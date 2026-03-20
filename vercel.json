@@ -13,26 +13,17 @@
       "use": "@vercel/node"
     }
   ],
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/(.*)",
-      "destination": "/backend/server.js"
+      "src": "/api/(.*)",
+      "dest": "/backend/server.js"
     },
     {
-      "source": "/assets/(.*)",
-      "destination": "/frontend/dist/assets/$1"
+      "handle": "filesystem"
     },
     {
-      "source": "/(.*\\.svg)",
-      "destination": "/frontend/dist/$1"
-    },
-    {
-      "source": "/(.*\\.png)",
-      "destination": "/frontend/dist/$1"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/frontend/dist/index.html"
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }
