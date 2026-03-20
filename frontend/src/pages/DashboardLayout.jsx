@@ -29,11 +29,8 @@ export default function DashboardLayout() {
 
     const consultasEstaciones = [
         { name: 'Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText },
-        { name: 'Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets }
-    ];
-
-    const consultasPista = [
-        { name: 'Resumen de Cierre', path: '/dashboard/consultas/pista/resumen-cierre', icon: ClipboardList }
+        { name: 'Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets },
+        { name: 'Resumen de Cierre', path: '/dashboard/consultas/estaciones/resumen-cierre', icon: ClipboardList }
     ];
 
     const consultasBancos = [
