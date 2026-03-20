@@ -62,7 +62,7 @@ export default function ResumenPista() {
 
         const tableColumn = ["Sucursal", "Creditos", "Cupones", "Tarjetas", "Remesas", "Gastos", "Lubrica.", "Anticip.", "Pagos", "Descu.", "Suma", "Tot.Venta", "Dif."];
         const tableRows = data.map(row => [
-            row.sucursal, moneyFmt(row.creditos), moneyFmt(row.cupones), moneyFmt(row.tarjetas), 
+            row.sucursales || row.sucursal, moneyFmt(row.creditos_ || row.creditos), moneyFmt(row.cupones), moneyFmt(row.tarjetas), 
             moneyFmt(row.remesas), moneyFmt(row.gastos), moneyFmt(row.lubricantes), moneyFmt(row.anticipos), 
             moneyFmt(row.cheques), moneyFmt(row.descuentos), moneyFmt(row.suma), moneyFmt(row.tot_venta), moneyFmt(row.diferencia)
         ]);
@@ -152,8 +152,8 @@ export default function ResumenPista() {
                         <tbody>
                             {data.map((row, i) => (
                                 <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                                    <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>{row.sucursal}</td>
-                                    <RowCell val={row.creditos} />
+                                    <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>{row.sucursales || row.sucursal}</td>
+                                    <RowCell val={row.creditos_ || row.creditos} />
                                     <RowCell val={row.cupones} />
                                     <RowCell val={row.tarjetas} />
                                     <RowCell val={row.remesas} />
