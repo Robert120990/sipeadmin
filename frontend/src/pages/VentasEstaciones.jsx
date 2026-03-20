@@ -4,8 +4,10 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 
 export default function VentasEstaciones() {
-    const today = new Date().toISOString().split('T')[0];
-    const [fecha, setFecha] = useState(today);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const defaultDate = yesterday.toISOString().split('T')[0];
+    const [fecha, setFecha] = useState(defaultDate);
     
     const [dataTiendas, setDataTiendas] = useState([]);
     const [dataEstaciones, setDataEstaciones] = useState([]);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, LogOut, Truck, Container, Folder, ChevronDown, ChevronRight, FileText, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, LogOut, Truck, Container, Folder, ChevronDown, ChevronRight, FileText, BarChart3, Droplets } from 'lucide-react';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -25,6 +25,10 @@ export default function DashboardLayout() {
         { name: 'Pipas', path: '/dashboard/tankers', icon: Container },
     ];
 
+    const consultasItemsRoot = [
+        { name: 'Lubricantes', path: '/dashboard/consultas/lubricantes', icon: Droplets }
+    ];
+
     const consultasEstaciones = [
         { name: 'Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText }
     ];
@@ -45,7 +49,7 @@ export default function DashboardLayout() {
         if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
             setOpenCatalogs(true);
         }
-        if ([...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
+        if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
             setOpenConsultas(true);
         }
         if (consultasBancos.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
@@ -116,6 +120,9 @@ export default function DashboardLayout() {
                         
                         {openConsultas && (
                             <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                {/* root level Consultas items */}
+                                {consultasItemsRoot.map(item => renderNavItem(item, true))}
+                                
                                 {/* level 2 Estaciones expandable */}
                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                                     <button 

@@ -275,6 +275,19 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
     }
 });
 
+app.get('/api/ventas/lubricantes/:start/:end', authenticateToken, async (req, res) => {
+    const { start, end } = req.params;
+    const axios = require('axios');
+    const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
+    
+    try {
+        const response = await axios.get(`${baseUrl}/GetVtaLubricantes/${start}/${end}`);
+        res.json(response.data || []);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching Lubricantes API' });
+    }
+});
+
 // --- Consultas Routes (External Database) ---
 app.get('/api/consultas/:type', authenticateToken, async (req, res) => {
     const { type } = req.params;
