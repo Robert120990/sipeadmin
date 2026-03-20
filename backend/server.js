@@ -312,7 +312,7 @@ app.get('/api/ventas/resumen-cierre/:date', authenticateToken, async (req, res) 
     const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
     
     try {
-        const response = await apiAxios.get(`${baseUrl}/GetResumens/${date}`);
+        const response = await apiAxios.get(`${baseUrl}/GetResumen/${date}`);
         res.json(response.data || []);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching Resumen Cierre API' });

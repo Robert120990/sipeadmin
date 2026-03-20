@@ -20,10 +20,16 @@ export default function ResumenPista() {
         setLoading(true);
         try {
             const res = await api.get(`/ventas/resumen-cierre/${fecha}`);
-            setData(res.data || []);
+            if (Array.isArray(res.data)) {
+                setData(res.data);
+            } else {
+                setData([]);
+                addToast('El servicio remoto no devolvió datos válidos', 'error');
+            }
             setLoading(false);
         } catch (error) {
             addToast('Error al cargar datos del resumen', 'error');
+            setData([]);
             setLoading(false);
         }
     };
