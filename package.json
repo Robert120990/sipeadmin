@@ -2,6 +2,6 @@
   "name": "sipeadmin-root",
   "version": "1.0.0",
   "scripts": {
-    "build": "cd frontend && npm install && npm run build && cd ../backend && npm install"
+    "build": "rm -rf public && cd frontend && npm install && npm run build && cp -a dist ../public && cd ../backend && npm install"
   }
 }

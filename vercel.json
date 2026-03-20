@@ -6,15 +6,15 @@
     },
     {
       "source": "/assets/(.*)",
-      "destination": "/frontend/dist/assets/$1"
+      "destination": "/assets/$1"
     },
     {
       "source": "/vite.svg",
-      "destination": "/frontend/dist/vite.svg"
+      "destination": "/vite.svg"
     },
     {
       "source": "/(.*)",
-      "destination": "/frontend/dist/index.html"
+      "destination": "/index.html"
     }
   ]
 }
