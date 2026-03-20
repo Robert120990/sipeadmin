@@ -9,6 +9,7 @@ import Tankers from './pages/Tankers';
 import Consultas from './pages/Consultas';
 import VentasEstaciones from './pages/VentasEstaciones';
 import Lubricantes from './pages/Lubricantes';
+import ResumenPista from './pages/ResumenPista';
 import { ToastProvider } from './components/Toast';
 
 const ProtectedRoute = ({ children }) => {
@@ -39,6 +40,7 @@ function App() {
                         <Route path="consultas/estaciones" element={<div className="card glass"><h1>Estaciones</h1><p>Módulo de estaciones (Próximamente).</p></div>} />
                         <Route path="consultas/estaciones/ventas" element={<VentasEstaciones />} />
                         <Route path="consultas/estaciones/lubricantes" element={<Lubricantes />} />
+                        <Route path="consultas/estaciones/resumen-pista" element={<ResumenPista />} />
                         <Route path="consultas/saldos-bancos" element={<Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." />} />
                         <Route path="consultas/saldos-chequera" element={<Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />} />
                         <Route path="permissions" element={<div className="card glass"><h1>Permisos</h1><p>Módulo en desarrollo.</p></div>} />

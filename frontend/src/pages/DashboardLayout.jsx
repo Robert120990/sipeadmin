@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, LogOut, Truck, Container, Folder, ChevronDown, ChevronRight, FileText, BarChart3, Droplets } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, LogOut, Truck, Container, Folder, ChevronDown, ChevronRight, FileText, BarChart3, Droplets, ClipboardList } from 'lucide-react';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -29,7 +29,8 @@ export default function DashboardLayout() {
 
     const consultasEstaciones = [
         { name: 'Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText },
-        { name: 'Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets }
+        { name: 'Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets },
+        { name: 'Resumen de Pista', path: '/dashboard/consultas/estaciones/resumen-pista', icon: ClipboardList }
     ];
 
     const consultasBancos = [
