@@ -17,14 +17,27 @@ app.use(express.json());
 let db;
 
 // Initialize database and start server
-initDB().then(pool => {
+const dbPromise = initDB().then(pool => {
     db = pool;
-    app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-    });
+    if (process.env.NODE_ENV !== 'production') {
+        app.listen(PORT, () => {
+            console.log(`Server running on port ${PORT}`);
+        });
+    }
 }).catch(err => {
     console.error('Failed to initialize database:', err);
-    process.exit(1);
+});
+
+// Vercel Serverless lazy DB initialization middleware
+app.use(async (req, res, next) => {
+    if (!db) {
+        try {
+            await dbPromise;
+        } catch (error) {
+            return res.status(500).json({ message: 'Database initialization failed. Check DATABASE_URL in Vercel.' });
+        }
+    }
+    next();
 });
 
 // Middleware for authentication
