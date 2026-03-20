@@ -7,6 +7,7 @@ export default function DashboardLayout() {
     const location = useLocation();
     const [openCatalogs, setOpenCatalogs] = useState(false);
     const [openConsultas, setOpenConsultas] = useState(false);
+    const [openConsultasEstaciones, setOpenConsultasEstaciones] = useState(false);
     const [openConsultasBancos, setOpenConsultasBancos] = useState(false);
 
     const handleLogout = () => {
@@ -43,9 +44,6 @@ export default function DashboardLayout() {
         { name: 'Permisos', path: '/dashboard/permissions', icon: Shield },
     ];
 
-    const [openConsultasEstaciones, setOpenConsultasEstaciones] = useState(false);
-    const [openConsultasPista, setOpenConsultasPista] = useState(false);
-
     useEffect(() => {
         if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
             setOpenCatalogs(true);
@@ -58,9 +56,6 @@ export default function DashboardLayout() {
         }
         if (consultasEstaciones.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
             setOpenConsultasEstaciones(true);
-        }
-        if (consultasPista.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
-            setOpenConsultasPista(true);
         }
     }, [location.pathname]);
 
@@ -162,41 +157,6 @@ export default function DashboardLayout() {
                                     )}
                                 </div>
                                 
-                                {/* level 2 Pista expandable */}
-                                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                    <button 
-                                        className="nav-item" 
-                                        onClick={() => setOpenConsultasPista(!openConsultasPista)}
-                                        style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}
-                                    >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                            <Folder size={18} />
-                                            Pista
-                                        </div>
-                                        {openConsultasPista ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                    </button>
-                                    
-                                    {openConsultasPista && (
-                                        <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
-                                            {consultasPista.map(item => {
-                                                const Icon = item.icon;
-                                                const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
-                                                return (
-                                                    <Link
-                                                        key={item.name}
-                                                        to={item.path}
-                                                        className={`nav-item ${isActive ? 'active' : ''}`}
-                                                        style={{ paddingLeft: '3.75rem', fontSize: '0.85rem' }}
-                                                    >
-                                                        <Icon size={16} />
-                                                        {item.name}
-                                                    </Link>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-
                                 {/* level 2 Bancos expandable */}
                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                                     <button 
