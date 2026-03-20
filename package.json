@@ -1,0 +1,7 @@
+{
+  "name": "sipeadmin-root",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build && cd ../backend && npm install"
+  }
+}
