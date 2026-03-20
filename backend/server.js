@@ -1,5 +1,8 @@
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
+const https = require('https');
+const axios = require('axios');
 const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -14,7 +17,12 @@ const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey123';
 app.use(cors());
 app.use(express.json());
 
+// Global connection caching
 let db;
+let externalPools = {}; 
+const keepAliveAgent = new http.Agent({ keepAlive: true, maxSockets: 100 });
+const keepAliveHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 });
+const apiAxios = axios.create({ httpAgent: keepAliveAgent, httpsAgent: keepAliveHttpsAgent });
 
 // Initialize database and start server
 const dbPromise = initDB().then(pool => {
@@ -266,15 +274,14 @@ app.delete('/api/tankers/:id', authenticateToken, async (req, res) => {
 // --- Ventas Estaciones Proxy ---
 app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => {
     const { date } = req.params;
-    const axios = require('axios');
     const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
     
     try {
         const [tiendas, estaciones, margenes, inventario] = await Promise.all([
-            axios.get(`${baseUrl}/GetVentasTienda/${date}`),
-            axios.get(`${baseUrl}/GetVentasEstacion/${date}`),
-            axios.get(`${baseUrl}/GetMargenesEstacion/${date}`),
-            axios.get(`${baseUrl}/GetInventario/${date}`)
+            apiAxios.get(`${baseUrl}/GetVentasTienda/${date}`),
+            apiAxios.get(`${baseUrl}/GetVentasEstacion/${date}`),
+            apiAxios.get(`${baseUrl}/GetMargenesEstacion/${date}`),
+            apiAxios.get(`${baseUrl}/GetInventario/${date}`)
         ]);
 
         res.json({
@@ -290,11 +297,10 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
 
 app.get('/api/ventas/lubricantes/:start/:end', authenticateToken, async (req, res) => {
     const { start, end } = req.params;
-    const axios = require('axios');
     const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
     
     try {
-        const response = await axios.get(`${baseUrl}/GetVtaLubricantes/${start}/${end}`);
+        const response = await apiAxios.get(`${baseUrl}/GetVtaLubricantes/${start}/${end}`);
         res.json(response.data || []);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching Lubricantes API' });
@@ -311,14 +317,21 @@ app.get('/api/consultas/:type', authenticateToken, async (req, res) => {
         }
         
         const config = configs[0];
-        const mysql = require('mysql2/promise');
-        const externalDb = await mysql.createConnection({
-            host: config.host,
-            user: config.user,
-            password: config.password,
-            database: config.database_name,
-            port: config.port || 3306
-        });
+        const poolKey = `${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+        
+        let externalDb = externalPools[poolKey];
+        if (!externalDb) {
+            const mysql = require('mysql2/promise');
+            externalDb = mysql.createPool({
+                host: config.host,
+                user: config.user,
+                password: config.password,
+                database: config.database_name,
+                port: config.port || 3306,
+                connectionLimit: 10
+            });
+            externalPools[poolKey] = externalDb;
+        }
 
         const today = new Date().toISOString().split('T')[0];
         let results;
@@ -329,8 +342,6 @@ app.get('/api/consultas/:type', authenticateToken, async (req, res) => {
         } else {
             return res.status(404).json({ message: 'Consulta no encontrada' });
         }
-
-        await externalDb.end();
         
         // MySQL stored procedures return an array where [0] is the result set
         res.json(results[0] || []);
