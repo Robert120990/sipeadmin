@@ -1,0 +1,2 @@
+TODAY:anticipos,cheques,credito,cupones,descuentos,diferencia,empresa,gastos,lubricantes,pagos,remesas,suma,tarjetas,tot_venta
+VALS:undefined,undefined

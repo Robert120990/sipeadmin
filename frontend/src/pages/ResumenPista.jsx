@@ -62,9 +62,19 @@ export default function ResumenPista() {
 
         const tableColumn = ["Sucursal", "Creditos", "Cupones", "Tarjetas", "Remesas", "Gastos", "Lubrica.", "Anticip.", "Pagos", "Descu.", "Suma", "Tot.Venta", "Dif."];
         const tableRows = data.map(row => [
-            row.sucursales || row.sucursal, moneyFmt(row.creditos_ || row.creditos), moneyFmt(row.cupones), moneyFmt(row.tarjetas), 
-            moneyFmt(row.remesas), moneyFmt(row.gastos), moneyFmt(row.lubricantes), moneyFmt(row.anticipos), 
-            moneyFmt(row.cheques), moneyFmt(row.descuentos), moneyFmt(row.suma), moneyFmt(row.tot_venta), moneyFmt(row.diferencia)
+            row.empresa || row.sucursales || row.sucursal || '-', 
+            moneyFmt(row.credito || row.creditos_ || row.creditos || 0), 
+            moneyFmt(row.cupones || 0), 
+            moneyFmt(row.tarjetas || 0), 
+            moneyFmt(row.remesas || 0), 
+            moneyFmt(row.gastos || 0), 
+            moneyFmt(row.lubricantes || 0), 
+            moneyFmt(row.anticipos || 0), 
+            moneyFmt(row.pagos || row.cheques || 0), 
+            moneyFmt(row.descuentos || 0), 
+            moneyFmt(row.suma || 0), 
+            moneyFmt(row.tot_venta || 0), 
+            moneyFmt(row.diferencia || 0)
         ]);
 
         autoTable(doc, {
@@ -152,20 +162,20 @@ export default function ResumenPista() {
                         <tbody>
                             {data.map((row, i) => (
                                 <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                                    <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>{row.sucursales || row.sucursal}</td>
-                                    <RowCell val={row.creditos_ || row.creditos} />
-                                    <RowCell val={row.cupones} />
-                                    <RowCell val={row.tarjetas} />
-                                    <RowCell val={row.remesas} />
-                                    <RowCell val={row.gastos} />
-                                    <RowCell val={row.lubricantes} />
-                                    <RowCell val={row.anticipos} />
-                                    <RowCell val={row.cheques} />
-                                    <RowCell val={row.descuentos} />
-                                    <RowCell val={row.suma} />
-                                    <RowCell val={row.tot_venta} />
-                                    <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap', color: row.diferencia < 0 ? '#ef4444' : (row.diferencia > 0 ? '#22c55e' : 'inherit'), fontWeight: row.diferencia !== 0 ? 'bold' : 'normal' }}>
-                                        {moneyFmt(row.diferencia)}
+                                    <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>{row.empresa || row.sucursales || row.sucursal || '-'}</td>
+                                    <RowCell val={row.credito || row.creditos_ || row.creditos || 0} />
+                                    <RowCell val={row.cupones || 0} />
+                                    <RowCell val={row.tarjetas || 0} />
+                                    <RowCell val={row.remesas || 0} />
+                                    <RowCell val={row.gastos || 0} />
+                                    <RowCell val={row.lubricantes || 0} />
+                                    <RowCell val={row.anticipos || 0} />
+                                    <RowCell val={row.pagos || row.cheques || 0} />
+                                    <RowCell val={row.descuentos || 0} />
+                                    <RowCell val={row.suma || 0} />
+                                    <RowCell val={row.tot_venta || 0} />
+                                    <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap', color: (row.diferencia || 0) < 0 ? '#ef4444' : ((row.diferencia || 0) > 0 ? '#22c55e' : 'inherit'), fontWeight: (row.diferencia || 0) !== 0 ? 'bold' : 'normal' }}>
+                                        {moneyFmt(row.diferencia || 0)}
                                     </td>
                                 </tr>
                             ))}
