@@ -36,9 +36,9 @@ function App() {
                         <Route path="carriers" element={<Carriers />} />
                         <Route path="tankers" element={<Tankers />} />
                         <Route path="settings" element={<Settings />} />
-                        <Route path="consultas/lubricantes" element={<Lubricantes />} />
                         <Route path="consultas/estaciones" element={<div className="card glass"><h1>Estaciones</h1><p>Módulo de estaciones (Próximamente).</p></div>} />
                         <Route path="consultas/estaciones/ventas" element={<VentasEstaciones />} />
+                        <Route path="consultas/estaciones/lubricantes" element={<Lubricantes />} />
                         <Route path="consultas/saldos-bancos" element={<Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." />} />
                         <Route path="consultas/saldos-chequera" element={<Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />} />
                         <Route path="permissions" element={<div className="card glass"><h1>Permisos</h1><p>Módulo en desarrollo.</p></div>} />

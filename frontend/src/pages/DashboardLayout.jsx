@@ -25,12 +25,11 @@ export default function DashboardLayout() {
         { name: 'Pipas', path: '/dashboard/tankers', icon: Container },
     ];
 
-    const consultasItemsRoot = [
-        { name: 'Lubricantes', path: '/dashboard/consultas/lubricantes', icon: Droplets }
-    ];
+    const consultasItemsRoot = [];
 
     const consultasEstaciones = [
-        { name: 'Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText }
+        { name: 'Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText },
+        { name: 'Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets }
     ];
 
     const consultasBancos = [
