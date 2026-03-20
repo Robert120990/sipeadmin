@@ -4,7 +4,7 @@ import { useToast } from '../components/Toast';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-// import api from '../services/api'; // Reserved for when API is provided
+import api from '../services/api';
 
 export default function ResumenPista() {
     const yesterday = new Date();
@@ -19,36 +19,9 @@ export default function ResumenPista() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            // TODO: Implement actual API call once endpoint is provided
-            // const res = await api.get(`/ventas/resumen-pista/${fecha}`);
-            // setData(res.data || []);
-            
-            // Mock data for demonstration purposes based on the screenshot
-            const mockData = [
-                {
-                    sucursal: 'ENERGY GAS COSTA DEL SOL', creditos: 0, cupones: 11, tarjetas: 1492.20, remesas: 8744.30,
-                    gastos: 0, lubrica: 40, anticip: 0, pagos: 0, descu: 59.21, suma: 10356.71, totVenta: 10356.37, dif: 0.34
-                },
-                {
-                    sucursal: 'PUMA CHALCHUAPA', creditos: 0, cupones: 0, tarjetas: 2091.26, remesas: 5072.16,
-                    gastos: 0, lubrica: 0, anticip: 0, pagos: 2268, descu: 0, suma: 9431.42, totVenta: 9431.42, dif: 0
-                },
-                {
-                    sucursal: 'PUMA MIRAFLORES', creditos: 3022.86, cupones: 71, tarjetas: 4327.07, remesas: 7888.29,
-                    gastos: 0, lubrica: 40.25, anticip: 0, pagos: 1237.13, descu: 62.94, suma: 16709.29, totVenta: 16712.54, dif: -3.25
-                },
-                {
-                    sucursal: 'PUMA SAN MARTIN II', creditos: 46.35, cupones: 369, tarjetas: 2220.53, remesas: 10337.10,
-                    gastos: 4, lubrica: 59.70, anticip: 0, pagos: 0, descu: 40, suma: 13016.98, totVenta: 13016.78, dif: 0.20
-                }
-            ];
-            
-            setTimeout(() => {
-                setData(mockData);
-                addToast('Modo demostración: esperando endpoint oficial', 'success');
-                setLoading(false);
-            }, 600);
-            
+            const res = await api.get(`/ventas/resumen-cierre/${fecha}`);
+            setData(res.data || []);
+            setLoading(false);
         } catch (error) {
             addToast('Error al cargar datos del resumen', 'error');
             setLoading(false);
@@ -84,8 +57,8 @@ export default function ResumenPista() {
         const tableColumn = ["Sucursal", "Creditos", "Cupones", "Tarjetas", "Remesas", "Gastos", "Lubrica.", "Anticip.", "Pagos", "Descu.", "Suma", "Tot.Venta", "Dif."];
         const tableRows = data.map(row => [
             row.sucursal, moneyFmt(row.creditos), moneyFmt(row.cupones), moneyFmt(row.tarjetas), 
-            moneyFmt(row.remesas), moneyFmt(row.gastos), moneyFmt(row.lubrica), moneyFmt(row.anticip), 
-            moneyFmt(row.pagos), moneyFmt(row.descu), moneyFmt(row.suma), moneyFmt(row.totVenta), moneyFmt(row.dif)
+            moneyFmt(row.remesas), moneyFmt(row.gastos), moneyFmt(row.lubricantes), moneyFmt(row.anticipos), 
+            moneyFmt(row.cheques), moneyFmt(row.descuentos), moneyFmt(row.suma), moneyFmt(row.tot_venta), moneyFmt(row.diferencia)
         ]);
 
         autoTable(doc, {
@@ -179,14 +152,14 @@ export default function ResumenPista() {
                                     <RowCell val={row.tarjetas} />
                                     <RowCell val={row.remesas} />
                                     <RowCell val={row.gastos} />
-                                    <RowCell val={row.lubrica} />
-                                    <RowCell val={row.anticip} />
-                                    <RowCell val={row.pagos} />
-                                    <RowCell val={row.descu} />
+                                    <RowCell val={row.lubricantes} />
+                                    <RowCell val={row.anticipos} />
+                                    <RowCell val={row.cheques} />
+                                    <RowCell val={row.descuentos} />
                                     <RowCell val={row.suma} />
-                                    <RowCell val={row.totVenta} />
-                                    <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap', color: row.dif < 0 ? '#ef4444' : (row.dif > 0 ? '#22c55e' : 'inherit'), fontWeight: row.dif !== 0 ? 'bold' : 'normal' }}>
-                                        {moneyFmt(row.dif)}
+                                    <RowCell val={row.tot_venta} />
+                                    <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap', color: row.diferencia < 0 ? '#ef4444' : (row.diferencia > 0 ? '#22c55e' : 'inherit'), fontWeight: row.diferencia !== 0 ? 'bold' : 'normal' }}>
+                                        {moneyFmt(row.diferencia)}
                                     </td>
                                 </tr>
                             ))}
