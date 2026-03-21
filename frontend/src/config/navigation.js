@@ -12,9 +12,10 @@ export const catalogItems = [
 export const consultasItemsRoot = [];
 
 export const consultasEstaciones = [
-    { name: 'Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText },
-    { name: 'Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets },
-    { name: 'Resumen de Cierre', path: '/dashboard/consultas/estaciones/resumen-cierre', icon: ClipboardList }
+    { name: 'Resumen de Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText },
+    { name: 'Venta de Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets },
+    { name: 'Resumen de Cierre', path: '/dashboard/consultas/estaciones/resumen-cierre', icon: ClipboardList },
+    { name: 'Diferencias Combustible', path: '/dashboard/consultas/estaciones/diferencias-combustible', icon: BarChart3 }
 ];
 
 export const consultasBancos = [
