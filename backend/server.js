@@ -325,6 +325,18 @@ app.get('/api/ventas/resumen-cierre/:date', authenticateToken, async (req, res) 
     }
 });
 
+app.get('/api/ventas/precios-estacion/:date', authenticateToken, async (req, res) => {
+    const { date } = req.params;
+    const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
+    
+    try {
+        const response = await apiAxios.get(`${baseUrl}/GetPreciosEstacion/${date}`);
+        res.json(response.data || []);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching Precios Estacion API' });
+    }
+});
+
 // --- Consultas Routes (External Database) ---
 const getExternalDb = async () => {
     const [configs] = await db.query('SELECT * FROM external_configs ORDER BY created_at DESC LIMIT 1');
