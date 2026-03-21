@@ -17,7 +17,7 @@ export default function Login() {
             localStorage.setItem('user', JSON.stringify(res.data.user));
             navigate('/dashboard');
         } catch (err) {
-            setError('Credenciales inválidas');
+            setError(err.response?.data?.message || err.message || 'Error de conexión');
         }
     };
 

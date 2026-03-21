@@ -12,6 +12,12 @@ const dbConfig = {
 
 const initDB = async () => {
     try {
+        // En Vercel no podemos correr 15 scripts de CREATE TABLE por timeout de Serverless (10s)
+        if (process.env.VERCEL) {
+            console.log('Vercel Environment Detected: Bypassing local init schemas.');
+            return mysql.createPool(dbConfig);
+        }
+
         // Create connection without database to check if it exists
         const connection = await mysql.createConnection({
             host: dbConfig.host,
