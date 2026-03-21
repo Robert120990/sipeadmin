@@ -326,30 +326,99 @@ app.get('/api/ventas/resumen-cierre/:date', authenticateToken, async (req, res) 
 });
 
 // --- Consultas Routes (External Database) ---
+const getExternalDb = async () => {
+    const [configs] = await db.query('SELECT * FROM external_configs ORDER BY created_at DESC LIMIT 1');
+    if (configs.length === 0) throw new Error('No hay configuración de base de datos externa. Configúrala primero.');
+    
+    const config = configs[0];
+    const poolKey = `${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+    
+    let externalDb = externalPools[poolKey];
+    if (!externalDb) {
+        const mysql = require('mysql2/promise');
+        externalDb = mysql.createPool({
+            host: config.host,
+            user: config.user,
+            password: config.password,
+            database: config.database_name,
+            port: config.port || 3306,
+            connectionLimit: 10
+        });
+        externalPools[poolKey] = externalDb;
+    }
+    return externalDb;
+};
+
+app.get('/api/consultas/diferencias-combustible/:desde/:hasta', authenticateToken, async (req, res) => {
+    const { desde, hasta } = req.params;
+    try {
+        const externalDb = await getExternalDb();
+        
+        const sql1 = `
+            select x.id_empresa,a.titulo as estacion,z.clasificacion as tipo,0.0 as inicial,0.0 as recargas,sum(y.total) as venta,0.0 final,0.0 as suma,0.0 as diferencia 
+            from cierre_turno x 
+            inner join cierre_turno_lecturas y on x.id_empresa = y.id_empresa and x.id = y.id_cierre_turno 
+            inner join cfg_combustibles z on y.id_empresa = z.id_empresa and y.id_producto = z.id_producto 
+            inner join web_consolidado a on x.id_empresa = a.id_empresa 
+            where str_to_date(x.fecha_turno,'%d/%m/%Y') between ? and ? 
+            and a.grupo = 'ESTACION' 
+            group by x.id_empresa,clasificacion 
+            order by a.orden,tipo
+        `;
+        const [dt_result] = await externalDb.query(sql1, [desde, hasta]);
+
+        const sql2 = `
+            select a.id_empresa,a.fecha,a.turno,c.tipo_combustible,sum(b.anterior) as anterior,sum(b.recarga) as recarga,sum(b.lectura) as lectura 
+            from lecturas_tanque a 
+            inner join detalle_lecturas_tanque b on a.id_empresa = b.id_empresa and a.id = b.id_lectura 
+            inner join tanques c on a.id_empresa = c.id_empresa and b.codigo_producto = c.id 
+            where a.fecha between ? and ? 
+            group by id_empresa,tipo_combustible,fecha,turno 
+            order by id_empresa,fecha,turno
+        `;
+        const [dt_movi] = await externalDb.query(sql2, [desde, hasta]);
+
+        const listado_final = dt_result.map(fila => {
+            let inicial = 0.0;
+            let recargas = 0.0;
+            let final = 0.0;
+
+            const FindRow = dt_movi.filter(m => String(m.id_empresa) === String(fila.id_empresa) && String(m.tipo_combustible) === String(fila.tipo));
+            
+            if (FindRow.length > 0) {
+                inicial = Number(FindRow[0].anterior) || 0.0;
+                final = Number(FindRow[FindRow.length - 1].lectura) || 0.0;
+            }
+
+            recargas = FindRow.reduce((sum, current) => sum + (Number(current.recarga) || 0), 0);
+            
+            const venta = Number(fila.venta) || 0.0;
+            const suma = inicial + recargas - venta;
+            const diferencia = final - suma;
+
+            return {
+                empresa: fila.estacion,
+                combustible: fila.tipo,
+                inicial: inicial,
+                recargas: recargas,
+                venta: venta,
+                final: final,
+                suma: suma,
+                diferencia: diferencia
+            };
+        });
+
+        res.json(listado_final);
+    } catch (error) {
+        console.error('Error in diferencias-combustible:', error);
+        res.status(500).json({ message: 'Error procesando consulta externa de combustible' });
+    }
+});
+
 app.get('/api/consultas/:type', authenticateToken, async (req, res) => {
     const { type } = req.params;
     try {
-        const [configs] = await db.query('SELECT * FROM external_configs ORDER BY created_at DESC LIMIT 1');
-        if (configs.length === 0) {
-            return res.status(400).json({ message: 'No hay configuración de base de datos externa. Configúrala primero.' });
-        }
-        
-        const config = configs[0];
-        const poolKey = `${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
-        
-        let externalDb = externalPools[poolKey];
-        if (!externalDb) {
-            const mysql = require('mysql2/promise');
-            externalDb = mysql.createPool({
-                host: config.host,
-                user: config.user,
-                password: config.password,
-                database: config.database_name,
-                port: config.port || 3306,
-                connectionLimit: 10
-            });
-            externalPools[poolKey] = externalDb;
-        }
+        const externalDb = await getExternalDb();
 
         const today = new Date().toISOString().split('T')[0];
         let results;
@@ -364,6 +433,7 @@ app.get('/api/consultas/:type', authenticateToken, async (req, res) => {
         // MySQL stored procedures return an array where [0] is the result set
         res.json(results[0] || []);
     } catch (error) {
+        console.error('Error in consultas SP:', error);
         res.status(500).json({ message: `Error ejecutando SP: ${error.message}` });
     }
 });
