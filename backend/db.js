@@ -86,6 +86,20 @@ const initDB = async () => {
         `);
 
         await pool.query(`
+            CREATE TABLE IF NOT EXISTS email_configs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                host VARCHAR(255) NOT NULL,
+                port INT DEFAULT 587,
+                secure BOOLEAN DEFAULT FALSE,
+                user VARCHAR(255) NOT NULL,
+                password VARCHAR(255) NOT NULL,
+                from_address VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            );
+        `);
+
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS carriers (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 code VARCHAR(50) UNIQUE NOT NULL,

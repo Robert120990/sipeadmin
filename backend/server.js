@@ -6,6 +6,8 @@ const axios = require('axios');
 const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
+const { GoogleGenAI } = require('@google/genai');
 const { initDB } = require('./db');
 
 dotenv.config();
@@ -506,6 +508,64 @@ app.post('/api/config', authenticateToken, async (req, res) => {
     }
 });
 
+// --- Email Configuration Routes ---
+app.get('/api/config/email', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await db.query('SELECT * FROM email_configs ORDER BY created_at DESC LIMIT 1');
+        res.json(rows[0] || {});
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+app.post('/api/config/email', authenticateToken, async (req, res) => {
+    const { host, port, secure, user, password, from_address } = req.body;
+    try {
+        const [existing] = await db.query('SELECT id FROM email_configs LIMIT 1');
+        if (existing.length > 0) {
+            await db.query(
+                'UPDATE email_configs SET host = ?, port = ?, secure = ?, user = ?, password = ?, from_address = ? WHERE id = ?',
+                [host, port || 587, secure || false, user, password, from_address, existing[0].id]
+            );
+        } else {
+            await db.query(
+                'INSERT INTO email_configs (host, port, secure, user, password, from_address) VALUES (?, ?, ?, ?, ?, ?)',
+                [host, port || 587, secure || false, user, password, from_address]
+            );
+        }
+        res.json({ message: 'Configuración guardada exitosamente' });
+    } catch (error) {
+        res.status(500).json({ message: `Error guardando: ${error.message}` });
+    }
+});
+
+app.post('/api/config/email/test', authenticateToken, async (req, res) => {
+    const { host, port, secure, user, password, from_address, to_email } = req.body;
+    try {
+        const transporter = nodemailer.createTransport({
+            host,
+            port: port || 587,
+            secure: Boolean(secure),
+            auth: { user, pass: password },
+            tls: { rejectUnauthorized: false }
+        });
+
+        await transporter.verify();
+
+        await transporter.sendMail({
+            from: `"${from_address}" <${user}>`,
+            to: to_email,
+            subject: 'Prueba de Conexión SMTP - SIPE Admin',
+            text: '¡Felicidades! La configuración funciona correctamente.',
+            html: '<b>¡Felicidades!</b> La configuración SMTP funciona correctamente.'
+        });
+
+        res.json({ message: 'Conexión exitosa y correo enviado' });
+    } catch (error) {
+        res.status(400).json({ message: `Error SMTP: ${error.message}` });
+    }
+});
+
 // --- Carriers (Transportistas) Routes ---
 app.get('/api/carriers', authenticateToken, async (req, res) => {
     try {
@@ -839,6 +899,69 @@ app.delete('/api/roles/:id', authenticateToken, async (req, res) => {
     } catch (error) {
         if (error.code === 'ER_ROW_IS_REFERENCED_2') return res.status(400).json({message: 'No puede eliminarse porque tiene usuarios asignados'});
         res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// --- AI Agent Route ---
+app.post('/api/ai/pagos/chat', authenticateToken, async (req, res) => {
+    try {
+        const { prompt, context } = req.body;
+        if (!process.env.GEMINI_API_KEY) {
+            return res.status(400).json({ error: "Falta configurar GEMINI_API_KEY en el backend." });
+        }
+
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        
+        const systemInstruction = `Eres un asistente financiero y operativo experto del sistema SIPE Admin, enfocado en el "Control de Múltiples Pagos y Recordatorios".
+El usuario te dará una petición en lenguaje natural. Tú recibirás el "context" que es un arreglo con los datos actuales que el usuario ve en pantalla.
+Tu objetivo es analizar lo que pide y devolver UN ÚNICO OBJETO JSON ESTRICTO con la acción que el frontend debe ejecutar.
+
+INSTRUCCIONES DE ACCIÓN:
+Si el usuario saluda, pregunta resúmenes o dudas generales que no requieren filtrar o pagar en la tabla, usa "action": "NONE". Y respóndele en "reply" dando los datos que extrajiste de la tabla.
+Si el usuario quiere ver o buscar facturas específicas, proveedores, o deudas de una empresa, usa "action": "FILTER" y llena "action_params" con las claves "ubicacion" (la empresa abstracta sugerida), "descripcion" (el concepto) y "estado" ('P', 'C' o 'ALL').
+Si el usuario quiere pagar o marcar como pagado algo específico, usa "action": "PAY" y pon el "id_recordatorio" numérico exacto que encontraste en el context matchando la orden.
+
+DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
+{
+    "reply": "Tu mensaje amigable y humano respondiendo al usuario basado fuertemente en su contexto.",
+    "action": "NONE" | "FILTER" | "PAY",
+    "action_params": {
+        "ubicacion": "", 
+        "descripcion": "", 
+        "estado": "ALL", 
+        "id_recordatorio": null 
+    }
+}`;
+
+        const cleanContext = (context || []).slice(0, 80).map(c => ({
+            id_recordatorio: c.id_recordatorio,
+            ubicacion: c.ubicacion, 
+            descripcion: c.descripcion, 
+            monto: c.monto, 
+            estado: c.estado, 
+            vence: c.vence 
+        }));
+
+        const userMessage = `CONTEXTO DE DATOS ACTUALES: ${JSON.stringify(cleanContext)}\n\nCOMANDO DEL USUARIO: ${prompt}`;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: userMessage,
+            config: {
+                systemInstruction: systemInstruction,
+                responseMimeType: "application/json"
+            }
+        });
+
+        let rawText = response.text;
+        if (rawText.startsWith('\`\`\`json')) {
+            rawText = rawText.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
+        }
+        res.json(JSON.parse(rawText));
+
+    } catch (error) {
+        console.error("AI Agent Error:", error);
+        res.status(500).json({ error: "No se pudo procesar la solicitud con Inteligencia Artificial." });
     }
 });
 

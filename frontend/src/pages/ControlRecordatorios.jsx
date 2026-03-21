@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Search, Plus, CheckCircle, Edit, Trash2, X, Save, Download, FileText as FileTextIcon } from 'lucide-react';
+import { Search, Plus, CheckCircle, Edit, Trash2, X, Save, Download, FileText as FileTextIcon, Sparkles, Send, MessageSquare } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -53,14 +53,22 @@ export default function ControlRecordatorios() {
         forma_pago: '', pagado: false, fecPago: todayStr, formaPago2: ''
     });
 
-    // Form State (Pago)
     const [pagoData, setPagoData] = useState({ id_vencimiento: '', fecPago: todayStr, formaPago: '' });
+
+    // AI Chat State
+    const [isChatOpen, setIsChatOpen] = useState(false);
+    const [chatInput, setChatInput] = useState('');
+    const [chatHistory, setChatHistory] = useState([
+        { role: 'ai', text: '¡Hola! Soy tu asistente IA de Pagos. Dime qué necesitas buscar o pagar y yo lo haré por ti.' }
+    ]);
+    const [chatLoading, setChatLoading] = useState(false);
+    const [iaFilterText, setIaFilterText] = useState(null);
 
     useEffect(() => {
         fetchUbicaciones();
         fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [estadoFilter]); // Only auto-fetch when radio buttons change
+    }, [estadoFilter]);
 
     const fetchData = async () => {
         setLoading(true);
@@ -83,12 +91,67 @@ export default function ControlRecordatorios() {
         } catch (error) { console.error('Error', error); }
     };
 
+    const displayRecordatorios = useMemo(() => {
+        if (!iaFilterText) return recordatorios;
+        const term = iaFilterText.toLowerCase();
+        return recordatorios.filter(r => 
+            (r.ubicacion || '').toLowerCase().includes(term) ||
+            (r.descripcion || '').toLowerCase().includes(term) ||
+            (r.observacion || '').toLowerCase().includes(term)
+        );
+    }, [recordatorios, iaFilterText]);
+
     const totalMonto = useMemo(() => {
-        return recordatorios.reduce((sum, item) => {
+        return displayRecordatorios.reduce((sum, item) => {
             if (item.estado === 'PENDIENTE') return sum + Number(item.monto || 0);
             return sum;
         }, 0);
-    }, [recordatorios]);
+    }, [displayRecordatorios]);
+
+    // AI Handle Submit
+    const handleChatSubmit = async (e) => {
+        e.preventDefault();
+        if (!chatInput.trim()) return;
+        const userPrompt = chatInput.trim();
+        setChatInput('');
+        setChatHistory(prev => [...prev, { role: 'user', text: userPrompt }]);
+        setChatLoading(true);
+
+        try {
+            const res = await api.post('/ai/pagos/chat', {
+                prompt: userPrompt,
+                context: displayRecordatorios
+            });
+            
+            const iaResponse = res.data;
+            if (iaResponse.error) throw new Error(iaResponse.error);
+            
+            setChatHistory(prev => [...prev, { role: 'ai', text: iaResponse.reply }]);
+
+            if (iaResponse.action === 'FILTER') {
+                const p = iaResponse.action_params || {};
+                if (p.estado && ['P', 'C', 'ALL'].includes(p.estado) && p.estado !== estadoFilter) {
+                    setEstadoFilter(p.estado);
+                }
+                const term = p.ubicacion || p.descripcion || '';
+                setIaFilterText(term || null);
+                if (term || p.estado !== 'ALL') addToast('Orden de IA aplicada: Filtrando vista.', 'success');
+            } else if (iaResponse.action === 'PAY') {
+                const id = iaResponse.action_params?.id_recordatorio;
+                const rec = displayRecordatorios.find(r => String(r.id) === String(id) || String(r.id_recordatorio) === String(id));
+                if (rec) {
+                    setPagoData({ id_vencimiento: rec.id, fecPago: todayStr, formaPago: 'Aprobado vía IA Asistente' });
+                    setIsPagoModalOpen(true);
+                } else {
+                    setChatHistory(prev => [...prev, { role: 'ai', text: 'No logré localizar ese ID en la tabla mostrada.' }]);
+                }
+            }
+        } catch (err) {
+            setChatHistory(prev => [...prev, { role: 'ai', text: 'Ups, ' + (err.response?.data?.error || err.message || 'ocurrió un error de conexión.') }]);
+        } finally {
+            setChatLoading(false);
+        }
+    };
 
     // Format Currency & Dates
     const formatDate = (date) => {
@@ -369,9 +432,9 @@ export default function ControlRecordatorios() {
                         </tr>
                     </thead>
                     <tbody>
-                        {recordatorios.length === 0 ? (
+                        {displayRecordatorios.length === 0 ? (
                             <tr><td colSpan="9" style={{ textAlign: 'center', padding: '2rem' }}>No hay registros coincidentes</td></tr>
-                        ) : recordatorios.map((r, idx) => (
+                        ) : displayRecordatorios.map((r, idx) => (
                             <tr key={idx} style={{ 
                                 borderBottom: '1px solid rgba(255,255,255,0.05)',
                                 backgroundColor: r.estado === 'CANCELADO' ? 'rgba(40, 167, 69, 0.05)' : 'transparent' 
@@ -416,6 +479,79 @@ export default function ControlRecordatorios() {
                 <span style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MONTO TOTAL (Pendiente):</span>
                 <span style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--danger)' }}>{mc(totalMonto)}</span>
             </div>
+
+            {/* AGENTE IA FLOATING BUTTON & CHAT */}
+            <button 
+                onClick={() => setIsChatOpen(!isChatOpen)}
+                style={{
+                    position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 1050,
+                    backgroundColor: 'var(--primary)', color: 'white', border: 'none', borderRadius: '50%',
+                    width: '60px', height: '60px', display: 'flex', justifyContent: 'center', alignItems: 'center',
+                    boxShadow: '0 4px 15px rgba(99, 102, 241, 0.5)', cursor: 'pointer', transition: 'transform 0.3s'
+                }}
+            >
+                {isChatOpen ? <X size={28} /> : <Sparkles size={28} />}
+            </button>
+
+            {isChatOpen && (
+                <div className="card glass" style={{
+                    position: 'fixed', bottom: '6.5rem', right: '2rem', zIndex: 1050,
+                    width: '380px', height: '500px', display: 'flex', flexDirection: 'column',
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.5)', overflow: 'hidden'
+                }}>
+                    <div style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.1)', background: 'rgba(99, 102, 241, 0.1)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{ padding: '0.5rem', background: 'var(--primary)', borderRadius: '50%', display: 'flex' }}>
+                            <Sparkles size={18} color="white" />
+                        </div>
+                        <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'white' }}>Agente Inteligente SIPE</h3>
+                    </div>
+                    
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {chatHistory.map((m, i) => (
+                            <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                                <div style={{
+                                    maxWidth: '85%', padding: '0.75rem 1rem', borderRadius: '12px',
+                                    background: m.role === 'user' ? 'var(--primary)' : 'rgba(255,255,255,0.1)',
+                                    color: 'white', fontSize: '0.85rem', lineHeight: '1.4',
+                                    borderTopRightRadius: m.role === 'user' ? 0 : '12px',
+                                    borderTopLeftRadius: m.role === 'ai' ? 0 : '12px',
+                                }}>
+                                    {m.text}
+                                </div>
+                            </div>
+                        ))}
+                        {chatLoading && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                                <div style={{ background: 'rgba(255,255,255,0.1)', padding: '0.75rem 1rem', borderRadius: '12px', borderTopLeftRadius: 0, color: 'var(--primary)', fontWeight: 'bold' }}>
+                                    Analizando...
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {iaFilterText && (
+                        <div style={{ padding: '0.5rem 1rem', background: 'rgba(234, 179, 8, 0.15)', fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(234, 179, 8, 0.3)' }}>
+                            <span style={{color: '#facc15'}}>Filtro Dinámico Aplicado: <strong>{iaFilterText}</strong></span>
+                            <button onClick={() => setIaFilterText(null)} style={{ background: 'none', border: 'none', color: '#facc15', cursor: 'pointer', display: 'flex' }}><X size={16}/></button>
+                        </div>
+                    )}
+
+                    <form onSubmit={handleChatSubmit} style={{ padding: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)' }}>
+                        <input 
+                            type="text" className="form-control" placeholder="Pagar factura CFE, buscar Juan..."
+                            value={chatInput} onChange={e => setChatInput(e.target.value)}
+                            style={{ flex: 1, borderRadius: '20px', padding: '0.6rem 1rem', fontSize: '0.85rem' }}
+                            disabled={chatLoading}
+                        />
+                        <button type="submit" disabled={chatLoading} style={{
+                            background: 'var(--primary)', border: 'none', color: 'white', width: '38px', height: '38px',
+                            borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer'
+                        }}>
+                            <Send size={16} />
+                        </button>
+                    </form>
+                </div>
+            )}
 
             {/* MODAL 1: NUEVO/EDITAR RECORDATORIO */}
             {isFormModalOpen && (
