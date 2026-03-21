@@ -73,8 +73,14 @@ app.post('/api/login', async (req, res) => {
         const validPassword = await bcrypt.compare(password, user.password);
         if (!validPassword) return res.status(400).json({ message: 'Invalid password' });
 
-        const token = jwt.sign({ id: user.id, username: user.username, role_id: user.role_id }, JWT_SECRET, { expiresIn: '8h' });
-        res.json({ token, user: { id: user.id, username: user.username, role_id: user.role_id } });
+        const [permsRows] = await db.query(
+            'SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ?', 
+            [user.role_id]
+        );
+        const permissions = permsRows.map(p => p.name);
+
+        const token = jwt.sign({ id: user.id, username: user.username, role_id: user.role_id, permissions }, JWT_SECRET, { expiresIn: '8h' });
+        res.json({ token, user: { id: user.id, username: user.username, role_id: user.role_id, permissions } });
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
     }
@@ -365,18 +371,69 @@ app.get('/api/consultas/:type', authenticateToken, async (req, res) => {
 // Roles and Permissions Routes
 app.get('/api/roles', authenticateToken, async (req, res) => {
     try {
-        const [rows] = await db.query('SELECT * FROM roles');
-        res.json(rows);
+        const [roles] = await db.query('SELECT * FROM roles');
+        for (let role of roles) {
+            const [perms] = await db.query('SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ?', [role.id]);
+            role.permissions = perms.map(p => p.name);
+        }
+        res.json(roles);
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
     }
 });
 
-app.get('/api/permissions', authenticateToken, async (req, res) => {
+app.post('/api/roles', authenticateToken, async (req, res) => {
+    const { name, description, permissions } = req.body;
     try {
-        const [rows] = await db.query('SELECT * FROM permissions');
-        res.json(rows);
+        const [result] = await db.query('INSERT INTO roles (name, description) VALUES (?, ?)', [name, description]);
+        const roleId = result.insertId;
+        
+        if (permissions && permissions.length > 0) {
+            for (const permName of permissions) {
+                await db.query('INSERT IGNORE INTO permissions (name) VALUES (?)', [permName]);
+                const [[perm]] = await db.query('SELECT id FROM permissions WHERE name = ?', [permName]);
+                if (perm) {
+                    await db.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [roleId, perm.id]);
+                }
+            }
+        }
+        res.status(201).json({ message: 'Rol creado exitosamente' });
     } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El rol ya existe' });
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+app.put('/api/roles/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { name, description, permissions } = req.body;
+    try {
+        await db.query('UPDATE roles SET name = ?, description = ? WHERE id = ?', [name, description, id]);
+        
+        if (permissions) {
+            await db.query('DELETE FROM role_permissions WHERE role_id = ?', [id]);
+            for (const permName of permissions) {
+                await db.query('INSERT IGNORE INTO permissions (name) VALUES (?)', [permName]);
+                const [[perm]] = await db.query('SELECT id FROM permissions WHERE name = ?', [permName]);
+                if (perm) {
+                    await db.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [id, perm.id]);
+                }
+            }
+        }
+        res.json({ message: 'Rol actualizado exitosamente' });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El rol ya existe' });
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+app.delete('/api/roles/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+        await db.query('DELETE FROM roles WHERE id = ?', [id]);
+        res.json({ message: 'Rol eliminado' });
+    } catch (error) {
+        if (error.code === 'ER_ROW_IS_REFERENCED_2') return res.status(400).json({message: 'No puede eliminarse porque tiene usuarios asignados'});
         res.status(500).json({ message: 'Server error' });
     }
 });

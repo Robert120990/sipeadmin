@@ -10,12 +10,20 @@ import Consultas from './pages/Consultas';
 import VentasEstaciones from './pages/VentasEstaciones';
 import Lubricantes from './pages/Lubricantes';
 import ResumenPista from './pages/ResumenPista';
+import Permissions from './pages/Permissions';
 import { ToastProvider } from './components/Toast';
 
 const ProtectedRoute = ({ children }) => {
     const token = localStorage.getItem('token');
     if (!token) return <Navigate to="/login" replace />;
     return children;
+};
+
+const PermissionRoute = ({ pathKey, children }) => {
+    const user = JSON.parse(localStorage.getItem('user')) || {};
+    if (user.role_id === 1) return children;
+    if (user.permissions?.includes(pathKey)) return children;
+    return <Navigate to="/dashboard" replace />;
 };
 
 function App() {
@@ -33,17 +41,17 @@ function App() {
                         }
                     >
                         <Route index element={<div className="card glass"><h1>Dashboard</h1><p>Sistema de gestión administrativa.</p></div>} />
-                        <Route path="users" element={<Users />} />
-                        <Route path="carriers" element={<Carriers />} />
-                        <Route path="tankers" element={<Tankers />} />
-                        <Route path="settings" element={<Settings />} />
+                        <Route path="users" element={<PermissionRoute pathKey="/dashboard/users"><Users /></PermissionRoute>} />
+                        <Route path="carriers" element={<PermissionRoute pathKey="/dashboard/carriers"><Carriers /></PermissionRoute>} />
+                        <Route path="tankers" element={<PermissionRoute pathKey="/dashboard/tankers"><Tankers /></PermissionRoute>} />
+                        <Route path="settings" element={<PermissionRoute pathKey="/dashboard/settings"><Settings /></PermissionRoute>} />
                         <Route path="consultas/estaciones" element={<div className="card glass"><h1>Estaciones</h1><p>Módulo de estaciones (Próximamente).</p></div>} />
-                        <Route path="consultas/estaciones/ventas" element={<VentasEstaciones />} />
-                        <Route path="consultas/estaciones/lubricantes" element={<Lubricantes />} />
-                        <Route path="consultas/estaciones/resumen-cierre" element={<ResumenPista />} />
-                        <Route path="consultas/saldos-bancos" element={<Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." />} />
-                        <Route path="consultas/saldos-chequera" element={<Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />} />
-                        <Route path="permissions" element={<div className="card glass"><h1>Permisos</h1><p>Módulo en desarrollo.</p></div>} />
+                        <Route path="consultas/estaciones/ventas" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/ventas"><VentasEstaciones /></PermissionRoute>} />
+                        <Route path="consultas/estaciones/lubricantes" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/lubricantes"><Lubricantes /></PermissionRoute>} />
+                        <Route path="consultas/estaciones/resumen-cierre" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/resumen-cierre"><ResumenPista /></PermissionRoute>} />
+                        <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." /></PermissionRoute>} />
+                        <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
+                        <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />
                     </Route>
                     <Route path="*" element={<Navigate to="/login" replace />} />
                 </Routes>
