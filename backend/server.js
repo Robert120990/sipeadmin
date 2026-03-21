@@ -331,8 +331,30 @@ app.get('/api/ventas/precios-estacion/:date', authenticateToken, async (req, res
     
     try {
         const response = await apiAxios.get(`${baseUrl}/GetPreciosEstacion/${date}`);
-        res.json(response.data || []);
+        let precios = response.data || [];
+        
+        // Fetch station names directly from the external web_consolidado table
+        let estaciones = [];
+        try {
+            const externalDb = await getExternalDb();
+            const [rows] = await externalDb.query("SELECT id_empresa, titulo as estacion FROM web_consolidado WHERE grupo = 'ESTACION'");
+            estaciones = rows;
+        } catch (dbError) {
+            console.warn("Could not fetch station names from external DB, ignoring names");
+        }
+
+        // Merge the station name into the WCF response payload
+        const merged = precios.map(p => {
+            const match = estaciones.find(e => Number(e.id_empresa) === Number(p.id_empresa));
+            return {
+                ...p,
+                sucursal: match ? match.estacion : `Sucursal ${p.id_empresa}`
+            };
+        });
+
+        res.json(merged);
     } catch (error) {
+        console.error('Error fetching precios: ', error.message);
         res.status(500).json({ message: 'Error fetching Precios Estacion API' });
     }
 });
