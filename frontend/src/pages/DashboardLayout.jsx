@@ -9,6 +9,7 @@ export default function DashboardLayout() {
     const [openConsultas, setOpenConsultas] = useState(false);
     const [openConsultasEstaciones, setOpenConsultasEstaciones] = useState(false);
     const [openConsultasBancos, setOpenConsultasBancos] = useState(false);
+    const [openSecurity, setOpenSecurity] = useState(false);
 
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -18,7 +19,6 @@ export default function DashboardLayout() {
 
     const mainNavItems = [
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-        { name: 'Usuarios', path: '/dashboard/users', icon: Users },
     ];
 
     const catalogItems = [
@@ -39,12 +39,19 @@ export default function DashboardLayout() {
         { name: 'Saldos en Chequera', path: '/dashboard/consultas/saldos-chequera', icon: BarChart3 },
     ];
 
-    const systemNavItems = [
-        { name: 'Configuración', path: '/dashboard/settings', icon: SettingsIcon },
+    const securityItems = [
+        { name: 'Usuarios', path: '/dashboard/users', icon: Users },
         { name: 'Permisos', path: '/dashboard/permissions', icon: Shield },
     ];
 
+    const systemNavItems = [
+        { name: 'Configuración', path: '/dashboard/settings', icon: SettingsIcon },
+    ];
+
     useEffect(() => {
+        if (securityItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
+            setOpenSecurity(true);
+        }
         if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
             setOpenCatalogs(true);
         }
@@ -191,6 +198,27 @@ export default function DashboardLayout() {
                                         </div>
                                     )}
                                 </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Expandable Security Menu */}
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <button 
+                            className="nav-item" 
+                            onClick={() => setOpenSecurity(!openSecurity)}
+                            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between' }}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <Shield size={20} />
+                                Seguridad
+                            </div>
+                            {openSecurity ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        </button>
+                        
+                        {openSecurity && (
+                            <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                {securityItems.map(item => renderNavItem(item, true))}
                             </div>
                         )}
                     </div>
