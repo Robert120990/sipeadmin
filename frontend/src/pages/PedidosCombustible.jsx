@@ -13,7 +13,9 @@ export default function PedidosCombustible() {
 
     const fmtDateArray = (dStr) => {
         if (!dStr) return '';
-        const parts = dStr.split('T')[0].split('-');
+        // If it's a timestamp
+        if (dStr.includes('T')) dStr = dStr.split('T')[0];
+        const parts = dStr.split('-');
         if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
         return dStr;
     };
@@ -164,6 +166,12 @@ export default function PedidosCombustible() {
         setPedidoTemp({ id: null });
     };
 
+    // Safe Number Parsing helper
+    const parseNum = (val) => {
+        const n = Number(val);
+        return isNaN(n) ? 0 : n;
+    };
+
     const handleGuardarPedido = async () => {
         if (!fechaPedido || !selectedTransporte || !selectedEstacion) return addToast('Faltan campos obligatorios', 'error');
         try {
@@ -172,7 +180,7 @@ export default function PedidosCombustible() {
                 id_estacion: selectedEstacion,
                 fecha: fechaPedido,
                 id_transportista: selectedTransporte, // Local Carriers ID
-                diesel: comp.D.val, regular: comp.R.val, super: comp.S.val, iondiesel: comp.I.val,
+                diesel: parseNum(comp.D.val), regular: parseNum(comp.R.val), super: parseNum(comp.S.val), iondiesel: parseNum(comp.I.val),
                 id_calibracion_diesel: selectedPipa || null, id_calibracion_regular: null,
                 id_calibracion_super: null, id_calibracion_ion: null
             });
@@ -232,18 +240,26 @@ export default function PedidosCombustible() {
         }
     };
 
-    const InputSet = ({ label, tipo }) => (
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>{label}</span>
-            <input 
-                type="number" min="0" step="1" 
-                value={comp[tipo].val || ''} onChange={e => setComp({...comp, [tipo]: {...comp[tipo], val: e.target.value}})}
-                style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} 
-            />
-        </div>
-    );
-
-    const Cell = ({ v, fg }) => <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: fg?'bold':'normal', borderBottom: '1px outset var(--border)' }}>{numFmt(v)}</td>;
+    const getSelectedPipaData = () => pipas.find(p => p.id === Number(selectedPipa));
+    const renderCompartments = () => {
+        const pData = getSelectedPipaData();
+        if (!pData || !pData.compartments) return null;
+        let comps = [];
+        try { comps = typeof pData.compartments === 'string' ? JSON.parse(pData.compartments) : pData.compartments; } catch(e){}
+        if (!comps.length) return null;
+        
+        return (
+            <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem', flexWrap: 'wrap', padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>
+                <span style={{ fontSize:'0.7rem', fontWeight:'bold', width:'100%', marginBottom:'0.2rem', color:'var(--primary)' }}>COMPARTIMIENTOS PIPA ({comps.length}):</span>
+                {comps.map((c, i) => (
+                    <div key={i} style={{ border: '1px solid var(--border)', background: 'var(--bg-active)', padding: '0.25rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>C{i+1}</span>
+                        <b>{numFmt(c.capacity)}</b>
+                    </div>
+                ))}
+            </div>
+        );
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', zoom: 0.95 }}>
@@ -254,7 +270,7 @@ export default function PedidosCombustible() {
                 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div style={{ background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                        DATOS AL DIA: {fechaConsulta || '-'}
+                        DATOS AL DIA: {fmtDateArray(fechaConsulta)}
                     </div>
                 </div>
             </div>
@@ -302,17 +318,36 @@ export default function PedidosCombustible() {
                         </select>
                     </div>
 
-                    <InputSet label="DIESEL" tipo="D" />
-                    <InputSet label="REGULAR" tipo="R" />
-                    <InputSet label="SUPER" tipo="S" />
-                    <InputSet label="IONDIESEL" tipo="I" />
+                    {renderCompartments()}
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>TOTAL PIPA</span>
-                            <input type="text" readOnly value={numFmt(totalPipa)} style={{ flex: 1, minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', fontWeight: 'bold', background: 'var(--bg-active)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
+                    {/* Inline InputSets to prevent Unmount/Remount Focus Loss */}
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>DIESEL</span>
+                        <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})}
+                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>REGULAR</span>
+                        <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})}
+                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>SUPER</span>
+                        <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})}
+                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>IONDIESEL</span>
+                        <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})}
+                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', borderTop: '2px solid var(--border)', paddingTop: '1rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                            <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-color)' }}>TOTAL PIPA</span>
+                            <input type="text" readOnly value={numFmt(totalPipa)} style={{ flex: 1, maxWidth: '180px', textAlign: 'right', padding: '0.35rem', fontSize: '1rem', fontWeight: 'bold', background: 'var(--bg-active)', color: 'var(--primary)', border: '1px solid var(--border)', borderRadius: '4px' }} />
                         </div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
                             <button className="btn-primary" onClick={handleGuardarPedido} style={{ fontSize: '0.7rem', padding: '0.4rem 0.5rem' }}>
                                 AGREGAR PEDIDO
                             </button>
@@ -339,23 +374,38 @@ export default function PedidosCombustible() {
                         <tbody>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>CAPACIDAD MAXIMA</td>
-                                <Cell v={matrix.D.capacidad} /><Cell v={matrix.R.capacidad} /><Cell v={matrix.S.capacidad} /><Cell v={matrix.I.capacidad} />
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>FUERA DE VENTA</td>
-                                <Cell v={matrix.D.reserva} /><Cell v={matrix.R.reserva} /><Cell v={matrix.S.reserva} /><Cell v={matrix.I.reserva} />
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.reserva)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>INVENTARIO ACTUAL</td>
-                                <Cell v={matrix.D.inventario} /><Cell v={matrix.R.inventario} /><Cell v={matrix.S.inventario} /><Cell v={matrix.I.inventario} />
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>VENTA PROMEDIO</td>
-                                <Cell v={matrix.D.promedio} /><Cell v={matrix.R.promedio} /><Cell v={matrix.S.promedio} /><Cell v={matrix.I.promedio} />
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
                             </tr>
                             <tr style={{ background: 'rgba(37,99,235,0.05)' }}>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}>PEDIDOS PROGRAMADOS</td>
-                                <Cell fg v={matrix.D.programado} /><Cell fg v={matrix.R.programado} /><Cell fg v={matrix.S.programado} /><Cell fg v={matrix.I.programado} />
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.programado)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN DIAS</td>
@@ -403,7 +453,7 @@ export default function PedidosCombustible() {
                             {programados.map(p => (
                                 <tr key={p.id_pedido} style={{ borderBottom: '1px solid var(--border)' }} onDoubleClick={() => loadPedidoToForm(p)}>
                                     <td style={{ padding: '0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
-                                    <td style={{ padding: '0.5rem', color: 'var(--primary)' }}><b>{p.id_pedido}</b></td>
+                                    <td style={{ padding: '0.5rem', color: 'var(--primary)' }}><b>{p.numero || p.id_pedido}</b></td>
                                     <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
                                     <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
                                     <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.super)}</td>
