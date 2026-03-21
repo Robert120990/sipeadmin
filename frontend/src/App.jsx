@@ -11,6 +11,8 @@ import VentasEstaciones from './pages/VentasEstaciones';
 import Lubricantes from './pages/Lubricantes';
 import ResumenPista from './pages/ResumenPista';
 import DiferenciasCombustible from './pages/DiferenciasCombustible';
+import PreciosEstacion from './pages/PreciosEstacion';
+import PedidosCombustible from './pages/PedidosCombustible';
 import Permissions from './pages/Permissions';
 import { ToastProvider } from './components/Toast';
 
@@ -51,6 +53,8 @@ function App() {
                         <Route path="consultas/estaciones/lubricantes" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/lubricantes"><Lubricantes /></PermissionRoute>} />
                         <Route path="consultas/estaciones/resumen-cierre" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/resumen-cierre"><ResumenPista /></PermissionRoute>} />
                         <Route path="consultas/estaciones/diferencias-combustible" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/diferencias-combustible"><DiferenciasCombustible /></PermissionRoute>} />
+                        <Route path="consultas/estaciones/precios" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios"><PreciosEstacion /></PermissionRoute>} />
+                        <Route path="operaciones/pedidos" element={<PermissionRoute pathKey="/dashboard/operaciones/pedidos"><PedidosCombustible /></PermissionRoute>} />
                         <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." /></PermissionRoute>} />
                         <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
                         <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />

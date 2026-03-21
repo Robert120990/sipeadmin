@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { LogOut, Folder, ChevronDown, ChevronRight, Shield, FileText, UserCircle } from 'lucide-react';
-import { mainNavItems, catalogItems, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems } from '../config/navigation';
+import { mainNavItems, catalogItems, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems } from '../config/navigation';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -11,11 +11,13 @@ export default function DashboardLayout() {
     const [openConsultasEstaciones, setOpenConsultasEstaciones] = useState(false);
     const [openConsultasBancos, setOpenConsultasBancos] = useState(false);
     const [openSecurity, setOpenSecurity] = useState(false);
+    const [openOperaciones, setOpenOperaciones] = useState(false);
 
     const user = JSON.parse(localStorage.getItem('user')) || {};
     const hasPermission = (path) => user.role_id === 1 || user.permissions?.includes(path);
 
     const filteredCatalogs = catalogItems.filter(item => hasPermission(item.path));
+    const filteredOperaciones = operacionesMenu.filter(item => hasPermission(item.path));
     const filteredEstaciones = consultasEstaciones.filter(item => hasPermission(item.path));
     const filteredBancos = consultasBancos.filter(item => hasPermission(item.path));
     const filteredSecurity = securityItems.filter(item => hasPermission(item.path));
@@ -35,6 +37,9 @@ export default function DashboardLayout() {
         }
         if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
             setOpenCatalogs(true);
+        }
+        if (operacionesMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
+            setOpenOperaciones(true);
         }
         if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
             setOpenConsultas(true);
@@ -87,6 +92,29 @@ export default function DashboardLayout() {
                             {openCatalogs && (
                                 <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
                                     {filteredCatalogs.map(item => renderNavItem(item, true))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Expandable Operaciones Menu */}
+                    {filteredOperaciones.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <button 
+                                className="nav-item" 
+                                onClick={() => setOpenOperaciones(!openOperaciones)}
+                                style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between' }}
+                            >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <Folder size={20} />
+                                    Operaciones
+                                </div>
+                                {openOperaciones ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </button>
+                            
+                            {openOperaciones && (
+                                <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                    {filteredOperaciones.map(item => renderNavItem(item, true))}
                                 </div>
                             )}
                         </div>

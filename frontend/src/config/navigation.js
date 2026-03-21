@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -15,7 +15,12 @@ export const consultasEstaciones = [
     { name: 'Resumen de Ventas', path: '/dashboard/consultas/estaciones/ventas', icon: FileText },
     { name: 'Venta de Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets },
     { name: 'Resumen de Cierre', path: '/dashboard/consultas/estaciones/resumen-cierre', icon: ClipboardList },
-    { name: 'Diferencias Combustible', path: '/dashboard/consultas/estaciones/diferencias-combustible', icon: BarChart3 }
+    { name: 'Diferencias Combustible', path: '/dashboard/consultas/estaciones/diferencias-combustible', icon: BarChart3 },
+    { name: 'Precios Estación', path: '/dashboard/consultas/estaciones/precios', icon: DollarSign }
+];
+
+export const operacionesMenu = [
+    { name: 'Pedidos Combustible', path: '/dashboard/operaciones/pedidos', icon: Truck }
 ];
 
 export const consultasBancos = [
