@@ -48,6 +48,163 @@ app.use(async (req, res, next) => {
     next();
 });
 
+// --- Operaciones Routes (Pedidos de Combustible) ---
+
+app.get('/api/operaciones/transportistas', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [rows] = await externalDb.query("SELECT id, nombre FROM web_transportistas ORDER BY nombre");
+        res.json(rows);
+    } catch (error) { res.status(500).json({ message: 'Error fetching transportistas' }); }
+});
+
+app.get('/api/operaciones/calibraciones/:id_transporte', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [rows] = await externalDb.query("SELECT id, descripcion FROM web_transportistas_calibracion WHERE id_transportista = ?", [req.params.id_transporte]);
+        res.json(rows);
+    } catch (error) { res.status(500).json({ message: 'Error fetching calibraciones' }); }
+});
+
+app.get('/api/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticateToken, async (req, res) => {
+    try {
+        const { id_empresa, fecha } = req.params;
+        const externalDb = await getExternalDb();
+
+        const maxFechaQ = `SELECT MAX(fecha) as last_date FROM lecturas_tanque WHERE id_empresa = ? AND fecha <= ?`;
+        const [maxRows] = await externalDb.query(maxFechaQ, [id_empresa, fecha]);
+        
+        let targetDate = fecha;
+        if (maxRows.length && maxRows[0].last_date) {
+            targetDate = maxRows[0].last_date;
+            if (targetDate instanceof Date) { targetDate = targetDate.toISOString().split('T')[0]; }
+        }
+        
+        const query = `
+            SELECT b.id_producto AS id_tanque, sum(b.lectura) as lectura, sum(c.capacidad) as capacidad, sum(c.galones_reserva) as reserva, if(c.tipo_combustible='M','I',c.tipo_combustible) as tipo_combustible 
+            FROM lecturas_tanque a 
+            INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa=b.id_empresa 
+            INNER JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa=c.id_empresa 
+            WHERE a.id_empresa = ? AND a.fecha = ? AND a.turno = (SELECT MAX(x.turno) FROM lecturas_tanque x WHERE x.id_empresa=a.id_empresa AND x.fecha=a.fecha) 
+            GROUP BY tipo_combustible
+        `;
+        const [rows] = await externalDb.query(query, [id_empresa, targetDate]);
+        res.json({ fecha: targetDate, inventario: rows });
+    } catch (error) { res.status(500).json({ message: 'Error fetching datos-tanque' }); }
+});
+
+app.get('/api/operaciones/pedidos/promedios/:id_empresa/:fecha', authenticateToken, async (req, res) => {
+    try {
+        const { id_empresa, fecha } = req.params;
+        const externalDb = await getExternalDb();
+        const query = `
+           SELECT IF(a.id_empresa = '004' AND a.codigo_producto = '0007','I', LEFT(a.nom_producto,1)) AS tipo_combustible,
+                  SUM(a.total)/7 as promedio
+           FROM cierre_turno_lecturas a 
+           INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa 
+           WHERE a.id_empresa = ? AND STR_TO_DATE(b.fecha_turno,'%d/%m/%Y') BETWEEN DATE_SUB(?, INTERVAL 7 DAY) AND ?
+           GROUP BY codigo_producto, a.id_empresa
+        `;
+        const [rows] = await externalDb.query(query, [id_empresa, fecha, fecha]);
+        
+        const agg = { D: 0, R: 0, S: 0, I: 0 };
+        rows.forEach(r => {
+            if (['D', 'R', 'S', 'I'].includes(r.tipo_combustible)) {
+                agg[r.tipo_combustible] += Number(r.promedio || 0);
+            }
+        });
+        
+        res.json(agg);
+    } catch (error) { res.status(500).json({ message: 'Error fetching promedios' }); }
+});
+
+app.get('/api/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateToken, async (req, res) => {
+    try {
+        const { id_estacion, fecha } = req.params;
+        const externalDb = await getExternalDb();
+        const query = `
+            SELECT fecha, numero, diesel, regular, super, iondiesel, id_transportista, id as id_pedido, id_calibracion_diesel, id_calibracion_regular, id_calibracion_super, id_calibracion_ion 
+            FROM web_pedidos_temp 
+            WHERE id_estacion = ? AND fecha > ? ORDER BY fecha
+        `;
+        const [rows] = await externalDb.query(query, [id_estacion, fecha]);
+        res.json(rows);
+    } catch (error) { res.status(500).json({ message: 'Error fetching pedidos programados' }); }
+});
+
+app.post('/api/operaciones/pedidos/agregar', authenticateToken, async (req, res) => {
+    try {
+        const { id_pedido, id_estacion, fecha, id_transportista, diesel, regular, super: s, iondiesel, id_calibracion_diesel, id_calibracion_regular, id_calibracion_super, id_calibracion_ion } = req.body;
+        const externalDb = await getExternalDb();
+        if (id_pedido) {
+            await externalDb.query(`UPDATE web_pedidos_temp SET fecha=?, id_transportista=?, diesel=?, regular=?, super=?, iondiesel=?, id_calibracion_diesel=?, id_calibracion_regular=?, id_calibracion_super=?, id_calibracion_ion=? WHERE id=?`, 
+                [fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, id_calibracion_regular || null, id_calibracion_super || null, id_calibracion_ion || null, id_pedido]);
+        } else {
+            await externalDb.query(`INSERT INTO web_pedidos_temp (id_estacion, fecha, id_transportista, diesel, regular, super, iondiesel, id_calibracion_diesel, id_calibracion_regular, id_calibracion_super, id_calibracion_ion) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, 
+                [id_estacion, fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, id_calibracion_regular || null, id_calibracion_super || null, id_calibracion_ion || null]);
+        }
+        res.json({ success: true, message: 'Pedido Guardado!' });
+    } catch (error) { res.status(500).json({ message: 'Error agregando pedido' }); }
+});
+
+app.delete('/api/operaciones/pedidos/anular/:id', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [ex] = await externalDb.query("SELECT count(id_origen) as cont FROM web_pedidos WHERE id_origen = ?", [req.params.id]);
+        if (ex[0].cont > 0) return res.status(400).json({ message: "Pedido Confirmado. No Puede Anular." });
+        
+        await externalDb.query("DELETE FROM web_pedidos_temp WHERE id = ?", [req.params.id]);
+        res.json({ success: true, message: 'Pedido Anulado' });
+    } catch (error) { res.status(500).json({ message: 'Error anulando pedido' }); }
+});
+
+app.post('/api/operaciones/pedidos/confirmar', authenticateToken, async (req, res) => {
+    try {
+        const { id_pedido, numero, id_estacion, forma_pago, costo_d, costo_s, costo_r, costo_i } = req.body;
+        const externalDb = await getExternalDb();
+        
+        const [exCheck] = await externalDb.query("SELECT count(id_origen) as cont FROM web_pedidos WHERE id_origen = ?", [id_pedido]);
+        if (exCheck[0].cont > 0) return res.status(400).json({ message: "Pedido Confirmado. No Puede Volver a Confirmar." });
+        
+        const [tempReq] = await externalDb.query("SELECT * FROM web_pedidos_temp WHERE id = ?", [id_pedido]);
+        if (!tempReq.length) return res.status(404).json({ message: "Pedido temporal no encontrado." });
+        
+        const p = tempReq[0];
+        const nTotal = Number(p.diesel || 0) + Number(p.regular || 0) + Number(p.super || 0) + Number(p.iondiesel || 0);
+        const pipa = nTotal >= 8000 ? 8000 : 4000;
+        const fleteCol = nTotal >= 8000 ? "pipa8000" : "pipa4000";
+        
+        let flete = 0.0;
+        try {
+            const [fRows] = await externalDb.query(`SELECT ${fleteCol} as cost FROM web_fletes WHERE id_estacion = ? AND id_transportista = ?`, [id_estacion, p.id_transportista]);
+            if (fRows.length) flete = fRows[0].cost || 0;
+        } catch(e) {}
+        
+        const cDate = p.fecha instanceof Date ? p.fecha.toISOString().split('T')[0] : p.fecha;
+        
+        const connection = await externalDb.getConnection();
+        await connection.beginTransaction();
+        try {
+            const [exNum] = await connection.query("SELECT count(numero) as c FROM web_pedidos WHERE numero = ?", [numero]);
+            if (exNum[0].c > 0) {
+                await connection.query("UPDATE web_pedidos SET p_diesel = p_diesel + ?, p_regular = p_regular + ?, p_super = p_super + ?, p_ion = p_ion + ?, compartido = ? WHERE numero = ?", 
+                    [p.diesel, p.regular, p.super, p.iondiesel, nTotal, numero]);
+            } else {
+                await connection.query(`INSERT INTO web_pedidos (fecha, numero, id_estacion, forma_pago, p_diesel, p_regular, p_super, p_ion, id_transportista, flete, pipa, costo_d, costo_s, costo_r, costo_i, id_origen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, 
+                    [cDate, numero, id_estacion, forma_pago, p.diesel, p.regular, p.super, p.iondiesel, p.id_transportista, flete, pipa, costo_d || 0, costo_s || 0, costo_r || 0, costo_i || 0, id_pedido]);
+            }
+            await connection.query("UPDATE web_pedidos_temp SET numero = ? WHERE id = ?", [numero, id_pedido]);
+            await connection.commit();
+            res.json({ success: true, message: 'Pedido Confirmado y Creado!' });
+        } catch(errTransaction) {
+            await connection.rollback();
+            throw errTransaction;
+        } finally {
+            connection.release();
+        }
+    } catch (error) { res.status(500).json({ message: 'Error al confirmar pedido: ' + error.message }); }
+});
+
 // Middleware for authentication
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
