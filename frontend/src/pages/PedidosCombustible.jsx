@@ -28,6 +28,7 @@ export default function PedidosCombustible() {
     // Selections
     const [selectedEstacion, setSelectedEstacion] = useState('');
     const [fechaConsulta, setFechaConsulta] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
     
     // Formulario Agregar Pedido
     const [fechaPedido, setFechaPedido] = useState(defaultDate);
@@ -105,6 +106,7 @@ export default function PedidosCombustible() {
     // 3. Fetch Operational Data when Estacion changes
     const fetchOperationalData = async (est) => {
         if (!est) return;
+        setIsLoading(true);
         try {
             // Inventario Tanques
             const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${defaultDate}`);
@@ -122,6 +124,8 @@ export default function PedidosCombustible() {
             limpiarFormulario();
         } catch (error) {
             addToast("Error al obtener datos operativos", "error");
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -320,15 +324,19 @@ export default function PedidosCombustible() {
             <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>ESTACION</label>
-                    <select value={selectedEstacion} onChange={e => setSelectedEstacion(e.target.value)}
+                    <select value={selectedEstacion} onChange={e => setSelectedEstacion(e.target.value)} disabled={isLoading}
                         style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', minWidth: '250px' }}>
                         <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Estación --</option>
                         {estaciones.map(e => <option key={e.id_empresa} value={e.id_empresa} style={{ background: '#1e293b', color: 'white' }}>{e.titulo}</option>)}
                     </select>
                 </div>
+                {isLoading && <span style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className="spinner" style={{ width: '16px', height: '16px', border: '2px solid var(--primary)', borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                    Sincronizando Módulos...
+                </span>}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(350px, 1fr) 2fr', gap: '1rem', alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(350px, 1fr) 2fr', gap: '1rem', alignItems: 'start', opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
                 {/* Panel Izquierdo: Formulario */}
                 <div className="card glass" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem' }}>
                     <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', borderBottom: '1px solid var(--primary)', paddingBottom: '0.5rem' }}>OPERACIONES PARA AGREGAR PEDIDO</h3>
@@ -477,7 +485,7 @@ export default function PedidosCombustible() {
             </div>
 
             {/* Tablas Inferiores */}
-            <div className="card glass" style={{ padding: 0 }}>
+            <div className="card glass" style={{ padding: 0, opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
                 <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', background: 'var(--bg-active)', padding: '0.5rem', borderBottom: '1px solid var(--border)' }}>PEDIDOS PROGRAMADOS POR ESTACION</h3>
                 <div style={{ overflowX: 'auto', padding: '0.5rem' }}>
                     <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
