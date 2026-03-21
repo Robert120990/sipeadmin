@@ -128,11 +128,19 @@ input:focus {
 }
 
 .sidebar {
-  width: 260px;
+  width: 280px;
   border-right: 1px solid var(--border);
   padding: 1.5rem;
   display: flex;
   flex-direction: column;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s;
+  overflow-x: hidden;
+  background: var(--card-bg);
+}
+
+.dashboard-layout.collapsed .sidebar {
+  width: 80px;
+  padding: 1.5rem 0.75rem;
 }
 
 .sidebar h2 {
@@ -140,6 +148,7 @@ input:focus {
   margin-bottom: 2rem;
   color: var(--primary);
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .sidebar-nav {
@@ -156,7 +165,57 @@ input:focus {
   text-decoration: none;
   color: var(--text-muted);
   border-radius: var(--border-radius);
-  transition: var(--transition);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.dashboard-layout.collapsed .nav-item {
+  padding: 0.75rem;
+  justify-content: center;
+  gap: 0;
+}
+
+.dashboard-layout.collapsed .nav-item span {
+  display: none;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.3);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* For Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.3) rgba(255, 255, 255, 0.05);
+}
+
+.main-content {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+  transition: margin-left 0.3s;
 }
 
 .nav-item:hover, .nav-item.active {

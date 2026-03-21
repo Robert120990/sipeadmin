@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, Shield, FileText, UserCircle } from 'lucide-react';
+import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard } from 'lucide-react';
 import { mainNavItems, catalogItems, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems } from '../config/navigation';
 
 export default function DashboardLayout() {
@@ -12,6 +12,7 @@ export default function DashboardLayout() {
     const [openConsultasBancos, setOpenConsultasBancos] = useState(false);
     const [openSecurity, setOpenSecurity] = useState(false);
     const [openOperaciones, setOpenOperaciones] = useState(false);
+    const [isCollapsed, setIsCollapsed] = useState(false);
 
     const user = JSON.parse(localStorage.getItem('user')) || {};
     const hasPermission = (path) => user.role_id === 1 || user.permissions?.includes(path);
@@ -30,66 +31,65 @@ export default function DashboardLayout() {
         navigate('/login');
     };
 
-
     useEffect(() => {
-        if (securityItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
-            setOpenSecurity(true);
-        }
-        if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
-            setOpenCatalogs(true);
-        }
-        if (operacionesMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
-            setOpenOperaciones(true);
-        }
-        if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
-            setOpenConsultas(true);
-        }
-        if (consultasBancos.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
-            setOpenConsultasBancos(true);
-        }
-        if (consultasEstaciones.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) {
-            setOpenConsultasEstaciones(true);
-        }
+        if (securityItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenSecurity(true);
+        if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenCatalogs(true);
+        if (operacionesMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenOperaciones(true);
+        if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultas(true);
+        if (consultasBancos.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasBancos(true);
+        if (consultasEstaciones.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasEstaciones(true);
     }, [location.pathname]);
 
     const renderNavItem = (item, isSubItem = false) => {
         const Icon = item.icon;
-        const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+        const isActive = location.pathname === item.path || (item.path !== '/dashboard' && location.pathname.startsWith(item.path + '/'));
+        if (item.path === '/dashboard' && location.pathname !== '/dashboard') return null; // Prevent duplicate dashboard home in submenus
+        
         return (
             <Link
                 key={item.name}
                 to={item.path}
                 className={`nav-item ${isActive ? 'active' : ''}`}
-                style={isSubItem ? { paddingLeft: '2.5rem', fontSize: '0.9rem' } : {}}
+                style={isSubItem ? { paddingLeft: isCollapsed ? '0.75rem' : '2.5rem', fontSize: '0.9rem' } : {}}
+                title={isCollapsed ? item.name : ''}
             >
                 <Icon size={isSubItem ? 18 : 20} />
-                {item.name}
+                {!isCollapsed && <span>{item.name}</span>}
             </Link>
         );
     };
 
     return (
-        <div className="dashboard-layout">
+        <div className={`dashboard-layout ${isCollapsed ? 'collapsed' : ''}`}>
             <aside className="sidebar">
-                <h2>SIPE ADMIN</h2>
-                <nav className="sidebar-nav">
-                    {mainNavItems.map(item => renderNavItem(item))}
-                    
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'space-between', padding: '0.5rem 0', marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    {!isCollapsed && <h2 style={{ margin: 0, fontSize: '1.25rem', overflow: 'hidden', whiteSpace: 'nowrap' }}>SIPE ADMIN</h2>}
+                    <button 
+                        onClick={() => setIsCollapsed(!isCollapsed)}
+                        style={{ background: 'rgba(255,255,255,0.05)', border: 'none', color: 'var(--text-muted)', borderRadius: '8px', cursor: 'pointer', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        title={isCollapsed ? "Expandir" : "Contraer"}
+                    >
+                        {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+                    </button>
+                </div>
+
+                <nav className="sidebar-nav" style={{ flex: 1, overflowY: 'auto' }}>
+                    {/* Hardcoded Dashboard Home for better control */}
+                    <Link to="/dashboard" className={`nav-item ${location.pathname === '/dashboard' ? 'active' : ''}`} title={isCollapsed ? "Dashboard" : ""}>
+                        <LayoutDashboard size={20} />
+                        {!isCollapsed && <span>Dashboard</span>}
+                    </Link>
+
                     {filteredCatalogs.length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <button 
-                                className="nav-item" 
-                                onClick={() => setOpenCatalogs(!openCatalogs)}
-                                style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between' }}
-                            >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <button className="nav-item" onClick={() => !isCollapsed && setOpenCatalogs(!openCatalogs)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }} title={isCollapsed ? "Catálogos" : ""}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
                                     <Folder size={20} />
-                                    Catálogos
+                                    {!isCollapsed && <span>Catálogos</span>}
                                 </div>
-                                {openCatalogs ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                {!isCollapsed && (openCatalogs ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
                             </button>
-                            
-                            {openCatalogs && (
+                            {openCatalogs && !isCollapsed && (
                                 <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
                                     {filteredCatalogs.map(item => renderNavItem(item, true))}
                                 </div>
@@ -97,22 +97,16 @@ export default function DashboardLayout() {
                         </div>
                     )}
 
-                    {/* Expandable Operaciones Menu */}
                     {filteredOperaciones.length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <button 
-                                className="nav-item" 
-                                onClick={() => setOpenOperaciones(!openOperaciones)}
-                                style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between' }}
-                            >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <button className="nav-item" onClick={() => !isCollapsed && setOpenOperaciones(!openOperaciones)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }} title={isCollapsed ? "Operaciones" : ""}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
                                     <Folder size={20} />
-                                    Operaciones
+                                    {!isCollapsed && <span>Operaciones</span>}
                                 </div>
-                                {openOperaciones ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                {!isCollapsed && (openOperaciones ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
                             </button>
-                            
-                            {openOperaciones && (
+                            {openOperaciones && !isCollapsed && (
                                 <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
                                     {filteredOperaciones.map(item => renderNavItem(item, true))}
                                 </div>
@@ -120,120 +114,49 @@ export default function DashboardLayout() {
                         </div>
                     )}
 
-                    {/* Expandable Consultas Menu */}
                     {hasAnyConsultas && (
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <button 
-                            className="nav-item" 
-                            onClick={() => setOpenConsultas(!openConsultas)}
-                            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between' }}
-                        >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                <FileText size={20} />
-                                Consultas
-                            </div>
-                            {openConsultas ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        </button>
-                        
-                        {openConsultas && (
-                            <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
-                                {/* root level Consultas items */}
-                                {consultasItemsRoot.filter(i => hasPermission(i.path)).map(item => renderNavItem(item, true))}
-                                
-                                {/* level 2 Estaciones expandable */}
-                                {filteredEstaciones.length > 0 && (
-                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                        <button 
-                                            className="nav-item" 
-                                            onClick={() => setOpenConsultasEstaciones(!openConsultasEstaciones)}
-                                            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}
-                                        >
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                                <Folder size={18} />
-                                                Estaciones
-                                            </div>
-                                            {openConsultasEstaciones ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                        </button>
-                                        
-                                        {openConsultasEstaciones && (
-                                            <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
-                                                {filteredEstaciones.map(item => {
-                                                    const Icon = item.icon;
-                                                    const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
-                                                    return (
-                                                        <Link
-                                                            key={item.name}
-                                                            to={item.path}
-                                                            className={`nav-item ${isActive ? 'active' : ''}`}
-                                                            style={{ paddingLeft: '3.75rem', fontSize: '0.85rem' }}
-                                                        >
-                                                            <Icon size={16} />
-                                                            {item.name}
-                                                        </Link>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                                
-                                {/* level 2 Bancos expandable */}
-                                {filteredBancos.length > 0 && (
-                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                        <button 
-                                        className="nav-item" 
-                                        onClick={() => setOpenConsultasBancos(!openConsultasBancos)}
-                                        style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}
-                                    >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                            <Folder size={18} />
-                                            Bancos
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <button className="nav-item" onClick={() => !isCollapsed && setOpenConsultas(!openConsultas)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }} title={isCollapsed ? "Consultas" : ""}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                    <FileText size={20} />
+                                    {!isCollapsed && <span>Consultas</span>}
+                                </div>
+                                {!isCollapsed && (openConsultas ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                            </button>
+                            {openConsultas && !isCollapsed && (
+                                <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                    {consultasItemsRoot.filter(i => hasPermission(i.path)).map(item => renderNavItem(item, true))}
+                                    {filteredEstaciones.length > 0 && (
+                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                            <button className="nav-item" onClick={() => setOpenConsultasEstaciones(!openConsultasEstaciones)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                    <Folder size={18} />
+                                                    Estaciones
+                                                </div>
+                                                {openConsultasEstaciones ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                            </button>
+                                            {openConsultasEstaciones && (
+                                                <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                                    {filteredEstaciones.map(item => renderNavItem(item, true))}
+                                                </div>
+                                            )}
                                         </div>
-                                        {openConsultasBancos ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                    </button>
-                                    
-                                        {openConsultasBancos && (
-                                            <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
-                                                {filteredBancos.map(item => {
-                                                    const Icon = item.icon;
-                                                    const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
-                                                    return (
-                                                        <Link
-                                                            key={item.name}
-                                                            to={item.path}
-                                                            className={`nav-item ${isActive ? 'active' : ''}`}
-                                                            style={{ paddingLeft: '3.75rem', fontSize: '0.85rem' }}
-                                                        >
-                                                            <Icon size={16} />
-                                                            {item.name}
-                                                        </Link>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     )}
 
-                    {/* Expandable Security Menu */}
                     {filteredSecurity.length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <button 
-                                className="nav-item" 
-                                onClick={() => setOpenSecurity(!openSecurity)}
-                                style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between' }}
-                            >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <button className="nav-item" onClick={() => !isCollapsed && setOpenSecurity(!openSecurity)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }} title={isCollapsed ? "Seguridad" : ""}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
                                     <Shield size={20} />
-                                    Seguridad
+                                    {!isCollapsed && <span>Seguridad</span>}
                                 </div>
-                                {openSecurity ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                {!isCollapsed && (openSecurity ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
                             </button>
-                            
-                            {openSecurity && (
+                            {openSecurity && !isCollapsed && (
                                 <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
                                     {filteredSecurity.map(item => renderNavItem(item, true))}
                                 </div>
@@ -241,23 +164,23 @@ export default function DashboardLayout() {
                         </div>
                     )}
 
-                    {filteredSystem.map(item => renderNavItem(item))}
+                    {!isCollapsed && filteredSystem.map(item => renderNavItem(item))}
                 </nav>
-                <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 1rem', marginBottom: '0.5rem' }}>
-                        <UserCircle size={32} color="var(--primary)" />
-                        <div style={{ overflow: 'hidden' }}>
-                            <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-color)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.username || 'Usuario Invitado'}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
-                        </div>
+
+                <div style={{ marginTop: 'auto', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.5rem', marginBottom: '0.5rem', justifyContent: isCollapsed ? 'center' : 'flex-start' }}>
+                        <UserCircle size={isCollapsed ? 28 : 32} color="var(--primary)" />
+                        {!isCollapsed && (
+                            <div style={{ overflow: 'hidden' }}>
+                                <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-color)', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{user.username || 'Usuario'}</div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
+                            </div>
+                        )}
                     </div>
-                    <button onClick={handleLogout} className="nav-item" style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', color: '#ef4444' }}>
+                    <button onClick={handleLogout} className="nav-item" style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', color: '#ef4444', justifyContent: isCollapsed ? 'center' : 'flex-start' }} title={isCollapsed ? "Cerrar Sesión" : ""}>
                         <LogOut size={20} />
-                        Cerrar Sesión
+                        {!isCollapsed && <span>Cerrar Sesión</span>}
                     </button>
-                    <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '1rem', opacity: 0.7 }}>
-                        SIPE Admin v1.0.0
-                    </div>
                 </div>
             </aside>
             <main className="main-content">

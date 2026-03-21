@@ -11,7 +11,7 @@ const { initDB } = require('./db');
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey123';
 
 app.use(cors());
@@ -48,6 +48,7 @@ app.use(async (req, res, next) => {
     next();
 });
 
+app.get('/api/debug-ping', (req, res) => res.json({ message: 'pong' }));
 // Middleware for authentication
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -61,6 +62,36 @@ const authenticateToken = (req, res, next) => {
         next();
     });
 };
+
+// --- Operaciones Routes (Recortatorios Dashboard) ---
+// --- Operaciones Routes (Recortatorios Dashboard) ---
+app.get('/api/dashboard/vencimientos', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const now = new Date();
+        const toDate = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+        
+        console.log(`DASHBOARD: fetching pendings < ${toDate}`);
+
+        const query = `
+            SELECT c.descripcion as ubicacion, b.descripcion, a.vencimiento as vence, b.monto, a.id, b.id as id_recordatorio
+            FROM web_rc_recordatorios_vencimientos a 
+            INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id 
+            INNER JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id 
+            WHERE a.vencimiento < ? 
+            AND a.estado = 'P' AND b.activo = 1
+            ORDER BY a.vencimiento DESC
+        `;
+        const [rows] = await externalDb.query(query, [toDate]);
+        console.log(`DASHBOARD: found ${rows.length} records`);
+        res.json(rows);
+    } catch (error) { 
+        console.error('SERVER ERROR IN DASHBOARD:', error);
+        res.status(500).json({ message: 'Error' }); 
+    }
+});
+
+
 
 // --- Operaciones Routes (Pedidos de Combustible) ---
 
@@ -248,6 +279,8 @@ app.get('/api/operaciones/recordatorios', authenticateToken, async (req, res) =>
         res.json(rows);
     } catch (error) { res.status(500).json({ message: 'Error fetching recordatorios' }); }
 });
+
+
 
 app.get('/api/operaciones/recordatorios/:id', authenticateToken, async (req, res) => {
     try {

@@ -340,60 +340,70 @@ export default function ControlRecordatorios() {
                 </div>
             </div>
 
-            <div className={`card glass table-responsive ${loading ? 'fade-loading' : ''}`} style={{ marginBottom: '1.5rem', maxHeight: '55vh', overflowY: 'auto', backgroundColor: 'rgba(20, 25, 30, 0.4)' }}>
+            <div className={`card glass ${loading ? 'fade-loading' : ''}`} style={{ 
+                marginBottom: '1.5rem', 
+                flex: 1, 
+                overflowY: 'auto', 
+                maxHeight: '600px', 
+                padding: '0',
+                backgroundColor: 'rgba(20, 25, 30, 0.4)'
+            }}>
                 {loading && (
                     <div className="loading-overlay">
                         <div className="spinner"></div>
                         <p style={{ marginTop: '1rem', color: 'var(--primary)', fontWeight: 'bold' }}>Sincronizando Módulos...</p>
                     </div>
                 )}
-                <table className="data-table" style={{ fontSize: '0.85rem' }}>
-                    <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: 'rgba(30, 35, 42, 1)' }}>
-                        <tr>
-                            <th>UBICACION</th>
-                            <th>DESCRIPCION</th>
-                            <th>VENCE</th>
-                            <th>OBSERVACION</th>
-                            <th>FORMA PAGO</th>
-                            <th>MONTO</th>
-                            <th>ESTADO</th>
-                            <th>FEC. PAGO</th>
-                            <th style={{ textAlign: 'center' }}>ACCIONES</th>
+                <table className="data-table" style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#1E232A' }}>
+                        <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>UBICACION</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>DESCRIPCION</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>VENCE</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>OBSERVACION</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>FORMA PAGO</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>MONTO</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>ESTADO</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>FEC. PAGO</th>
+                            <th style={{ textAlign: 'center', padding: '0.75rem 0.5rem' }}>ACCIONES</th>
                         </tr>
                     </thead>
                     <tbody>
                         {recordatorios.length === 0 ? (
                             <tr><td colSpan="9" style={{ textAlign: 'center', padding: '2rem' }}>No hay registros coincidentes</td></tr>
                         ) : recordatorios.map((r, idx) => (
-                            <tr key={idx} style={{ backgroundColor: r.estado === 'CANCELADO' ? 'rgba(40, 167, 69, 0.1)' : 'transparent' }}>
-                                <td>{r.ubicacion}</td>
-                                <td>{r.descripcion}</td>
-                                <td style={{ color: 'var(--warning)', fontWeight: 'bold' }}>{formatDate(r.vence)}</td>
-                                <td>{r.observacion}</td>
-                                <td>{r.forma_pago}</td>
-                                <td style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{mc(r.monto)}</td>
-                                <td>
+                            <tr key={idx} style={{ 
+                                borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                backgroundColor: r.estado === 'CANCELADO' ? 'rgba(40, 167, 69, 0.05)' : 'transparent' 
+                            }}>
+                                <td style={{ padding: '0.5rem' }}>{r.ubicacion}</td>
+                                <td style={{ padding: '0.5rem' }}>{r.descripcion}</td>
+                                <td style={{ padding: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>{formatDate(r.vence)}</td>
+                                <td style={{ padding: '0.5rem' }}>{r.observacion}</td>
+                                <td style={{ padding: '0.5rem' }}>{r.forma_pago}</td>
+                                <td style={{ padding: '0.5rem', fontWeight: 'bold', color: 'var(--primary)' }}>{mc(r.monto)}</td>
+                                <td style={{ padding: '0.5rem' }}>
                                     <span style={{ 
-                                        padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold',
+                                        padding: '0.15rem 0.4rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold',
                                         backgroundColor: r.estado === 'CANCELADO' ? 'rgba(40,167,69,0.2)' : 'rgba(255,193,7,0.2)',
                                         color: r.estado === 'CANCELADO' ? '#28a745' : '#ffc107'
                                     }}>
                                         {r.estado}
                                     </span>
                                 </td>
-                                <td>{formatDate(r.fecha_cancelacion)}</td>
-                                <td style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
-                                    <button className="btn-primary" style={{ padding: '0.4rem' }} title="Marcar como Pagado" disabled={r.estado === 'CANCELADO'} onClick={() => {
+                                <td style={{ padding: '0.5rem' }}>{formatDate(r.fecha_cancelacion)}</td>
+                                <td style={{ display: 'flex', gap: '0.2rem', justifyContent: 'center', padding: '0.5rem' }}>
+                                    <button className="btn-primary" style={{ padding: '0.3rem' }} title="Marcar como Pagado" disabled={r.estado === 'CANCELADO'} onClick={() => {
                                         setPagoData({ id_vencimiento: r.id, fecPago: todayStr, formaPago: '' });
                                         setIsPagoModalOpen(true);
                                     }}>
-                                        <CheckCircle size={16} />
+                                        <CheckCircle size={14} />
                                     </button>
-                                    <button className="btn-success" style={{ padding: '0.4rem', backgroundColor: r.estado === 'CANCELADO' ? 'gray' : '#17a2b8' }} title="Editar" onClick={() => loadForEdit(r)}>
-                                        <Edit size={16} />
+                                    <button className="btn-success" style={{ padding: '0.3rem', backgroundColor: r.estado === 'CANCELADO' ? 'gray' : '#17a2b8' }} title="Editar" onClick={() => loadForEdit(r)}>
+                                        <Edit size={14} />
                                     </button>
-                                    <button className="btn-danger" style={{ padding: '0.4rem' }} title="Eliminar" disabled={r.estado === 'CANCELADO'} onClick={() => handleDelete(r)}>
-                                        <Trash2 size={16} />
+                                    <button className="btn-danger" style={{ padding: '0.3rem' }} title="Eliminar" disabled={r.estado === 'CANCELADO'} onClick={() => handleDelete(r)}>
+                                        <Trash2 size={14} />
                                     </button>
                                 </td>
                             </tr>

@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import DashboardLayout from './pages/DashboardLayout';
+import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
 import Carriers from './pages/Carriers';
@@ -44,7 +45,7 @@ function App() {
                             </ProtectedRoute>
                         }
                     >
-                        <Route index element={<div className="card glass"><h1>Dashboard</h1><p>Sistema de gestión administrativa.</p></div>} />
+                        <Route index element={<Dashboard />} />
                         <Route path="users" element={<PermissionRoute pathKey="/dashboard/users"><Users /></PermissionRoute>} />
                         <Route path="carriers" element={<PermissionRoute pathKey="/dashboard/carriers"><Carriers /></PermissionRoute>} />
                         <Route path="tankers" element={<PermissionRoute pathKey="/dashboard/tankers"><Tankers /></PermissionRoute>} />
