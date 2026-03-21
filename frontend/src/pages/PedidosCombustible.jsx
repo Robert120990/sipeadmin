@@ -5,7 +5,18 @@ import api from '../services/api';
 
 export default function PedidosCombustible() {
     const { addToast } = useToast();
-    const defaultDate = new Date().toISOString().split('T')[0];
+    
+    // T-1 Default Date Calculation
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const defaultDate = yesterday.toISOString().split('T')[0];
+
+    const fmtDateArray = (dStr) => {
+        if (!dStr) return '';
+        const parts = dStr.split('T')[0].split('-');
+        if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+        return dStr;
+    };
 
     // Master Data
     const [estaciones, setEstaciones] = useState([]);
@@ -254,8 +265,8 @@ export default function PedidosCombustible() {
                     <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>ESTACION</label>
                     <select value={selectedEstacion} onChange={e => setSelectedEstacion(e.target.value)}
                         style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', minWidth: '250px' }}>
-                        <option value="">-- Seleccione Estación --</option>
-                        {estaciones.map(e => <option key={e.id_empresa} value={e.id_empresa}>{e.titulo}</option>)}
+                        <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Estación --</option>
+                        {estaciones.map(e => <option key={e.id_empresa} value={e.id_empresa} style={{ background: '#1e293b', color: 'white' }}>{e.titulo}</option>)}
                     </select>
                 </div>
             </div>
@@ -276,17 +287,17 @@ export default function PedidosCombustible() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>TRANSPORTE</span>
                         <select value={selectedTransporte} onChange={e => {setSelectedTransporte(e.target.value); setSelectedPipa('');}} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px' }}>
-                            <option value="">-- Seleccione --</option>
-                            {transportistas.map(t => <option key={t.id} value={t.id}>[{t.code}] {t.description}</option>)}
+                            <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione --</option>
+                            {transportistas.map(t => <option key={t.id} value={t.id} style={{ background: '#1e293b', color: 'white' }}>[{t.code}] {t.description}</option>)}
                         </select>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>PIPA</span>
                         <select value={selectedPipa} onChange={e => setSelectedPipa(e.target.value)} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px' }} disabled={!selectedTransporte}>
-                            <option value="">-- Seleccione Pipa --</option>
+                            <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Pipa --</option>
                             {pipas.filter(p => !selectedTransporte || p.carrier_id === Number(selectedTransporte)).map(p => (
-                                <option key={p.id} value={p.id}>{p.code}</option>
+                                <option key={p.id} value={p.id} style={{ background: '#1e293b', color: 'white' }}>{p.code}</option>
                             ))}
                         </select>
                     </div>
@@ -355,10 +366,10 @@ export default function PedidosCombustible() {
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN FECHA</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{matrix.D.duracionFecha}<br/>{matrix.D.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{matrix.R.duracionFecha}<br/>{matrix.R.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{matrix.S.duracionFecha}<br/>{matrix.S.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{matrix.I.duracionFecha}<br/>{matrix.I.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.D.duracionFecha)}<br/>{matrix.D.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.R.duracionFecha)}<br/>{matrix.R.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.S.duracionFecha)}<br/>{matrix.S.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.I.duracionFecha)}<br/>{matrix.I.duracionDiaNom}</td>
                             </tr>
                             <tr style={{ background: 'rgba(16,185,129,0.1)' }}>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL DE TANQUES</td>
@@ -391,7 +402,7 @@ export default function PedidosCombustible() {
                         <tbody>
                             {programados.map(p => (
                                 <tr key={p.id_pedido} style={{ borderBottom: '1px solid var(--border)' }} onDoubleClick={() => loadPedidoToForm(p)}>
-                                    <td style={{ padding: '0.5rem', whiteSpace: 'nowrap' }}>{p.fecha ? p.fecha.split('T')[0] : ''}</td>
+                                    <td style={{ padding: '0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
                                     <td style={{ padding: '0.5rem', color: 'var(--primary)' }}><b>{p.id_pedido}</b></td>
                                     <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
                                     <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
