@@ -48,22 +48,28 @@ app.use(async (req, res, next) => {
     next();
 });
 
+// Middleware for authentication
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) return res.status(401).json({ message: 'Missing token' });
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ message: 'Invalid token' });
+        req.user = user;
+        next();
+    });
+};
+
 // --- Operaciones Routes (Pedidos de Combustible) ---
 
-app.get('/api/operaciones/transportistas', authenticateToken, async (req, res) => {
+app.get('/api/operaciones/estaciones', authenticateToken, async (req, res) => {
     try {
         const externalDb = await getExternalDb();
-        const [rows] = await externalDb.query("SELECT id, nombre FROM web_transportistas ORDER BY nombre");
+        const [rows] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden");
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching transportistas' }); }
-});
-
-app.get('/api/operaciones/calibraciones/:id_transporte', authenticateToken, async (req, res) => {
-    try {
-        const externalDb = await getExternalDb();
-        const [rows] = await externalDb.query("SELECT id, descripcion FROM web_transportistas_calibracion WHERE id_transportista = ?", [req.params.id_transporte]);
-        res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching calibraciones' }); }
+    } catch (error) { res.status(500).json({ message: 'Error fetching estaciones' }); }
 });
 
 app.get('/api/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticateToken, async (req, res) => {
@@ -123,7 +129,10 @@ app.get('/api/operaciones/pedidos/programados/:id_estacion/:fecha', authenticate
         const { id_estacion, fecha } = req.params;
         const externalDb = await getExternalDb();
         const query = `
-            SELECT fecha, numero, diesel, regular, super, iondiesel, id_transportista, id as id_pedido, id_calibracion_diesel, id_calibracion_regular, id_calibracion_super, id_calibracion_ion 
+            SELECT fecha, numero, diesel, regular, super, iondiesel,
+                   IFNULL(id_carrier_local, id_transportista) as id_transportista,
+                   IFNULL(id_tanker_local, id_calibracion_diesel) as id_calibracion_diesel,
+                   id as id_pedido
             FROM web_pedidos_temp 
             WHERE id_estacion = ? AND fecha > ? ORDER BY fecha
         `;
@@ -137,11 +146,11 @@ app.post('/api/operaciones/pedidos/agregar', authenticateToken, async (req, res)
         const { id_pedido, id_estacion, fecha, id_transportista, diesel, regular, super: s, iondiesel, id_calibracion_diesel, id_calibracion_regular, id_calibracion_super, id_calibracion_ion } = req.body;
         const externalDb = await getExternalDb();
         if (id_pedido) {
-            await externalDb.query(`UPDATE web_pedidos_temp SET fecha=?, id_transportista=?, diesel=?, regular=?, super=?, iondiesel=?, id_calibracion_diesel=?, id_calibracion_regular=?, id_calibracion_super=?, id_calibracion_ion=? WHERE id=?`, 
-                [fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, id_calibracion_regular || null, id_calibracion_super || null, id_calibracion_ion || null, id_pedido]);
+            await externalDb.query(`UPDATE web_pedidos_temp SET fecha=?, id_carrier_local=?, diesel=?, regular=?, super=?, iondiesel=?, id_tanker_local=? WHERE id=?`, 
+                [fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, id_pedido]);
         } else {
-            await externalDb.query(`INSERT INTO web_pedidos_temp (id_estacion, fecha, id_transportista, diesel, regular, super, iondiesel, id_calibracion_diesel, id_calibracion_regular, id_calibracion_super, id_calibracion_ion) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, 
-                [id_estacion, fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, id_calibracion_regular || null, id_calibracion_super || null, id_calibracion_ion || null]);
+            await externalDb.query(`INSERT INTO web_pedidos_temp (id_estacion, fecha, id_carrier_local, diesel, regular, super, iondiesel, id_tanker_local) VALUES (?,?,?,?,?,?,?,?)`, 
+                [id_estacion, fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null]);
         }
         res.json({ success: true, message: 'Pedido Guardado!' });
     } catch (error) { res.status(500).json({ message: 'Error agregando pedido' }); }
@@ -176,7 +185,8 @@ app.post('/api/operaciones/pedidos/confirmar', authenticateToken, async (req, re
         
         let flete = 0.0;
         try {
-            const [fRows] = await externalDb.query(`SELECT ${fleteCol} as cost FROM web_fletes WHERE id_estacion = ? AND id_transportista = ?`, [id_estacion, p.id_transportista]);
+            // Revert fallback to legacy id_transportista logic for Fletes as required by WCF constraints
+            const [fRows] = await externalDb.query(`SELECT ${fleteCol} as cost FROM web_fletes WHERE id_estacion = ? AND id_transportista = ?`, [id_estacion, p.id_transportista || p.id_carrier_local]);
             if (fRows.length) flete = fRows[0].cost || 0;
         } catch(e) {}
         
@@ -190,8 +200,8 @@ app.post('/api/operaciones/pedidos/confirmar', authenticateToken, async (req, re
                 await connection.query("UPDATE web_pedidos SET p_diesel = p_diesel + ?, p_regular = p_regular + ?, p_super = p_super + ?, p_ion = p_ion + ?, compartido = ? WHERE numero = ?", 
                     [p.diesel, p.regular, p.super, p.iondiesel, nTotal, numero]);
             } else {
-                await connection.query(`INSERT INTO web_pedidos (fecha, numero, id_estacion, forma_pago, p_diesel, p_regular, p_super, p_ion, id_transportista, flete, pipa, costo_d, costo_s, costo_r, costo_i, id_origen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, 
-                    [cDate, numero, id_estacion, forma_pago, p.diesel, p.regular, p.super, p.iondiesel, p.id_transportista, flete, pipa, costo_d || 0, costo_s || 0, costo_r || 0, costo_i || 0, id_pedido]);
+                await connection.query(`INSERT INTO web_pedidos (fecha, numero, id_estacion, forma_pago, p_diesel, p_regular, p_super, p_ion, id_carrier_local, id_tanker_local, flete, pipa, costo_d, costo_s, costo_r, costo_i, id_origen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, 
+                    [cDate, numero, id_estacion, forma_pago, p.diesel, p.regular, p.super, p.iondiesel, p.id_carrier_local, p.id_tanker_local, flete, pipa, costo_d || 0, costo_s || 0, costo_r || 0, costo_i || 0, id_pedido]);
             }
             await connection.query("UPDATE web_pedidos_temp SET numero = ? WHERE id = ?", [numero, id_pedido]);
             await connection.commit();
@@ -205,19 +215,7 @@ app.post('/api/operaciones/pedidos/confirmar', authenticateToken, async (req, re
     } catch (error) { res.status(500).json({ message: 'Error al confirmar pedido: ' + error.message }); }
 });
 
-// Middleware for authentication
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) return res.status(401).json({ message: 'Missing token' });
-
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ message: 'Invalid token' });
-        req.user = user;
-        next();
-    });
-};
 
 // Login Route
 app.post('/api/login', async (req, res) => {
