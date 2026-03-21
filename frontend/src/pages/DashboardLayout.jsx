@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, Shield, FileText } from 'lucide-react';
+import { LogOut, Folder, ChevronDown, ChevronRight, Shield, FileText, UserCircle } from 'lucide-react';
 import { mainNavItems, catalogItems, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems } from '../config/navigation';
 
 export default function DashboardLayout() {
@@ -215,11 +215,21 @@ export default function DashboardLayout() {
 
                     {filteredSystem.map(item => renderNavItem(item))}
                 </nav>
-                <div style={{ marginTop: 'auto' }}>
-                    <button onClick={handleLogout} className="nav-item" style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}>
+                <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 1rem', marginBottom: '0.5rem' }}>
+                        <UserCircle size={32} color="var(--primary)" />
+                        <div style={{ overflow: 'hidden' }}>
+                            <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-color)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.username || 'Usuario Invitado'}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
+                        </div>
+                    </div>
+                    <button onClick={handleLogout} className="nav-item" style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', color: '#ef4444' }}>
                         <LogOut size={20} />
                         Cerrar Sesión
                     </button>
+                    <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '1rem', opacity: 0.7 }}>
+                        SIPE Admin v1.0.0
+                    </div>
                 </div>
             </aside>
             <main className="main-content">

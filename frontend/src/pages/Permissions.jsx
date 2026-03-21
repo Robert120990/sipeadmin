@@ -34,10 +34,38 @@ export default function Permissions() {
 
     const togglePermission = (path) => {
         if (!selectedRole) return;
-        const perms = selectedRole.permissions.includes(path)
-            ? selectedRole.permissions.filter(p => p !== path)
-            : [...selectedRole.permissions, path];
+        const currentPerms = selectedRole.permissions || [];
+        const perms = currentPerms.includes(path)
+            ? currentPerms.filter(p => p !== path)
+            : [...currentPerms, path];
         setSelectedRole({ ...selectedRole, permissions: perms });
+    };
+
+    const toggleAllPermissions = () => {
+        if (!selectedRole) return;
+        const currentPerms = selectedRole.permissions || [];
+        const allPaths = allNavCategories.flatMap(c => c.items.map(i => i.path));
+        const hasAll = allPaths.every(path => currentPerms.includes(path));
+        setSelectedRole({ 
+            ...selectedRole, 
+            permissions: hasAll ? [] : allPaths 
+        });
+    };
+
+    const toggleCategoryPermissions = (categoryItems) => {
+        if (!selectedRole) return;
+        const currentPerms = selectedRole.permissions || [];
+        const categoryPaths = categoryItems.map(i => i.path);
+        const hasAllCategory = categoryPaths.every(path => currentPerms.includes(path));
+        
+        let newPerms;
+        if (hasAllCategory) {
+            newPerms = currentPerms.filter(p => !categoryPaths.includes(p));
+        } else {
+            const missingPerms = categoryPaths.filter(p => !currentPerms.includes(p));
+            newPerms = [...currentPerms, ...missingPerms];
+        }
+        setSelectedRole({ ...selectedRole, permissions: newPerms });
     };
 
     const saveRole = async () => {
@@ -161,7 +189,12 @@ export default function Permissions() {
                         </div>
 
                         <div>
-                            <h3 style={{ fontSize: '1rem', marginBottom: '1rem', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border)' }}>Módulos Mapeados Automáticamente</h3>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
+                                <h3 style={{ fontSize: '1rem', margin: 0 }}>Módulos Mapeados Automáticamente</h3>
+                                <button onClick={toggleAllPermissions} className="btn-secondary" style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}>
+                                    Marcar / Desmarcar Todos
+                                </button>
+                            </div>
                             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
                                 Este panel se adapta en tiempo real a las opciones agregadas al sistema. Selecciona o deshabilita en qué menús tendrá visión y acceso este rol:
                             </p>
@@ -169,7 +202,12 @@ export default function Permissions() {
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.5rem' }}>
                                 {allNavCategories.filter(cat => cat.items.length > 0).map((category, idx) => (
                                     <div key={idx} style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
-                                        <h4 style={{ fontSize: '0.9rem', marginBottom: '1rem', color: 'var(--primary)' }}>{category.title}</h4>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                            <h4 style={{ fontSize: '0.9rem', color: 'var(--primary)', margin: 0 }}>{category.title}</h4>
+                                            <button onClick={(e) => { e.preventDefault(); toggleCategoryPermissions(category.items); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.75rem', textDecoration: 'underline' }}>
+                                                Todo el grupo
+                                            </button>
+                                        </div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                             {category.items.map(item => {
                                                 const isChecked = selectedRole.permissions.includes(item.path);
