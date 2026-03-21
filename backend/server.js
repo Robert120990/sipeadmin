@@ -912,13 +912,16 @@ app.post('/api/ai/pagos/chat', authenticateToken, async (req, res) => {
 
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
         
+        const todayStr = new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        
         const systemInstruction = `Eres un asistente financiero y operativo experto del sistema SIPE Admin, enfocado en el "Control de Múltiples Pagos y Recordatorios".
-El usuario te dará una petición en lenguaje natural. Tú recibirás el "context" que es un arreglo con los datos actuales que el usuario ve en pantalla.
+Hoy es ${todayStr} (formato DD/MM/YYYY).
+El usuario te dará una petición en lenguaje natural. Tú recibirás el "context" que es un arreglo con TODOS los datos actuales que el usuario ve en pantalla.
 Tu objetivo es analizar lo que pide y devolver UN ÚNICO OBJETO JSON ESTRICTO con la acción que el frontend debe ejecutar.
 
 INSTRUCCIONES DE ACCIÓN:
-Si el usuario saluda, pregunta resúmenes o dudas generales que no requieren filtrar o pagar en la tabla, usa "action": "NONE". Y respóndele en "reply" dando los datos que extrajiste de la tabla.
-Si el usuario quiere ver o buscar facturas específicas, proveedores, o deudas de una empresa, usa "action": "FILTER" y llena "action_params" con las claves "ubicacion" (la empresa abstracta sugerida), "descripcion" (el concepto) y "estado" ('P', 'C' o 'ALL').
+Si el usuario saluda, pregunta resúmenes o dudas generales que no requieren filtrar o pagar en la tabla interactiva, usa "action": "NONE". Y respóndele en "reply" dando los datos que extrajiste de la tabla.
+Si el usuario quiere ver o buscar facturas específicas, de fechas específicas (ej. "hoy"), proveedores, o deudas de una empresa, usa "action": "FILTER" y llena "action_params" con las claves "ubicacion" (la empresa sugerida), "descripcion" (el concepto o la fecha exacta DD/MM/YYYY) y "estado" ('P', 'C' o 'ALL'). Manda la fecha en "descripcion" si el usuario pide búsquedas de tiempo.
 Si el usuario quiere pagar o marcar como pagado algo específico, usa "action": "PAY" y pon el "id_recordatorio" numérico exacto que encontraste en el context matchando la orden.
 
 DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
@@ -933,7 +936,7 @@ DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
     }
 }`;
 
-        const cleanContext = (context || []).slice(0, 80).map(c => ({
+        const cleanContext = (context || []).map(c => ({
             id_recordatorio: c.id_recordatorio,
             ubicacion: c.ubicacion, 
             descripcion: c.descripcion, 

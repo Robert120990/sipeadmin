@@ -97,7 +97,9 @@ export default function ControlRecordatorios() {
         return recordatorios.filter(r => 
             (r.ubicacion || '').toLowerCase().includes(term) ||
             (r.descripcion || '').toLowerCase().includes(term) ||
-            (r.observacion || '').toLowerCase().includes(term)
+            (r.observacion || '').toLowerCase().includes(term) ||
+            (r.vence && formatDate(r.vence).includes(term)) ||
+            (r.vence || '').includes(term)
         );
     }, [recordatorios, iaFilterText]);
 
