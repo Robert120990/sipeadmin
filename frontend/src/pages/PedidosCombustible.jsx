@@ -46,6 +46,29 @@ export default function PedidosCombustible() {
 
     const totalPipa = Number(comp.D.val) + Number(comp.R.val) + Number(comp.S.val) + Number(comp.I.val);
 
+    const pipasWithCap = useMemo(() => pipas.map(p => {
+        let comps = [];
+        try { comps = typeof p.compartments === 'string' ? JSON.parse(p.compartments) : p.compartments; } catch(e){}
+        const totalCap = (comps || []).reduce((acc, curr) => acc + Number(curr.capacity || 0), 0);
+        return { ...p, totalCapacity: totalCap };
+    }), [pipas]);
+
+    const recommendedPipa = useMemo(() => {
+        if (totalPipa <= 0) return null;
+        let best = pipasWithCap.find(p => p.totalCapacity === totalPipa);
+        if (best) return best;
+        const valid = pipasWithCap.filter(p => p.totalCapacity >= totalPipa);
+        if (valid.length > 0) {
+            valid.sort((a,b) => a.totalCapacity - b.totalCapacity);
+            return valid[0];
+        }
+        if (pipasWithCap.length > 0) {
+            const sorted = [...pipasWithCap].sort((a,b) => b.totalCapacity - a.totalCapacity);
+            return sorted[0];
+        }
+        return null;
+    }, [totalPipa, pipasWithCap]);
+
     // Operational Data
     const [inventario, setInventario] = useState([]);
     const [promedios, setPromedios] = useState({ D: 0, R: 0, S: 0, I: 0 });
@@ -261,6 +284,24 @@ export default function PedidosCombustible() {
         );
     };
 
+    const RenderPipaRecommendation = () => {
+        if (totalPipa <= 0 || !recommendedPipa) return null;
+        
+        const isCurrentOk = selectedPipa && Number(selectedPipa) === recommendedPipa.id;
+        return (
+            <div style={{ marginTop: '0.5rem', marginBottom: '1rem', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem',
+                background: isCurrentOk ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                color: isCurrentOk ? '#10b981' : '#ef4444', border: `1px solid ${isCurrentOk ? '#10b981' : '#ef4444'}`
+            }}>
+                {isCurrentOk ? (
+                    <>✓ La Pipa seleccionada cubre dinámicamente tu solicitud.</>
+                ) : (
+                    <>⚠️ Sugerencia de Eficiencia: Selecciona la Pipa [{recommendedPipa.code}] (Capacidad Fija: {numFmt(recommendedPipa.totalCapacity)})</>
+                )}
+            </div>
+        );
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', zoom: 0.95 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -341,6 +382,8 @@ export default function PedidosCombustible() {
                         <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})}
                             style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
                     </div>
+
+                    <RenderPipaRecommendation />
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', borderTop: '2px solid var(--border)', paddingTop: '1rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
