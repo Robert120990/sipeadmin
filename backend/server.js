@@ -217,6 +217,139 @@ app.post('/api/operaciones/pedidos/confirmar', authenticateToken, async (req, re
 
 
 
+// ================= RECORDATORIOS / PAGOS =================
+
+app.get('/api/operaciones/recordatorios/ubicaciones', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [rows] = await externalDb.query("SELECT id, descripcion FROM web_rc_ubicaciones ORDER BY descripcion");
+        res.json(rows);
+    } catch (error) { res.status(500).json({ message: 'Error fetching ubicaciones' }); }
+});
+
+app.get('/api/operaciones/recordatorios', authenticateToken, async (req, res) => {
+    try {
+        const { desde, hasta, estado } = req.query; 
+        const externalDb = await getExternalDb();
+        let statusFilter = "a.estado IN ('P', 'C')";
+        if (estado === 'P') statusFilter = "a.estado = 'P'";
+        else if (estado === 'C') statusFilter = "a.estado = 'C'";
+
+        const query = `
+            SELECT c.descripcion as ubicacion, b.descripcion, a.vencimiento as vence, b.forma_pago as observacion, 
+                   a.forma_pago, b.monto, IF(a.estado = 'P','PENDIENTE','CANCELADO') as estado, a.fecha_cancelacion, a.id, b.id as id_recordatorio
+            FROM web_rc_recordatorios_vencimientos a 
+            INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id 
+            INNER JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id 
+            WHERE a.vencimiento BETWEEN ? AND ? AND b.activo = 1 AND ${statusFilter}
+            ORDER BY a.vencimiento
+        `;
+        const [rows] = await externalDb.query(query, [desde, hasta]);
+        res.json(rows);
+    } catch (error) { res.status(500).json({ message: 'Error fetching recordatorios' }); }
+});
+
+app.get('/api/operaciones/recordatorios/:id', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [rows] = await externalDb.query("SELECT * FROM web_rc_recordatorios WHERE id = ?", [req.params.id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'Not found' });
+        
+        const [pagados] = await externalDb.query("SELECT COUNT(*) as cont FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ? AND estado = 'C'", [req.params.id]);
+        res.json({ recordatorio: rows[0], pagados: pagados[0].cont });
+    } catch (error) { res.status(500).json({ message: 'Error fetching recordatorio detail' }); }
+});
+
+app.get('/api/operaciones/recordatorios/parents/buscar', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const query = `
+            SELECT b.id, b.descripcion, b.iniciar as fecha_inicio, c.descripcion as ubicacion, 
+                   b.monto, b.forma_pago as observacion, b.repetir as cuotas, IF(b.activo=1,'SI','NO') as activo
+            FROM web_rc_recordatorios b 
+            LEFT JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id 
+            ORDER BY b.iniciar DESC
+        `;
+        const [rows] = await externalDb.query(query);
+        res.json(rows);
+    } catch (error) { res.status(500).json({ message: 'Error fetching parent recordatorios' }); }
+});
+
+app.post('/api/operaciones/recordatorios', authenticateToken, async (req, res) => {
+    try {
+        const { id, descripcion, id_ubicacion, iniciar, activo, monto, repetir, repetir_desc, forma_pago, pagado, fecPago, formaPago2 } = req.body;
+        const externalDb = await getExternalDb();
+        const connection = await externalDb.getConnection();
+        await connection.beginTransaction();
+        
+        try {
+            let recordatorioId = id;
+            if (id) {
+                await connection.query(`UPDATE web_rc_recordatorios SET descripcion=?, id_ubicacion=?, iniciar=?, monto=?, repetir=?, repetir_desc=?, activo=?, forma_pago=? WHERE id=?`, 
+                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, forma_pago, id]);
+            } else {
+                const [result] = await connection.query(`INSERT INTO web_rc_recordatorios (descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo, forma_pago) VALUES (?,?,?,?,?,?,?,?)`, 
+                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, forma_pago]);
+                recordatorioId = result.insertId;
+            }
+
+            await connection.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?", [recordatorioId]);
+            
+            for (let n = 1; n <= repetir; n++) {
+                let dFecha = new Date(iniciar + 'T12:00:00'); // Midday prevents TZ shifting
+                let isPagado = false;
+                
+                if (repetir_desc === 'VEZ') {
+                    if (pagado) isPagado = true;
+                } else if (repetir_desc === 'DIAS') {
+                    if (n > 1) dFecha.setDate(dFecha.getDate() + (n * repetir)); 
+                } else if (repetir_desc === 'MES') {
+                    if (n > 1) dFecha.setMonth(dFecha.getMonth() + (n - 1));
+                } else if (repetir_desc === 'AÑO' || repetir_desc === 'ANO') { 
+                    if (n > 1) dFecha.setFullYear(dFecha.getFullYear() + n); 
+                }
+                
+                const formattedDate = dFecha.toISOString().split('T')[0];
+                
+                if (isPagado) {
+                    await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", 
+                        [recordatorioId, formattedDate, fecPago, formaPago2]);
+                } else {
+                    await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'P', NULL, '')", 
+                        [recordatorioId, formattedDate]);
+                }
+            }
+            
+            await connection.commit();
+            res.json({ success: true, message: 'Recordatorio Guardado!' });
+        } catch(errTx) {
+            await connection.rollback();
+            throw errTx;
+        } finally {
+            connection.release();
+        }
+    } catch (error) { res.status(500).json({ message: 'Error saving recordatorio: ' + error.message }); }
+});
+
+app.put('/api/operaciones/recordatorios/pagar/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { forma_pago, fecha_cancelacion } = req.body;
+        const externalDb = await getExternalDb();
+        await externalDb.query("UPDATE web_rc_recordatorios_vencimientos SET estado = 'C', fecha_cancelacion = ?, forma_pago = ? WHERE id = ?", [fecha_cancelacion, forma_pago, id]);
+        res.json({ success: true, message: 'Pago Realizado!' });
+    } catch (error) { res.status(500).json({ message: 'Error marking paid' }); }
+});
+
+app.delete('/api/operaciones/recordatorios/vencimiento/:id', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        await externalDb.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id = ?", [req.params.id]);
+        res.json({ success: true, message: 'Recordatorio Eliminado!' });
+    } catch (error) { res.status(500).json({ message: 'Error deleting vencimiento' }); }
+});
+
+
 // Login Route
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;

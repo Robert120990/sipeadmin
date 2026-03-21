@@ -193,6 +193,98 @@ export default function PedidosCombustible() {
         setPedidoTemp({ id: null });
     };
 
+    const autoSuggestPedido = () => {
+        if (!selectedTransporte) return addToast('Por favor seleccione un Transportista primero', 'warning');
+        if (!matrix || !pipasWithCap.length) return addToast('Faltan datos maestros de pipas o matriz', 'error');
+
+        // maxFill is the absolute physical limit we can cram into the underground tanks.
+        // We only consider types where capacity > 0 (meaning the station has that fuel)
+        const activeTypes = ['D', 'R', 'S', 'I'].filter(type => matrix[type].capacidad > 0);
+        
+        const maxFill = {};
+        activeTypes.forEach(type => {
+            maxFill[type] = matrix[type].capacidad - matrix[type].inventario - matrix[type].programado;
+        });
+
+        // Enforce physical constraints
+        const needsRefill = activeTypes.some(type => maxFill[type] > 500);
+        if (!needsRefill) {
+            return addToast('Los tanques ya están a máxima capacidad proyectada.', 'info');
+        }
+
+        const totalMax = activeTypes.reduce((acc, type) => acc + Math.max(0, maxFill[type]), 0);
+        
+        // Filter pipas only for the SELECTED carrier
+        let carrierPipas = pipasWithCap.filter(p => p.carrier_id === Number(selectedTransporte));
+        if (!carrierPipas.length) return addToast('Este transportista no tiene pipas registradas', 'error');
+
+        // Find pipas that fit the totalMax, prioritize the largest valid one
+        let validPipas = carrierPipas.filter(p => p.totalCapacity <= (totalMax + 100)).sort((a,b) => b.totalCapacity - a.totalCapacity);
+        
+        let bestPipa = validPipas.length > 0 ? validPipas[0] : [...carrierPipas].sort((a,b) => a.totalCapacity - b.totalCapacity)[0];
+
+        let alloc = { D: 0, R: 0, S: 0, I: 0 };
+        // Clone and sort compartments largest to smallest to fill knapsack
+        let compartments = [...bestPipa.compartments].sort((a,b) => Number(b.capacity) - Number(a.capacity));
+
+        compartments.forEach(c => {
+            const cap = Number(c.capacity);
+            let mostCriticalType = null;
+            let lowestDuration = 9999;
+
+            activeTypes.forEach(type => {
+                const currentDur = matrix[type].duracionDias;
+                const remainingSpace = maxFill[type] - alloc[type];
+                if (remainingSpace >= (cap * 0.9) && currentDur < lowestDuration) {
+                    lowestDuration = currentDur;
+                    mostCriticalType = type;
+                }
+            });
+
+            if (mostCriticalType) {
+                alloc[mostCriticalType] += cap;
+            } else {
+                activeTypes.forEach(type => {
+                    if (!mostCriticalType && (maxFill[type] - alloc[type] >= (cap * 0.9))) {
+                        mostCriticalType = type;
+                    }
+                });
+                if (!mostCriticalType) {
+                   mostCriticalType = activeTypes.reduce((a, b) => matrix[a].duracionDias < matrix[b].duracionDias ? a : b);
+                }
+                alloc[mostCriticalType] += cap;
+            }
+        });
+
+        setSelectedPipa(bestPipa.id);
+        setComp({
+            D: { val: alloc.D },
+            R: { val: alloc.R },
+            S: { val: alloc.S },
+            I: { val: alloc.I }
+        });
+        
+        addToast(`Sugerencia Aplicada: Pipa [${bestPipa.code}] de ${bestPipa.totalCapacity} Galones.`, 'success');
+
+        // SUGGEST DATE: Find the fuel that runs out SOONEST
+        let minDate = '';
+        let minVal = 9999;
+        activeTypes.forEach(type => {
+            if (matrix[type].promedio > 0 && matrix[type].duracionDias < minVal) {
+                minVal = matrix[type].duracionDias;
+                minDate = matrix[type].duracionFecha;
+            }
+        });
+
+        if (minDate) {
+            // If the out-of-stock date is today or earlier, suggest today. 
+            // Otherwise suggest the out-of-stock date (or 1 day before for safety)
+            // Let's suggest the exact date it hits reserve so the fuel arrives justo a tiempo.
+            setFechaPedido(minDate);
+            addToast(`Fecha Sugerida: ${fmtDateArray(minDate)} (Agotamiento Crítico)`, 'info');
+        }
+    };
+
     // Safe Number Parsing helper
     const parseNum = (val) => {
         const n = Number(val);
@@ -340,6 +432,10 @@ export default function PedidosCombustible() {
                 {/* Panel Izquierdo: Formulario */}
                 <div className="card glass" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem' }}>
                     <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', borderBottom: '1px solid var(--primary)', paddingBottom: '0.5rem' }}>OPERACIONES PARA AGREGAR PEDIDO</h3>
+                    
+                    <button onClick={autoSuggestPedido} className="btn-success" style={{ width: '100%', margin: '0.5rem 0', padding: '0.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', backgroundColor: '#10b981', color: '#fff' }}>
+                        <CheckSquare size={18} /> Sugerir Pedido (IA)
+                    </button>
                     
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>FECHA</span>

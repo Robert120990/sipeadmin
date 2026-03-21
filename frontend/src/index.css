@@ -58,6 +58,16 @@ button {
   background-color: var(--primary-hover);
 }
 
+.btn-secondary {
+  background-color: white;
+  color: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  background-color: #f1f5f9;
+}
+
 .btn-danger {
   background-color: var(--danger);
   color: white;
@@ -77,6 +87,38 @@ input {
 input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Modals */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-content {
+  background: var(--card-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  position: relative;
+  z-index: 10000;
 }
 
 /* Layout */

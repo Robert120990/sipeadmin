@@ -20,7 +20,16 @@ export const consultasEstaciones = [
 ];
 
 export const operacionesMenu = [
-    { name: 'Pedidos Combustible', path: '/dashboard/operaciones/pedidos', icon: Truck }
+    {
+        name: 'Pedidos Combustible',
+        path: '/dashboard/operaciones/pedidos',
+        icon: Truck
+    },
+    {
+        name: 'Control de Pagos',
+        path: '/dashboard/operaciones/recordatorios',
+        icon: FileText
+    }
 ];
 
 export const consultasBancos = [
