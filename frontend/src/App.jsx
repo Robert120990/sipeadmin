@@ -16,6 +16,7 @@ import PreciosEstacion from './pages/PreciosEstacion';
 import PedidosCombustible from './pages/PedidosCombustible';
 import ControlRecordatorios from './pages/ControlRecordatorios';
 import Permissions from './pages/Permissions';
+import CuentasBancarias from './pages/CuentasBancarias';
 import { ToastProvider } from './components/Toast';
 
 const ProtectedRoute = ({ children }) => {
@@ -60,6 +61,7 @@ function App() {
                         <Route path="operaciones/recordatorios" element={<ProtectedRoute><ControlRecordatorios /></ProtectedRoute>} />
                         <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." /></PermissionRoute>} />
                         <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
+                        <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />
                         <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />
                     </Route>
                     <Route path="*" element={<Navigate to="/login" replace />} />

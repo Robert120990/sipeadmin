@@ -1293,4 +1293,74 @@ DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
     }
 });
 
+// --- Bancos y Cuentas Bancarias (External Database) ---
+app.get('/api/bancos/catalogos', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [bancos] = await externalDb.query('SELECT id, descripcion FROM bancos ORDER BY descripcion');
+        const [empresas] = await externalDb.query('SELECT id, nombre FROM empresas ORDER BY nombre');
+        res.json({ bancos, empresas });
+    } catch (error) {
+        res.status(500).json({ message: 'Error al cargar catálogos bancarios', error: error.message });
+    }
+});
+
+app.get('/api/bancos/cuentas', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [rows] = await externalDb.query(`
+            SELECT c.corr, c.numero, c.nombre, c.id_empresa, c.cod_banco, c.activa,
+                   e.nombre as empresa_nombre, b.descripcion as banco_nombre
+            FROM cuentas_bancarias c
+            LEFT JOIN empresas e ON c.id_empresa = e.id
+            LEFT JOIN bancos b ON c.cod_banco = b.id
+            ORDER BY c.corr DESC
+        `);
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ message: 'Error al cargar cuentas bancarias', error: error.message });
+    }
+});
+
+app.post('/api/bancos/cuentas', authenticateToken, async (req, res) => {
+    const { id_empresa, numero, nombre, cod_banco } = req.body;
+    try {
+        const externalDb = await getExternalDb();
+        await externalDb.query(
+            'INSERT INTO cuentas_bancarias (id_empresa, numero, nombre, cod_banco, activa) VALUES (?, ?, ?, ?, "S")',
+            [id_empresa, numero, nombre, cod_banco]
+        );
+        res.status(201).json({ message: 'Cuenta creada con éxito' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error al crear cuenta', error: error.message });
+    }
+});
+
+app.put('/api/bancos/cuentas/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { id_empresa, numero, nombre, cod_banco, activa } = req.body;
+    try {
+        const externalDb = await getExternalDb();
+        await externalDb.query(
+            'UPDATE cuentas_bancarias SET id_empresa = ?, numero = ?, nombre = ?, cod_banco = ?, activa = ? WHERE corr = ?',
+            [id_empresa, numero, nombre, cod_banco, activa || 'S', id]
+        );
+        res.json({ message: 'Cuenta actualizada' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error al actualizar cuenta', error: error.message });
+    }
+});
+
+app.delete('/api/bancos/cuentas/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const externalDb = await getExternalDb();
+        // Logical delete
+        await externalDb.query('UPDATE cuentas_bancarias SET activa = "N" WHERE corr = ?', [id]);
+        res.json({ message: 'Cuenta desactivada' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error al desactivar cuenta', error: error.message });
+    }
+});
+
 module.exports = app;
