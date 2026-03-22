@@ -47,6 +47,7 @@ export const securityItems = [
 
 export const configuracionMenu = [
     { name: 'Conexión Externa', path: '/dashboard/settings/database', icon: Database },
+    { name: 'Conexión Contabilidad', path: '/dashboard/settings/accounting', icon: Database },
     { name: 'Configuración Correo', path: '/dashboard/settings/email', icon: Mail },
 ];
 

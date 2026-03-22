@@ -106,10 +106,13 @@ const initDB = async () => {
                 password VARCHAR(255) NOT NULL,
                 database_name VARCHAR(255) NOT NULL,
                 port INT DEFAULT 3306,
+                type VARCHAR(50) DEFAULT 'main',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             );
         `);
+
+        try { await pool.query("ALTER TABLE external_configs ADD COLUMN type VARCHAR(50) DEFAULT 'main'"); } catch(e) {}
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS email_configs (

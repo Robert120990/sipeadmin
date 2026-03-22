@@ -18,6 +18,7 @@ import Permissions from './pages/Permissions';
 import CuentasBancarias from './pages/CuentasBancarias';
 import ConfiguracionDb from './pages/ConfiguracionDb';
 import ConfiguracionEmail from './pages/ConfiguracionEmail';
+import ConfiguracionContabilidad from './pages/ConfiguracionContabilidad';
 import { ToastProvider } from './components/Toast';
 
 const ProtectedRoute = ({ children }) => {
@@ -63,6 +64,7 @@ function App() {
                         <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
                         <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />
                         <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
+                        <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />
                         <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />
                         <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />
                     </Route>

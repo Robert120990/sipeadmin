@@ -507,7 +507,7 @@ app.put('/api/users/:id/status', authenticateToken, async (req, res) => {
 // External Database Configuration Routes
 app.get('/api/config', authenticateToken, async (req, res) => {
     try {
-        const [rows] = await db.query('SELECT * FROM external_configs ORDER BY created_at DESC LIMIT 1');
+        const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
         res.json(rows[0] || {});
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
@@ -517,27 +517,60 @@ app.get('/api/config', authenticateToken, async (req, res) => {
 app.post('/api/config', authenticateToken, async (req, res) => {
     const { host, user, password, database_name, port } = req.body;
     try {
-        // Test connection first
         const mysql = require('mysql2/promise');
         const testConn = await mysql.createConnection({ host, user, password, database: database_name, port: port || 3306 });
         await testConn.end();
 
-        // Save if successful
-        const [existing] = await db.query('SELECT id FROM external_configs LIMIT 1');
+        const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'main' LIMIT 1");
         if (existing.length > 0) {
             await db.query(
-                'UPDATE external_configs SET host = ?, user = ?, password = ?, database_name = ?, port = ? WHERE id = ?',
+                "UPDATE external_configs SET host = ?, user = ?, password = ?, database_name = ?, port = ? WHERE id = ?",
                 [host, user, password, database_name, port || 3306, existing[0].id]
             );
         } else {
             await db.query(
-                'INSERT INTO external_configs (host, user, password, database_name, port) VALUES (?, ?, ?, ?, ?)',
+                "INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, ?, ?, 'main')",
                 [host, user, password, database_name, port || 3306]
             );
         }
         res.json({ message: 'Configuración guardada y conexión exitosa' });
     } catch (error) {
         res.status(400).json({ message: `Error de conexión: ${error.message}` });
+    }
+});
+
+// Accounting Database Configuration Routes
+app.get('/api/config/accounting', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+        res.json(rows[0] || {});
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+app.post('/api/config/accounting', authenticateToken, async (req, res) => {
+    const { host, user, password, database_name, port } = req.body;
+    try {
+        const mysql = require('mysql2/promise');
+        const testConn = await mysql.createConnection({ host, user, password, database: database_name, port: port || 3306 });
+        await testConn.end();
+
+        const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'accounting' LIMIT 1");
+        if (existing.length > 0) {
+            await db.query(
+                "UPDATE external_configs SET host = ?, user = ?, password = ?, database_name = ?, port = ? WHERE id = ?",
+                [host, user, password, database_name, port || 3306, existing[0].id]
+            );
+        } else {
+            await db.query(
+                "INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, ?, ?, 'accounting')",
+                [host, user, password, database_name, port || 3306]
+            );
+        }
+        res.json({ message: 'Configuración de contabilidad guardada y conexión exitosa' });
+    } catch (error) {
+        res.status(400).json({ message: `Error de conexión contabilidad: ${error.message}` });
     }
 });
 
@@ -1004,11 +1037,34 @@ app.get('/api/ventas/precios-estacion/:date', authenticateToken, async (req, res
 
 // --- Consultas Routes (External Database) ---
 const getExternalDb = async () => {
-    const [configs] = await db.query('SELECT * FROM external_configs ORDER BY created_at DESC LIMIT 1');
-    if (configs.length === 0) throw new Error('No hay configuración de base de datos externa. Configúrala primero.');
+    const [configs] = await db.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+    if (configs.length === 0) throw new Error('No hay configuración de base de datos externa (Principal). Configúrala primero.');
     
     const config = configs[0];
-    const poolKey = `${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+    const poolKey = `main:${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+    
+    let externalDb = externalPools[poolKey];
+    if (!externalDb) {
+        const mysql = require('mysql2/promise');
+        externalDb = mysql.createPool({
+            host: config.host,
+            user: config.user,
+            password: config.password,
+            database: config.database_name,
+            port: config.port || 3306,
+            connectionLimit: 10
+        });
+        externalPools[poolKey] = externalDb;
+    }
+    return externalDb;
+};
+
+const getAccountingDb = async () => {
+    const [configs] = await db.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+    if (configs.length === 0) throw new Error('No hay configuración de base de datos de contabilidad. Configúrala primero.');
+    
+    const config = configs[0];
+    const poolKey = `accounting:${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
     
     let externalDb = externalPools[poolKey];
     if (!externalDb) {
