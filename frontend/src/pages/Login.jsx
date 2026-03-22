@@ -17,7 +17,12 @@ export default function Login() {
             localStorage.setItem('user', JSON.stringify(res.data.user));
             navigate('/dashboard');
         } catch (err) {
-            setError(err.response?.data?.message || err.message || 'Error de conexión');
+            const data = err.response?.data;
+            if (data && data.error) {
+                setError(`${data.message}: ${data.error} (${data.detail || ''})`);
+            } else {
+                setError(data?.message || err.message || 'Error de conexión');
+            }
         }
     };
 
