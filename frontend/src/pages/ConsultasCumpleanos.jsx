@@ -45,10 +45,11 @@ export default function ConsultasCumpleanos() {
         doc.setFontSize(10);
         doc.text("Listado de empleados activos que cumplen años el mes actual.", 14, 22);
 
-        const tableColumn = ["Nombre Completo", "Fecha Nacimiento", "Empresa"];
+        const tableColumn = ["Nombre", "Departamento", "Cumpleaños", "Empresa"];
         const tableRows = data.map(item => [
             item.nombre,
-            new Date(item.fecha_nacimiento).toLocaleDateString('es-ES'),
+            item.departamento || 'N/A',
+            new Date(item.fecha_nacimiento).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }),
             item.empresa
         ]);
 
@@ -111,7 +112,8 @@ export default function ConsultasCumpleanos() {
                             <table style={{ minWidth: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                                        <th style={{ padding: '1rem' }}>Nombre Completo</th>
+                                        <th style={{ padding: '1rem' }}>Nombre</th>
+                                        <th style={{ padding: '1rem' }}>Departamento</th>
                                         <th style={{ padding: '1rem' }}>Día</th>
                                         <th style={{ padding: '1rem' }}>Fecha Completa</th>
                                     </tr>
@@ -129,6 +131,9 @@ export default function ConsultasCumpleanos() {
                                                 <td style={{ padding: '1rem', fontWeight: '500' }}>
                                                     {emp.nombre}
                                                     {isToday && <span style={{ marginLeft: '0.5rem', fontSize: '1.25rem' }}>🎂</span>}
+                                                </td>
+                                                <td style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                                                    {emp.departamento || 'Sin asignar'}
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
                                                     <span style={{ 

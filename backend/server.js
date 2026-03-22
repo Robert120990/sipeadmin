@@ -1167,13 +1167,15 @@ app.get('/api/consultas/cumpleanos', authenticateToken, async (req, res) => {
             SELECT 
                 CONCAT(e.nombre_dui, ' ', e.apellidos_dui) as nombre, 
                 STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y') as fecha_nacimiento, 
-                m.nombre as empresa
+                m.nombre as empresa,
+                d.descripcion as departamento
             FROM empleados e
             JOIN empresas_mayores m ON e.id_empresa = m.id
+            INNER JOIN departamentos_personal d ON e.cod_area_trabajo = d.id AND e.id_empresa = d.id_empresa
             WHERE e.activo = 1 
             AND e.fecha_nacimiento IS NOT NULL
             AND MONTH(STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y')) = MONTH(CURRENT_DATE())
-            ORDER BY m.nombre, DAY(STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y'))
+            ORDER BY m.nombre, d.descripcion, DAY(STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y'))
         `;
         const [rows] = await accountingDb.query(query);
         res.json(rows);
