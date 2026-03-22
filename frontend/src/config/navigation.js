@@ -49,6 +49,7 @@ export const systemNavItems = [
 export const allNavCategories = [
     { title: 'Principal', items: mainNavItems },
     { title: 'Catálogos', items: catalogItems },
+    { title: 'Operaciones', items: operacionesMenu },
     { title: 'Consultas - Estaciones', items: consultasEstaciones },
     { title: 'Consultas - Bancos', items: consultasBancos },
     { title: 'Seguridad', items: securityItems },

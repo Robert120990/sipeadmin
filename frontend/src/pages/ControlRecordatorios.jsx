@@ -329,7 +329,20 @@ export default function ControlRecordatorios() {
 
     return (
         <div style={{ padding: '2rem', height: '100%', position: 'relative' }}>
-            <h1 style={{ marginBottom: '2rem', color: 'var(--primary)' }}>Control de Recordatorios</h1>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+                <h1 style={{ margin: 0, color: 'var(--primary)' }}>Control de Recordatorios</h1>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={openSearchModal}>
+                        <Search size={18} /> Buscar
+                    </button>
+                    <button className="btn-success" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={() => {
+                        setFormData({ id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr, activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', forma_pago: '', pagado: false, fecPago: todayStr, formaPago2: '' });
+                        setIsFormModalOpen(true);
+                    }}>
+                        <Plus size={18} /> Nuevo Recordatorio
+                    </button>
+                </div>
+            </div>
             
             <div className="card glass" style={{ marginBottom: '1.5rem', display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-end' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', opacity: selectedParent ? 0.5 : 1 }}>
@@ -404,17 +417,6 @@ export default function ControlRecordatorios() {
                     </button>
                 </div>
 
-                <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={openSearchModal}>
-                        <Search size={18} /> Buscar
-                    </button>
-                    <button className="btn-success" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={() => {
-                        setFormData({ id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr, activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', forma_pago: '', pagado: false, fecPago: todayStr, formaPago2: '' });
-                        setIsFormModalOpen(true);
-                    }}>
-                        <Plus size={18} /> Nuevo Recordatorio
-                    </button>
-                </div>
             </div>
 
             <div className={`card glass ${loading ? 'fade-loading' : ''}`} style={{ 
