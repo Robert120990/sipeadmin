@@ -10,7 +10,8 @@ const nodemailer = require('nodemailer');
 const { GoogleGenAI } = require('@google/genai');
 const { initDB } = require('./db');
 
-dotenv.config();
+const path = require('path');
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -906,6 +907,9 @@ app.delete('/api/roles/:id', authenticateToken, async (req, res) => {
 app.post('/api/ai/pagos/chat', authenticateToken, async (req, res) => {
     try {
         const { prompt, context } = req.body;
+        console.log("AI Agent Prompt:", prompt);
+        console.log("GEMINI_API_KEY status:", process.env.GEMINI_API_KEY ? "CONFIGURED (starts with " + process.env.GEMINI_API_KEY.substring(0, 4) + ")" : "MISSING");
+
         if (!process.env.GEMINI_API_KEY) {
             return res.status(400).json({ error: "Falta configurar GEMINI_API_KEY en el backend." });
         }
@@ -947,24 +951,58 @@ DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
 
         const userMessage = `CONTEXTO DE DATOS ACTUALES: ${JSON.stringify(cleanContext)}\n\nCOMANDO DEL USUARIO: ${prompt}`;
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: userMessage,
+        const result = await ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: [{ role: 'user', parts: [{ text: userMessage }] }],
             config: {
                 systemInstruction: systemInstruction,
                 responseMimeType: "application/json"
             }
         });
 
-        let rawText = response.text;
-        if (rawText.startsWith('\`\`\`json')) {
-            rawText = rawText.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
+        let rawText = "";
+        try {
+            if (result.text) {
+                rawText = result.text;
+            } else if (result.candidates && result.candidates[0]?.content?.parts[0]?.text) {
+                rawText = result.candidates[0].content.parts[0].text;
+            } else {
+                throw new Error("Estructura de respuesta de IA no reconocida.");
+            }
+        } catch (e) {
+            console.error("Error extrayendo texto de la IA:", e);
+            throw new Error("No se pudo extraer una respuesta válida de la IA.");
         }
-        res.json(JSON.parse(rawText));
+
+        if (rawText.startsWith('```json')) {
+            rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+        }
+
+        try {
+            const parsed = JSON.parse(rawText);
+            res.json(parsed);
+        } catch (parseError) {
+            console.error("Error parsing AI JSON:", rawText);
+            res.json({
+                reply: "Lo siento, tuve un problema interno al procesar la respuesta. Aquí tienes el mensaje crudo: " + rawText,
+                action: "NONE"
+            });
+        }
 
     } catch (error) {
         console.error("AI Agent Error:", error);
-        res.status(500).json({ error: "No se pudo procesar la solicitud con Inteligencia Artificial." });
+        
+        let userMessage = "No se pudo procesar la solicitud con Inteligencia Artificial.";
+        if (error.status === 429 || error.message?.includes('429')) {
+            userMessage = "Se ha alcanzado el límite de peticiones (Rate Limit) de la API de Google Gemini. Por favor, espera un momento o revisa tu cuota en Google AI Studio.";
+        } else if (error.status === 404 || error.message?.includes('404')) {
+            userMessage = "El modelo de IA especificado no fue encontrado (404).";
+        }
+
+        res.status(500).json({ 
+            error: userMessage,
+            details: error.message 
+        });
     }
 });
 
