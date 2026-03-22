@@ -18,7 +18,13 @@ const dbConfig = getDbConfig();
 const initDB = async () => {
     try {
         const config = process.env.DATABASE_URL || getDbConfig();
-        const pool = mysql.createPool(config);
+        
+        // Add SSL support for cloud databases if using DATABASE_URL
+        const poolConfig = typeof config === 'string' 
+            ? { uri: config, ssl: { rejectUnauthorized: false } }
+            : { ...config, ssl: { rejectUnauthorized: false } };
+
+        const pool = mysql.createPool(poolConfig);
 
         // Verification connection
         console.log('Connecting to database...');
@@ -141,9 +147,9 @@ const initDB = async () => {
 
         return pool;
     } catch (error) {
-        console.error('DATABASE ERROR:', error.message);
-        // Fallback or rethrow
-        throw error;
+        console.error('DATABASE INITIALIZATION ERROR:', error.message);
+        console.error('Hint: Ensure your database is running and accessible. Check connection details (host, user, password, database) and SSL configuration.');
+        throw error; // Re-throw to ensure the application handles the failure
     }
 };
 

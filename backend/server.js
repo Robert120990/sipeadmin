@@ -45,7 +45,12 @@ app.use(async (req, res, next) => {
         try {
             await dbPromise;
         } catch (error) {
-            return res.status(500).json({ message: 'Database initialization failed. Check DATABASE_URL in Vercel.' });
+            console.error('SERVER INIT ERROR:', error.message);
+            return res.status(500).json({ 
+                message: 'Database initialization failed.',
+                error: error.message,
+                hint: 'Check DATABASE_URL in Vercel environment variables. Ensure the database allows external connections and the URL format is correct (mysql://user:pass@host:port/db).'
+            });
         }
     }
     next();
