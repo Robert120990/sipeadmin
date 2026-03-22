@@ -5,6 +5,21 @@ const path = require('path');
 dotenv.config({ path: path.join(__dirname, '.env') });
 
 const getDbConfig = () => {
+    if (process.env.DATABASE_URL) {
+        // Parse mysql://user:pass@host/db
+        try {
+            const url = new URL(process.env.DATABASE_URL);
+            return {
+                host: url.hostname,
+                user: url.username,
+                password: decodeURIComponent(url.password),
+                database: url.pathname.substring(1),
+                port: url.port ? parseInt(url.port) : 3306
+            };
+        } catch (e) {
+            console.error('Error parsing DATABASE_URL:', e);
+        }
+    }
     return {
         host: '207.244.251.167',
         user: 'sysadmin',
@@ -17,13 +32,26 @@ const dbConfig = getDbConfig();
 
 const initDB = async () => {
     try {
-        const config = process.env.DATABASE_URL || getDbConfig();
-        const pool = mysql.createPool(config);
+        // En Vercel no podemos correr 15 scripts de CREATE TABLE por timeout de Serverless (10s)
+        if (process.env.VERCEL) {
+            console.log('Vercel Environment Detected: Bypassing local init schemas.');
+            return mysql.createPool(dbConfig);
+        }
 
-        // Verification connection
-        console.log('Connecting to database...');
-        const [rows] = await pool.query('SELECT 1');
-        console.log('Connection successful!');
+        // Create connection without database to check if it exists
+        const connection = await mysql.createConnection({
+            host: dbConfig.host,
+            user: dbConfig.user,
+            password: dbConfig.password
+        });
+
+        console.log('Checking database...');
+        await connection.query(`CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`;`);
+        await connection.end();
+
+        // Connect with the database
+        const pool = mysql.createPool(dbConfig);
+        console.log('Connected to MySQL database!');
 
         // Create tables
         await pool.query(`
