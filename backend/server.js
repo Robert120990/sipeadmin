@@ -1295,12 +1295,22 @@ DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
 
 // --- Bancos y Cuentas Bancarias (External Database) ---
 app.get('/api/bancos/catalogos', authenticateToken, async (req, res) => {
+    const { id_empresa } = req.query;
     try {
         const externalDb = await getExternalDb();
-        const [bancos] = await externalDb.query('SELECT id, descripcion FROM bancos ORDER BY descripcion');
-        const [empresas] = await externalDb.query('SELECT id, nombre FROM empresas ORDER BY nombre');
-        res.json({ bancos, empresas });
+        const [empresas] = await externalDb.query('SELECT TRIM(id) as id, nombre FROM empresas_mayores ORDER BY nombre');
+        
+        let bancos = [];
+        let tipos = [];
+        
+        if (id_empresa) {
+            [bancos] = await externalDb.query('SELECT TRIM(id) as id, descripcion FROM bancos WHERE id_empresa = ? ORDER BY descripcion', [id_empresa]);
+            [tipos] = await externalDb.query('SELECT TRIM(id) as id, descripcion FROM tipos_cuenta_bancaria WHERE id_empresa = ? ORDER BY descripcion', [id_empresa]);
+        }
+        
+        res.json({ bancos, empresas, tipos });
     } catch (error) {
+        console.error('CATALOGOS BANCOS ERROR:', error);
         res.status(500).json({ message: 'Error al cargar catálogos bancarios', error: error.message });
     }
 });
@@ -1309,26 +1319,29 @@ app.get('/api/bancos/cuentas', authenticateToken, async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query(`
-            SELECT c.corr, c.numero, c.nombre, c.id_empresa, c.cod_banco, c.activa,
-                   e.nombre as empresa_nombre, b.descripcion as banco_nombre
+            SELECT c.corr, TRIM(c.numero) as numero, c.nombre, TRIM(c.id_empresa) as id_empresa, 
+                   TRIM(c.cod_banco) as cod_banco, TRIM(c.cod_tipo) as cod_tipo, TRIM(c.cod_cta) as cod_cta, c.activa,
+                   e.nombre as empresa_nombre, b.descripcion as banco_nombre, t.descripcion as tipo_nombre
             FROM cuentas_bancarias c
-            LEFT JOIN empresas e ON c.id_empresa = e.id
-            LEFT JOIN bancos b ON c.cod_banco = b.id
+            LEFT JOIN empresas_mayores e ON TRIM(c.id_empresa) = TRIM(e.id)
+            LEFT JOIN bancos b ON TRIM(c.cod_banco) = TRIM(b.id) AND TRIM(c.id_empresa) = TRIM(b.id_empresa)
+            LEFT JOIN tipos_cuenta_bancaria t ON TRIM(c.cod_tipo) = TRIM(t.id) AND TRIM(c.id_empresa) = TRIM(t.id_empresa)
             ORDER BY c.corr DESC
         `);
         res.json(rows);
     } catch (error) {
+        console.error('CUENTAS BANCARIAS ERROR:', error);
         res.status(500).json({ message: 'Error al cargar cuentas bancarias', error: error.message });
     }
 });
 
 app.post('/api/bancos/cuentas', authenticateToken, async (req, res) => {
-    const { id_empresa, numero, nombre, cod_banco } = req.body;
+    const { id_empresa, numero, nombre, cod_banco, cod_tipo, cod_cta } = req.body;
     try {
         const externalDb = await getExternalDb();
         await externalDb.query(
-            'INSERT INTO cuentas_bancarias (id_empresa, numero, nombre, cod_banco, activa) VALUES (?, ?, ?, ?, "S")',
-            [id_empresa, numero, nombre, cod_banco]
+            'INSERT INTO cuentas_bancarias (id_empresa, numero, nombre, cod_banco, cod_tipo, cod_cta, activa) VALUES (?, ?, ?, ?, ?, ?, "S")',
+            [id_empresa, numero, nombre, cod_banco, cod_tipo, cod_cta]
         );
         res.status(201).json({ message: 'Cuenta creada con éxito' });
     } catch (error) {
@@ -1338,12 +1351,12 @@ app.post('/api/bancos/cuentas', authenticateToken, async (req, res) => {
 
 app.put('/api/bancos/cuentas/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { id_empresa, numero, nombre, cod_banco, activa } = req.body;
+    const { id_empresa, numero, nombre, cod_banco, cod_tipo, cod_cta, activa } = req.body;
     try {
         const externalDb = await getExternalDb();
         await externalDb.query(
-            'UPDATE cuentas_bancarias SET id_empresa = ?, numero = ?, nombre = ?, cod_banco = ?, activa = ? WHERE corr = ?',
-            [id_empresa, numero, nombre, cod_banco, activa || 'S', id]
+            'UPDATE cuentas_bancarias SET id_empresa = ?, numero = ?, nombre = ?, cod_banco = ?, cod_tipo = ?, cod_cta = ?, activa = ? WHERE corr = ?',
+            [id_empresa, numero, nombre, cod_banco, cod_tipo, cod_cta, activa || 'S', id]
         );
         res.json({ message: 'Cuenta actualizada' });
     } catch (error) {

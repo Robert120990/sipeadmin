@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard } from 'lucide-react';
-import { mainNavItems, catalogItems, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems } from '../config/navigation';
+import { mainNavItems, catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems } from '../config/navigation';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -12,6 +12,7 @@ export default function DashboardLayout() {
     const [openConsultasBancos, setOpenConsultasBancos] = useState(false);
     const [openSecurity, setOpenSecurity] = useState(false);
     const [openOperaciones, setOpenOperaciones] = useState(false);
+    const [openBancos, setOpenBancos] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
 
     const user = JSON.parse(localStorage.getItem('user')) || {};
@@ -19,6 +20,7 @@ export default function DashboardLayout() {
 
     const filteredCatalogs = catalogItems.filter(item => hasPermission(item.path));
     const filteredOperaciones = operacionesMenu.filter(item => hasPermission(item.path));
+    const filteredBancosMenu = bancosMenu.filter(item => hasPermission(item.path));
     const filteredEstaciones = consultasEstaciones.filter(item => hasPermission(item.path));
     const filteredBancos = consultasBancos.filter(item => hasPermission(item.path));
     const filteredSecurity = securityItems.filter(item => hasPermission(item.path));
@@ -34,6 +36,7 @@ export default function DashboardLayout() {
     useEffect(() => {
         if (securityItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenSecurity(true);
         if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenCatalogs(true);
+        if (bancosMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenBancos(true);
         if (operacionesMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenOperaciones(true);
         if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultas(true);
         if (consultasBancos.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasBancos(true);
@@ -109,6 +112,23 @@ export default function DashboardLayout() {
                             {openOperaciones && !isCollapsed && (
                                 <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
                                     {filteredOperaciones.map(item => renderNavItem(item, true))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {filteredBancosMenu.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <button className="nav-item" onClick={() => !isCollapsed && setOpenBancos(!openBancos)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }} title={isCollapsed ? "Bancos" : ""}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                    <Folder size={20} />
+                                    {!isCollapsed && <span>Bancos</span>}
+                                </div>
+                                {!isCollapsed && (openBancos ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                            </button>
+                            {openBancos && !isCollapsed && (
+                                <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                    {filteredBancosMenu.map(item => renderNavItem(item, true))}
                                 </div>
                             )}
                         </div>
