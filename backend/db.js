@@ -18,23 +18,7 @@ const dbConfig = getDbConfig();
 const initDB = async () => {
     try {
         const config = process.env.DATABASE_URL || getDbConfig();
-        
-        let pool;
-        if (typeof config === 'string') {
-            // If it's a URL, we can't easily merge SSL object into it via createPool(obj)
-            // But mysql2 allows passing the string directly. 
-            // Most cloud DBs work if we just append ssl query param if not there, 
-            // but safer to use the object if we want to force SSL.
-            pool = mysql.createPool(config);
-        } else {
-            pool = mysql.createPool({ 
-                ...config, 
-                ssl: { rejectUnauthorized: false },
-                connectionLimit: 10,
-                waitForConnections: true,
-                queueLimit: 0
-            });
-        }
+        const pool = mysql.createPool(config);
 
         // Verification connection
         console.log('Connecting to database...');
