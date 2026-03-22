@@ -30,14 +30,14 @@ const apiAxios = axios.create({ httpAgent: keepAliveAgent, httpsAgent: keepAlive
 // Initialize database and start server
 const dbPromise = initDB().then(pool => {
     db = pool;
-    if (process.env.NODE_ENV !== 'production') {
+    if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
         app.listen(PORT, () => {
             console.log(`Server running on port ${PORT}`);
         });
     }
-}).catch(err => {
-    console.error('Failed to initialize database:', err);
+    return pool;
 });
+// Note: We don't catch here globally, we let the middleware or the process handle it.
 
 // Vercel Serverless lazy DB initialization middleware
 app.use(async (req, res, next) => {
