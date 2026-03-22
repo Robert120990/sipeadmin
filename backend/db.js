@@ -1,14 +1,34 @@
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
 
-dotenv.config();
+const path = require('path');
+dotenv.config({ path: path.join(__dirname, '.env') });
 
-const dbConfig = {
-    host: '207.244.251.167',
-    user: 'sysadmin',
-    password: 'QwErTy123',
-    database: 'db_sipe_admin'
+const getDbConfig = () => {
+    if (process.env.DATABASE_URL) {
+        // Parse mysql://user:pass@host/db
+        try {
+            const url = new URL(process.env.DATABASE_URL);
+            return {
+                host: url.hostname,
+                user: url.username,
+                password: decodeURIComponent(url.password),
+                database: url.pathname.substring(1),
+                port: url.port ? parseInt(url.port) : 3306
+            };
+        } catch (e) {
+            console.error('Error parsing DATABASE_URL:', e);
+        }
+    }
+    return {
+        host: '207.244.251.167',
+        user: 'sysadmin',
+        password: 'QwErTy123',
+        database: 'db_sipe_admin'
+    };
 };
+
+const dbConfig = getDbConfig();
 
 const initDB = async () => {
     try {

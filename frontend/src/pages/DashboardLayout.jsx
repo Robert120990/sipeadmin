@@ -142,6 +142,22 @@ export default function DashboardLayout() {
                                             )}
                                         </div>
                                     )}
+                                    {filteredBancos.length > 0 && (
+                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                            <button className="nav-item" onClick={() => setOpenConsultasBancos(!openConsultasBancos)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                    <Folder size={18} />
+                                                    Bancos
+                                                </div>
+                                                {openConsultasBancos ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                            </button>
+                                            {openConsultasBancos && (
+                                                <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                                    {filteredBancos.map(item => renderNavItem(item, true))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

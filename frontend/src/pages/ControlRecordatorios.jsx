@@ -42,9 +42,10 @@ export default function ControlRecordatorios() {
     
     // Search Filters State
     const [searchFilters, setSearchFilters] = useState({
-        descripcion: '', fecha_inicio: '', ubicacion: '', monto: '', observacion: '', cuotas: '', activo: ''
+        descripcion: '', fecha_inicio: '', ubicacion: '', monto: '', observacion: '', cuotas: '', activo: '', repetir_desc: ''
     });
     const debouncedFilters = useDebounce(searchFilters, 350);
+    const [selectedParent, setSelectedParent] = useState(null); // { id, descripcion }
     
     // Form State (Parent Recordatorio)
     const [formData, setFormData] = useState({
@@ -73,9 +74,14 @@ export default function ControlRecordatorios() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const res = await api.get('/operaciones/recordatorios', {
-                params: { desde: fechaDesde, hasta: fechaHasta, estado: estadoFilter }
-            });
+            const params = { estado: estadoFilter };
+            if (selectedParent) {
+                params.id_recordatorio = selectedParent.id;
+            } else {
+                params.desde = fechaDesde;
+                params.hasta = fechaHasta;
+            }
+            const res = await api.get('/operaciones/recordatorios', { params });
             setRecordatorios(res.data);
         } catch (error) {
             addToast('Error al cargar datos', 'error');
@@ -211,34 +217,20 @@ export default function ControlRecordatorios() {
         }
     };
 
-    const loadParentForEdit = async (parentId) => {
-        try {
-            const res = await api.get(`/operaciones/recordatorios/${parentId}`);
-            if (res.data.pagados > 0) {
-                if(!window.confirm("Este Recordatorio ya posee pagos.\nSi Decide editar perderá todos los pagos. ¿Desea continuar?")) return;
-            }
-            
-            const p = res.data.recordatorio;
-            setFormData({
-                id: p.id,
-                descripcion: p.descripcion,
-                id_ubicacion: p.id_ubicacion,
-                iniciar: String(p.iniciar).substring(0, 10),
-                activo: Boolean(p.activo),
-                monto: p.monto,
-                repetir: p.repetir,
-                repetir_desc: p.repetir_desc,
-                forma_pago: p.forma_pago || '',
-                pagado: false,
-                fecPago: todayStr,
-                formaPago2: ''
-            });
-            setIsSearchModalOpen(false);
-            setIsFormModalOpen(true);
-        } catch (error) {
-            addToast('Error al cargar detalle', 'error');
-        }
+    const handleSelectParent = (parent) => {
+        setSelectedParent({ id: parent.id, descripcion: parent.descripcion });
+        setIsSearchModalOpen(false);
+        // We'll call fetchData via useEffect if we want, or manually
     };
+
+    const clearParentFilter = () => {
+        setSelectedParent(null);
+    };
+
+    useEffect(() => {
+        fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedParent, fechaDesde, fechaHasta, estadoFilter]);
 
     const openSearchModal = async () => {
         setLoading(true);
@@ -255,15 +247,20 @@ export default function ControlRecordatorios() {
 
     const filteredParents = useMemo(() => {
         if (!parentsList.length) return [];
-        return parentsList.filter(p => {
-            return (p.descripcion || '').toLowerCase().includes(debouncedFilters.descripcion.toLowerCase()) &&
-                   (formatDate(p.fecha_inicio) || '').includes(debouncedFilters.fecha_inicio) &&
-                   (p.ubicacion || '').toLowerCase().includes(debouncedFilters.ubicacion.toLowerCase()) &&
-                   String(p.monto || '').includes(debouncedFilters.monto) &&
-                   (p.observacion || '').toLowerCase().includes(debouncedFilters.observacion.toLowerCase()) &&
-                   String(p.cuotas || '').includes(debouncedFilters.cuotas) &&
-                   (p.activo || '').toLowerCase().includes(debouncedFilters.activo.toLowerCase());
+        const result = parentsList.filter(p => {
+            const descMatch = (p.descripcion || '').toLowerCase().includes(debouncedFilters.descripcion.toLowerCase());
+            const dateMatch = (formatDate(p.fecha_inicio) || '').includes(debouncedFilters.fecha_inicio);
+            const ubicMatch = (p.ubicacion || '').toLowerCase().includes(debouncedFilters.ubicacion.toLowerCase());
+            const montoMatch = String(p.monto || '').includes(debouncedFilters.monto);
+            const obsMatch = (p.observacion || '').toLowerCase().includes(debouncedFilters.observacion.toLowerCase());
+            const cuotasMatch = String(p.cuotas || '').includes(debouncedFilters.cuotas);
+            const repDescMatch = (p.repetir_desc || '').toLowerCase().includes(debouncedFilters.repetir_desc.toLowerCase());
+            const activoMatch = (p.activo || '').toLowerCase().includes(debouncedFilters.activo.toLowerCase());
+            
+            return descMatch && dateMatch && ubicMatch && montoMatch && obsMatch && cuotasMatch && repDescMatch && activoMatch;
         });
+        // Limit to 100 for performance during search
+        return result.slice(0, 100);
     }, [parentsList, debouncedFilters]);
 
     const handleDelete = async (rec) => {
@@ -335,14 +332,29 @@ export default function ControlRecordatorios() {
             <h1 style={{ marginBottom: '2rem', color: 'var(--primary)' }}>Control de Recordatorios</h1>
             
             <div className="card glass" style={{ marginBottom: '1.5rem', display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-end' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', opacity: selectedParent ? 0.5 : 1 }}>
                     <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>VENCEN DESDE</label>
-                    <input type="date" className="form-control" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)} />
+                    <input type="date" className="form-control" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)} disabled={!!selectedParent} />
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', opacity: selectedParent ? 0.5 : 1 }}>
                     <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>VENCEN HASTA</label>
-                    <input type="date" className="form-control" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)} />
+                    <input type="date" className="form-control" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)} disabled={!!selectedParent} />
                 </div>
+                
+                {selectedParent && (
+                    <div style={{ 
+                        display: 'flex', alignItems: 'center', gap: '0.75rem', 
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)', border: '1px solid var(--primary)', 
+                        padding: '0.5rem 1rem', borderRadius: '12px', height: '42px' 
+                    }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold' }}>
+                            FILTRADO POR: <span style={{ color: 'white' }}>{selectedParent.descripcion} (ID: {selectedParent.id})</span>
+                        </div>
+                        <button onClick={clearParentFilter} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', padding: 0 }}>
+                            <X size={16} />
+                        </button>
+                    </div>
+                )}
                 
                 <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                     <button onClick={fetchData} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1.5rem' }}>
@@ -394,7 +406,7 @@ export default function ControlRecordatorios() {
 
                 <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={openSearchModal}>
-                        <Search size={18} /> Buscar Matriz
+                        <Search size={18} /> Buscar
                     </button>
                     <button className="btn-success" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={() => {
                         setFormData({ id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr, activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', forma_pago: '', pagado: false, fecPago: todayStr, formaPago2: '' });
@@ -422,6 +434,7 @@ export default function ControlRecordatorios() {
                 <table className="data-table" style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
                     <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#1E232A' }}>
                         <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                            <th style={{ padding: '0.75rem 0.5rem', width: '100px' }}>ID PRINCIPAL</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>UBICACION</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>DESCRIPCION</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>VENCE</th>
@@ -441,6 +454,7 @@ export default function ControlRecordatorios() {
                                 borderBottom: '1px solid rgba(255,255,255,0.05)',
                                 backgroundColor: r.estado === 'CANCELADO' ? 'rgba(40, 167, 69, 0.05)' : 'transparent' 
                             }}>
+                                <td style={{ padding: '0.5rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>{r.id_recordatorio}</td>
                                 <td style={{ padding: '0.5rem' }}>{r.ubicacion}</td>
                                 <td style={{ padding: '0.5rem' }}>{r.descripcion}</td>
                                 <td style={{ padding: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>{formatDate(r.vence)}</td>
@@ -713,6 +727,7 @@ export default function ControlRecordatorios() {
                             <table className="data-table" style={{ fontSize: '0.8rem' }}>
                                 <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: 'rgba(30,35,42,1)' }}>
                                     <tr>
+                                        <th style={{ width: '100px' }}>ID PRINCIPAL</th>
                                         <th>
                                             Descripcion
                                             <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
@@ -744,24 +759,25 @@ export default function ControlRecordatorios() {
                                                    value={searchFilters.cuotas} onChange={e => setSearchFilters({...searchFilters, cuotas: e.target.value})} placeholder="Buscar..." />
                                         </th>
                                         <th>
-                                            Activo
+                                            Repetición
                                             <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.activo} onChange={e => setSearchFilters({...searchFilters, activo: e.target.value})} placeholder="Buscar..." />
+                                                   value={searchFilters.repetir_desc} onChange={e => setSearchFilters({...searchFilters, repetir_desc: e.target.value})} placeholder="Buscar..." />
                                         </th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {filteredParents.length === 0 ? (
-                                        <tr><td colSpan="7" style={{ textAlign: 'center', padding: '1rem' }}>No se encontraron matrices</td></tr>
+                                        <tr><td colSpan="6" style={{ textAlign: 'center', padding: '1rem' }}>No se encontraron matrices</td></tr>
                                     ) : filteredParents.map((p, idx) => (
-                                        <tr key={idx} style={{ cursor: 'pointer' }} onClick={() => loadParentForEdit(p.id)}>
+                                        <tr key={idx} style={{ cursor: 'pointer' }} onClick={() => handleSelectParent(p)}>
+                                            <td style={{ fontWeight: 'bold', color: 'var(--text-muted)' }}>{p.id}</td>
                                             <td style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{p.descripcion}</td>
                                             <td>{formatDate(p.fecha_inicio)}</td>
                                             <td>{p.ubicacion}</td>
                                             <td>{p.monto}</td>
                                             <td>{p.observacion}</td>
                                             <td>{p.cuotas}</td>
-                                            <td>{p.activo}</td>
+                                            <td>{p.repetir_desc}</td>
                                         </tr>
                                     ))}
                                 </tbody>

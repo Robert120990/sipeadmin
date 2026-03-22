@@ -263,24 +263,39 @@ app.get('/api/operaciones/recordatorios/ubicaciones', authenticateToken, async (
 
 app.get('/api/operaciones/recordatorios', authenticateToken, async (req, res) => {
     try {
-        const { desde, hasta, estado } = req.query; 
+        const { desde, hasta, estado, id_recordatorio } = req.query; 
         const externalDb = await getExternalDb();
+        
         let statusFilter = "a.estado IN ('P', 'C')";
         if (estado === 'P') statusFilter = "a.estado = 'P'";
         else if (estado === 'C') statusFilter = "a.estado = 'C'";
 
-        const query = `
+        let query = `
             SELECT c.descripcion as ubicacion, b.descripcion, a.vencimiento as vence, b.forma_pago as observacion, 
                    a.forma_pago, b.monto, IF(a.estado = 'P','PENDIENTE','CANCELADO') as estado, a.fecha_cancelacion, a.id, b.id as id_recordatorio
             FROM web_rc_recordatorios_vencimientos a 
             INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id 
             INNER JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id 
-            WHERE a.vencimiento BETWEEN ? AND ? AND b.activo = 1 AND ${statusFilter}
-            ORDER BY a.vencimiento
+            WHERE 1=1 
         `;
-        const [rows] = await externalDb.query(query, [desde, hasta]);
+        
+        const params = [];
+        if (id_recordatorio) {
+            query += " AND b.id = ? ";
+            params.push(id_recordatorio);
+        } else {
+            query += ` AND b.activo = 1 AND ${statusFilter} AND a.vencimiento BETWEEN ? AND ? `;
+            params.push(desde, hasta);
+        }
+
+        query += " ORDER BY a.vencimiento ";
+        
+        const [rows] = await externalDb.query(query, params);
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching recordatorios' }); }
+    } catch (error) { 
+        console.error('Error fetching recordatorios:', error);
+        res.status(500).json({ message: 'Error fetching recordatorios' }); 
+    }
 });
 
 
@@ -301,7 +316,7 @@ app.get('/api/operaciones/recordatorios/parents/buscar', authenticateToken, asyn
         const externalDb = await getExternalDb();
         const query = `
             SELECT b.id, b.descripcion, b.iniciar as fecha_inicio, c.descripcion as ubicacion, 
-                   b.monto, b.forma_pago as observacion, b.repetir as cuotas, IF(b.activo=1,'SI','NO') as activo
+                   b.monto, b.forma_pago as observacion, b.repetir as cuotas, b.repetir_desc, IF(b.activo=1,'SI','NO') as activo
             FROM web_rc_recordatorios b 
             LEFT JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id 
             ORDER BY b.iniciar DESC
