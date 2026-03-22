@@ -686,18 +686,182 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
     const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
     
     try {
-        const [tiendas, estaciones, margenes, inventario] = await Promise.all([
-            apiAxios.get(`${baseUrl}/GetVentasTienda/${date}`),
-            apiAxios.get(`${baseUrl}/GetVentasEstacion/${date}`),
-            apiAxios.get(`${baseUrl}/GetMargenesEstacion/${date}`),
-            apiAxios.get(`${baseUrl}/GetInventario/${date}`)
+        const externalDb = await getExternalDb();
+        
+        // Fetch station list once for all sub-sections
+        const [stations] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden");
+        
+        // --- LOCAL GetVentasTienda Logic ---
+        const cInicio = new Date(date);
+        cInicio.setDate(cInicio.getDate() - 15);
+        const cInicioStr = cInicio.toISOString().split('T')[0];
+        
+        const sqlTiendas = `
+            SELECT b.fecha, a.id_empresa, a.titulo, 
+                   SUM(IF(b.fecha = ?, IFNULL(b.monto, 0.0), 0.0)) as monto, 
+                   AVG(IFNULL(b.monto, 0.0)) as promedio 
+            FROM web_consolidado a 
+            LEFT JOIN ventas_tienda b ON a.id_empresa = b.id_empresa AND b.fecha BETWEEN ? AND ?
+            WHERE a.grupo = 'TIENDA' 
+            GROUP BY a.id_empresa 
+            ORDER BY a.orden
+        `;
+        const [tiendasRows] = await externalDb.query(sqlTiendas, [date, cInicioStr, date]);
+        const tiendasLocal = tiendasRows.map(row => ({
+            fecha: date,
+            empresa: row.titulo,
+            venta: Number(row.monto || 0),
+            promedio: Number(row.promedio || 0)
+        }));
+
+        // --- LOCAL GetVentasEstacion Logic ---
+        const sqlEstaciones = `
+            SELECT a.titulo, 
+                   IFNULL(SUM(IF(d.clasificacion = 'D', b.total, 0.0)), 0.0) as diesel, 
+                   IFNULL(SUM(IF(d.clasificacion = 'R', b.total, 0.0)), 0.0) as regular, 
+                   IFNULL(SUM(IF(d.clasificacion = 'S', b.total, 0.0)), 0.0) as super, 
+                   IFNULL(SUM(IF(d.clasificacion = 'I', b.total, 0.0)), 0.0) as ion, 
+                   IFNULL(SUM(b.total), 0.0) as galonaje, 
+                   IFNULL(SUM(b.total * b.precio), 0.0) as monto, 
+                   COUNT(DISTINCT c.turno) as turnos, 
+                   a.id_empresa 
+            FROM web_consolidado a 
+            LEFT JOIN cierre_turno_lecturas b ON a.id_empresa = b.id_empresa 
+            INNER JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto 
+            INNER JOIN cierre_turno c ON b.id_cierre_turno = c.id AND b.id_empresa = c.id_empresa 
+                  AND c.fecha_turno = DATE_FORMAT(?, '%d/%m/%Y') 
+            WHERE a.grupo = 'ESTACION' 
+            GROUP BY a.id_empresa 
+            ORDER BY a.orden
+        `;
+        const [estacionesRows] = await externalDb.query(sqlEstaciones, [date]);
+        const estacionesLocal = estacionesRows.map(row => ({
+            empresa: row.titulo,
+            diesel: Number(row.diesel || 0),
+            regular: Number(row.regular || 0),
+            super: Number(row.super || 0),
+            ion: Number(row.ion || 0),
+            galonaje: Number(row.galonaje || 0),
+            venta: Number(row.monto || 0)
+        }));
+
+        // --- LOCAL GetMargenesEstacion Logic ---
+        const sqlMargenes = `
+            SELECT a.id_empresa, a.titulo, 
+                   SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as diesel_a, 
+                   SUM(IFNULL(IF(b.clasificacion = 'R' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as regular_a, 
+                   SUM(IFNULL(IF(b.clasificacion = 'S' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as super_a, 
+                   SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as diesel_c, 
+                   SUM(IFNULL(IF(b.clasificacion = 'R' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as regular_c, 
+                   SUM(IFNULL(IF(b.clasificacion = 'S' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as super_c, 
+                   SUM(IFNULL(IF(b.clasificacion = 'I', c.precio, 0.0), 0.0)) as ion_diesel, 
+                   SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'M', c.precio, 0.0), 0.0)) as master 
+            FROM web_consolidado a 
+            LEFT JOIN cfg_combustibles b ON a.id_empresa = b.id_empresa 
+            LEFT JOIN ( 
+                 SELECT a.id_empresa, a.id_producto, a.codigo_producto, a.nom_producto, precio 
+                 FROM cierre_turno_lecturas a 
+                 INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa 
+                 WHERE STR_TO_DATE(b.fecha_turno, '%d/%m/%Y') = ? 
+                   AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa = b.id_empresa AND x.fecha_turno = b.fecha_turno) 
+                 GROUP BY codigo_producto, a.id_empresa 
+            ) c ON b.id_empresa = c.id_empresa AND b.codigo = c.codigo_producto 
+            WHERE a.grupo = 'ESTACION' 
+            GROUP BY id_empresa 
+            ORDER BY orden
+        `;
+        const [margenesRows] = await externalDb.query(sqlMargenes, [date]);
+        
+        // Fetch latest costs for all stations to avoid N+1 queries
+        const [costsRows] = await externalDb.query(`
+            SELECT id_empresa, cod_producto, costo 
+            FROM combustibles_costos 
+            WHERE id IN (
+                SELECT MAX(id) FROM combustibles_costos GROUP BY id_empresa, cod_producto
+            )
+        `);
+        const costsMap = {};
+        costsRows.forEach(row => {
+            if (!costsMap[row.id_empresa]) costsMap[row.id_empresa] = {};
+            costsMap[row.id_empresa][row.cod_producto] = Number(row.costo || 0);
+        });
+
+        const margenesLocal = margenesRows.map(row => {
+            const getC = (prod) => (costsMap[row.id_empresa] && costsMap[row.id_empresa][prod]) || 0;
+            const cD = getC('DIESEL'), cR = getC('REGULAR'), cS = getC('SUPER'), cI = getC('IONDIESEL');
+            
+            return {
+                empresa: row.titulo,
+                margen_da: Number(row.diesel_a || 0) - cD,
+                margen_ra: Number(row.regular_a || 0) - cR,
+                margen_sa: Number(row.super_a || 0) - cS,
+                margen_dc: Number(row.diesel_c || 0) - cD,
+                margen_rc: Number(row.regular_c || 0) - cR,
+                margen_sc: Number(row.super_c || 0) - cS,
+                margen_io: Number(row.ion_diesel || 0) - cI,
+                margen_master: Number(row.master || 0) - cD
+            };
+        });
+
+        // --- LOCAL GetInventario Logic ---
+        const cDesde = new Date(date);
+        cDesde.setDate(cDesde.getDate() - 6);
+        const cDesdeStr = cDesde.toISOString().split('T')[0];
+
+        const [lecturasRows, promediosRows] = await Promise.all([
+            externalDb.query(`
+                SELECT b.lectura, c.galones_reserva, IF(c.tipo_combustible='M','I',c.tipo_combustible) as tipo_combustible, a.id_empresa 
+                FROM lecturas_tanque a 
+                INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa 
+                INNER JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa 
+                WHERE a.fecha = ? AND a.turno = (SELECT MAX(x.turno) FROM lecturas_tanque x WHERE x.id_empresa = a.id_empresa AND x.fecha = a.fecha)
+            `, [date]),
+            externalDb.query(`
+                SELECT a.id_empresa, IF(a.id_empresa = '004' AND a.codigo_producto = '0007','I', LEFT(a.nom_producto,1)) AS tipo_combustible,
+                       SUM(a.total) as total_7d
+                FROM cierre_turno_lecturas a 
+                INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa 
+                WHERE STR_TO_DATE(b.fecha_turno, '%d/%m/%Y') BETWEEN ? AND ? 
+                GROUP BY a.id_empresa, tipo_combustible
+            `, [cDesdeStr, date])
         ]);
 
+        const lecturas = lecturasRows[0];
+        const promedios = promediosRows[0];
+
+        const inventarioLocal = stations.map(s => {
+            const id = s.id_empresa;
+            
+            const getInv = (tipo) => lecturas
+                .filter(l => l.id_empresa === id && l.tipo_combustible === tipo)
+                .reduce((acc, curr) => acc + (Number(curr.lectura || 0) - Number(curr.galones_reserva || 0)), 0);
+            
+            const nD = getInv('D'), nR = getInv('R'), nS = getInv('S'), nI = getInv('I');
+
+            const getProm = (tipo) => {
+                const row = promedios.find(p => p.id_empresa === id && p.tipo_combustible === tipo);
+                return (Number(row?.total_7d || 0) / 7);
+            };
+            const pD = getProm('D'), pR = getProm('R'), pS = getProm('S'), pI = getProm('I');
+
+            return {
+                empresa: s.titulo,
+                diesel: nD,
+                regular: nR,
+                super: nS,
+                iondiesel: nI,
+                duracion_diesel: pD > 0 ? Math.round((nD / pD) * 10) / 10 : 0,
+                duracion_regular: pR > 0 ? Math.round((nR / pR) * 10) / 10 : 0,
+                duracion_super: pS > 0 ? Math.round((nS / pS) * 10) / 10 : 0,
+                duracion_ion: pI > 0 ? Math.round((nI / pI) * 10) / 10 : 0
+            };
+        });
+
         res.json({
-            tiendas: tiendas.data || [],
-            estaciones: estaciones.data || [],
-            margenes: margenes.data || [],
-            inventario: inventario.data || []
+            tiendas: tiendasLocal,
+            estaciones: estacionesLocal,
+            margenes: margenesLocal,
+            inventario: inventarioLocal
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching external API' });
@@ -706,38 +870,124 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
 
 app.get('/api/ventas/lubricantes/:start/:end', authenticateToken, async (req, res) => {
     const { start, end } = req.params;
-    const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
     
     try {
-        const response = await apiAxios.get(`${baseUrl}/GetVtaLubricantes/${start}/${end}`);
-        res.json(response.data || []);
+        const externalDb = await getExternalDb();
+        const sql = `
+            SELECT a.id_empresa, a.titulo, IFNULL(SUM(b.precio_total), 0.0) as monto 
+            FROM web_consolidado a 
+            LEFT JOIN inventario_lubricantes b ON a.id_empresa = b.id_empresa 
+                 AND STR_TO_DATE(b.fecha_turno, '%d/%m/%Y') BETWEEN ? AND ? 
+            WHERE a.grupo = 'ESTACION' 
+            GROUP BY id_empresa 
+            ORDER BY a.orden
+        `;
+        const [rows] = await externalDb.query(sql, [start, end]);
+        const mapped = rows.map(r => ({
+            empresa: r.titulo,
+            venta: Number(r.monto || 0)
+        }));
+        res.json(mapped);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching Lubricantes API' });
+        console.error('LUBRICANTES ERROR:', error);
+        res.status(500).json({ message: 'Error fetching Lubricantes locally' });
     }
 });
 
 app.get('/api/ventas/resumen-cierre/:date', authenticateToken, async (req, res) => {
     const { date } = req.params;
-    const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
     
     try {
-        const response = await apiAxios.get(`${baseUrl}/GetResumen/${date}`);
-        res.json(response.data || []);
+        const externalDb = await getExternalDb();
+        const sql = `
+            SELECT x.titulo AS estacion,
+                   (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS creditos,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cupones b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS cupones,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cheques b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS cheques,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_tarjeta b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS tarjetas,
+                   (SELECT IFNULL(SUM(b.efectivo),0.0) + IFNULL(SUM(b.monedas),0.0) + IFNULL(SUM(b.transferencia),0.0) FROM cierre_turno a INNER JOIN cierre_turno_remesa b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS remesas,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_gastos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS gastos,
+                   (SELECT IFNULL(SUM(precio_total),0.0) FROM inventario_lubricantes WHERE id_empresa=x.id_empresa AND STR_TO_DATE(fecha_turno,'%d/%m/%Y')=?) AS lubricantes,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_anticipos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS anticipos,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_pagos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS pagos,
+                   (SELECT IFNULL(SUM(b.valor*b.cantidad),0.0) FROM cierre_turno a INNER JOIN cierre_turno_descuentos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS descuentos,
+                   (SELECT IFNULL(SUM(b.monto),0.0) FROM cierre_turno a INNER JOIN cierre_turno_lecturas b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS total_venta,
+                   x.id_empresa 
+            FROM web_consolidado x 
+            WHERE x.grupo = 'ESTACION' 
+            ORDER BY x.titulo
+        `;
+        const params = Array(11).fill(date);
+        const [rows] = await externalDb.query(sql, params);
+        
+        const mapped = rows.map(r => {
+            const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
+            const venta = Number(r.total_venta) + Number(r.lubricantes);
+            const suma = Math.round(monto * 100) / 100;
+            const tot_venta = Math.round(venta * 100) / 100;
+            
+            return {
+                empresa: r.estacion,
+                credito: Number(r.creditos),
+                cupones: Number(r.cupones),
+                cheques: Number(r.cheques),
+                tarjetas: Number(r.tarjetas),
+                remesas: Number(r.remesas),
+                gastos: Number(r.gastos),
+                lubricantes: Number(r.lubricantes),
+                anticipos: Number(r.anticipos),
+                pagos: Number(r.pagos),
+                descuentos: Number(r.descuentos),
+                suma,
+                tot_venta,
+                diferencia: Math.round((suma - tot_venta) * 100) / 100
+            };
+        });
+        
+        res.json(mapped);
     } catch (error) {
-        res.status(500).json({ message: 'Error fetching Resumen Cierre API' });
+        console.error('RESUMEN ERROR:', error);
+        res.status(500).json({ message: 'Error fetching Resumen Cierre locally' });
     }
 });
 
 app.get('/api/ventas/precios-estacion/:date', authenticateToken, async (req, res) => {
     const { date } = req.params;
-    const baseUrl = 'http://207.244.251.167:8041/WSdatos_consolidados.svc';
     
     try {
-        const response = await apiAxios.get(`${baseUrl}/GetPreciosEstacion/${date}`);
-        res.json(response.data || []);
+        const externalDb = await getExternalDb();
+        const sql = `
+            select a.id_empresa,a.titulo,
+                   sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'A',c.precio,0.0),0.0)) as diesel_a,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'A',c.precio,0.0),0.0)) as regular_a,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'A',c.precio,0.0),0.0)) as super_a,
+                   sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'F',c.precio,0.0),0.0)) as diesel_c,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'F',c.precio,0.0),0.0)) as regular_c,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'F',c.precio,0.0),0.0)) as super_c,
+                   sum(ifnull(if(b.clasificacion = 'I',c.precio,0.0),0.0)) as ion_diesel,sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'M',c.precio,0.0),0.0)) as master 
+            from web_consolidado a 
+            left join cfg_combustibles b on a.id_empresa = b.id_empresa 
+            left join ( 
+                 SELECT a.id_empresa,a.id_producto,
+                        a.codigo_producto,a.nom_producto,precio 
+                 FROM cierre_turno_lecturas a 
+                 INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa 
+                 WHERE str_to_date(b.fecha_turno,'%d/%m/%Y') = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) 
+                 GROUP BY codigo_producto,a.id_empresa order by id_empresa,codigo_producto) c on b.id_empresa = c.id_empresa and b.codigo = c.codigo_producto 
+            where a.grupo = 'ESTACION' group by id_empresa order by orden
+        `;
+        const [rows] = await externalDb.query(sql, [date]);
+        const mapped = rows.map(r => ({
+            empresa: r.titulo,
+            diesel_a: Number(r.diesel_a),
+            regular_a: Number(r.regular_a),
+            super_a: Number(r.super_a),
+            diesel_c: Number(r.diesel_c),
+            regular_c: Number(r.regular_c),
+            super_c: Number(r.super_c),
+            ion_diesel: Number(r.ion_diesel),
+            master: Number(r.master)
+        }));
+        res.json(mapped);
     } catch (error) {
-        console.error('Error fetching precios: ', error.message);
-        res.status(500).json({ message: 'Error fetching Precios Estacion API' });
+        console.error('PRECIOS ERROR:', error);
+        res.status(500).json({ message: 'Error fetching Precios locally' });
     }
 });
 
@@ -771,15 +1021,17 @@ app.get('/api/consultas/diferencias-combustible/:desde/:hasta', authenticateToke
         const externalDb = await getExternalDb();
         
         const sql1 = `
-            select x.id_empresa,a.titulo as estacion,z.clasificacion as tipo,0.0 as inicial,0.0 as recargas,sum(y.total) as venta,0.0 final,0.0 as suma,0.0 as diferencia 
+            select x.id_empresa, a.titulo as estacion, z.clasificacion as tipo, 
+                   0.0 as inicial, 0.0 as recargas, sum(y.total) as venta, 
+                   0.0 as final, 0.0 as suma, 0.0 as diferencia 
             from cierre_turno x 
             inner join cierre_turno_lecturas y on x.id_empresa = y.id_empresa and x.id = y.id_cierre_turno 
             inner join cfg_combustibles z on y.id_empresa = z.id_empresa and y.id_producto = z.id_producto 
             inner join web_consolidado a on x.id_empresa = a.id_empresa 
-            where str_to_date(x.fecha_turno,'%d/%m/%Y') between ? and ? 
+            where STR_TO_DATE(x.fecha_turno, '%d/%m/%Y') between ? and ? 
             and a.grupo = 'ESTACION' 
-            group by x.id_empresa,clasificacion 
-            order by a.orden,tipo
+            group by x.id_empresa, a.titulo, z.clasificacion, a.orden
+            order by a.orden, z.clasificacion
         `;
         const [dt_result] = await externalDb.query(sql1, [desde, hasta]);
 
@@ -827,7 +1079,10 @@ app.get('/api/consultas/diferencias-combustible/:desde/:hasta', authenticateToke
         res.json(listado_final);
     } catch (error) {
         console.error('Error in diferencias-combustible:', error);
-        res.status(500).json({ message: 'Error procesando consulta externa de combustible' });
+        res.status(500).json({ 
+            message: 'Error procesando consulta externa de combustible',
+            details: error.message 
+        });
     }
 });
 

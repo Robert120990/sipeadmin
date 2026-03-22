@@ -16,12 +16,19 @@ export default function ResumenPista() {
     const [loading, setLoading] = useState(false);
     const { addToast } = useToast();
 
-    const fetchData = async () => {
+    const fetchData = async (isManual = false) => {
         setLoading(true);
         try {
             const res = await api.get(`/ventas/resumen-cierre/${fecha}`);
             if (Array.isArray(res.data)) {
                 setData(res.data);
+                if (isManual) {
+                    if (res.data.length > 0) {
+                        addToast('Datos cargados exitosamente', 'success');
+                    } else {
+                        addToast('No se encontraron registros para esta fecha', 'info');
+                    }
+                }
             } else {
                 setData([]);
                 addToast('El servicio remoto no devolvió datos válidos', 'error');
@@ -133,7 +140,7 @@ export default function ResumenPista() {
                     </div>
                 </div>
 
-                <button className="btn-primary" onClick={fetchData} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1.5rem', marginTop: '1.25rem' }}>
+                <button className="btn-primary" onClick={() => fetchData(true)} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1.5rem', marginTop: '1.25rem' }}>
                     <Search size={16} /> {loading ? 'Cargando...' : 'Realizar consulta'}
                 </button>
             </div>

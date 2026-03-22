@@ -13,13 +13,17 @@ export default function DiferenciasCombustible() {
     const [loading, setLoading] = useState(false);
     const { addToast } = useToast();
 
-    const fetchData = async () => {
+    const fetchData = async (isManual = false) => {
         if (!startDate || !endDate) return addToast('Seleccione un rango de fechas', 'warning');
         setLoading(true);
         try {
             const response = await api.get(`/consultas/diferencias-combustible/${startDate}/${endDate}`);
             setData(response.data);
-            if (response.data.length === 0) addToast('No se encontraron registros', 'info');
+            if (response.data.length === 0) {
+                addToast('No se encontraron registros', 'info');
+            } else if (isManual) {
+                addToast('Diferencias cargadas con éxito', 'success');
+            }
         } catch (error) {
             addToast(error.response?.data?.message || 'Error al cargar datos', 'error');
         } finally {
@@ -102,7 +106,7 @@ export default function DiferenciasCombustible() {
                     <label>Hasta:</label>
                     <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="form-control" />
                 </div>
-                <button onClick={fetchData} className="btn-primary" disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', height: '42px' }}>
+                <button onClick={() => fetchData(true)} className="btn-primary" disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', height: '42px' }}>
                     <Search size={18} /> {loading ? 'Consultando...' : 'Realizar consulta'}
                 </button>
             </div>
