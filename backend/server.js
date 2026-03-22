@@ -11,6 +11,7 @@ const { GoogleGenAI } = require('@google/genai');
 const { initDB } = require('./db');
 
 const path = require('path');
+const fs = require('fs');
 dotenv.config(); // Standard config works better across environments
 
 const app = express();
@@ -57,6 +58,7 @@ app.use(async (req, res, next) => {
 });
 
 app.get('/api/debug-ping', (req, res) => res.json({ message: 'pong' }));
+
 // Middleware for authentication
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -540,7 +542,7 @@ app.post('/api/config', authenticateToken, async (req, res) => {
 });
 
 // Accounting Database Configuration Routes
-app.get('/api/config/accounting', authenticateToken, async (req, res) => {
+app.get('/api/accounting-config', authenticateToken, async (req, res) => {
     try {
         const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
         res.json(rows[0] || {});
@@ -549,12 +551,15 @@ app.get('/api/config/accounting', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/config/accounting', authenticateToken, async (req, res) => {
+app.post('/api/accounting-config', authenticateToken, async (req, res) => {
     const { host, user, password, database_name, port } = req.body;
+    const logMsg = `[${new Date().toISOString()}] CONFIG ACCOUNTING: Testing connection to ${host}:${port || 3306}...\n`;
+    fs.appendFileSync('accounting_debug.log', logMsg);
     try {
         const mysql = require('mysql2/promise');
         const testConn = await mysql.createConnection({ host, user, password, database: database_name, port: port || 3306 });
         await testConn.end();
+        fs.appendFileSync('accounting_debug.log', 'CONFIG ACCOUNTING: Connection successful!\n');
 
         const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'accounting' LIMIT 1");
         if (existing.length > 0) {
@@ -570,6 +575,7 @@ app.post('/api/config/accounting', authenticateToken, async (req, res) => {
         }
         res.json({ message: 'Configuración de contabilidad guardada y conexión exitosa' });
     } catch (error) {
+        fs.appendFileSync('accounting_debug.log', `CONFIG ACCOUNTING ERROR: ${error.message}\n`);
         res.status(400).json({ message: `Error de conexión contabilidad: ${error.message}` });
     }
 });
@@ -1031,7 +1037,7 @@ app.get('/api/ventas/precios-estacion/:date', authenticateToken, async (req, res
         res.json(mapped);
     } catch (error) {
         console.error('PRECIOS ERROR:', error);
-        res.status(500).json({ message: 'Error fetching Precios locally' });
+        res.status(500).json({ message: 'Error al obtener consulta bancaria' });
     }
 });
 
@@ -1150,6 +1156,30 @@ app.get('/api/consultas/diferencias-combustible/:desde/:hasta', authenticateToke
             message: 'Error procesando consulta externa de combustible',
             details: error.message 
         });
+    }
+});
+
+// --- Otras Consultas (Contabilidad) ---
+app.get('/api/consultas/cumpleanos', authenticateToken, async (req, res) => {
+    try {
+        const accountingDb = await getAccountingDb();
+        const query = `
+            SELECT 
+                CONCAT(e.nombre_dui, ' ', e.apellidos_dui) as nombre, 
+                STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y') as fecha_nacimiento, 
+                m.nombre as empresa
+            FROM empleados e
+            JOIN empresas_mayores m ON e.id_empresa = m.id
+            WHERE e.activo = 1 
+            AND e.fecha_nacimiento IS NOT NULL
+            AND MONTH(STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y')) = MONTH(CURRENT_DATE())
+            ORDER BY m.nombre, DAY(STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y'))
+        `;
+        const [rows] = await accountingDb.query(query);
+        res.json(rows);
+    } catch (error) {
+        console.error('ERROR CUMPLEANOS:', error.message);
+        res.status(500).json({ message: 'Error al obtener consulta de cumpleañeros: ' + error.message });
     }
 });
 

@@ -19,6 +19,7 @@ import CuentasBancarias from './pages/CuentasBancarias';
 import ConfiguracionDb from './pages/ConfiguracionDb';
 import ConfiguracionEmail from './pages/ConfiguracionEmail';
 import ConfiguracionContabilidad from './pages/ConfiguracionContabilidad';
+import ConsultasCumpleanos from './pages/ConsultasCumpleanos';
 import { ToastProvider } from './components/Toast';
 
 const ProtectedRoute = ({ children }) => {
@@ -57,11 +58,12 @@ function App() {
                         <Route path="consultas/estaciones/lubricantes" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/lubricantes"><Lubricantes /></PermissionRoute>} />
                         <Route path="consultas/estaciones/resumen-cierre" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/resumen-cierre"><ResumenPista /></PermissionRoute>} />
                         <Route path="consultas/estaciones/diferencias-combustible" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/diferencias-combustible"><DiferenciasCombustible /></PermissionRoute>} />
-                        <Route path="consultas/estaciones/precios" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios"><PreciosEstacion /></PermissionRoute>} />
+                        <Route path="consultas/estaciones/precios" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios"><Consultas type="estaciones/precios" title="Precios Estación" description="Consulta de precios actuales en estaciones." /></PermissionRoute>} />
                         <Route path="operaciones/pedidos" element={<ProtectedRoute><PedidosCombustible /></ProtectedRoute>} />
                         <Route path="operaciones/recordatorios" element={<ProtectedRoute><ControlRecordatorios /></ProtectedRoute>} />
-                        <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." /></PermissionRoute>} />
+                        <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />
                         <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
+                        <Route path="consultas/otras/cumpleanos" element={<PermissionRoute pathKey="/dashboard/consultas/otras/cumpleanos"><ConsultasCumpleanos /></PermissionRoute>} />
                         <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />
                         <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
                         <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />

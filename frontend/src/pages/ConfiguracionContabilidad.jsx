@@ -17,7 +17,7 @@ export default function ConfiguracionContabilidad() {
 
     const fetchConfig = async () => {
         try {
-            const res = await api.get('/config/accounting').catch(() => ({ data: {} }));
+            const res = await api.get('/accounting-config').catch(() => ({ data: {} }));
             if (res.data?.id) setConfig(res.data);
         } catch (err) {
             addToast('Error al cargar la configuración de contabilidad', 'error');
@@ -30,7 +30,7 @@ export default function ConfiguracionContabilidad() {
         e.preventDefault();
         setSavingDB(true);
         try {
-            const res = await api.post('/config/accounting', config);
+            const res = await api.post('/accounting-config', config);
             addToast(res.data.message, 'success');
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al guardar la configuración de contabilidad', 'error');

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Database, Mail, Settings as SettingsIcon } from 'lucide-react';
-import { mainNavItems, catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems, configuracionMenu } from '../config/navigation';
+import { mainNavItems, catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, consultasOtras, securityItems, systemNavItems, configuracionMenu } from '../config/navigation';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -10,6 +10,7 @@ export default function DashboardLayout() {
     const [openConsultas, setOpenConsultas] = useState(false);
     const [openConsultasEstaciones, setOpenConsultasEstaciones] = useState(false);
     const [openConsultasBancos, setOpenConsultasBancos] = useState(false);
+    const [openConsultasOtras, setOpenConsultasOtras] = useState(false);
     const [openSecurity, setOpenSecurity] = useState(false);
     const [openOperaciones, setOpenOperaciones] = useState(false);
     const [openBancos, setOpenBancos] = useState(false);
@@ -26,10 +27,11 @@ export default function DashboardLayout() {
     const filteredBancosMenu = bancosMenu.filter(item => hasPermission(item.path));
     const filteredEstaciones = consultasEstaciones.filter(item => hasPermission(item.path));
     const filteredBancos = consultasBancos.filter(item => hasPermission(item.path));
+    const filteredOtras = consultasOtras.filter(item => hasPermission(item.path));
     const filteredSecurity = securityItems.filter(item => hasPermission(item.path));
     const filteredSystem = systemNavItems.filter(item => hasPermission(item.path));
     const filteredConfiguracionMenu = configuracionMenu.filter(item => hasPermission(item.path));
-    const hasAnyConsultas = consultasItemsRoot.some(item => hasPermission(item.path)) || filteredEstaciones.length > 0 || filteredBancos.length > 0;
+    const hasAnyConsultas = consultasItemsRoot.some(item => hasPermission(item.path)) || filteredEstaciones.length > 0 || filteredBancos.length > 0 || filteredOtras.length > 0;
     
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -42,9 +44,10 @@ export default function DashboardLayout() {
         if (catalogItems.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenCatalogs(true);
         if (bancosMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenBancos(true);
         if (operacionesMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenOperaciones(true);
-        if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultas(true);
+        if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos, ...consultasOtras].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultas(true);
         if (consultasBancos.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasBancos(true);
         if (consultasEstaciones.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasEstaciones(true);
+        if (consultasOtras.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasOtras(true);
         if (configuracionMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConfiguracion(true);
     }, [location.pathname]);
 
@@ -179,6 +182,22 @@ export default function DashboardLayout() {
                                             {openConsultasBancos && (
                                                 <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
                                                     {filteredBancos.map(item => renderNavItem(item, true))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                    {filteredOtras.length > 0 && (
+                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                            <button className="nav-item" onClick={() => setOpenConsultasOtras(!openConsultasOtras)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: 'space-between', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                    <Folder size={18} />
+                                                    Otras
+                                                </div>
+                                                {openConsultasOtras ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                            </button>
+                                            {openConsultasOtras && (
+                                                <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                                    {filteredOtras.map(item => renderNavItem(item, true))}
                                                 </div>
                                             )}
                                         </div>
