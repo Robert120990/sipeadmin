@@ -188,7 +188,7 @@ export default function DashboardLayout() {
                         <UserCircle size={isCollapsed ? 28 : 32} color="var(--primary)" />
                         {!isCollapsed && (
                             <div style={{ overflow: 'hidden' }}>
-                                <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-color)', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{user.username || 'Usuario'}</div>
+                                <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-color)', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{user.nombre || user.username || 'Usuario'}</div>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
                             </div>
                         )}

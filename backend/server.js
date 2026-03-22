@@ -423,8 +423,8 @@ app.post('/api/login', async (req, res) => {
         );
         const permissions = permsRows.map(p => p.name);
 
-        const token = jwt.sign({ id: user.id, username: user.username, role_id: user.role_id, permissions }, JWT_SECRET, { expiresIn: '8h' });
-        res.json({ token, user: { id: user.id, username: user.username, role_id: user.role_id, permissions } });
+        const token = jwt.sign({ id: user.id, username: user.username, nombre: user.nombre, role_id: user.role_id, permissions }, JWT_SECRET, { expiresIn: '8h' });
+        res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre, email: user.email, role_id: user.role_id, permissions } });
     } catch (error) {
         console.error('LOGIN ERROR:', error);
         res.status(500).json({ message: 'Server error', error: error.message, detail: error.code });
@@ -435,7 +435,7 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/users', authenticateToken, async (req, res) => {
     try {
         const [rows] = await db.query(`
-            SELECT u.id, u.username, u.status, r.name as role_name, u.created_at
+            SELECT u.id, u.username, u.nombre, u.email, u.status, r.name as role_name, u.created_at
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
         `);
@@ -446,10 +446,10 @@ app.get('/api/users', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/users', authenticateToken, async (req, res) => {
-    const { username, password, role_id } = req.body;
+    const { username, nombre, email, password, role_id } = req.body;
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
-        await db.query('INSERT INTO users (username, password, role_id) VALUES (?, ?, ?)', [username, hashedPassword, role_id]);
+        await db.query('INSERT INTO users (username, nombre, email, password, role_id) VALUES (?, ?, ?, ?, ?)', [username, nombre || null, email || null, hashedPassword, role_id]);
         res.status(201).json({ message: 'User created' });
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
@@ -458,10 +458,10 @@ app.post('/api/users', authenticateToken, async (req, res) => {
 
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { username, password, status, role_id } = req.body;
+    const { username, nombre, email, password, status, role_id } = req.body;
     try {
-        let query = 'UPDATE users SET status = ?, role_id = ?';
-        let params = [status, role_id];
+        let query = 'UPDATE users SET status = ?, role_id = ?, nombre = ?, email = ?';
+        let params = [status, role_id, nombre || null, email || null];
 
         if (username) {
             query += ', username = ?';
@@ -488,6 +488,17 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
     try {
         await db.query('DELETE FROM users WHERE id = ?', [id]);
         res.json({ message: 'User deleted' });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+app.put('/api/users/:id/status', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    try {
+        await db.query('UPDATE users SET status = ? WHERE id = ?', [status, id]);
+        res.json({ message: 'User status updated' });
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
     }

@@ -9,7 +9,7 @@ export default function Users() {
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editingUser, setEditingUser] = useState(null);
-    const [formData, setFormData] = useState({ username: '', password: '', role_id: '', status: 'active' });
+    const [formData, setFormData] = useState({ username: '', nombre: '', email: '', password: '', role_id: '', status: 'active' });
     const { addToast } = useToast();
 
     useEffect(() => {
@@ -33,12 +33,23 @@ export default function Users() {
     const handleOpenModal = (user = null) => {
         if (user) {
             setEditingUser(user);
-            setFormData({ username: user.username, password: '', role_id: roles.find(r => r.name === user.role_name)?.id || '', status: user.status });
+            setFormData({ username: user.username, nombre: user.nombre || '', email: user.email || '', password: '', role_id: roles.find(r => r.name === user.role_name)?.id || '', status: user.status });
         } else {
             setEditingUser(null);
-            setFormData({ username: '', password: '', role_id: roles[0]?.id || '', status: 'active' });
+            setFormData({ username: '', nombre: '', email: '', password: '', role_id: roles[0]?.id || '', status: 'active' });
         }
         setShowModal(true);
+    };
+
+    const toggleStatus = async (user) => {
+        try {
+            const newStatus = user.status === 'active' ? 'inactive' : 'active';
+            await api.put(`/users/${user.id}/status`, { status: newStatus });
+            addToast('Estado actualizado', 'success');
+            fetchData();
+        } catch(err) {
+            addToast('Error al actualizar estado', 'error');
+        }
     };
 
     const handleSubmit = async (e) => {
@@ -89,7 +100,9 @@ export default function Users() {
                 <table>
                     <thead>
                         <tr>
-                            <th>Usuario</th>
+                            <th>Usuario (Login)</th>
+                            <th>Nombre</th>
+                            <th>Email</th>
                             <th>Rol</th>
                             <th>Estado</th>
                             <th>Fecha Creación</th>
@@ -100,11 +113,15 @@ export default function Users() {
                         {users.map(user => (
                             <tr key={user.id}>
                                 <td style={{ fontWeight: '500' }}>{user.username}</td>
+                                <td>{user.nombre || '-'}</td>
+                                <td>{user.email || '-'}</td>
                                 <td>{user.role_name}</td>
                                 <td>
-                                    <span className={`badge badge-${user.status}`}>
-                                        {user.status === 'active' ? 'Activo' : 'Inactivo'}
-                                    </span>
+                                    <button onClick={() => toggleStatus(user)} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} title="Clic para cambiar estado">
+                                        <span className={`badge badge-${user.status}`}>
+                                            {user.status === 'active' ? 'Activo' : 'Inactivo'}
+                                        </span>
+                                    </button>
                                 </td>
                                 <td style={{ color: 'var(--text-muted)' }}>
                                     {new Date(user.created_at).toLocaleDateString()}
@@ -152,6 +169,23 @@ export default function Users() {
                                     value={formData.username} 
                                     onChange={e => setFormData({...formData, username: e.target.value})}
                                     required 
+                                />
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Nombre Completo</label>
+                                <input 
+                                    type="text" 
+                                    value={formData.nombre} 
+                                    onChange={e => setFormData({...formData, nombre: e.target.value})}
+                                    required 
+                                />
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Correo Electrónico (Opcional)</label>
+                                <input 
+                                    type="email" 
+                                    value={formData.email} 
+                                    onChange={e => setFormData({...formData, email: e.target.value})}
                                 />
                             </div>
                             <div>

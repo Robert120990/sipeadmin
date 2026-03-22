@@ -66,6 +66,8 @@ const initDB = async () => {
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 username VARCHAR(50) UNIQUE NOT NULL,
+                nombre VARCHAR(100),
+                email VARCHAR(100),
                 password VARCHAR(255) NOT NULL,
                 role_id INT,
                 status ENUM('active', 'inactive') DEFAULT 'active',
@@ -73,6 +75,10 @@ const initDB = async () => {
                 FOREIGN KEY (role_id) REFERENCES roles(id)
             );
         `);
+
+        // Migrations for existing DB
+        try { await pool.query('ALTER TABLE users ADD COLUMN nombre VARCHAR(100)'); } catch(e) { if(e.code !== 'ER_DUP_FIELDNAME') console.error(e); }
+        try { await pool.query('ALTER TABLE users ADD COLUMN email VARCHAR(100)'); } catch(e) { if(e.code !== 'ER_DUP_FIELDNAME') console.error(e); }
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS permissions (
@@ -149,7 +155,7 @@ const initDB = async () => {
 
             const bcrypt = require('bcryptjs');
             const hashedPassword = await bcrypt.hash('admin123', 10);
-            await pool.query('INSERT INTO users (username, password, role_id) VALUES ("admin", ?, ?)', [hashedPassword, adminRoleId]);
+            await pool.query('INSERT INTO users (username, nombre, password, role_id) VALUES ("admin", "Administrador", ?, ?)', [hashedPassword, adminRoleId]);
 
             // Add basic permissions
             const permissionsList = [
