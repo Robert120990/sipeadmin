@@ -11,7 +11,7 @@ const { GoogleGenAI } = require('@google/genai');
 const { initDB } = require('./db');
 
 const path = require('path');
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config(); // Standard config works better across environments
 
 const app = express();
 const PORT = process.env.PORT || 5001;

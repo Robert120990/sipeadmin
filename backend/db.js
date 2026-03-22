@@ -2,7 +2,7 @@ const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
 
 const path = require('path');
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config(); // Standard config works better across environments
 
 const getDbConfig = () => {
     if (process.env.DATABASE_URL) {
