@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard } from 'lucide-react';
-import { mainNavItems, catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems } from '../config/navigation';
+import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Database, Mail, Settings as SettingsIcon } from 'lucide-react';
+import { mainNavItems, catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, securityItems, systemNavItems, configuracionMenu } from '../config/navigation';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -13,11 +13,14 @@ export default function DashboardLayout() {
     const [openSecurity, setOpenSecurity] = useState(false);
     const [openOperaciones, setOpenOperaciones] = useState(false);
     const [openBancos, setOpenBancos] = useState(false);
+    const [openConfiguracion, setOpenConfiguracion] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
 
     const user = JSON.parse(localStorage.getItem('user')) || {};
     const hasPermission = (path) => user.role_id === 1 || user.permissions?.includes(path);
 
+    const [filteredConfiguracion, setFilteredConfiguracion] = useState(configuracionMenu); // Or filter by permission if needed
+    
     const filteredCatalogs = catalogItems.filter(item => hasPermission(item.path));
     const filteredOperaciones = operacionesMenu.filter(item => hasPermission(item.path));
     const filteredBancosMenu = bancosMenu.filter(item => hasPermission(item.path));
@@ -25,6 +28,7 @@ export default function DashboardLayout() {
     const filteredBancos = consultasBancos.filter(item => hasPermission(item.path));
     const filteredSecurity = securityItems.filter(item => hasPermission(item.path));
     const filteredSystem = systemNavItems.filter(item => hasPermission(item.path));
+    const filteredConfiguracionMenu = configuracionMenu.filter(item => hasPermission(item.path));
     const hasAnyConsultas = consultasItemsRoot.some(item => hasPermission(item.path)) || filteredEstaciones.length > 0 || filteredBancos.length > 0;
     
     const handleLogout = () => {
@@ -41,6 +45,7 @@ export default function DashboardLayout() {
         if ([...consultasItemsRoot, ...consultasEstaciones, ...consultasBancos].some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultas(true);
         if (consultasBancos.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasBancos(true);
         if (consultasEstaciones.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConsultasEstaciones(true);
+        if (configuracionMenu.some(item => location.pathname === item.path || location.pathname.startsWith(item.path + '/'))) setOpenConfiguracion(true);
     }, [location.pathname]);
 
     const renderNavItem = (item, isSubItem = false) => {
@@ -200,7 +205,22 @@ export default function DashboardLayout() {
                         </div>
                     )}
 
-                    {!isCollapsed && filteredSystem.map(item => renderNavItem(item))}
+                    {filteredConfiguracionMenu.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <button className="nav-item" onClick={() => !isCollapsed && setOpenConfiguracion(!openConfiguracion)} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }} title={isCollapsed ? "Configuración" : ""}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                    <SettingsIcon size={20} />
+                                    {!isCollapsed && <span>Configuración</span>}
+                                </div>
+                                {!isCollapsed && (openConfiguracion ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                            </button>
+                            {openConfiguracion && !isCollapsed && (
+                                <div style={{ display: 'flex', flexDirection: 'column', marginTop: '0.25rem', gap: '0.25rem' }}>
+                                    {filteredConfiguracionMenu.map(item => renderNavItem(item, true))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </nav>
 
                 <div style={{ marginTop: 'auto', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>

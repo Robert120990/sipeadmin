@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -45,6 +45,11 @@ export const securityItems = [
     { name: 'Permisos', path: '/dashboard/permissions', icon: Shield },
 ];
 
+export const configuracionMenu = [
+    { name: 'Conexión Externa', path: '/dashboard/settings/database', icon: Database },
+    { name: 'Configuración Correo', path: '/dashboard/settings/email', icon: Mail },
+];
+
 export const systemNavItems = [
     { name: 'Configuración', path: '/dashboard/settings', icon: SettingsIcon },
 ];
@@ -57,5 +62,5 @@ export const allNavCategories = [
     { title: 'Consultas - Estaciones', items: consultasEstaciones },
     { title: 'Consultas - Bancos', items: consultasBancos },
     { title: 'Seguridad', items: securityItems },
-    { title: 'Sistema', items: systemNavItems }
+    { title: 'Configuración', items: configuracionMenu }
 ];

@@ -4,7 +4,6 @@ import Login from './pages/Login';
 import DashboardLayout from './pages/DashboardLayout';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
-import Settings from './pages/Settings';
 import Carriers from './pages/Carriers';
 import Tankers from './pages/Tankers';
 import Consultas from './pages/Consultas';
@@ -17,6 +16,8 @@ import PedidosCombustible from './pages/PedidosCombustible';
 import ControlRecordatorios from './pages/ControlRecordatorios';
 import Permissions from './pages/Permissions';
 import CuentasBancarias from './pages/CuentasBancarias';
+import ConfiguracionDb from './pages/ConfiguracionDb';
+import ConfiguracionEmail from './pages/ConfiguracionEmail';
 import { ToastProvider } from './components/Toast';
 
 const ProtectedRoute = ({ children }) => {
@@ -50,7 +51,6 @@ function App() {
                         <Route path="users" element={<PermissionRoute pathKey="/dashboard/users"><Users /></PermissionRoute>} />
                         <Route path="carriers" element={<PermissionRoute pathKey="/dashboard/carriers"><Carriers /></PermissionRoute>} />
                         <Route path="tankers" element={<PermissionRoute pathKey="/dashboard/tankers"><Tankers /></PermissionRoute>} />
-                        <Route path="settings" element={<PermissionRoute pathKey="/dashboard/settings"><Settings /></PermissionRoute>} />
                         <Route path="consultas/estaciones" element={<div className="card glass"><h1>Estaciones</h1><p>Módulo de estaciones (Próximamente).</p></div>} />
                         <Route path="consultas/estaciones/ventas" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/ventas"><VentasEstaciones /></PermissionRoute>} />
                         <Route path="consultas/estaciones/lubricantes" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/lubricantes"><Lubricantes /></PermissionRoute>} />
@@ -62,6 +62,8 @@ function App() {
                         <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos bancarios a la fecha actual." /></PermissionRoute>} />
                         <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
                         <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />
+                        <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
+                        <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />
                         <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />
                     </Route>
                     <Route path="*" element={<Navigate to="/login" replace />} />
