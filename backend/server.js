@@ -10,8 +10,6 @@ const nodemailer = require('nodemailer');
 const { GoogleGenAI } = require('@google/genai');
 const { initDB } = require('./db');
 
-const path = require('path');
-const fs = require('fs');
 dotenv.config(); // Standard config works better across environments
 
 const app = express();
@@ -553,13 +551,10 @@ app.get('/api/accounting-config', authenticateToken, async (req, res) => {
 
 app.post('/api/accounting-config', authenticateToken, async (req, res) => {
     const { host, user, password, database_name, port } = req.body;
-    const logMsg = `[${new Date().toISOString()}] CONFIG ACCOUNTING: Testing connection to ${host}:${port || 3306}...\n`;
-    fs.appendFileSync('accounting_debug.log', logMsg);
     try {
         const mysql = require('mysql2/promise');
         const testConn = await mysql.createConnection({ host, user, password, database: database_name, port: port || 3306 });
         await testConn.end();
-        fs.appendFileSync('accounting_debug.log', 'CONFIG ACCOUNTING: Connection successful!\n');
 
         const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'accounting' LIMIT 1");
         if (existing.length > 0) {
@@ -575,7 +570,6 @@ app.post('/api/accounting-config', authenticateToken, async (req, res) => {
         }
         res.json({ message: 'Configuración de contabilidad guardada y conexión exitosa' });
     } catch (error) {
-        fs.appendFileSync('accounting_debug.log', `CONFIG ACCOUNTING ERROR: ${error.message}\n`);
         res.status(400).json({ message: `Error de conexión contabilidad: ${error.message}` });
     }
 });
@@ -1156,6 +1150,35 @@ app.get('/api/consultas/diferencias-combustible/:desde/:hasta', authenticateToke
             message: 'Error procesando consulta externa de combustible',
             details: error.message 
         });
+    }
+});
+
+app.get('/api/consultas/estaciones/precios-competencia', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const query = `
+            SELECT 
+                c.titulo, 
+                a.estacion, 
+                a.modificacion, 
+                a.super_c, 
+                a.regular_c, 
+                a.ion_c, 
+                a.diesel_c, 
+                a.super_a, 
+                a.regular_a, 
+                a.ion_a, 
+                a.diesel_a 
+            FROM web_precios_competencia a 
+            INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia 
+            INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION' 
+            ORDER BY c.titulo, a.estacion
+        `;
+        const [rows] = await externalDb.query(query);
+        res.json(rows);
+    } catch (error) {
+        console.error('ERROR PRECIOS COMPETENCIA:', error);
+        res.status(500).json({ message: 'Error al obtener precios de competencia: ' + error.message });
     }
 });
 

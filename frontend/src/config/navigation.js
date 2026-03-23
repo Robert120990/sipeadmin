@@ -16,7 +16,8 @@ export const consultasEstaciones = [
     { name: 'Venta de Lubricantes', path: '/dashboard/consultas/estaciones/lubricantes', icon: Droplets },
     { name: 'Resumen de Cierre', path: '/dashboard/consultas/estaciones/resumen-cierre', icon: ClipboardList },
     { name: 'Diferencias Combustible', path: '/dashboard/consultas/estaciones/diferencias-combustible', icon: BarChart3 },
-    { name: 'Precios Estación', path: '/dashboard/consultas/estaciones/precios', icon: DollarSign }
+    { name: 'Precios Estación', path: '/dashboard/consultas/estaciones/precios', icon: DollarSign },
+    { name: 'Precios Competencia', path: '/dashboard/consultas/estaciones/precios-competencia', icon: BarChart3 }
 ];
 
 export const operacionesMenu = [
