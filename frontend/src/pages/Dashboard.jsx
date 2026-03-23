@@ -53,44 +53,17 @@ const Dashboard = () => {
         }).format(val || 0);
     };
 
-    const expiredCount = weeklyPayments.filter(p => {
+    const expiredPayments = weeklyPayments.filter(p => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         return new Date(p.vence) < today;
-    }).length;
+    });
+
+    const expiredCount = expiredPayments.length;
+    const expiredTotal = expiredPayments.reduce((sum, p) => sum + Number(p.monto), 0);
 
     return (
         <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-            {expiredCount > 0 && (
-                <div style={{ 
-                    backgroundColor: 'rgba(239, 68, 68, 0.15)', 
-                    border: '1px solid rgba(239, 68, 68, 0.3)', 
-                    borderRadius: '12px', 
-                    padding: '1rem 1.5rem', 
-                    marginBottom: '2rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    animation: 'pulse 2s infinite'
-                }}>
-                    <div style={{ backgroundColor: '#ef4444', padding: '0.5rem', borderRadius: '50%', display: 'flex' }}>
-                        <AlertCircle size={20} color="white" />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                        <h4 style={{ margin: 0, color: '#ef4444' }}>Pagos Críticos Detectados</h4>
-                        <p style={{ margin: '0.1rem 0 0 0', fontSize: '0.9rem', color: 'rgba(255,255,255,0.8)' }}>
-                            Tienes <strong>{expiredCount}</strong> pagos vencidos que requieren atención inmediata.
-                        </p>
-                    </div>
-                    <button 
-                        onClick={() => navigate('/dashboard/operaciones/recordatorios')}
-                        style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', padding: '0.5rem 1rem', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem' }}
-                    >
-                        Gestionar Pagos
-                    </button>
-                </div>
-            )}
-
             <div style={{ marginBottom: '2rem' }}>
                 <h1 style={{ color: 'var(--primary)', marginBottom: '0.5rem' }}>Resumen Operativo</h1>
                 <p style={{ color: 'var(--text-muted)' }}>Bienvenido al panel de control administrativo de SIPE.</p>
@@ -98,24 +71,56 @@ const Dashboard = () => {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '2rem' }}>
                 {/* CARD: PAGOS DE LA SEMANA */}
-                <div className="card glass" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', maxHeight: '420px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexShrink: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div className="card glass" style={{ 
+                    padding: '1.25rem', 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    maxHeight: '450px',
+                    maxWidth: '600px',
+                    width: '100%'
+                }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', flexShrink: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                             <div style={{ backgroundColor: 'rgba(99, 102, 241, 0.15)', padding: '0.5rem', borderRadius: '10px' }}>
-                                <Calendar size={20} color="var(--primary)" />
+                                <Calendar size={22} color="var(--primary)" />
                             </div>
                             <div>
-                                <h4 style={{ margin: 0, fontSize: '1rem' }}>Vencimientos de la Semana</h4>
-                                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>Próximos 7 días</p>
+                                <h4 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 'bold' }}>Vencimientos de la Semana</h4>
+                                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>Panel de control operativo</p>
                             </div>
                         </div>
                         <button 
                             onClick={() => navigate('/dashboard/operaciones/recordatorios')}
-                            style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.8rem', fontWeight: 'bold' }}
+                            style={{ background: 'rgba(99, 102, 241, 0.1)', border: 'none', color: 'var(--primary)', padding: '0.4rem 0.8rem', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.8rem', fontWeight: 'bold', transition: 'all 0.2s' }}
                         >
                             Ver Todo <ArrowRight size={14} />
                         </button>
                     </div>
+
+                    {expiredCount > 0 && (
+                        <div style={{ 
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)', 
+                            borderLeft: '4px solid #ef4444',
+                            borderRadius: '6px', 
+                            padding: '0.75rem', 
+                            marginBottom: '1rem',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            animation: 'pulse 2s infinite',
+                            flexShrink: 0
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <AlertCircle size={16} color="#ef4444" />
+                                <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                    {expiredCount} VENCIDOS
+                                </span>
+                            </div>
+                            <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '1rem' }}>
+                                {mc(expiredTotal)}
+                            </span>
+                        </div>
+                    )}
 
                     {loading ? (
                         <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -176,31 +181,6 @@ const Dashboard = () => {
                             <p>No hay pagos programados para esta semana.</p>
                         </div>
                     )}
-                </div>
-
-                {/* PLACEHOLDER CARD: QUICK STATS */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                    <div className="card glass" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-                        <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', padding: '1rem', borderRadius: '14px' }}>
-                            <DollarSign size={32} color="#10b981" />
-                        </div>
-                        <div>
-                            <h4 style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.9rem' }}>Total Pendiente Semana</h4>
-                            <h2 style={{ margin: '0.25rem 0 0 0', color: '#10b981' }}>
-                                {mc(weeklyPayments.reduce((sum, p) => sum + Number(p.monto), 0))}
-                            </h2>
-                        </div>
-                    </div>
-                    
-                    <div className="card glass" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1.5rem', opacity: 0.8 }}>
-                        <div style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', padding: '1rem', borderRadius: '14px' }}>
-                            <Calendar size={32} color="#f59e0b" />
-                        </div>
-                        <div>
-                            <h4 style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.9rem' }}>Recordatorios Activos</h4>
-                            <h2 style={{ margin: '0.25rem 0 0 0' }}>{weeklyPayments.length}</h2>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
