@@ -78,7 +78,7 @@ export default function PedidosCombustible() {
     // Modals
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [confirmData, setConfirmData] = useState({
-        forma_pago: 'CREDITO', costo_d: 0, costo_r: 0, costo_s: 0, costo_i: 0
+        numero_pedido: '', forma_pago: '', costo_d: 0, costo_r: 0, costo_s: 0, costo_i: 0
     });
 
     const numFmt = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
@@ -340,12 +340,11 @@ export default function PedidosCombustible() {
     };
 
     const executeConfirmTransaction = async () => {
+        if (!confirmData.numero_pedido) return addToast('Ingrese el número de pedido', 'warning');
         try {
-            // Use random numero explicitly for MVP or user logic 
-            const pseudoNumero = Math.floor(Math.random() * 90000000) + 10000000;
             await api.post('/operaciones/pedidos/confirmar', {
                 id_pedido: pedidoTemp.id,
-                numero: pseudoNumero.toString(),
+                numero: confirmData.numero_pedido,
                 id_estacion: selectedEstacion,
                 forma_pago: confirmData.forma_pago,
                 costo_d: confirmData.costo_d, costo_r: confirmData.costo_r,
@@ -353,6 +352,7 @@ export default function PedidosCombustible() {
             });
             addToast("Pedido Confirmado Exitosamente", "success");
             setShowConfirmModal(false);
+            setConfirmData({ numero_pedido: '', forma_pago: '', costo_d: 0, costo_r: 0, costo_s: 0, costo_i: 0 });
             fetchOperationalData(selectedEstacion);
         } catch (e) {
             addToast(e.response?.data?.message || "Error en confirmación", "error");
@@ -625,11 +625,12 @@ export default function PedidosCombustible() {
                     <div className="card glass" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <h3 style={{ margin: 0, borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>Confirmar Transacción</h3>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>NÚMERO DE PEDIDO</label>
+                            <input type="text" placeholder="Ingrese número de pedido" value={confirmData.numero_pedido} onChange={e=>setConfirmData({...confirmData, numero_pedido: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                             <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>FORMA DE PAGO</label>
-                            <select value={confirmData.forma_pago} onChange={e=>setConfirmData({...confirmData, forma_pago: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}>
-                                <option value="EFECTIVO">EFECTIVO</option>
-                                <option value="CREDITO">CREDITO</option>
-                            </select>
+                            <input type="text" placeholder="Ej. CREDITO, EFECTIVO, CHEQUE..." value={confirmData.forma_pago} onChange={e=>setConfirmData({...confirmData, forma_pago: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
