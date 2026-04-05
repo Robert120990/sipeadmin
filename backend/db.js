@@ -5,8 +5,16 @@ const path = require('path');
 dotenv.config(); // Standard config works better across environments
 
 const getDbConfig = () => {
+    const config = {
+        host: process.env.DB_HOST || '207.244.251.167',
+        user: process.env.DB_USER || 'sysadmin',
+        password: process.env.DB_PASSWORD || 'QwErTy123',
+        database: process.env.DB_NAME || 'db_sipe_admin',
+        port: parseInt(process.env.DB_PORT || '3306'),
+        connectTimeout: 10000 // 10s timeout
+    };
+
     if (process.env.DATABASE_URL) {
-        // Parse mysql://user:pass@host/db
         try {
             const url = new URL(process.env.DATABASE_URL);
             return {
@@ -14,18 +22,14 @@ const getDbConfig = () => {
                 user: url.username,
                 password: decodeURIComponent(url.password),
                 database: url.pathname.substring(1),
-                port: url.port ? parseInt(url.port) : 3306
+                port: url.port ? parseInt(url.port) : 3306,
+                connectTimeout: 10000
             };
         } catch (e) {
             console.error('Error parsing DATABASE_URL:', e);
         }
     }
-    return {
-        host: '207.244.251.167',
-        user: 'sysadmin',
-        password: 'QwErTy123',
-        database: 'db_sipe_admin'
-    };
+    return config;
 };
 
 const dbConfig = getDbConfig();
@@ -38,14 +42,18 @@ const initDB = async () => {
             return mysql.createPool(dbConfig);
         }
 
+        console.log(`Checking connection to ${dbConfig.host}:${dbConfig.port}...`);
+        
         // Create connection without database to check if it exists
         const connection = await mysql.createConnection({
             host: dbConfig.host,
             user: dbConfig.user,
-            password: dbConfig.password
+            password: dbConfig.password,
+            port: dbConfig.port,
+            connectTimeout: 10000
         });
 
-        console.log('Checking database...');
+        console.log('Database server reachable. Ensuring database exists...');
         await connection.query(`CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`;`);
         await connection.end();
 

@@ -1,13 +1,24 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { Lock, User } from 'lucide-react';
+import { useToast } from '../components/Toast';
 
 export default function Login() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const { addToast } = useToast();
+    const hasShownToast = React.useRef(false);
+
+    useEffect(() => {
+        if (searchParams.get('expired') && !hasShownToast.current) {
+            addToast('Su sesión ha caducado. Por favor, inicie sesión de nuevo.', 'error');
+            hasShownToast.current = true;
+        }
+    }, [searchParams, addToast]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
