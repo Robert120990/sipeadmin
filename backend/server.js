@@ -128,12 +128,18 @@ app.get('/api/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticate
         const query = `
             SELECT b.id_producto AS id_tanque, sum(b.lectura) as lectura, sum(c.capacidad) as capacidad, sum(c.galones_reserva) as reserva, if(c.tipo_combustible='M','I',c.tipo_combustible) as tipo_combustible 
             FROM lecturas_tanque a 
+            INNER JOIN (
+                SELECT id_empresa, fecha, MAX(turno) as max_turno 
+                FROM lecturas_tanque 
+                WHERE id_empresa = ? AND fecha = ?
+                GROUP BY id_empresa, fecha
+            ) m ON a.id_empresa = m.id_empresa AND a.fecha = m.fecha AND a.turno = m.max_turno
             INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa=b.id_empresa 
             INNER JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa=c.id_empresa 
-            WHERE a.id_empresa = ? AND a.fecha = ? AND a.turno = (SELECT MAX(x.turno) FROM lecturas_tanque x WHERE x.id_empresa=a.id_empresa AND x.fecha=a.fecha) 
+            WHERE a.id_empresa = ? AND a.fecha = ?
             GROUP BY tipo_combustible
         `;
-        const [rows] = await externalDb.query(query, [id_empresa, targetDate]);
+        const [rows] = await externalDb.query(query, [id_empresa, targetDate, id_empresa, targetDate]);
         res.json({ fecha: targetDate, inventario: rows });
     } catch (error) { res.status(500).json({ message: 'Error fetching datos-tanque' }); }
 });
@@ -142,15 +148,28 @@ app.get('/api/operaciones/pedidos/promedios/:id_empresa/:fecha', authenticateTok
     try {
         const { id_empresa, fecha } = req.params;
         const externalDb = await getExternalDb();
+        
+        // Generate last 7 days strings in DD/MM/YYYY format to match VARCHAR column and USE INDEXes
+        const dates = [];
+        const baseDate = new Date(fecha + 'T12:00:00');
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(baseDate);
+            d.setDate(d.getDate() - i);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            dates.push(`${day}/${month}/${year}`);
+        }
+
         const query = `
            SELECT IF(a.id_empresa = '004' AND a.codigo_producto = '0007','I', LEFT(a.nom_producto,1)) AS tipo_combustible,
                   SUM(a.total)/7 as promedio
            FROM cierre_turno_lecturas a 
            INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa 
-           WHERE a.id_empresa = ? AND STR_TO_DATE(b.fecha_turno,'%d/%m/%Y') BETWEEN DATE_SUB(?, INTERVAL 7 DAY) AND ?
+           WHERE a.id_empresa = ? AND b.fecha_turno IN (?)
            GROUP BY codigo_producto, a.id_empresa
         `;
-        const [rows] = await externalDb.query(query, [id_empresa, fecha, fecha]);
+        const [rows] = await externalDb.query(query, [id_empresa, dates]);
         
         const agg = { D: 0, R: 0, S: 0, I: 0 };
         rows.forEach(r => {
@@ -735,8 +754,15 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
         // Fetch station list once for all sub-sections
         const [stations] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden");
         
+        // Utility to format YYYY-MM-DD to DD/MM/YYYY
+        const toSystemDate = (dStr) => {
+            const parts = dStr.split('-');
+            return `${parts[2]}/${parts[1]}/${parts[0]}`;
+        };
+        const sysDate = toSystemDate(date);
+
         // --- LOCAL GetVentasTienda Logic ---
-        const cInicio = new Date(date);
+        const cInicio = new Date(date + 'T12:00:00');
         cInicio.setDate(cInicio.getDate() - 15);
         const cInicioStr = cInicio.toISOString().split('T')[0];
         
@@ -773,12 +799,12 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
             LEFT JOIN cierre_turno_lecturas b ON a.id_empresa = b.id_empresa 
             INNER JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto 
             INNER JOIN cierre_turno c ON b.id_cierre_turno = c.id AND b.id_empresa = c.id_empresa 
-                  AND c.fecha_turno = DATE_FORMAT(?, '%d/%m/%Y') 
+                  AND c.fecha_turno = ? 
             WHERE a.grupo = 'ESTACION' 
             GROUP BY a.id_empresa 
             ORDER BY a.orden
         `;
-        const [estacionesRows] = await externalDb.query(sqlEstaciones, [date]);
+        const [estacionesRows] = await externalDb.query(sqlEstaciones, [sysDate]);
         const estacionesLocal = estacionesRows.map(row => ({
             empresa: row.titulo,
             diesel: Number(row.diesel || 0),
@@ -806,7 +832,7 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
                  SELECT a.id_empresa, a.id_producto, a.codigo_producto, a.nom_producto, precio 
                  FROM cierre_turno_lecturas a 
                  INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa 
-                 WHERE STR_TO_DATE(b.fecha_turno, '%d/%m/%Y') = ? 
+                 WHERE b.fecha_turno = ? 
                    AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa = b.id_empresa AND x.fecha_turno = b.fecha_turno) 
                  GROUP BY codigo_producto, a.id_empresa 
             ) c ON b.id_empresa = c.id_empresa AND b.codigo = c.codigo_producto 
@@ -814,7 +840,7 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
             GROUP BY id_empresa 
             ORDER BY orden
         `;
-        const [margenesRows] = await externalDb.query(sqlMargenes, [date]);
+        const [margenesRows] = await externalDb.query(sqlMargenes, [sysDate]);
         
         // Fetch latest costs for all stations to avoid N+1 queries
         const [costsRows] = await externalDb.query(`
@@ -848,9 +874,20 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
         });
 
         // --- LOCAL GetInventario Logic ---
-        const cDesde = new Date(date);
+        const cDesde = new Date(date + 'T12:00:00');
         cDesde.setDate(cDesde.getDate() - 6);
-        const cDesdeStr = cDesde.toISOString().split('T')[0];
+        
+        // Build 7-day array for promedios
+        const promediosDates = [];
+        let pCurr = new Date(cDesde);
+        const pLast = new Date(date + 'T12:00:00');
+        while (pCurr <= pLast) {
+            const d = String(pCurr.getDate()).padStart(2, '0');
+            const m = String(pCurr.getMonth() + 1).padStart(2, '0');
+            const y = pCurr.getFullYear();
+            promediosDates.push(`${d}/${m}/${y}`);
+            pCurr.setDate(pCurr.getDate() + 1);
+        }
 
         const [lecturasRows, promediosRows] = await Promise.all([
             externalDb.query(`
@@ -865,9 +902,9 @@ app.get('/api/ventas/consolidado/:date', authenticateToken, async (req, res) => 
                        SUM(a.total) as total_7d
                 FROM cierre_turno_lecturas a 
                 INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa 
-                WHERE STR_TO_DATE(b.fecha_turno, '%d/%m/%Y') BETWEEN ? AND ? 
+                WHERE b.fecha_turno IN (?)
                 GROUP BY a.id_empresa, tipo_combustible
-            `, [cDesdeStr, date])
+            `, [promediosDates])
         ]);
 
         const lecturas = lecturasRows[0];
@@ -917,16 +954,29 @@ app.get('/api/ventas/lubricantes/:start/:end', authenticateToken, async (req, re
     
     try {
         const externalDb = await getExternalDb();
+        
+        // Build array of dates in DD/MM/YYYY format to use IN clause and leverage index
+        const datesArray = [];
+        let curr = new Date(start + 'T12:00:00');
+        const last = new Date(end + 'T12:00:00');
+        while (curr <= last) {
+            const day = String(curr.getDate()).padStart(2, '0');
+            const month = String(curr.getMonth() + 1).padStart(2, '0');
+            const year = curr.getFullYear();
+            datesArray.push(`${day}/${month}/${year}`);
+            curr.setDate(curr.getDate() + 1);
+        }
+
         const sql = `
             SELECT a.id_empresa, a.titulo, IFNULL(SUM(b.precio_total), 0.0) as monto 
             FROM web_consolidado a 
             LEFT JOIN inventario_lubricantes b ON a.id_empresa = b.id_empresa 
-                 AND STR_TO_DATE(b.fecha_turno, '%d/%m/%Y') BETWEEN ? AND ? 
+                 AND b.fecha_turno IN (?)
             WHERE a.grupo = 'ESTACION' 
             GROUP BY id_empresa 
             ORDER BY a.orden
         `;
-        const [rows] = await externalDb.query(sql, [start, end]);
+        const [rows] = await externalDb.query(sql, [datesArray]);
         const mapped = rows.map(r => ({
             empresa: r.titulo,
             venta: Number(r.monto || 0)
@@ -943,25 +993,28 @@ app.get('/api/ventas/resumen-cierre/:date', authenticateToken, async (req, res) 
     
     try {
         const externalDb = await getExternalDb();
+        const parts = date.split('-');
+        const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+
         const sql = `
             SELECT x.titulo AS estacion,
-                   (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS creditos,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cupones b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS cupones,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cheques b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS cheques,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_tarjeta b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS tarjetas,
-                   (SELECT IFNULL(SUM(b.efectivo),0.0) + IFNULL(SUM(b.monedas),0.0) + IFNULL(SUM(b.transferencia),0.0) FROM cierre_turno a INNER JOIN cierre_turno_remesa b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS remesas,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_gastos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS gastos,
-                   (SELECT IFNULL(SUM(precio_total),0.0) FROM inventario_lubricantes WHERE id_empresa=x.id_empresa AND STR_TO_DATE(fecha_turno,'%d/%m/%Y')=?) AS lubricantes,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_anticipos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS anticipos,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_pagos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS pagos,
-                   (SELECT IFNULL(SUM(b.valor*b.cantidad),0.0) FROM cierre_turno a INNER JOIN cierre_turno_descuentos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS descuentos,
-                   (SELECT IFNULL(SUM(b.monto),0.0) FROM cierre_turno a INNER JOIN cierre_turno_lecturas b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE STR_TO_DATE(a.fecha_turno,'%d/%m/%Y') = ? AND a.id_empresa = x.id_empresa) AS total_venta,
+                   (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS creditos,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cupones b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cupones,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cheques b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cheques,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_tarjeta b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS tarjetas,
+                   (SELECT IFNULL(SUM(b.efectivo),0.0) + IFNULL(SUM(b.monedas),0.0) + IFNULL(SUM(b.transferencia),0.0) FROM cierre_turno a INNER JOIN cierre_turno_remesa b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS remesas,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_gastos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS gastos,
+                   (SELECT IFNULL(SUM(precio_total),0.0) FROM inventario_lubricantes WHERE id_empresa=x.id_empresa AND fecha_turno=?) AS lubricantes,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_anticipos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS anticipos,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_pagos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS pagos,
+                   (SELECT IFNULL(SUM(b.valor*b.cantidad),0.0) FROM cierre_turno a INNER JOIN cierre_turno_descuentos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS descuentos,
+                   (SELECT IFNULL(SUM(b.monto),0.0) FROM cierre_turno a INNER JOIN cierre_turno_lecturas b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS total_venta,
                    x.id_empresa 
             FROM web_consolidado x 
             WHERE x.grupo = 'ESTACION' 
             ORDER BY x.titulo
         `;
-        const params = Array(11).fill(date);
+        const params = Array(11).fill(sysDate);
         const [rows] = await externalDb.query(sql, params);
         
         const mapped = rows.map(r => {
@@ -1000,6 +1053,9 @@ app.get('/api/ventas/precios-estacion/:date', authenticateToken, async (req, res
     
     try {
         const externalDb = await getExternalDb();
+        const parts = date.split('-');
+        const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+
         const sql = `
             select a.id_empresa,a.titulo,
                    sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'A',c.precio,0.0),0.0)) as diesel_a,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'A',c.precio,0.0),0.0)) as regular_a,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'A',c.precio,0.0),0.0)) as super_a,
@@ -1012,11 +1068,11 @@ app.get('/api/ventas/precios-estacion/:date', authenticateToken, async (req, res
                         a.codigo_producto,a.nom_producto,precio 
                  FROM cierre_turno_lecturas a 
                  INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa 
-                 WHERE str_to_date(b.fecha_turno,'%d/%m/%Y') = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) 
+                 WHERE b.fecha_turno = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) 
                  GROUP BY codigo_producto,a.id_empresa order by id_empresa,codigo_producto) c on b.id_empresa = c.id_empresa and b.codigo = c.codigo_producto 
             where a.grupo = 'ESTACION' group by id_empresa order by orden
         `;
-        const [rows] = await externalDb.query(sql, [date]);
+        const [rows] = await externalDb.query(sql, [sysDate]);
         const mapped = rows.map(r => ({
             empresa: r.titulo,
             diesel_a: Number(r.diesel_a),
@@ -1087,6 +1143,18 @@ app.get('/api/consultas/diferencias-combustible/:desde/:hasta', authenticateToke
     try {
         const externalDb = await getExternalDb();
         
+        // Build array of dates in DD/MM/YYYY format to use IN clause and leverage index
+        const datesArray = [];
+        let curr = new Date(desde + 'T12:00:00');
+        const last = new Date(hasta + 'T12:00:00');
+        while (curr <= last) {
+            const day = String(curr.getDate()).padStart(2, '0');
+            const month = String(curr.getMonth() + 1).padStart(2, '0');
+            const year = curr.getFullYear();
+            datesArray.push(`${day}/${month}/${year}`);
+            curr.setDate(curr.getDate() + 1);
+        }
+
         const sql1 = `
             select x.id_empresa, a.titulo as estacion, z.clasificacion as tipo, 
                    0.0 as inicial, 0.0 as recargas, sum(y.total) as venta, 
@@ -1095,12 +1163,12 @@ app.get('/api/consultas/diferencias-combustible/:desde/:hasta', authenticateToke
             inner join cierre_turno_lecturas y on x.id_empresa = y.id_empresa and x.id = y.id_cierre_turno 
             inner join cfg_combustibles z on y.id_empresa = z.id_empresa and y.id_producto = z.id_producto 
             inner join web_consolidado a on x.id_empresa = a.id_empresa 
-            where STR_TO_DATE(x.fecha_turno, '%d/%m/%Y') between ? and ? 
+            where x.fecha_turno IN (?) 
             and a.grupo = 'ESTACION' 
             group by x.id_empresa, a.titulo, z.clasificacion, a.orden
             order by a.orden, z.clasificacion
         `;
-        const [dt_result] = await externalDb.query(sql1, [desde, hasta]);
+        const [dt_result] = await externalDb.query(sql1, [datesArray]);
 
         const sql2 = `
             select a.id_empresa,a.fecha,a.turno,c.tipo_combustible,sum(b.anterior) as anterior,sum(b.recarga) as recarga,sum(b.lectura) as lectura 
