@@ -512,68 +512,68 @@ export default function PedidosCombustible() {
                         <thead>
                             <tr style={{ background: 'var(--bg-color)' }}>
                                 <th style={{ padding: '0.5rem', textAlign: 'left' }}>METRICA</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>DIESEL</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>REGULAR</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>SUPER</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>IONDIESEL</th>
+                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>DIESEL</th>
+                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>REGULAR</th>
+                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>SUPER</th>
+                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>IONDIESEL</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>CAPACIDAD MAXIMA</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>FUERA DE VENTA</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.reserva)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>INVENTARIO ACTUAL</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>VENTA PROMEDIO</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
                             </tr>
                             <tr style={{ background: 'rgba(37,99,235,0.05)' }}>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}>PEDIDOS PROGRAMADOS</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.D.programado)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.R.programado)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.S.programado)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px outset var(--border)' }}>{numFmt(matrix.I.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.programado)}</td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN DIAS</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)' }}><b>{matrix.D.duracionDias.toFixed(1)}</b></td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)' }}><b>{matrix.R.duracionDias.toFixed(1)}</b></td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)' }}><b>{matrix.S.duracionDias.toFixed(1)}</b></td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)' }}><b>{matrix.I.duracionDias.toFixed(1)}</b></td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}><b>{matrix.D.duracionDias.toFixed(1)}</b></td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}><b>{matrix.R.duracionDias.toFixed(1)}</b></td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}><b>{matrix.S.duracionDias.toFixed(1)}</b></td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}><b>{matrix.I.duracionDias.toFixed(1)}</b></td>
                             </tr>
                             <tr>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN FECHA</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.D.duracionFecha)}<br/>{matrix.D.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.R.duracionFecha)}<br/>{matrix.R.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.S.duracionFecha)}<br/>{matrix.S.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.I.duracionFecha)}<br/>{matrix.I.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.D.duracionFecha)}<br/>{matrix.D.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.R.duracionFecha)}<br/>{matrix.R.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.S.duracionFecha)}<br/>{matrix.S.duracionDiaNom}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.I.duracionFecha)}<br/>{matrix.I.duracionDiaNom}</td>
                             </tr>
                             <tr style={{ background: 'rgba(16,185,129,0.1)' }}>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL DE TANQUES</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.D.nivelTanque)}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.R.nivelTanque)}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.S.nivelTanque)}</td>
-                                <td style={{ textAlign: 'center', borderBottom: '1px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.I.nivelTanque)}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{pctFmt(matrix.D.nivelTanque)}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.R.nivelTanque)}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.S.nivelTanque)}</td>
+                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.I.nivelTanque)}</td>
                             </tr>
                         </tbody>
                     </table>
