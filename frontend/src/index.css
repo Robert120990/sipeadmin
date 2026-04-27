@@ -213,20 +213,85 @@ input:focus {
 
 .main-content {
   flex: 1;
-  padding: 2rem;
-  overflow-y: auto;
-  transition: margin-left 0.3s;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100vh;
 }
 
-.nav-item:hover, .nav-item.active {
+.tabs-bar {
+  display: flex;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 1rem 0;
+  gap: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
   background: var(--card-bg);
-  color: var(--text);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  transition: var(--transition);
+  position: relative;
+  min-width: 120px;
+  max-width: 200px;
 }
 
-.main-content {
+.tab-item:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-item.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 4px;
+  transition: var(--transition);
+  opacity: 0.6;
+}
+
+.tab-close:hover {
+  background: rgba(0, 0, 0, 0.2);
+  opacity: 1;
+}
+
+.tab-content-container {
   flex: 1;
-  padding: 2rem;
   overflow-y: auto;
+  padding: 2rem;
+  position: relative;
+}
+
+.tab-panel {
+  display: none;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.tab-panel.active {
+  display: block;
 }
 
 /* Cards & Tables */
