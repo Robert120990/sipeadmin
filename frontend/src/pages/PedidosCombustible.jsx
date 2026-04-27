@@ -50,8 +50,13 @@ export default function PedidosCombustible() {
     const pipasWithCap = useMemo(() => pipas.map(p => {
         let comps = [];
         try { comps = typeof p.compartments === 'string' ? JSON.parse(p.compartments) : p.compartments; } catch(e){}
-        const totalCap = (comps || []).reduce((acc, curr) => acc + Number(curr.capacity || 0), 0);
-        return { ...p, totalCapacity: totalCap };
+        const totalCap = (comps || []).reduce((acc, curr) => {
+            if (curr.separations) {
+                return acc + curr.separations.reduce((sSum, s) => sSum + Number(s.capacity || 0), 0);
+            }
+            return acc + Number(curr.capacity || 0);
+        }, 0);
+        return { ...p, totalCapacity: totalCap, parsedCompartments: comps };
     }), [pipas]);
 
     const recommendedPipa = useMemo(() => {
@@ -225,7 +230,7 @@ export default function PedidosCombustible() {
 
         let alloc = { D: 0, R: 0, S: 0, I: 0 };
         // Clone and sort compartments largest to smallest to fill knapsack
-        let compartments = [...bestPipa.compartments].sort((a,b) => Number(b.capacity) - Number(a.capacity));
+        let compartments = [...bestPipa.parsedCompartments].sort((a,b) => Number(b.capacity) - Number(a.capacity));
 
         compartments.forEach(c => {
             const cap = Number(c.capacity);
@@ -370,12 +375,26 @@ export default function PedidosCombustible() {
         return (
             <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem', flexWrap: 'wrap', padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>
                 <span style={{ fontSize:'0.7rem', fontWeight:'bold', width:'100%', marginBottom:'0.2rem', color:'var(--primary)' }}>COMPARTIMIENTOS PIPA ({comps.length}):</span>
-                {comps.map((c, i) => (
-                    <div key={i} style={{ border: '1px solid var(--border)', background: 'var(--bg-active)', padding: '0.25rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>C{i+1}</span>
-                        <b>{numFmt(c.capacity)}</b>
-                    </div>
-                ))}
+                {comps.map((c, i) => {
+                    const cCap = c.separations ? c.separations.reduce((acc, s) => acc + Number(s.capacity || 0), 0) : Number(c.capacity || 0);
+                    return (
+                        <div key={i} style={{ border: '1px solid var(--border)', background: 'var(--bg-active)', padding: '0.25rem 0.6rem', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.2rem' }}>
+                                <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>C{i+1}</span>
+                                <b>{numFmt(cCap)}</b>
+                            </div>
+                            {c.separations && (
+                                <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap' }}>
+                                    {c.separations.map((s, si) => (
+                                        <span key={si} style={{ fontSize: '0.6rem', background: 'rgba(255,255,255,0.05)', padding: '1px 3px', borderRadius: '2px' }}>
+                                            {numFmt(s.capacity)}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
             </div>
         );
     };

@@ -10,7 +10,7 @@ export default function Tankers() {
     const [showModal, setShowModal] = useState(false);
     const [editingTanker, setEditingTanker] = useState(null);
     const [formData, setFormData] = useState({ code: '', carrier_id: '' });
-    const [compartments, setCompartments] = useState([{ number: 1, capacity: '' }]);
+    const [compartments, setCompartments] = useState([{ number: 1, separations: [{ capacity: '' }], capacity: 0 }]);
     const { addToast } = useToast();
 
     useEffect(() => {
@@ -35,17 +35,26 @@ export default function Tankers() {
         if (tanker) {
             setEditingTanker(tanker);
             setFormData({ code: tanker.code, carrier_id: tanker.carrier_id || '' });
-            setCompartments(typeof tanker.compartments === 'string' ? JSON.parse(tanker.compartments) : (tanker.compartments || [{ number: 1, capacity: '' }]));
+            
+            let comps = typeof tanker.compartments === 'string' ? JSON.parse(tanker.compartments) : (tanker.compartments || []);
+            // Migración de datos viejos o estructura básica
+            const migratedComps = comps.map(c => {
+                if (!c.separations) {
+                    return { ...c, separations: [{ capacity: c.capacity || '' }] };
+                }
+                return c;
+            });
+            setCompartments(migratedComps.length > 0 ? migratedComps : [{ number: 1, separations: [{ capacity: '' }], capacity: 0 }]);
         } else {
             setEditingTanker(null);
             setFormData({ code: '', carrier_id: carriers[0]?.id || '' });
-            setCompartments([{ number: 1, capacity: '' }]);
+            setCompartments([{ number: 1, separations: [{ capacity: '' }], capacity: 0 }]);
         }
         setShowModal(true);
     };
 
     const handleAddCompartment = () => {
-        setCompartments([...compartments, { number: compartments.length + 1, capacity: '' }]);
+        setCompartments([...compartments, { number: compartments.length + 1, separations: [{ capacity: '' }], capacity: 0 }]);
     };
 
     const handleRemoveCompartment = (index) => {
@@ -53,17 +62,39 @@ export default function Tankers() {
         setCompartments(newComps);
     };
 
-    const handleCompChange = (index, value) => {
+    const handleAddSeparation = (compIndex) => {
         const newComps = [...compartments];
-        newComps[index].capacity = value;
+        newComps[compIndex].separations.push({ capacity: '' });
+        setCompartments(newComps);
+    };
+
+    const handleRemoveSeparation = (compIndex, sepIndex) => {
+        const newComps = [...compartments];
+        newComps[compIndex].separations = newComps[compIndex].separations.filter((_, i) => i !== sepIndex);
+        if (newComps[compIndex].separations.length === 0) {
+            newComps[compIndex].separations = [{ capacity: '' }];
+        }
+        setCompartments(newComps);
+    };
+
+    const handleSeparationChange = (compIndex, sepIndex, value) => {
+        const newComps = [...compartments];
+        newComps[compIndex].separations[sepIndex].capacity = value;
+        // Recalcular capacidad del compartimiento
+        newComps[compIndex].capacity = newComps[compIndex].separations.reduce((sum, s) => sum + (parseFloat(s.capacity) || 0), 0);
         setCompartments(newComps);
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        // Validar que los compartimientos tengan capacidad numérica válida
-        const validCompartments = compartments.map(c => ({ number: c.number, capacity: parseFloat(c.capacity) }));
-        if (validCompartments.some(c => isNaN(c.capacity) || c.capacity <= 0)) {
+        // Validar que los compartimientos y separaciones tengan capacidad numérica válida
+        const validCompartments = compartments.map(c => {
+            const validSeps = c.separations.map(s => ({ capacity: parseFloat(s.capacity) }));
+            const totalCap = validSeps.reduce((sum, s) => sum + (s.capacity || 0), 0);
+            return { number: c.number, separations: validSeps, capacity: totalCap };
+        });
+
+        if (validCompartments.some(c => c.capacity <= 0)) {
             return addToast('La capacidad de los compartimientos debe ser mayor a 0', 'error');
         }
 
@@ -99,7 +130,12 @@ export default function Tankers() {
     // Calculate total capacity
     const getTotalCapacity = (comps) => {
         let parsed = typeof comps === 'string' ? JSON.parse(comps) : (comps || []);
-        return parsed.reduce((acc, curr) => acc + (parseFloat(curr.capacity) || 0), 0);
+        return parsed.reduce((acc, curr) => {
+            if (curr.separations) {
+                return acc + curr.separations.reduce((sSum, s) => sSum + (parseFloat(s.capacity) || 0), 0);
+            }
+            return acc + (parseFloat(curr.capacity) || 0)
+        }, 0);
     };
 
     if (loading) return <div>Cargando...</div>;
@@ -191,30 +227,50 @@ export default function Tankers() {
                                     </button>
                                 </div>
                                 
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                     {compartments.map((comp, i) => (
-                                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 'var(--border-radius)' }}>
-                                            <span style={{ fontWeight: 'bold', width: '30px', color: 'var(--text-muted)' }}>#{comp.number}</span>
-                                            <div style={{ flex: 1, position: 'relative' }}>
-                                                <input 
-                                                    type="number" 
-                                                    value={comp.capacity} 
-                                                    onChange={(e) => handleCompChange(i, e.target.value)} 
-                                                    placeholder="Capacidad en Galones" 
-                                                    required 
-                                                    min="1"
-                                                />
-                                                <span style={{ position: 'absolute', right: '12px', top: '12px', color: 'var(--text-muted)', fontSize: '0.875rem' }}>Gal</span>
+                                        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', padding: '1rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>Compartimiento #{comp.number}</span>
+                                                <button type="button" onClick={() => handleRemoveCompartment(i)} disabled={compartments.length === 1} style={{ background: 'none', border: 'none', color: compartments.length === 1 ? 'transparent' : 'var(--danger)', cursor: compartments.length === 1 ? 'default' : 'pointer' }}>
+                                                    <Minus size={16} />
+                                                </button>
                                             </div>
-                                            <button type="button" onClick={() => handleRemoveCompartment(i)} disabled={compartments.length === 1} style={{ background: 'none', border: 'none', color: compartments.length === 1 ? 'var(--border)' : 'var(--danger)', padding: '4px', cursor: compartments.length === 1 ? 'not-allowed' : 'pointer' }}>
-                                                <Minus size={18} />
-                                            </button>
+                                            
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingLeft: '1rem', borderLeft: '2px solid var(--border)' }}>
+                                                {comp.separations.map((sep, j) => (
+                                                    <div key={j} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '70px' }}>Sep. {j + 1}:</span>
+                                                        <div style={{ flex: 1, position: 'relative' }}>
+                                                            <input 
+                                                                type="number" 
+                                                                value={sep.capacity} 
+                                                                onChange={(e) => handleSeparationChange(i, j, e.target.value)} 
+                                                                placeholder="Galones" 
+                                                                required 
+                                                                min="1"
+                                                                style={{ padding: '0.5rem', fontSize: '0.85rem' }}
+                                                            />
+                                                        </div>
+                                                        <button type="button" onClick={() => handleRemoveSeparation(i, j)} disabled={comp.separations.length === 1} style={{ background: 'none', border: 'none', color: comp.separations.length === 1 ? 'transparent' : 'var(--text-muted)', cursor: comp.separations.length === 1 ? 'default' : 'pointer' }}>
+                                                            <X size={14} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                <button type="button" onClick={() => handleAddSeparation(i)} style={{ alignSelf: 'flex-start', fontSize: '0.7rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '0.25rem' }}>
+                                                    <Plus size={12} /> Añadir Separación
+                                                </button>
+                                            </div>
+                                            
+                                            <div style={{ textAlign: 'right', fontSize: '0.8rem', fontWeight: 'bold', marginTop: '0.5rem', borderTop: '1px dashed var(--border)', paddingTop: '0.5rem' }}>
+                                                Capacidad Comp: {comp.separations.reduce((sum, s) => sum + (parseFloat(s.capacity) || 0), 0).toLocaleString()} Gal
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
                                 <div style={{ marginTop: '1rem', textAlign: 'right', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                                     Capacidad Total: <span style={{ fontWeight: 'bold', color: 'var(--text)' }}>
-                                        {compartments.reduce((sum, c) => sum + (parseFloat(c.capacity) || 0), 0).toLocaleString()} Gal
+                                        {compartments.reduce((sum, c) => sum + (c.separations.reduce((sSum, s) => sSum + (parseFloat(s.capacity) || 0), 0) || 0), 0).toLocaleString()} Gal
                                     </span>
                                 </div>
                             </div>
