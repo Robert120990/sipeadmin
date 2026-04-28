@@ -105,9 +105,10 @@ export default function DashboardLayout() {
     };
 
     const openTab = (item) => {
-        if (!tabs.find(t => t.path === item.path)) {
-            setTabs(prev => [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }]);
-        }
+        setTabs(prev => {
+            if (prev.find(t => t.path === item.path)) return prev;
+            return [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }];
+        });
         setActiveTabPath(item.path);
         if (location.pathname !== item.path) {
             navigate(item.path);

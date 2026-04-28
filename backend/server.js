@@ -690,8 +690,9 @@ app.post('/api/carriers', authenticateToken, async (req, res) => {
         req.io.emit('carriers_updated');
         res.status(201).json({ message: 'Transportista creado' });
     } catch (error) {
+        console.error('ERROR POST CARRIER:', error);
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El código ya existe' });
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 });
 
@@ -703,8 +704,9 @@ app.put('/api/carriers/:id', authenticateToken, async (req, res) => {
         req.io.emit('carriers_updated');
         res.json({ message: 'Transportista actualizado' });
     } catch (error) {
+        console.error('ERROR PUT CARRIER:', error);
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El código ya existe' });
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 });
 
