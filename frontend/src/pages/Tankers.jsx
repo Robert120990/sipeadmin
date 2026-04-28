@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../services/api';
+import { socket } from '../services/socket';
 import { useToast } from '../components/Toast';
 import { Container, Edit2, Trash2, X, Save, Plus, Minus } from 'lucide-react';
 
@@ -15,6 +16,18 @@ export default function Tankers() {
 
     useEffect(() => {
         fetchData();
+
+        const handleUpdate = () => {
+            fetchData();
+        };
+
+        socket.on('carriers_updated', handleUpdate);
+        socket.on('tankers_updated', handleUpdate);
+
+        return () => {
+            socket.off('carriers_updated', handleUpdate);
+            socket.off('tankers_updated', handleUpdate);
+        };
     }, []);
 
     const fetchData = async () => {

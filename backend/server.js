@@ -13,11 +13,33 @@ const { initDB } = require('./db');
 dotenv.config(); // Standard config works better across environments
 
 const app = express();
+const server = http.createServer(app);
+const { Server } = require("socket.io");
+const io = new Server(server, {
+  cors: {
+    origin: "*", // En producción se debe restringir al dominio del frontend
+    methods: ["GET", "POST", "PUT", "DELETE"]
+  }
+});
+
 const PORT = process.env.PORT || 5001;
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey123';
 
 app.use(cors());
 app.use(express.json());
+
+// Inyectar io en las rutas
+app.use((req, res, next) => {
+    req.io = io;
+    next();
+});
+
+io.on("connection", (socket) => {
+    console.log(`Usuario conectado a Socket.io: ${socket.id}`);
+    socket.on("disconnect", () => {
+        console.log(`Usuario desconectado: ${socket.id}`);
+    });
+});
 
 // Global connection caching
 let db;
@@ -30,8 +52,8 @@ const apiAxios = axios.create({ httpAgent: keepAliveAgent, httpsAgent: keepAlive
 const dbPromise = initDB().then(pool => {
     db = pool;
     if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-        app.listen(PORT, () => {
-            console.log(`Server running on port ${PORT}`);
+        server.listen(PORT, () => {
+            console.log(`Server HTTP y Socket.io running on port ${PORT}`);
         });
     }
     return pool;
@@ -665,6 +687,7 @@ app.post('/api/carriers', authenticateToken, async (req, res) => {
     const { code, description } = req.body;
     try {
         await db.query('INSERT INTO carriers (code, description) VALUES (?, ?)', [code, description]);
+        req.io.emit('carriers_updated');
         res.status(201).json({ message: 'Transportista creado' });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El código ya existe' });
@@ -677,6 +700,7 @@ app.put('/api/carriers/:id', authenticateToken, async (req, res) => {
     const { code, description } = req.body;
     try {
         await db.query('UPDATE carriers SET code = ?, description = ? WHERE id = ?', [code, description, id]);
+        req.io.emit('carriers_updated');
         res.json({ message: 'Transportista actualizado' });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El código ya existe' });
@@ -688,6 +712,7 @@ app.delete('/api/carriers/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         await db.query('DELETE FROM carriers WHERE id = ?', [id]);
+        req.io.emit('carriers_updated');
         res.json({ message: 'Transportista eliminado' });
     } catch (error) {
         if (error.code === 'ER_ROW_IS_REFERENCED_2') return res.status(400).json({message: 'No puede eliminarse porque tiene pipas asociadas'});
@@ -714,6 +739,7 @@ app.post('/api/tankers', authenticateToken, async (req, res) => {
     const { code, carrier_id, compartments } = req.body;
     try {
         await db.query('INSERT INTO tankers (code, carrier_id, compartments) VALUES (?, ?, ?)', [code, carrier_id, JSON.stringify(compartments)]);
+        req.io.emit('tankers_updated');
         res.status(201).json({ message: 'Pipa creada' });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El código ya existe' });
@@ -726,6 +752,7 @@ app.put('/api/tankers/:id', authenticateToken, async (req, res) => {
     const { code, carrier_id, compartments } = req.body;
     try {
         await db.query('UPDATE tankers SET code = ?, carrier_id = ?, compartments = ? WHERE id = ?', [code, carrier_id, JSON.stringify(compartments), id]);
+        req.io.emit('tankers_updated');
         res.json({ message: 'Pipa actualizada' });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El código ya existe' });
@@ -737,6 +764,7 @@ app.delete('/api/tankers/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         await db.query('DELETE FROM tankers WHERE id = ?', [id]);
+        req.io.emit('tankers_updated');
         res.json({ message: 'Pipa eliminada' });
     } catch (error) {
         res.status(500).json({ message: 'Server error' });

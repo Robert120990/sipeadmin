@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Truck, CheckCircle, Save, XCircle, Search, Calendar, CheckSquare, PlusSquare } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api from '../services/api';
+import { socket } from '../services/socket';
 
 export default function PedidosCombustible() {
     const { addToast } = useToast();
@@ -105,7 +106,20 @@ export default function PedidosCombustible() {
                 setPipas(resP.data || []);
             } catch (e) { addToast("Error cargando catálogos maestros", "error"); }
         };
+        
         fetchMaster();
+
+        const handleUpdate = () => {
+            fetchMaster();
+        };
+
+        socket.on('carriers_updated', handleUpdate);
+        socket.on('tankers_updated', handleUpdate);
+
+        return () => {
+            socket.off('carriers_updated', handleUpdate);
+            socket.off('tankers_updated', handleUpdate);
+        };
     }, []);
 
     // 3. Fetch Operational Data when Estacion changes
