@@ -7,11 +7,6 @@ import { socket } from '../services/socket';
 export default function PedidosCombustible() {
     const { addToast } = useToast();
     
-    // T-1 Default Date Calculation
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const defaultDate = yesterday.toISOString().split('T')[0];
-
     const fmtDateArray = (dStr) => {
         if (!dStr) return '';
         // If it's a timestamp
@@ -25,14 +20,15 @@ export default function PedidosCombustible() {
     const [estaciones, setEstaciones] = useState([]);
     const [transportistas, setTransportistas] = useState([]);
     const [pipas, setPipas] = useState([]);
+    const [fechaServidor, setFechaServidor] = useState(null);
 
     // Selections
     const [selectedEstacion, setSelectedEstacion] = useState('');
     const [fechaConsulta, setFechaConsulta] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     
-    // Formulario Agregar Pedido
-    const [fechaPedido, setFechaPedido] = useState(defaultDate);
+    // Formulario Agregar Pedido - se inicializa despues de obtener fecha servidor
+    const [fechaPedido, setFechaPedido] = useState('');
     const [previsualizar, setPrevisualizar] = useState(true);
     const [selectedTransporte, setSelectedTransporte] = useState('');
     const [selectedPipa, setSelectedPipa] = useState('');
@@ -90,7 +86,7 @@ export default function PedidosCombustible() {
     const numFmt = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
     const pctFmt = (val) => new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2 }).format(val || 0);
 
-    // 1. Initial Load Master Data
+    // 1. Initial Load Master Data y fecha servidor
     useEffect(() => {
         const fetchMaster = async () => {
             try {
@@ -104,6 +100,34 @@ export default function PedidosCombustible() {
 
                 const resP = await api.get('/tankers');
                 setPipas(resP.data || []);
+
+                // Fecha del servidor - calcular fallback primero
+                let fechaHoy = new Date().toISOString().split('T')[0];
+                
+                try {
+                    const resFecha = await api.get('/operaciones/fecha-servidor-global');
+                    const fs = resFecha.data?.fecha_actual;
+                    if (fs) {
+                        setFechaServidor(fs);
+                        setFechaConsulta(fs);
+                        // fecha pedido = dia siguiente a datos al dia
+                        const fSig = new Date(fs);
+                        fSig.setDate(fSig.getDate() + 1);
+                        setFechaPedido(fSig.toISOString().split('T')[0]);
+                    } else {
+                        setFechaServidor(fechaHoy);
+                        setFechaConsulta(fechaHoy);
+                        const fSig = new Date(fechaHoy);
+                        fSig.setDate(fSig.getDate() + 1);
+                        setFechaPedido(fSig.toISOString().split('T')[0]);
+                    }
+                } catch (e) {
+                    setFechaServidor(fechaHoy);
+                    setFechaConsulta(fechaHoy);
+                    const fSig = new Date(fechaHoy);
+                    fSig.setDate(fSig.getDate() + 1);
+                    setFechaPedido(fSig.toISOString().split('T')[0]);
+                }
             } catch (e) { addToast("Error cargando catálogos maestros", "error"); }
         };
         
@@ -125,22 +149,20 @@ export default function PedidosCombustible() {
     // 3. Fetch Operational Data when Estacion changes
     const fetchOperationalData = async (est) => {
         if (!est) return;
+        if (!fechaConsulta) return;
         setIsLoading(true);
         try {
             // Inventario Tanques
-            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${defaultDate}`);
-            setFechaConsulta(resT.data.fecha);
+            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${fechaConsulta}`);
             setInventario(resT.data.inventario || []);
 
             // Promedios
-            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${defaultDate}`);
+            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${fechaConsulta}`);
             setPromedios(resP.data || { D: 0, R: 0, S: 0, I: 0 });
 
             // Programados
-            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${resT.data.fecha}`);
+            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${fechaConsulta}`);
             setProgramados(resProg.data || []);
-            
-            limpiarFormulario();
         } catch (error) {
             addToast("Error al obtener datos operativos", "error");
         } finally {
@@ -201,7 +223,7 @@ export default function PedidosCombustible() {
     }, [inventario, promedios, programados, previsualizar, comp, fechaConsulta]);
 
     const limpiarFormulario = () => {
-        setFechaPedido(defaultDate);
+        setFechaPedido(fechaServidor || '');
         setSelectedTransporte('');
         setSelectedPipa('');
         setComp({
