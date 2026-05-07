@@ -34,6 +34,7 @@ export const operacionesMenu = [
 ];
 export const bancosMenu = [
     { name: 'Cuentas Bancarias', path: '/dashboard/bancos/cuentas', icon: Landmark },
+    { name: 'Movimientos Bancarios', path: '/dashboard/bancos/movimientos', icon: FileText },
 ];
 
 export const consultasBancos = [

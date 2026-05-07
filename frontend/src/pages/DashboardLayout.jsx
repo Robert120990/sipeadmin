@@ -22,6 +22,7 @@ import ConfiguracionDb from './ConfiguracionDb';
 import ConfiguracionEmail from './ConfiguracionEmail';
 import ConfiguracionContabilidad from './ConfiguracionContabilidad';
 import ConsultasCumpleanos from './ConsultasCumpleanos';
+import MovimientosBancarios from './MovimientosBancarios';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -69,6 +70,7 @@ export default function DashboardLayout() {
         '/dashboard/consultas/saldos-chequera': <Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />,
         '/dashboard/consultas/otras/cumpleanos': <ConsultasCumpleanos />,
         '/dashboard/bancos/cuentas': <CuentasBancarias />,
+        '/dashboard/bancos/movimientos': <MovimientosBancarios />,
         '/dashboard/settings/database': <ConfiguracionDb />,
         '/dashboard/settings/accounting': <ConfiguracionContabilidad />,
         '/dashboard/settings/email': <ConfiguracionEmail />,
@@ -253,6 +255,16 @@ export default function DashboardLayout() {
                                                 {openMenus.consultasBancos ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                             </button>
                                             {openMenus.consultasBancos && filteredBancos.map(item => renderNavItem(item, true))}
+                                        </div>
+                                    )}
+                                    {/* Otras Submenu */}
+                                    {filteredOtras.length > 0 && (
+                                        <div>
+                                            <button className="nav-item" onClick={() => toggleMenu('consultasOtras')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                                <span>Otras</span>
+                                                {openMenus.consultasOtras ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                            </button>
+                                            {openMenus.consultasOtras && filteredOtras.map(item => renderNavItem(item, true))}
                                         </div>
                                     )}
                                 </div>

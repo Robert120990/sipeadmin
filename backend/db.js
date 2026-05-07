@@ -11,7 +11,11 @@ const getDbConfig = () => {
         password: process.env.DB_PASSWORD || 'QwErTy123',
         database: process.env.DB_NAME || 'db_sipe_admin',
         port: parseInt(process.env.DB_PORT || '3306'),
-        connectTimeout: 10000 // 10s timeout
+        connectTimeout: 10000, // 10s timeout
+        waitForConnections: true,
+        connectionLimit: 10,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 0
     };
 
     if (process.env.DATABASE_URL) {
@@ -23,7 +27,11 @@ const getDbConfig = () => {
                 password: decodeURIComponent(url.password),
                 database: url.pathname.substring(1),
                 port: url.port ? parseInt(url.port) : 3306,
-                connectTimeout: 10000
+                connectTimeout: 10000,
+                waitForConnections: true,
+                connectionLimit: 10,
+                enableKeepAlive: true,
+                keepAliveInitialDelay: 0
             };
         } catch (e) {
             console.error('Error parsing DATABASE_URL:', e);
@@ -34,12 +42,16 @@ const getDbConfig = () => {
 
 const dbConfig = getDbConfig();
 
+let pool;
+let externalPools = {};
+
 const initDB = async () => {
     try {
         // En Vercel no podemos correr 15 scripts de CREATE TABLE por timeout de Serverless (10s)
         if (process.env.VERCEL) {
             console.log('Vercel Environment Detected: Bypassing local init schemas.');
-            return mysql.createPool(dbConfig);
+            pool = mysql.createPool(dbConfig);
+            return pool;
         }
 
         console.log(`Checking connection to ${dbConfig.host}:${dbConfig.port}...`);
@@ -58,7 +70,7 @@ const initDB = async () => {
         await connection.end();
 
         // Connect with the database
-        const pool = mysql.createPool(dbConfig);
+        pool = mysql.createPool(dbConfig);
         console.log('Connected to MySQL database!');
 
         // Create tables
@@ -192,4 +204,72 @@ const initDB = async () => {
     }
 };
 
-module.exports = { initDB };
+const getDb = () => pool;
+
+const getExternalDb = async () => {
+    let configs;
+    try {
+        [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+    } catch (err) {
+        if (err.code === 'ECONNRESET') {
+            console.log('RETRYING getExternalDb config query due to ECONNRESET...');
+            [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+        } else {
+            throw err;
+        }
+    }
+    
+    if (configs.length === 0) throw new Error('No hay configuración de base de datos externa (Principal). Configúrala primero.');
+    
+    const config = configs[0];
+    const poolKey = `main:${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+    
+    let externalDb = externalPools[poolKey];
+    if (!externalDb) {
+        externalDb = mysql.createPool({
+            host: config.host,
+            user: config.user,
+            password: config.password,
+            database: config.database_name,
+            port: config.port || 3306,
+            connectionLimit: 10
+        });
+        externalPools[poolKey] = externalDb;
+    }
+    return externalDb;
+};
+
+const getAccountingDb = async () => {
+    let configs;
+    try {
+        [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+    } catch (err) {
+        if (err.code === 'ECONNRESET') {
+            console.log('RETRYING getAccountingDb config query due to ECONNRESET...');
+            [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+        } else {
+            throw err;
+        }
+    }
+    
+    if (configs.length === 0) throw new Error('No hay configuración de base de datos de contabilidad. Configúrala primero.');
+    
+    const config = configs[0];
+    const poolKey = `accounting:${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+    
+    let externalDb = externalPools[poolKey];
+    if (!externalDb) {
+        externalDb = mysql.createPool({
+            host: config.host,
+            user: config.user,
+            password: config.password,
+            database: config.database_name,
+            port: config.port || 3306,
+            connectionLimit: 10
+        });
+        externalPools[poolKey] = externalDb;
+    }
+    return externalDb;
+};
+
+module.exports = { initDB, getDb, getExternalDb, getAccountingDb };

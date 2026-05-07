@@ -86,3 +86,52 @@ La tabla debe ir envuelta en las clases estándar del proyecto (`card glass`) pa
     </table>
 </div>
 ```
+### 5. Formularios y Modales de Edición e Ingreso
+Para los modales de creación o edición de registros, utiliza este estándar para garantizar una experiencia de usuario premium y consistente.
+
+#### Reglas de Oro de Diseño
+- **Altura Consistente**: Todos los campos (inputs, selects, áreas de texto y campos de solo lectura) DEBEN tener la misma altura estándar de **42px**. Esto garantiza la simetría visual en grids y filas.
+- **Mayúsculas Automáticas**: Los campos de tipo "Documento", "Referencia", "Concepto" o "Descripción" deben configurarse para transformar el texto a MAYÚSCULAS automáticamente tanto visualmente (`text-transform: uppercase`) como en el estado del componente (`.toUpperCase()`).
+
+#### Estructura del Modal
+Utiliza un fondo oscuro con `backdropFilter` y una tarjeta con estilo `glass`:
+```jsx
+<div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(8px)' }}>
+    <div className="card glass shadow-xl" style={{ width: '650px', padding: '2rem', border: '1px solid rgba(255,255,255,0.1)' }}>
+        {/* Cabecera */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem', alignItems: 'center' }}>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
+                {editingItem ? <Edit2 size={24} color="var(--primary)" /> : <Plus size={24} color="var(--primary)" />}
+                {editingItem ? 'Editar Registro' : 'Nuevo Registro'}
+            </h2>
+            <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)' }}><X size={24} /></button>
+        </div>
+        {/* Formulario */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Contenido del Formulario */}
+        </form>
+    </div>
+</div>
+```
+
+#### Estilo de Inputs y Selectores
+- **Labels**: Deben usar `fontSize: '0.875rem'` y `color: 'var(--text-muted)'`.
+- **Selectores**: Deben heredar el estilo global del proyecto y mantener la altura de 42px.
+- **Campos de Solo Lectura**: Usa un div con fondo levemente translúcido y borde, con altura fija de 42px:
+  ```jsx
+  <div style={{ padding: '0 0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', fontSize: '0.9rem', height: '42px', display: 'flex', alignItems: 'center' }}>
+      {valor}
+  </div>
+  ```
+
+#### Botones de Acción
+Coloca los botones al final del formulario con un ratio de tamaño de 1:2 (Cancelar:Confirmar):
+```jsx
+<div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
+    <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
+    <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+        <Save size={18} />
+        {editingItem ? 'Actualizar' : 'Guardar'}
+    </button>
+</div>
+```
