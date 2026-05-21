@@ -23,6 +23,7 @@ import ConfiguracionEmail from './ConfiguracionEmail';
 import ConfiguracionContabilidad from './ConfiguracionContabilidad';
 import ConsultasCumpleanos from './ConsultasCumpleanos';
 import MovimientosBancarios from './MovimientosBancarios';
+import Cheques from './Cheques';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -71,6 +72,7 @@ export default function DashboardLayout() {
         '/dashboard/consultas/otras/cumpleanos': <ConsultasCumpleanos />,
         '/dashboard/bancos/cuentas': <CuentasBancarias />,
         '/dashboard/bancos/movimientos': <MovimientosBancarios />,
+        '/dashboard/bancos/cheques': <Cheques />,
         '/dashboard/settings/database': <ConfiguracionDb />,
         '/dashboard/settings/accounting': <ConfiguracionContabilidad />,
         '/dashboard/settings/email': <ConfiguracionEmail />,

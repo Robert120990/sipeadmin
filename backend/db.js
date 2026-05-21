@@ -170,6 +170,129 @@ const initDB = async () => {
             );
         `);
 
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS empresas (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                codigo VARCHAR(50) NOT NULL,
+                nombre VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_codigo (codigo)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS bancos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                codigo VARCHAR(50) NOT NULL,
+                descripcion VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
+                UNIQUE KEY uk_empresa_codigo (empresa_id, codigo)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS tipos_cuenta_bancaria (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                codigo VARCHAR(50) NOT NULL,
+                descripcion VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
+                UNIQUE KEY uk_empresa_codigo (empresa_id, codigo)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS tipos_remesas (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                codigo VARCHAR(50) NOT NULL,
+                descripcion VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
+                UNIQUE KEY uk_empresa_codigo (empresa_id, codigo)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS cuentas_bancarias (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                banco_id INT NOT NULL,
+                tipo_cuenta_id INT NOT NULL,
+                numero VARCHAR(50) NOT NULL,
+                nombre VARCHAR(255),
+                cod_cta VARCHAR(50),
+                activa BOOLEAN DEFAULT TRUE,
+                orden INT DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
+                FOREIGN KEY (banco_id) REFERENCES bancos(id),
+                FOREIGN KEY (tipo_cuenta_id) REFERENCES tipos_cuenta_bancaria(id),
+                UNIQUE KEY uk_empresa_numero (empresa_id, numero)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS movimientos_bancarios (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                cuenta_bancaria_id INT NOT NULL,
+                fecha DATE NOT NULL,
+                fecha_aplicado DATE,
+                documento VARCHAR(100),
+                concepto VARCHAR(255),
+                monto DECIMAL(14,2) DEFAULT 0,
+                cargo DECIMAL(14,2) DEFAULT 0,
+                abono DECIMAL(14,2) DEFAULT 0,
+                tipo_remesa_id INT,
+                num_partida VARCHAR(50),
+                cod_cta VARCHAR(50),
+                es_contabilizado BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
+                FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id),
+                FOREIGN KEY (tipo_remesa_id) REFERENCES tipos_remesas(id),
+                INDEX idx_fecha (fecha),
+                INDEX idx_empresa_fecha (empresa_id, fecha)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS cheques (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                cuenta_bancaria_id INT NOT NULL,
+                llave VARCHAR(20),
+                fecha DATE NOT NULL,
+                cheque_anulado BOOLEAN DEFAULT FALSE,
+                cheque VARCHAR(20),
+                valor DECIMAL(14,2) DEFAULT 0,
+                a_nombre VARCHAR(150),
+                fecha_aplicado DATE,
+                concepto VARCHAR(200),
+                es_reservado BOOLEAN DEFAULT FALSE,
+                es_contabilizado BOOLEAN DEFAULT FALSE,
+                es_pago_contado BOOLEAN DEFAULT FALSE,
+                fue_noemitido BOOLEAN DEFAULT FALSE,
+                num_partida VARCHAR(10),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
+                FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id),
+                INDEX idx_fecha (fecha),
+                INDEX idx_empresa_fecha (empresa_id, fecha)
+            );
+        `);
+
         // Seed initial data
         const [roles] = await pool.query('SELECT * FROM roles WHERE name = "Administrator"');
         if (roles.length === 0) {

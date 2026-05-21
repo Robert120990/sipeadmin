@@ -42,6 +42,7 @@ const catalogosRoutes = require('./routes/catalogos');
 const operacionesRoutes = require('./routes/operaciones');
 const consultasRoutes = require('./routes/consultas');
 const configRoutes = require('./routes/config');
+const chequesRoutes = require('./routes/cheques');
 const aiRoutes = require('./routes/ai');
 
 // Mount Routes
@@ -51,6 +52,7 @@ app.use('/api', catalogosRoutes); // Carriers, Tankers
 app.use('/api', operacionesRoutes); // Dashboard, Operaciones
 app.use('/api', consultasRoutes); // Ventas, Consultas
 app.use('/api', configRoutes);
+app.use('/api/cheques', chequesRoutes);
 app.use('/api/ai', aiRoutes);
 
 // Health Check

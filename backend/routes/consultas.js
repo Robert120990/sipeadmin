@@ -205,6 +205,43 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, async
     } catch (error) { res.status(500).json({ message: 'Error fetching competencia' }); }
 });
 
+router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [rows] = await externalDb.query('SELECT id, competencia, id_estacion FROM web_estaciones_competencia');
+        res.json(rows);
+    } catch (error) { res.status(500).json({ message: 'Error fetching estaciones competencia' }); }
+});
+
+router.post('/consultas/estaciones/precios-competencia/upload', authenticateToken, async (req, res) => {
+    try {
+        const { data } = req.body;
+        if (!Array.isArray(data) || data.length === 0) {
+            return res.status(400).json({ message: 'No data provided' });
+        }
+        const externalDb = await getExternalDb();
+        const conn = await externalDb.getConnection();
+        await conn.beginTransaction();
+        try {
+            await conn.query('DELETE FROM web_precios_competencia');
+            const insertSql = 'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?';
+            const values = data.map(row => [
+                row.estacion, row.modificacion, Number(row.super_c) || 0, Number(row.regular_c) || 0,
+                Number(row.ion_c) || 0, Number(row.diesel_c) || 0, Number(row.super_a) || 0,
+                Number(row.regular_a) || 0, Number(row.ion_a) || 0, Number(row.diesel_a) || 0
+            ]);
+            await conn.query(insertSql, [values]);
+            await conn.commit();
+            res.json({ message: 'Precios actualizados', count: data.length });
+        } catch (err) {
+            await conn.rollback();
+            throw err;
+        } finally {
+            conn.release();
+        }
+    } catch (error) { res.status(500).json({ message: 'Error updating precios competencia' }); }
+});
+
 router.get('/consultas/:type', authenticateToken, async (req, res) => {
     const { type } = req.params;
     try {

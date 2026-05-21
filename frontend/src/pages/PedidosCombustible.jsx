@@ -106,14 +106,13 @@ export default function PedidosCombustible() {
                 
                 try {
                     const resFecha = await api.get('/operaciones/fecha-servidor-global');
-                    const fs = resFecha.data?.fecha_actual;
-                    if (fs) {
-                        setFechaServidor(fs);
-                        setFechaConsulta(fs);
-                        // fecha pedido = dia siguiente a datos al dia
-                        const fSig = new Date(fs);
-                        fSig.setDate(fSig.getDate() + 1);
-                        setFechaPedido(fSig.toISOString().split('T')[0]);
+                    const fa = resFecha.data?.fecha_ayer;
+                    const fp = resFecha.data?.fecha_actual;
+                    if (fa) {
+                        setFechaServidor(fa);
+                        setFechaConsulta(fa);
+                        // fecha pedido = dia siguiente a datos al dia (fecha_ayer + 1 = fecha_actual)
+                        setFechaPedido(fp || fa);
                     } else {
                         setFechaServidor(fechaHoy);
                         setFechaConsulta(fechaHoy);
@@ -202,7 +201,7 @@ export default function PedidosCombustible() {
             let nomDia = "";
             if (durDias > 0 && fechaConsulta) {
                 const target = new Date(fechaConsulta);
-                target.setDate(target.getDate() + Math.floor(durDias) + 1); // JS dates need standardizing with local offset, but rough approx is OK.
+                target.setDate(target.getDate() + Math.floor(durDias));
                 fechaDur = target.toISOString().split('T')[0];
                 const days = ['DOMINGO','LUNES','MARTES','MIERCOLES','JUEVES','VIERNES','SABADO'];
                 nomDia = days[target.getUTCDay()];
