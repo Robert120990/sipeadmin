@@ -225,12 +225,19 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
         try {
             await conn.query('DELETE FROM web_precios_competencia');
             const insertSql = 'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?';
+            const cleanNum = (val) => {
+                const s = String(val || '');
+                const cleaned = s.replace(/[^0-9.\-]/g, '');
+                const n = Number(cleaned);
+                return isNaN(n) ? 0 : n;
+            };
             const values = data.map(row => [
-                row.estacion, row.modificacion, Number(row.super_c) || 0, Number(row.regular_c) || 0,
-                Number(row.ion_c) || 0, Number(row.diesel_c) || 0, Number(row.super_a) || 0,
-                Number(row.regular_a) || 0, Number(row.ion_a) || 0, Number(row.diesel_a) || 0
+                row.estacion, row.modificacion, cleanNum(row.super_c), cleanNum(row.regular_c),
+                cleanNum(row.ion_c), cleanNum(row.diesel_c), cleanNum(row.super_a),
+                cleanNum(row.regular_a), cleanNum(row.ion_a), cleanNum(row.diesel_a)
             ]);
-            await conn.query(insertSql, values);
+            console.log('UPLOAD precios competencia - count:', data.length, 'first row:', JSON.stringify(data[0]), 'first values:', JSON.stringify(values[0]));
+            await conn.query(insertSql, [values]);
             await conn.commit();
             res.json({ message: 'Precios actualizados', count: data.length });
         } catch (err) {
