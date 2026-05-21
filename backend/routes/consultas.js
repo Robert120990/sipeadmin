@@ -230,7 +230,7 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
                 Number(row.ion_c) || 0, Number(row.diesel_c) || 0, Number(row.super_a) || 0,
                 Number(row.regular_a) || 0, Number(row.ion_a) || 0, Number(row.diesel_a) || 0
             ]);
-            await conn.query(insertSql, [values]);
+            await conn.query(insertSql, values);
             await conn.commit();
             res.json({ message: 'Precios actualizados', count: data.length });
         } catch (err) {
