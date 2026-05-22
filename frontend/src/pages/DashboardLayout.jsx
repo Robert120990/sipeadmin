@@ -317,6 +317,11 @@ export default function DashboardLayout() {
                         <LogOut size={20} />
                         {!isCollapsed && <span>Cerrar Sesión</span>}
                     </button>
+                    {!isCollapsed && (
+                        <div style={{ padding: '0.5rem', textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-muted)', opacity: 0.5 }}>
+                            {__APP_VERSION__}
+                        </div>
+                    )}
                 </div>
             </aside>
 
