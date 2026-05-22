@@ -11,12 +11,26 @@ const encodeShareToken = (url) => {
 };
 
 const resolveShareUrl = async (shortUrl) => {
-    const res1 = await axios.head(shortUrl, {
+    const res1 = await axios.get(shortUrl, {
         maxRedirects: 0,
-        validateStatus: (s) => s === 302 || s === 301,
+        validateStatus: () => true,
         timeout: 10000
     });
-    return res1.headers.location || shortUrl;
+    console.log('Short link response status:', res1.status);
+    console.log('Location header:', res1.headers.location?.substring(0, 120));
+
+    let redir = res1.headers.location;
+    if (!redir) {
+        const body = String(res1.data || '').substring(0, 500);
+        console.log('Response body (first 500):', body);
+        throw new Error('No redirect Location from short link (status ' + res1.status + ')');
+    }
+
+    if (redir.includes('login.live.com')) {
+        throw new Error('El link requiere autenticacion. Usa la URL canonica (abre el link en el navegador y copia la URL final).');
+    }
+
+    return redir;
 };
 
 const listViaShares = async (shareUrl, folderPath) => {
