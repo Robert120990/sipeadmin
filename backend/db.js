@@ -50,11 +50,16 @@ const initDB = async () => {
         // En Vercel no podemos correr 15 scripts de CREATE TABLE por timeout de Serverless (10s)
         if (process.env.VERCEL) {
             console.log('Vercel Environment Detected: Bypassing local init schemas.');
-            pool = mysql.createPool({ ...dbConfig, connectionLimit: 3 });
-            // Test the connection immediately
-            const conn = await pool.getConnection();
-            conn.release();
-            console.log('Vercel: DB connection OK.');
+            pool = mysql.createPool(dbConfig);
+            // Test connection but don't crash if it fails (db might be warming up)
+            try {
+                const conn = await pool.getConnection();
+                conn.release();
+                console.log('Vercel: DB connection OK.');
+            } catch (e) {
+                console.error('Vercel: DB connection FAILED on init:', e.message);
+                // Pool still exists, route handlers will get the error naturally
+            }
             return pool;
         }
 

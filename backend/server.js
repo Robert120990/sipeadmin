@@ -60,6 +60,19 @@ app.use('/api/ai', aiRoutes);
 // Health Check
 app.get('/api/debug-ping', (req, res) => res.json({ message: 'pong' }));
 
+// DB diagnostic endpoint (no auth required)
+app.get('/api/debug-db', async (req, res) => {
+    try {
+        const { getDb } = require('./db');
+        const db = getDb();
+        if (!db) return res.json({ ok: false, error: 'Pool not initialized' });
+        const [rows] = await db.query('SELECT 1 AS test');
+        res.json({ ok: true, result: rows[0] });
+    } catch (e) {
+        res.json({ ok: false, error: e.message, code: e.code });
+    }
+});
+
 // Global error handler
 app.use((err, req, res, next) => {
     console.error('Unhandled error:', err);
