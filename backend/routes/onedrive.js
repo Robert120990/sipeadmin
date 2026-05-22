@@ -1,93 +1,124 @@
 const express = require('express');
 const router = express.Router();
-const axios = require('axios');
+const puppeteer = require('puppeteer');
 const { authenticateToken } = require('../middleware/auth');
 
 const getShareLink = () => process.env.ONEDRIVE_SHARE_LINK || '';
 
-const encodeShareToken = (url) => {
-    return Buffer.from(url, 'utf8').toString('base64')
-        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+const cleanName = (text) => {
+    return (text || '').replace(/[\uE000-\uF8FF]/g, '').replace(/Compartido/g, '').trim();
 };
 
-const resolveShareUrl = async (shortUrl) => {
-    const res1 = await axios.get(shortUrl, {
-        maxRedirects: 0,
-        validateStatus: () => true,
-        timeout: 10000
+const parseDate = (str) => {
+    if (!str) return null;
+    const parts = str.split('/');
+    if (parts.length === 3) {
+        return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+    }
+    return new Date(str);
+};
+
+const scrapeItems = async (page) => {
+    return await page.evaluate(() => {
+        const result = [];
+        document.querySelectorAll('[role="row"]').forEach((row) => {
+            const cells = row.querySelectorAll('[role="gridcell"]');
+            if (cells.length < 4) return;
+            const iconCellText = cells[1]?.textContent?.trim() || '';
+            const isFolder = iconCellText.startsWith('\uE716') || iconCellText.includes('folder');
+            const rawName = cells[2]?.innerText?.trim() || '';
+            const date = cells[3]?.innerText?.trim() || '';
+            const size = cells[4]?.innerText?.trim() || '';
+            if (rawName && rawName !== 'Nombre' && rawName.length > 1) {
+                result.push({ name: rawName, date, size, isFolder });
+            }
+        });
+        return result;
     });
-    console.log('Short link response status:', res1.status);
-    console.log('Location header:', res1.headers.location?.substring(0, 120));
-
-    let redir = res1.headers.location;
-    if (!redir) {
-        const body = String(res1.data || '').substring(0, 500);
-        console.log('Response body (first 500):', body);
-        throw new Error('No redirect Location from short link (status ' + res1.status + ')');
-    }
-
-    if (redir.includes('login.live.com')) {
-        throw new Error('El link requiere autenticacion. Usa la URL canonica (abre el link en el navegador y copia la URL final).');
-    }
-
-    return redir;
-};
-
-const listViaShares = async (shareUrl, folderPath) => {
-    const encoded = encodeShareToken(shareUrl);
-    const base = `https://api.onedrive.com/v1.0/shares/u!${encoded}/root`;
-    const url = folderPath ? `${base}:${folderPath}:/children` : `${base}/children`;
-    const res = await axios.get(url, { timeout: 15000 });
-    return res.data.value || [];
 };
 
 router.get('/onedrive/estado', authenticateToken, async (req, res) => {
+    let browser = null;
     try {
         const shareLink = getShareLink();
         if (!shareLink) {
             return res.status(400).json({ message: 'ONEDRIVE_SHARE_LINK no configurado en .env' });
         }
 
-        const resolvedUrl = await resolveShareUrl(shareLink);
-        console.log('Resolved share URL:', resolvedUrl);
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
 
-        const subfolders = await listViaShares(resolvedUrl, '');
-        if (subfolders.length === 0) {
-            return res.json([]);
-        }
+        await page.goto(shareLink, { waitUntil: 'networkidle2', timeout: 30000 });
+        await sleep(5000);
+
+        const rootItems = await scrapeItems(page);
+        const folders = rootItems.filter(i => i.isFolder);
+        console.log('Folders found:', folders.length);
 
         const carpetas = [];
-        for (const folder of subfolders) {
-            if (!folder.folder) continue;
-            const path = '/' + folder.name;
-            const files = await listViaShares(resolvedUrl, path);
-            if (files.length > 0) {
-                const sorted = files.sort((a, b) =>
-                    new Date(b.lastModifiedDateTime) - new Date(a.lastModifiedDateTime)
-                );
-                const latest = sorted[0];
-                const fecha = new Date(latest.lastModifiedDateTime);
-                const antiguedad = Math.floor((Date.now() - fecha.getTime()) / (1000 * 60 * 60 * 24));
-                carpetas.push({
-                    carpeta: folder.name,
-                    archivo: latest.name,
-                    fecha: fecha.toISOString(),
-                    antiguedad
-                });
-            } else {
-                carpetas.push({
-                    carpeta: folder.name,
-                    archivo: '(vacia)',
-                    fecha: null,
-                    antiguedad: null
-                });
+
+        for (const folder of folders) {
+            try {
+                const rows = await page.$$('[role="row"]');
+                let targetRow = null;
+                for (const row of rows) {
+                    const text = await row.evaluate(el => el.innerText);
+                    if (text.includes(folder.name)) {
+                        targetRow = row;
+                        break;
+                    }
+                }
+
+                if (targetRow) {
+                    await targetRow.click({ clickCount: 2 });
+                    await sleep(5000);
+
+                    const subItems = await scrapeItems(page);
+                    const files = subItems.filter(i => !i.isFolder);
+
+                    if (files.length > 0) {
+                        files.sort((a, b) => {
+                            const da = parseDate(a.date);
+                            const db = parseDate(b.date);
+                            return (db?.getTime() || 0) - (da?.getTime() || 0);
+                        });
+                        const latest = files[0];
+                        const fecha = parseDate(latest.date);
+                        const antiguedad = fecha ? Math.floor((Date.now() - fecha.getTime()) / 86400000) : null;
+                        carpetas.push({
+                            carpeta: folder.name,
+                            archivo: latest.name,
+                            fecha: fecha ? fecha.toISOString() : null,
+                            antiguedad
+                        });
+                    } else {
+                        carpetas.push({ carpeta: folder.name, archivo: '(vacia)', fecha: null, antiguedad: null });
+                    }
+
+                    await page.goBack();
+                    await sleep(3000);
+                } else {
+                    carpetas.push({ carpeta: folder.name, archivo: '(sin acceso)', fecha: null, antiguedad: null });
+                }
+            } catch (e) {
+                console.log('Error processing folder', folder.name, ':', e.message);
+                carpetas.push({ carpeta: folder.name, archivo: '(error)', fecha: null, antiguedad: null });
+                try { await page.goBack(); await sleep(2000); } catch {}
             }
         }
 
         res.json(carpetas);
     } catch (error) {
-        console.error('OneDrive error:', error.response?.status, error.response?.data || error.message);
+        console.error('OneDrive error:', error.message);
         res.status(500).json({ message: 'Error al consultar OneDrive' });
+    } finally {
+        if (browser) await browser.close();
     }
 });
 
