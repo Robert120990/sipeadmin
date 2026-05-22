@@ -26,6 +26,7 @@ import MovimientosBancarios from './MovimientosBancarios';
 import Cheques from './Cheques';
 import ChequesContado from './ChequesContado';
 import BackupDBCheck from './BackupDBCheck';
+import pkg from '../../package.json';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -321,7 +322,7 @@ export default function DashboardLayout() {
                     </button>
                     {!isCollapsed && (
                         <div style={{ padding: '0.6rem 0.5rem', textAlign: 'center', fontSize: '0.7rem', fontWeight: 500, color: 'var(--primary)', opacity: 0.7 }}>
-                            v{__APP_VERSION__}
+                            v{pkg.version}
                         </div>
                     )}
                 </div>

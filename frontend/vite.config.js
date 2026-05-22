@@ -6,12 +6,13 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8'));
+const APP_VERSION = pkg.version;
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version)
+    __APP_VERSION__: JSON.stringify(APP_VERSION)
   },
   server: {
     proxy: {
