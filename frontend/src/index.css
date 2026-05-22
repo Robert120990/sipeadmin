@@ -110,6 +110,10 @@ select {
   animation: spin 1s linear infinite;
 }
 
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 /* Modals */
 .modal-overlay {
   position: fixed;

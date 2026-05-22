@@ -7,49 +7,64 @@ const BackupDBCheck = () => {
     const { addToast } = useToast();
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [elapsed, setElapsed] = useState(0);
 
     useEffect(() => {
-        fetchData();
+        fetchData(false);
     }, []);
 
-    const fetchData = async () => {
+    // Timer to show elapsed seconds while loading
+    useEffect(() => {
+        let interval;
+        if (loading) {
+            setElapsed(0);
+            interval = setInterval(() => setElapsed(prev => prev + 1), 1000);
+        }
+        return () => clearInterval(interval);
+    }, [loading]);
+
+    const fetchData = async (force = false) => {
         setLoading(true);
         try {
-            const res = await api.get('/onedrive/estado');
+            const res = await api.get('/onedrive/estado' + (force ? '?force=1' : ''));
             setData(res.data || []);
         } catch (e) {
-            addToast('Error al consultar estado de backups', 'error');
+            addToast('Error al consultar estado de backups: ' + (e.response?.data?.detail || e.response?.data?.message || e.message), 'error');
         } finally {
             setLoading(false);
         }
     };
 
-    const getColor = (antiguedad) => {
+    const getLabel = (antiguedad, archivo) => {
+        if (archivo === '(vacia)' || archivo === '(sin acceso)' || archivo === '(error)') return 'Sin archivos';
+        if (antiguedad === null) return '?';
+        if (antiguedad === 0) return 'Hoy';
+        if (antiguedad === 1) return 'Ayer';
+        return `${antiguedad} días`;
+    };
+
+    const getIcon = (antiguedad, archivo) => {
+        if (archivo === '(vacia)' || archivo === '(sin acceso)' || archivo === '(error)') return <AlertTriangle size={14} />;
+        if (antiguedad === null) return <Clock size={14} />;
+        if (antiguedad <= 2) return <CheckCircle size={14} />;
+        if (antiguedad <= 4) return <Clock size={14} />;
+        return <AlertTriangle size={14} />;
+    };
+
+    const getColor = (antiguedad, archivo) => {
+        if (archivo === '(vacia)' || archivo === '(sin acceso)' || archivo === '(error)') return 'var(--text-muted)';
         if (antiguedad === null) return 'var(--text-muted)';
         if (antiguedad <= 2) return 'var(--success)';
         if (antiguedad <= 4) return '#f59e0b';
         return 'var(--danger)';
     };
 
-    const getBg = (antiguedad) => {
-        if (antiguedad === null) return 'rgba(255,255,255,0.03)';
+    const getBg = (antiguedad, archivo) => {
+        if (archivo === '(vacia)' || archivo === '(sin acceso)' || archivo === '(error)') return 'rgba(255,255,255,0.03)';
+        if (antiguedad === null) return 'rgba(255,255,255,0.05)';
         if (antiguedad <= 2) return 'rgba(34,197,94,0.12)';
         if (antiguedad <= 4) return 'rgba(245,158,11,0.12)';
         return 'rgba(239,68,68,0.12)';
-    };
-
-    const getLabel = (antiguedad) => {
-        if (antiguedad === null) return 'Sin archivos';
-        if (antiguedad === 0) return 'Hoy';
-        if (antiguedad === 1) return 'Ayer';
-        return `${antiguedad} dias`;
-    };
-
-    const getIcon = (antiguedad) => {
-        if (antiguedad === null) return <AlertTriangle size={14} />;
-        if (antiguedad <= 2) return <CheckCircle size={14} />;
-        if (antiguedad <= 4) return <Clock size={14} />;
-        return <AlertTriangle size={14} />;
     };
 
     const fmtFecha = (val) => {
@@ -76,9 +91,29 @@ const BackupDBCheck = () => {
                         <p style={{ color: 'var(--text-muted)' }}>Estado de los backups diarios de base de datos en OneDrive.</p>
                     </div>
                 </div>
-                <button onClick={fetchData} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <RefreshCw size={18} /> Actualizar
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                        onClick={() => fetchData(false)}
+                        className="btn-primary"
+                        disabled={loading}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                    >
+                        <RefreshCw size={18} className={loading ? 'spin' : ''} /> Actualizar
+                    </button>
+                    <button
+                        onClick={() => fetchData(true)}
+                        className="btn-primary"
+                        disabled={loading}
+                        style={{
+                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                            background: 'rgba(255,255,255,0.08)',
+                            border: '1px solid rgba(255,255,255,0.15)'
+                        }}
+                        title="Fuerza una recarga directa desde OneDrive, ignorando el caché"
+                    >
+                        <RefreshCw size={18} /> Forzar Recarga
+                    </button>
+                </div>
             </div>
 
             <div className="card glass" style={{ padding: 0, overflow: 'hidden' }}>
@@ -97,7 +132,9 @@ const BackupDBCheck = () => {
                                 <tr>
                                     <td colSpan={4} style={{ padding: '4rem', textAlign: 'center' }}>
                                         <div className="spinner" style={{ margin: '0 auto' }}></div>
-                                        <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>Consultando OneDrive...</p>
+                                        <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>
+                                            Consultando OneDrive... {elapsed > 3 && <span>({elapsed}s)</span>}
+                                        </p>
                                     </td>
                                 </tr>
                             ) : sortedData.length > 0 ? (
@@ -127,12 +164,12 @@ const BackupDBCheck = () => {
                                                 borderRadius: '20px',
                                                 fontSize: '0.75rem',
                                                 fontWeight: 600,
-                                                color: getColor(item.antiguedad),
-                                                background: getBg(item.antiguedad),
-                                                border: `1px solid ${getColor(item.antiguedad)}30`
+                                                color: getColor(item.antiguedad, item.archivo),
+                                                background: getBg(item.antiguedad, item.archivo),
+                                                border: `1px solid ${getColor(item.antiguedad, item.archivo)}30`
                                             }}>
-                                                {getIcon(item.antiguedad)}
-                                                {getLabel(item.antiguedad)}
+                                                {getIcon(item.antiguedad, item.archivo)}
+                                                {getLabel(item.antiguedad, item.archivo)}
                                             </span>
                                         </td>
                                     </tr>

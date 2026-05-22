@@ -321,8 +321,8 @@ export default function DashboardLayout() {
                         {!isCollapsed && <span>Cerrar Sesión</span>}
                     </button>
                     {!isCollapsed && (
-                        <div style={{ padding: '0.6rem 0.5rem', textAlign: 'center', fontSize: '0.7rem', fontWeight: 500, color: 'var(--primary)', opacity: 0.7 }}>
-                            v{pkg.version}
+                        <div style={{ padding: '0.1rem 0.1rem', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: 'var(--primary)', opacity: 0.9 }}>
+                            version: {pkg.version}
                         </div>
                     )}
                 </div>
