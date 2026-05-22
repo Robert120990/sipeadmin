@@ -170,6 +170,7 @@ const ChequesContado = () => {
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Fecha</th>
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Proveedor</th>
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Nombre</th>
+                                <th style={{ padding: '0.75rem 0.6rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'center', width: '30px' }}>D</th>
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Monto</th>
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Entrega</th>
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>No. CCF</th>
@@ -180,7 +181,7 @@ const ChequesContado = () => {
                         <tbody>
                             {loading ? (
                                 <tr>
-                                    <td colSpan={8} style={{ padding: '4rem', textAlign: 'center' }}>
+                                    <td colSpan={9} style={{ padding: '4rem', textAlign: 'center' }}>
                                         <div className="spinner" style={{ margin: '0 auto' }}></div>
                                         <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>Consultando solicitudes...</p>
                                     </td>
@@ -191,6 +192,7 @@ const ChequesContado = () => {
                                         <td style={{ padding: '0.65rem 1rem' }}>{fmtFecha(sol.fecha)}</td>
                                         <td style={{ padding: '0.65rem 1rem' }}>{sol.cod_proveedor}</td>
                                         <td style={{ padding: '0.65rem 1rem' }}>{sol.nombre}</td>
+                                        <td style={{ padding: '0.65rem 0.6rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 600, color: 'var(--primary)' }}>{(sol.tipo_destino || '')?.charAt(0) || '-'}</td>
                                         <td style={{ padding: '0.65rem 1rem', textAlign: 'right', fontWeight: 'bold' }}>{fmtMonto(sol.monto)}</td>
                                         <td style={{ padding: '0.65rem 1rem', fontSize: '0.8rem' }}>{fmtFecha(sol.fecha_entrega)}</td>
                                         <td style={{ padding: '0.65rem 1rem' }}>{sol.num_ccf}</td>
@@ -214,7 +216,7 @@ const ChequesContado = () => {
                                 ))
                             ) : (
                                 <tr>
-                                    <td colSpan={8} style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                    <td colSpan={9} style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                                         <Search size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
                                         <p>No se encontraron solicitudes.</p>
                                     </td>
