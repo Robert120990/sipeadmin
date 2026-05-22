@@ -103,13 +103,17 @@ const BackupDBCheck = () => {
                             ) : sortedData.length > 0 ? (
                                 sortedData.map((item, idx) => (
                                     <tr key={idx} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                        <td style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                            <Folder size={16} color="var(--primary)" />
-                                            <span style={{ fontWeight: 500 }}>{item.carpeta}</span>
+                                        <td style={{ padding: '0.75rem 1rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                <Folder size={16} color="var(--primary)" />
+                                                <span style={{ fontWeight: 500 }}>{item.carpeta}</span>
+                                            </div>
                                         </td>
-                                        <td style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                            <File size={14} color="var(--text-muted)" />
-                                            <span style={{ fontSize: '0.8rem' }}>{item.archivo}</span>
+                                        <td style={{ padding: '0.75rem 1rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                <File size={14} color="var(--text-muted)" />
+                                                <span style={{ fontSize: '0.8rem' }}>{item.archivo}</span>
+                                            </div>
                                         </td>
                                         <td style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                             {fmtFecha(item.fecha)}
