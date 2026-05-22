@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, X, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, AlertTriangle, Ban, Clock, DollarSign, User } from 'lucide-react';
@@ -38,6 +38,7 @@ export default function Cheques() {
     });
 
     const [editingCheque, setEditingCheque] = useState(null);
+    const originalValues = useRef({ valor: '', a_nombre: '', concepto: '' });
     const { addToast } = useToast();
 
     useEffect(() => {
@@ -451,7 +452,7 @@ export default function Cheques() {
                                     <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Valor ($)</label>
                                     <div style={{ position: 'relative' }}>
                                         <span style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--primary)', fontWeight: 'bold', fontSize: '1.2rem' }}>$</span>
-                                        <input type="number" step="0.01" placeholder="0.00" style={{ paddingLeft: '2.5rem', fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--primary)' }} value={formData.valor} onChange={e => setFormData({...formData, valor: e.target.value})} onFocus={(e) => e.target.select()} required />
+                                        <input type="number" step="0.01" placeholder="0.00" style={{ paddingLeft: '2.5rem', fontSize: '1.25rem', fontWeight: 'bold', color: formData.cheque_anulado ? 'rgba(255,255,255,0.3)' : 'var(--primary)', textDecoration: formData.cheque_anulado ? 'line-through' : 'none' }} value={formData.valor} onChange={e => setFormData({...formData, valor: e.target.value})} onFocus={(e) => e.target.select()} disabled={formData.cheque_anulado} />
                                     </div>
                                 </div>
                             </div>
@@ -460,29 +461,29 @@ export default function Cheques() {
                                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>A Nombre</label>
                                 <div style={{ position: 'relative' }}>
                                     <User size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                    <input type="text" style={{ paddingLeft: '3rem' }} placeholder="Beneficiario del cheque" value={formData.a_nombre} onChange={e => setFormData({...formData, a_nombre: e.target.value})} required />
+                                    <input type="text" style={{ paddingLeft: '3rem', color: formData.cheque_anulado ? 'var(--danger)' : 'var(--text)' }} placeholder="Beneficiario del cheque" value={formData.a_nombre} onChange={e => setFormData({...formData, a_nombre: e.target.value})} disabled={formData.cheque_anulado} />
                                 </div>
                             </div>
 
                             <div>
                                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Concepto</label>
-                                <input type="text" placeholder="Descripción del cheque..." style={{ width: '100%', textTransform: 'uppercase' }} value={formData.concepto} onChange={e => setFormData({...formData, concepto: e.target.value.toUpperCase()})} required />
+                                <input type="text" placeholder="Descripción del cheque..." style={{ width: '100%', textTransform: 'uppercase', color: formData.cheque_anulado ? 'var(--danger)' : 'var(--text)' }} value={formData.concepto} onChange={e => setFormData({...formData, concepto: e.target.value.toUpperCase()})} disabled={formData.cheque_anulado} />
                             </div>
 
                             <div>
                                 <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Estado del Cheque</label>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '1rem' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <ToggleSwitch checked={formData.cheque_anulado} onChange={v => setFormData({...formData, cheque_anulado: v})} />
+                                        <ToggleSwitch checked={formData.cheque_anulado} onChange={v => {
+                                            setFormData(prev => {
+                                                if (v) {
+                                                    originalValues.current = { valor: prev.valor, a_nombre: prev.a_nombre, concepto: prev.concepto };
+                                                    return { ...prev, cheque_anulado: true, valor: '0', a_nombre: '***** CHEQUE ANULADO *****', concepto: '***** CHEQUE ANULADO *****' };
+                                                }
+                                                return { ...prev, cheque_anulado: false, valor: originalValues.current.valor, a_nombre: originalValues.current.a_nombre, concepto: originalValues.current.concepto };
+                                            });
+                                        }} />
                                         <span style={{ fontSize: '0.8rem', color: formData.cheque_anulado ? '#ef4444' : 'var(--text-muted)' }}>Anulado</span>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <ToggleSwitch checked={formData.es_reservado} onChange={v => setFormData({...formData, es_reservado: v})} />
-                                        <span style={{ fontSize: '0.8rem', color: formData.es_reservado ? '#f59e0b' : 'var(--text-muted)' }}>Reservado</span>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <ToggleSwitch checked={formData.es_pago_contado} onChange={v => setFormData({...formData, es_pago_contado: v})} />
-                                        <span style={{ fontSize: '0.8rem', color: formData.es_pago_contado ? '#3b82f6' : 'var(--text-muted)' }}>Pago Contado</span>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                         <ToggleSwitch checked={formData.fue_noemitido} onChange={v => setFormData({...formData, fue_noemitido: v})} />
