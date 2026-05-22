@@ -27,3 +27,11 @@ Frontend proxies to `localhost:5001` in dev; no env vars required.
 - Backend has no test infrastructure (dummy `npm test` exits with error)
 - Frontend uses ESLint; backend has no lint or typecheck
 - Socket.io runs on same port as Express (not a separate port)
+
+## Versioning
+- Version number is stored in `frontend/package.json` (`version` field)
+- Displayed in sidebar as `vX.Y.Z`, injected at build time via Vite `define`
+- **Before every push to GitHub**, run: `cd frontend && npm run bump`
+- Then include the bumped `frontend/package.json` in the commit
+- This ensures production (Vercel) and local show the same version
+- Root-level `npm run deploy` automates bump + commit + push
