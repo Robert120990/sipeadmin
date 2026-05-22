@@ -43,6 +43,7 @@ const operacionesRoutes = require('./routes/operaciones');
 const consultasRoutes = require('./routes/consultas');
 const configRoutes = require('./routes/config');
 const chequesRoutes = require('./routes/cheques');
+const onedriveRoutes = require('./routes/onedrive');
 const aiRoutes = require('./routes/ai');
 
 // Mount Routes
@@ -53,6 +54,7 @@ app.use('/api', operacionesRoutes); // Dashboard, Operaciones
 app.use('/api', consultasRoutes); // Ventas, Consultas
 app.use('/api', configRoutes);
 app.use('/api/cheques', chequesRoutes);
+app.use('/api', onedriveRoutes);
 app.use('/api/ai', aiRoutes);
 
 // Health Check

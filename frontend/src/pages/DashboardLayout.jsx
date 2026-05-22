@@ -25,6 +25,7 @@ import ConsultasCumpleanos from './ConsultasCumpleanos';
 import MovimientosBancarios from './MovimientosBancarios';
 import Cheques from './Cheques';
 import ChequesContado from './ChequesContado';
+import BackupDBCheck from './BackupDBCheck';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -75,6 +76,7 @@ export default function DashboardLayout() {
         '/dashboard/bancos/movimientos': <MovimientosBancarios />,
         '/dashboard/bancos/cheques': <Cheques />,
         '/dashboard/bancos/cheques-contado': <ChequesContado />,
+        '/dashboard/consultas/otras/backup-db-check': <BackupDBCheck />,
         '/dashboard/settings/database': <ConfiguracionDb />,
         '/dashboard/settings/accounting': <ConfiguracionContabilidad />,
         '/dashboard/settings/email': <ConfiguracionEmail />,

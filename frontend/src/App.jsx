@@ -24,6 +24,7 @@ import ConsultasPreciosCompetencia from './pages/ConsultasPreciosCompetencia';
 import MovimientosBancarios from './pages/MovimientosBancarios';
 import Cheques from './pages/Cheques';
 import ChequesContado from './pages/ChequesContado';
+import BackupDBCheck from './pages/BackupDBCheck';
 import { ToastProvider } from './components/Toast';
 
 const ProtectedRoute = ({ children }) => {
@@ -69,6 +70,7 @@ function App() {
                         <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />
                         <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
                         <Route path="consultas/otras/cumpleanos" element={<PermissionRoute pathKey="/dashboard/consultas/otras/cumpleanos"><ConsultasCumpleanos /></PermissionRoute>} />
+                        <Route path="consultas/otras/backup-db-check" element={<PermissionRoute pathKey="/dashboard/consultas/otras/backup-db-check"><BackupDBCheck /></PermissionRoute>} />
                         <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />
                         <Route path="bancos/movimientos" element={<PermissionRoute pathKey="/dashboard/bancos/movimientos"><MovimientosBancarios /></PermissionRoute>} />
                         <Route path="bancos/cheques" element={<PermissionRoute pathKey="/dashboard/bancos/cheques"><Cheques /></PermissionRoute>} />

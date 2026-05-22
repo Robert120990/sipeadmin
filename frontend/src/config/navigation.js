@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, MoreHorizontal, CreditCard } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, MoreHorizontal, CreditCard, HardDrive } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -46,6 +46,7 @@ export const consultasBancos = [
 
 export const consultasOtras = [
     { name: 'Cumpleañeros', path: '/dashboard/consultas/otras/cumpleanos', icon: FileText },
+    { name: 'Backup DB Check', path: '/dashboard/consultas/otras/backup-db-check', icon: HardDrive },
 ];
 
 export const securityItems = [
