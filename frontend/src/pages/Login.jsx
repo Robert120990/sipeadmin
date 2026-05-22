@@ -30,7 +30,8 @@ export default function Login() {
         } catch (err) {
             const data = err.response?.data;
             if (data && data.error) {
-                setError(`${data.message}: ${data.error} (${data.detail || ''})`);
+                const errMsg = typeof data.error === 'object' ? (data.error.message || JSON.stringify(data.error)) : data.error;
+                setError(`${data.message || ''}: ${errMsg}${data.detail ? ' (' + data.detail + ')' : ''}`);
             } else {
                 setError(data?.message || err.message || 'Error de conexión');
             }

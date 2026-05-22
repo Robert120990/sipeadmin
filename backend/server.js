@@ -60,6 +60,12 @@ app.use('/api/ai', aiRoutes);
 // Health Check
 app.get('/api/debug-ping', (req, res) => res.json({ message: 'pong' }));
 
+// Global error handler
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    res.status(err.status || 500).json({ message: err.message || 'Error interno del servidor' });
+});
+
 // Initialize DB and Start Server
 initDB().then(() => {
     server.listen(PORT, () => {
