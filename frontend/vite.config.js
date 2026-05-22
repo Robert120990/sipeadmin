@@ -1,21 +1,17 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { execSync } from 'child_process'
+import { readFileSync } from 'fs'
+import { resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
 
-function getVersion() {
-  try {
-    const hash = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
-    return hash;
-  } catch {
-    return process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev';
-  }
-}
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8'));
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(getVersion())
+    __APP_VERSION__: JSON.stringify(pkg.version)
   },
   server: {
     proxy: {
