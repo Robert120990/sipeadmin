@@ -4,11 +4,10 @@ import { execSync } from 'child_process'
 
 function getVersion() {
   try {
-    const count = execSync('git rev-list --count HEAD', { encoding: 'utf8' }).trim();
     const hash = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
-    return `v${count} (${hash})`;
+    return hash;
   } catch {
-    return 'dev';
+    return process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev';
   }
 }
 
