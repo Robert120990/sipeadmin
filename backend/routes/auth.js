@@ -29,7 +29,11 @@ router.post('/login', async (req, res) => {
         res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre, role: user.role_name, permissions } });
     } catch (error) {
         console.error('LOGIN ERROR:', error);
-        res.status(500).json({ message: 'Server error', error: error.message });
+        const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND' || error.code === 'ER_ACCESS_DENIED';
+        const detail = isConnError
+            ? 'No se pudo conectar a la base de datos. Verifica las credenciales en Vercel (DB_HOST, DB_USER, DB_PASSWORD, DB_NAME).'
+            : error.message;
+        res.status(500).json({ message: detail, error: error.message });
     }
 });
 
