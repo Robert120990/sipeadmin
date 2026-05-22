@@ -7,17 +7,21 @@ const getShareLink = () => process.env.ONEDRIVE_SHARE_LINK || '';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-const cleanName = (text) => {
-    return (text || '').replace(/[\uE000-\uF8FF]/g, '').replace(/Compartido/g, '').trim();
-};
-
-const parseDate = (str) => {
+const parseRelativeDate = (str) => {
     if (!str) return null;
-    const parts = str.split('/');
-    if (parts.length === 3) {
-        return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
-    }
-    return new Date(str);
+    const lower = str.toLowerCase().replace('í', 'i').replace('á', 'a').replace('é', 'e').replace('ó', 'o');
+    const now = new Date();
+    const match = lower.match(/hace\s+(\d+)\s+(hora|minuto|dia|segundo|semana|mes)/);
+    if (!match) return null;
+    const num = parseInt(match[1]);
+    const unit = match[2];
+    if (unit.startsWith('minuto')) now.setMinutes(now.getMinutes() - num);
+    else if (unit.startsWith('hora')) now.setHours(now.getHours() - num);
+    else if (unit.startsWith('dia')) now.setDate(now.getDate() - num);
+    else if (unit.startsWith('semana')) now.setDate(now.getDate() - num * 7);
+    else if (unit.startsWith('mes')) now.setMonth(now.getMonth() - num);
+    else if (unit.startsWith('segundo')) now.setSeconds(now.getSeconds() - num);
+    return now;
 };
 
 const scrapeItems = async (page) => {
@@ -26,17 +30,35 @@ const scrapeItems = async (page) => {
         document.querySelectorAll('[role="row"]').forEach((row) => {
             const cells = row.querySelectorAll('[role="gridcell"]');
             if (cells.length < 4) return;
-            const iconCellText = cells[1]?.textContent?.trim() || '';
-            const isFolder = iconCellText.startsWith('\uE716') || iconCellText.includes('folder');
+            const iconCell = cells[1]?.textContent?.trim() || '';
+            const isFolder = iconCell.includes('\uE716');
             const rawName = cells[2]?.innerText?.trim() || '';
             const date = cells[3]?.innerText?.trim() || '';
             const size = cells[4]?.innerText?.trim() || '';
-            if (rawName && rawName !== 'Nombre' && rawName.length > 1) {
+            if (rawName && rawName.length > 1 && rawName !== 'Nombre') {
                 result.push({ name: rawName, date, size, isFolder });
             }
         });
         return result;
     });
+};
+
+const navigateIntoFolder = async (page, folderName) => {
+    const cells = await page.$$('[role="gridcell"]');
+    for (const cell of cells) {
+        const text = await cell.evaluate(el => el.innerText?.trim()?.substring(0, 80));
+        if (text.startsWith(folderName)) {
+            const box = await cell.boundingBox();
+            if (box) {
+                await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+                await sleep(300);
+                await page.keyboard.press('Enter');
+                await sleep(5000);
+                return true;
+            }
+        }
+    }
+    return false;
 };
 
 router.get('/onedrive/estado', authenticateToken, async (req, res) => {
@@ -59,55 +81,45 @@ router.get('/onedrive/estado', authenticateToken, async (req, res) => {
 
         const rootItems = await scrapeItems(page);
         const folders = rootItems.filter(i => i.isFolder);
-        console.log('Folders found:', folders.length);
+        console.log('Folders:', folders.length);
 
         const carpetas = [];
 
         for (const folder of folders) {
             try {
-                const rows = await page.$$('[role="row"]');
-                let targetRow = null;
-                for (const row of rows) {
-                    const text = await row.evaluate(el => el.innerText);
-                    if (text.includes(folder.name)) {
-                        targetRow = row;
-                        break;
-                    }
-                }
+                const cleanFolderName = folder.name.replace(/\n/g, ' ').trim();
+                const navigated = await navigateIntoFolder(page, cleanFolderName);
 
-                if (targetRow) {
-                    await targetRow.click({ clickCount: 2 });
-                    await sleep(5000);
-
+                if (navigated) {
                     const subItems = await scrapeItems(page);
                     const files = subItems.filter(i => !i.isFolder);
 
                     if (files.length > 0) {
                         files.sort((a, b) => {
-                            const da = parseDate(a.date);
-                            const db = parseDate(b.date);
+                            const da = parseRelativeDate(a.date);
+                            const db = parseRelativeDate(b.date);
                             return (db?.getTime() || 0) - (da?.getTime() || 0);
                         });
                         const latest = files[0];
-                        const fecha = parseDate(latest.date);
+                        const fecha = parseRelativeDate(latest.date);
                         const antiguedad = fecha ? Math.floor((Date.now() - fecha.getTime()) / 86400000) : null;
                         carpetas.push({
-                            carpeta: folder.name,
-                            archivo: latest.name,
+                            carpeta: cleanFolderName,
+                            archivo: latest.name.replace(/[\uE000-\uF8FF]/g, '').trim(),
                             fecha: fecha ? fecha.toISOString() : null,
                             antiguedad
                         });
                     } else {
-                        carpetas.push({ carpeta: folder.name, archivo: '(vacia)', fecha: null, antiguedad: null });
+                        carpetas.push({ carpeta: cleanFolderName, archivo: '(vacia)', fecha: null, antiguedad: null });
                     }
 
                     await page.goBack();
                     await sleep(3000);
                 } else {
-                    carpetas.push({ carpeta: folder.name, archivo: '(sin acceso)', fecha: null, antiguedad: null });
+                    carpetas.push({ carpeta: cleanFolderName, archivo: '(sin acceso)', fecha: null, antiguedad: null });
                 }
             } catch (e) {
-                console.log('Error processing folder', folder.name, ':', e.message);
+                console.log('Error in folder', folder.name, ':', e.message);
                 carpetas.push({ carpeta: folder.name, archivo: '(error)', fecha: null, antiguedad: null });
                 try { await page.goBack(); await sleep(2000); } catch {}
             }
