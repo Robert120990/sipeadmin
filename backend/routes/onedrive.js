@@ -13,9 +13,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // Lazy puppeteer — only loaded when the route is actually called
 let _puppeteer = null;
-const getPuppeteer = () => {
-    if (!_puppeteer) _puppeteer = require('puppeteer');
-    return _puppeteer;
+const getPuppeteer = async () => {
+    if (!_puppeteer) _puppeteer = await import('puppeteer');
+    return _puppeteer.default || _puppeteer;
 };
 
 // ── Date parsing (robust) ────────────────────────────────────────────────────
@@ -270,7 +270,8 @@ router.get('/onedrive/estado', authenticateToken, async (req, res) => {
 
         console.time('[OneDrive] Total scrape time');
 
-        browser = await getPuppeteer().launch({
+        const puppeteer = await getPuppeteer();
+        browser = await puppeteer.launch({
             headless: 'new',
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
                 '--disable-gpu', '--disable-extensions', '--disable-images']
