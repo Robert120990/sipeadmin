@@ -17,8 +17,8 @@ const getPuppeteer = async () => {
     if (!_puppeteer) {
         if (process.env.VERCEL) {
             const chromium = require('@sparticuz/chromium');
-            const puppeteer = require('puppeteer-core');
-            _puppeteer = { puppeteer, chromium };
+            const puppeteerCore = await import('puppeteer-core');
+            _puppeteer = { puppeteer: puppeteerCore.default || puppeteerCore, chromium };
         } else {
             _puppeteer = await import('puppeteer');
             _puppeteer = _puppeteer.default || _puppeteer;
