@@ -28,6 +28,7 @@ import BackupDBCheck from './pages/BackupDBCheck';
 import Bitacora from './pages/Bitacora';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
+import { ThemeProvider } from './components/ThemeProvider';
 
 const ProtectedRoute = ({ children }) => {
     const token = localStorage.getItem('token');
@@ -44,9 +45,10 @@ const PermissionRoute = ({ pathKey, children }) => {
 
 function App() {
     return (
-        <ToastProvider>
-            <ConfirmProvider>
-                <BrowserRouter>
+        <ThemeProvider>
+            <ToastProvider>
+                <ConfirmProvider>
+                    <BrowserRouter>
                 <Routes>
                     <Route path="/login" element={<Login />} />
                     <Route
@@ -86,9 +88,10 @@ function App() {
                     </Route>
                     <Route path="*" element={<Navigate to="/login" replace />} />
                 </Routes>
-            </BrowserRouter>
-            </ConfirmProvider>
-        </ToastProvider>
+                    </BrowserRouter>
+                </ConfirmProvider>
+            </ToastProvider>
+        </ThemeProvider>
     );
 }
 

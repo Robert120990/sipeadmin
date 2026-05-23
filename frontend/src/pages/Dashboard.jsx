@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { Calendar, AlertCircle, ArrowRight, DollarSign, Clock } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Calendar, AlertCircle, ArrowRight, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import CalendarGrid from '../components/CalendarGrid';
 
 const Dashboard = () => {
     const [weeklyPayments, setWeeklyPayments] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [monthPayments, setMonthPayments] = useState([]);
+    const [calendarLoading, setCalendarLoading] = useState(true);
+    const [calendarMonth, setCalendarMonth] = useState(new Date());
     const navigate = useNavigate();
-
-    useEffect(() => {
-        fetchDashboardData();
-    }, []);
 
     const fetchDashboardData = async () => {
         try {
@@ -24,6 +24,44 @@ const Dashboard = () => {
             setLoading(false);
         }
     };
+
+    const fetchMonthData = async () => {
+        setCalendarLoading(true);
+        try {
+            const year = calendarMonth.getFullYear();
+            const month = calendarMonth.getMonth();
+            const desde = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+            const hasta = `${year}-${String(month + 1).padStart(2, '0')}-${new Date(year, month + 1, 0).getDate()}`;
+            const { data } = await api.get(`/operaciones/recordatorios?desde=${desde}&hasta=${hasta}&estado=P`);
+            setMonthPayments(data || []);
+        } catch (error) {
+            console.error('Error fetching month payments:', error);
+            setMonthPayments([]);
+        } finally {
+            setCalendarLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchDashboardData();
+    }, []);
+
+    useEffect(() => {
+        fetchMonthData();
+    }, [calendarMonth]);
+
+    const paymentsByDay = useMemo(() => {
+        const byDay = {};
+        monthPayments.forEach(p => {
+            if (!p.vence) return;
+            const d = new Date(p.vence);
+            if (isNaN(d.getTime())) return;
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            if (!byDay[key]) byDay[key] = [];
+            byDay[key].push(p);
+        });
+        return byDay;
+    }, [monthPayments]);
 
     const formatDate = (dateStr) => {
         if (!dateStr) return '';
@@ -129,8 +167,8 @@ const Dashboard = () => {
                     ) : weeklyPayments.length > 0 ? (
                         <div style={{ flex: 1, overflowY: 'auto', paddingRight: '0.4rem' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1E293B', zIndex: 10 }}>
-                                    <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                                <thead style={{ position: 'sticky', top: 0, backgroundColor: 'var(--card-bg)', zIndex: 10 }}>
+                                    <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                                         <th style={{ padding: '0.5rem 0', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Proveedor / Ubicación</th>
                                         <th style={{ padding: '0.5rem 0', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Fecha</th>
                                         <th style={{ padding: '0.5rem 0', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Monto</th>
@@ -141,7 +179,7 @@ const Dashboard = () => {
                                         const status = getStatusInfo(p.vence);
                                         return (
                                             <tr key={idx} style={{ 
-                                                borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                                borderBottom: '1px solid var(--border)',
                                                 backgroundColor: status.bg
                                             }}>
                                                 <td style={{ padding: '0.6rem 0.5rem' }}>
@@ -180,6 +218,27 @@ const Dashboard = () => {
                             <AlertCircle size={48} opacity={0.3} />
                             <p>No hay pagos programados para esta semana.</p>
                         </div>
+                    )}
+                </div>
+
+                {/* CARD: CALENDARIO MENSUAL */}
+                <div className="card glass" style={{ 
+                    padding: '1.25rem', 
+                    display: 'flex', 
+                    flexDirection: 'column',
+                    maxWidth: '420px',
+                    width: '100%'
+                }}>
+                    {calendarLoading ? (
+                        <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '250px' }}>
+                            <div className="spinner"></div>
+                        </div>
+                    ) : (
+                        <CalendarGrid
+                            paymentsByDay={paymentsByDay}
+                            currentMonth={calendarMonth}
+                            onMonthChange={setCalendarMonth}
+                        />
                     )}
                 </div>
             </div>

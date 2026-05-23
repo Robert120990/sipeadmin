@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X } from 'lucide-react';
+import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon } from 'lucide-react';
+import { useTheme } from '../components/ThemeProvider';
 import { catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering
@@ -32,6 +33,7 @@ import pkg from '../../package.json';
 export default function DashboardLayout() {
     const navigate = useNavigate();
     const location = useLocation();
+    const { theme, toggleTheme } = useTheme();
     
     // UI State
     const [isCollapsed, setIsCollapsed] = useState(false);
@@ -182,14 +184,23 @@ export default function DashboardLayout() {
     return (
         <div className={`dashboard-layout ${isCollapsed ? 'collapsed' : ''}`}>
             <aside className="sidebar">
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'space-between', padding: '0.5rem 0', marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'space-between', padding: '0.5rem 0', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)' }}>
                     {!isCollapsed && <h2 style={{ margin: 0, fontSize: '1.25rem', overflow: 'hidden', whiteSpace: 'nowrap' }}>SIPE ADMIN</h2>}
-                    <button 
-                        onClick={() => setIsCollapsed(!isCollapsed)}
-                        style={{ background: 'rgba(255,255,255,0.05)', border: 'none', color: 'var(--text-muted)', borderRadius: '8px', cursor: 'pointer', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    >
-                        {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.25rem' }}>
+                        <button
+                            onClick={toggleTheme}
+                            style={{ background: 'var(--hover-bg)', border: 'none', color: 'var(--text-muted)', borderRadius: '8px', cursor: 'pointer', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
+                        >
+                            {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+                        </button>
+                        <button 
+                            onClick={() => setIsCollapsed(!isCollapsed)}
+                            style={{ background: 'var(--hover-bg)', border: 'none', color: 'var(--text-muted)', borderRadius: '8px', cursor: 'pointer', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                            {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+                        </button>
+                    </div>
                 </div>
 
                 <nav className="sidebar-nav" style={{ flex: 1, overflowY: 'auto' }}>
@@ -308,7 +319,7 @@ export default function DashboardLayout() {
                     )}
                 </nav>
 
-                <div style={{ marginTop: 'auto', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+                <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem', justifyContent: isCollapsed ? 'center' : 'flex-start' }}>
                         <UserCircle size={isCollapsed ? 28 : 32} color="var(--primary)" />
                         {!isCollapsed && (
