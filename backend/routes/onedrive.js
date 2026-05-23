@@ -14,8 +14,17 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // Lazy puppeteer — only loaded when the route is actually called
 let _puppeteer = null;
 const getPuppeteer = async () => {
-    if (!_puppeteer) _puppeteer = await import('puppeteer');
-    return _puppeteer.default || _puppeteer;
+    if (!_puppeteer) {
+        if (process.env.VERCEL) {
+            const chromium = require('@sparticuz/chromium');
+            const puppeteer = require('puppeteer-core');
+            _puppeteer = { puppeteer, chromium };
+        } else {
+            _puppeteer = await import('puppeteer');
+            _puppeteer = _puppeteer.default || _puppeteer;
+        }
+    }
+    return _puppeteer;
 };
 
 // ── Date parsing (robust) ────────────────────────────────────────────────────
@@ -270,12 +279,19 @@ router.get('/onedrive/estado', authenticateToken, async (req, res) => {
 
         console.time('[OneDrive] Total scrape time');
 
-        const puppeteer = await getPuppeteer();
-        browser = await puppeteer.launch({
+        const pup = await getPuppeteer();
+        const launchOpts = {
             headless: 'new',
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
                 '--disable-gpu', '--disable-extensions', '--disable-images']
-        });
+        };
+        if (process.env.VERCEL) {
+            launchOpts.executablePath = await pup.chromium.executablePath();
+            launchOpts.args = [...launchOpts.args, ...pup.chromium.args];
+            browser = await pup.puppeteer.launch(launchOpts);
+        } else {
+            browser = await pup.launch(launchOpts);
+        }
         const page = await browser.newPage();
 
         // Block images and fonts to speed up loading

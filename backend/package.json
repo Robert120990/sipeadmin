@@ -14,6 +14,7 @@
   "type": "commonjs",
   "dependencies": {
     "@google/genai": "^1.46.0",
+    "@sparticuz/chromium": "^148.0.0",
     "axios": "^1.13.6",
     "axios-cookiejar-support": "^7.0.0",
     "bcryptjs": "^3.0.3",
@@ -24,6 +25,7 @@
     "mysql2": "^3.20.0",
     "nodemailer": "^8.0.3",
     "puppeteer": "^25.0.4",
+    "puppeteer-core": "^25.0.4",
     "socket.io": "^4.8.3",
     "tough-cookie": "^6.0.1"
   }
