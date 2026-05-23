@@ -35,16 +35,16 @@ const parseRelativeDate = (str) => {
         .replace(/[íáéóúñ]/g, (c) => ({ 'í': 'i', 'á': 'a', 'é': 'e', 'ó': 'o', 'ú': 'u', 'ñ': 'n' })[c] || c);
     const now = new Date();
 
-    // "Hace unos segundos" / "Hace un momento" / "Justo ahora"
-    if (/justo ahora|hace unos segundos|hace un momento|unos segundos/i.test(lower)) {
+    // "Hace unos segundos" / "Hace un momento" / "Justo ahora" / English equivalents
+    if (/justo ahora|hace unos segundos|hace un momento|unos segundos|just now|a few seconds ago|a moment ago/i.test(lower)) {
         return new Date(now.getTime() - 30000);
     }
 
-    // "Ayer"
-    if (lower === 'ayer') return new Date(now.getTime() - 86400000);
+    // "Ayer" / "Yesterday"
+    if (lower === 'ayer' || lower === 'yesterday') return new Date(now.getTime() - 86400000);
 
-    // "Hoy" 
-    if (lower === 'hoy') return new Date(now);
+    // "Hoy" / "Today"
+    if (lower === 'hoy' || lower === 'today') return new Date(now);
 
     // "Hace X unidad(es)" with number words and digits
     const wordNums = {
@@ -54,20 +54,22 @@ const parseRelativeDate = (str) => {
         once: 11, doce: 12
     };
 
-    const relMatch = lower.match(/hace\s+(\d+|[a-z]+)\s+(hora|minuto|dia|segundo|semana|mes|ano)/);
+    // Relative: "hace X unidad(es)" (Spanish) or "X unit(s) ago" (English)
+    const engUnits = { hour: 'hora', minute: 'minuto', day: 'dia', second: 'segundo', week: 'semana', month: 'mes', year: 'ano' };
+    const relMatch = lower.match(/(?:hace\s+(\d+|[a-z]+)\s+(hora|minuto|dia|segundo|semana|mes|ano)|(\d+|[a-z]+)\s+(hour|minute|day|second|week|month|year)s?\s+ago)/);
     if (relMatch) {
-        const rawNum = relMatch[1];
+        const rawNum = relMatch[1] || relMatch[3];
+        const unit = relMatch[2] || engUnits[relMatch[4]] || relMatch[4];
         const num = wordNums[rawNum] || parseInt(rawNum);
         if (isNaN(num)) return null;
-        const unit = relMatch[2];
         const d = new Date(now);
-        if (unit.startsWith('segundo')) d.setSeconds(d.getSeconds() - num);
-        else if (unit.startsWith('minuto')) d.setMinutes(d.getMinutes() - num);
-        else if (unit.startsWith('hora')) d.setHours(d.getHours() - num);
-        else if (unit.startsWith('dia')) d.setDate(d.getDate() - num);
-        else if (unit.startsWith('semana')) d.setDate(d.getDate() - num * 7);
-        else if (unit.startsWith('mes')) d.setMonth(d.getMonth() - num);
-        else if (unit.startsWith('ano')) d.setFullYear(d.getFullYear() - num);
+        if (unit.startsWith('segundo') || unit === 'second') d.setSeconds(d.getSeconds() - num);
+        else if (unit.startsWith('minuto') || unit === 'minute') d.setMinutes(d.getMinutes() - num);
+        else if (unit.startsWith('hora') || unit === 'hour') d.setHours(d.getHours() - num);
+        else if (unit.startsWith('dia') || unit === 'day') d.setDate(d.getDate() - num);
+        else if (unit.startsWith('semana') || unit === 'week') d.setDate(d.getDate() - num * 7);
+        else if (unit.startsWith('mes') || unit === 'month') d.setMonth(d.getMonth() - num);
+        else if (unit.startsWith('ano') || unit === 'year') d.setFullYear(d.getFullYear() - num);
         return d;
     }
 
@@ -84,15 +86,27 @@ const parseRelativeDate = (str) => {
     }
 
     // Date with month name in Spanish: "22 de may. de 2026", "22 may 2026"
+    // or English: "May 22, 2026", "May 22 2026"
     const months = {
         ene: 0, feb: 1, mar: 2, abr: 3, may: 4, jun: 5,
-        jul: 6, ago: 7, sep: 8, oct: 9, nov: 10, dic: 11
+        jul: 6, ago: 7, sep: 8, oct: 9, nov: 10, dic: 11,
+        jan: 0, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+        apr: 3
     };
     const spanishDate = lower.match(/(\d{1,2})\s+(?:de\s+)?([a-z]{3})\.?\s+(?:de\s+)?(\d{4})/);
     if (spanishDate) {
         const month = months[spanishDate[2]];
         if (month !== undefined) {
             return new Date(Number(spanishDate[3]), month, Number(spanishDate[1]));
+        }
+    }
+
+    // English: "May 22, 2026" or "May 22 2026"
+    const engDate = lower.match(/([a-z]{3})\s+(\d{1,2}),?\s+(\d{4})/);
+    if (engDate) {
+        const month = months[engDate[1]];
+        if (month !== undefined) {
+            return new Date(Number(engDate[3]), month, Number(engDate[2]));
         }
     }
 
@@ -306,6 +320,13 @@ router.get('/onedrive/estado', authenticateToken, async (req, res) => {
         });
 
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
+        await page.setExtraHTTPHeaders({ 'Accept-Language': 'es-MX,es;q=0.9,en;q=0.5' });
+
+        // Also set locale via page content
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'language', { get: () => 'es-MX' });
+            Object.defineProperty(navigator, 'languages', { get: () => ['es-MX', 'es', 'en'] });
+        });
 
         await page.goto(shareLink, { waitUntil: 'networkidle2', timeout: 30000 });
         await waitForRows(page, 10000);
