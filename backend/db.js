@@ -302,6 +302,23 @@ const initDB = async () => {
             );
         `);
 
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS bitacora_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT,
+                username VARCHAR(100),
+                accion VARCHAR(50) NOT NULL,
+                entidad VARCHAR(100) NOT NULL,
+                entidad_id VARCHAR(100),
+                detalles TEXT,
+                ip_address VARCHAR(45),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_creado (created_at),
+                INDEX idx_entidad (entidad),
+                INDEX idx_accion (accion)
+            );
+        `);
+
         // Seed initial data
         const [roles] = await pool.query('SELECT * FROM roles WHERE name = "Administrator"');
         if (roles.length === 0) {
@@ -316,7 +333,8 @@ const initDB = async () => {
             const permissionsList = [
                 ['manage_users', 'Can create, edit, and delete users'],
                 ['manage_roles', 'Can manage roles and permissions'],
-                ['view_dashboard', 'Can view the main dashboard']
+                ['view_dashboard', 'Can view the main dashboard'],
+                ['view_bitacora', 'Can view audit logs']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -326,6 +344,21 @@ const initDB = async () => {
             }
 
             console.log('Initial setup completed with "admin" user!');
+        }
+
+        // Ensure view_bitacora permission exists for Administrator role
+        try {
+            const [adminRole] = await pool.query('SELECT id FROM roles WHERE name = "Administrator"');
+            if (adminRole.length > 0) {
+                const adminRoleId = adminRole[0].id;
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', ['view_bitacora', 'Can view audit logs']);
+                const [[perm]] = await pool.query('SELECT id FROM permissions WHERE name = ?', ['view_bitacora']);
+                if (perm) {
+                    await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [adminRoleId, perm.id]);
+                }
+            }
+        } catch (e) {
+            if (e.code !== 'ER_DUP_ENTRY') console.error('Migration view_bitacora:', e.message);
         }
 
         return pool;

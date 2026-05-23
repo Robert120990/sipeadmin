@@ -28,6 +28,10 @@ app.use((req, res, next) => {
     next();
 });
 
+// Auto-logging middleware (before routes to capture all write operations)
+const { autoLogMiddleware } = require('./middleware/bitacora');
+app.use(autoLogMiddleware());
+
 io.on("connection", (socket) => {
     console.log(`Usuario conectado a Socket.io: ${socket.id}`);
     socket.on("disconnect", () => {
@@ -45,6 +49,7 @@ const configRoutes = require('./routes/config');
 const chequesRoutes = require('./routes/cheques');
 const onedriveRoutes = require('./routes/onedrive');
 const aiRoutes = require('./routes/ai');
+const bitacoraRoutes = require('./routes/bitacora');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
@@ -56,6 +61,7 @@ app.use('/api', configRoutes);
 app.use('/api/cheques', chequesRoutes);
 app.use('/api', onedriveRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api', bitacoraRoutes);
 
 // Health Check
 app.get('/api/debug-ping', (req, res) => res.json({ message: 'pong' }));

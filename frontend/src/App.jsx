@@ -25,6 +25,7 @@ import MovimientosBancarios from './pages/MovimientosBancarios';
 import Cheques from './pages/Cheques';
 import ChequesContado from './pages/ChequesContado';
 import BackupDBCheck from './pages/BackupDBCheck';
+import Bitacora from './pages/Bitacora';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
 
@@ -81,6 +82,7 @@ function App() {
                         <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />
                         <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />
                         <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />
+                        <Route path="bitacora" element={<PermissionRoute pathKey="/dashboard/bitacora"><Bitacora /></PermissionRoute>} />
                     </Route>
                     <Route path="*" element={<Navigate to="/login" replace />} />
                 </Routes>

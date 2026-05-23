@@ -28,6 +28,32 @@ Frontend proxies to `localhost:5001` in dev; no env vars required.
 - Frontend uses ESLint; backend has no lint or typecheck
 - Socket.io runs on same port as Express (not a separate port)
 
+## Bitácora (Audit Log)
+- **Every new CRUD route** must be registered in the audit log automatically via `autoLogMiddleware` in `backend/middleware/bitacora.js` (already active for all `POST/PUT/PATCH/DELETE`).
+- No route needs manual logging — the middleware captures method, entity, ID, user, IP, and request body automatically.
+- **Exception**: If a route does not use `authenticateToken`, `req.user` won't exist and the action won't be logged (this is intentional for public endpoints like `/login`).
+- **Frontend**: Every new page that needs restricted access must:
+  - Add its path to `securityItems` in `navigation.js` if it belongs to Seguridad
+  - Register in `componentRegistry` in `DashboardLayout.jsx`
+  - Add a `<Route>` in `App.jsx` with `<PermissionRoute>`
+- **New permissions** must be added to the seed in `backend/db.js` (the `permissionsList` array) and as an `INSERT IGNORE` migration so existing DBs also get the permission.
+
+## Frontend Conventions
+- **All destructive actions** (delete, deactivate, etc.) must use the custom confirmation dialog:
+  ```jsx
+  import { useConfirm } from '../components/ConfirmDialog';
+  import { useToast } from '../components/Toast';
+  
+  const { confirm } = useConfirm();
+  const { addToast } = useToast();
+  
+  // Always wrap destructive operations with confirm
+  if (!await confirm('¿Estás seguro de eliminar X?', { variant: 'danger' })) return;
+  ```
+  - Use `variant: 'danger'` for delete/deactivate, omit for other confirmations
+  - Use `useToast` for success/error feedback (`addToast('Mensaje', 'success' | 'error' | 'warning')`)
+  - Both `ConfirmProvider` and `ToastProvider` are already active in `App.jsx`
+
 ## Versioning
 - Version number is stored in `frontend/package.json` (`version` field)
 - Displayed in sidebar as `vX.Y.Z`, injected at build time via Vite `define`

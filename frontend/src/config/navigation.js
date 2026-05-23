@@ -52,6 +52,7 @@ export const consultasOtras = [
 export const securityItems = [
     { name: 'Usuarios', path: '/dashboard/users', icon: Users },
     { name: 'Permisos', path: '/dashboard/permissions', icon: Shield },
+    { name: 'Bitácora', path: '/dashboard/bitacora', icon: ClipboardList },
 ];
 
 export const configuracionMenu = [

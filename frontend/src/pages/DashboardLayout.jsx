@@ -26,6 +26,7 @@ import MovimientosBancarios from './MovimientosBancarios';
 import Cheques from './Cheques';
 import ChequesContado from './ChequesContado';
 import BackupDBCheck from './BackupDBCheck';
+import Bitacora from './Bitacora';
 import pkg from '../../package.json';
 
 export default function DashboardLayout() {
@@ -82,6 +83,7 @@ export default function DashboardLayout() {
         '/dashboard/settings/accounting': <ConfiguracionContabilidad />,
         '/dashboard/settings/email': <ConfiguracionEmail />,
         '/dashboard/permissions': <Permissions />,
+        '/dashboard/bitacora': <Bitacora />,
     };
 
     // Sync with URL location
