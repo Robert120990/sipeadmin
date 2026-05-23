@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import api from '../services/api';
 import { socket } from '../services/socket';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import { Container, Edit2, Trash2, X, Save, Plus, Minus } from 'lucide-react';
 
 export default function Tankers() {
@@ -13,6 +14,7 @@ export default function Tankers() {
     const [formData, setFormData] = useState({ code: '', carrier_id: '' });
     const [compartments, setCompartments] = useState([{ number: 1, separations: [{ capacity: '' }], capacity: 0 }]);
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
 
     useEffect(() => {
         fetchData();
@@ -129,7 +131,7 @@ export default function Tankers() {
     };
 
     const handleDelete = async (id) => {
-        if (window.confirm('¿Estás seguro de eliminar esta pipa?')) {
+        if (await confirm('¿Estás seguro de eliminar esta pipa?', { variant: 'danger' })) {
             try {
                 await api.delete(`/tankers/${id}`);
                 addToast('Pipa eliminada', 'success');

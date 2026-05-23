@@ -5,9 +5,11 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 export default function ControlRecordatorios() {
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
     const [recordatorios, setRecordatorios] = useState([]);
     const [ubicaciones, setUbicaciones] = useState([]);
 
@@ -193,7 +195,7 @@ export default function ControlRecordatorios() {
         try {
             const res = await api.get(`/operaciones/recordatorios/${vencimientoRec.id_recordatorio}`);
             if (res.data.pagados > 0) {
-                if(!window.confirm("Este Recordatorio ya posee pagos.\nSi Decide editar perderá todos los pagos. ¿Desea continuar?")) return;
+                if(!await confirm("Este Recordatorio ya posee pagos.\nSi Decide editar perderá todos los pagos. ¿Desea continuar?", { variant: 'warning', title: 'Advertencia' })) return;
             }
             
             const p = res.data.recordatorio;
@@ -268,7 +270,7 @@ export default function ControlRecordatorios() {
             addToast('Recordatorio Finalizado. No Puede Eliminar.', 'error');
             return;
         }
-        if (!window.confirm("¿Eliminar Recordatorio?")) return;
+        if (!await confirm("¿Eliminar Recordatorio?", { variant: 'danger' })) return;
         try {
             await api.delete(`/operaciones/recordatorios/vencimiento/${rec.id}`);
             addToast('Eliminado', 'success');

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import { Truck, Edit2, Trash2, X, Save } from 'lucide-react';
 
 export default function Carriers() {
@@ -10,6 +11,7 @@ export default function Carriers() {
     const [editingCarrier, setEditingCarrier] = useState(null);
     const [formData, setFormData] = useState({ code: '', description: '' });
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
 
     useEffect(() => {
         fetchData();
@@ -54,7 +56,7 @@ export default function Carriers() {
     };
 
     const handleDelete = async (id) => {
-        if (window.confirm('¿Estás seguro de eliminar este transportista?')) {
+        if (await confirm('¿Estás seguro de eliminar este transportista?', { variant: 'danger' })) {
             try {
                 await api.delete(`/carriers/${id}`);
                 addToast('Transportista eliminado', 'success');

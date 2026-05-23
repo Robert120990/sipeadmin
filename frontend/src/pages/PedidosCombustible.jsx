@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Truck, CheckCircle, Save, XCircle, Search, Calendar, CheckSquare, PlusSquare } from 'lucide-react';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import api from '../services/api';
 import { socket } from '../services/socket';
 
 export default function PedidosCombustible() {
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
     
     const fmtDateArray = (dStr) => {
         if (!dStr) return '';
@@ -350,7 +352,7 @@ export default function PedidosCombustible() {
     };
 
     const handleEliminarPedido = async (id) => {
-        if (!window.confirm("¿Anular Pedido?")) return;
+        if (!await confirm("¿Anular Pedido?", { variant: 'danger' })) return;
         try {
             await api.delete(`/operaciones/pedidos/anular/${id}`);
             addToast("Pedido Anulado", "success");

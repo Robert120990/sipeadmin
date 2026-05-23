@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Plus, Edit2, Trash2, Save, X, CheckSquare, Square } from 'lucide-react';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import api from '../services/api';
 import { allNavCategories } from '../config/navigation';
 
@@ -10,6 +11,7 @@ export default function Permissions() {
     const [selectedRole, setSelectedRole] = useState(null);
     const [isEditing, setIsEditing] = useState(false);
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
 
     const fetchRoles = async () => {
         try {
@@ -87,7 +89,7 @@ export default function Permissions() {
 
     const deleteRole = async (id, name) => {
         if (name === 'Administrator') return addToast('No puedes eliminar el rol principal', 'warning');
-        if (!window.confirm(`¿Estás seguro de eliminar el rol ${name}?`)) return;
+        if (!await confirm(`¿Estás seguro de eliminar el rol ${name}?`, { variant: 'danger' })) return;
         try {
             await api.delete(`/roles/${id}`);
             addToast('Rol eliminado', 'success');

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import { UserPlus, Edit2, Trash2, X, Save, AlertTriangle } from 'lucide-react';
 
 export default function Users() {
@@ -11,6 +12,7 @@ export default function Users() {
     const [editingUser, setEditingUser] = useState(null);
     const [formData, setFormData] = useState({ username: '', nombre: '', email: '', password: '', role_id: '', status: 'active' });
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
 
     useEffect(() => {
         fetchData();
@@ -70,7 +72,7 @@ export default function Users() {
     };
 
     const handleDelete = async (id) => {
-        if (window.confirm('¿Estás seguro de eliminar este usuario?')) {
+        if (await confirm('¿Estás seguro de eliminar este usuario?', { variant: 'danger' })) {
             try {
                 await api.delete(`/users/${id}`);
                 addToast('Usuario eliminado', 'success');

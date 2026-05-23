@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, X, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin } from 'lucide-react';
 
 export default function MovimientosBancarios() {
@@ -42,6 +43,7 @@ export default function MovimientosBancarios() {
     const [editingMovement, setEditingMovement] = useState(null);
 
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
 
     useEffect(() => {
         fetchInitialCatalogs();
@@ -175,7 +177,7 @@ export default function MovimientosBancarios() {
     };
 
     const handleDelete = async (id) => {
-        if (!window.confirm('¿Está seguro de eliminar este movimiento?')) return;
+        if (!await confirm('¿Está seguro de eliminar este movimiento?', { variant: 'danger' })) return;
         try {
             await api.delete(`/bancos/movimientos/${id}`);
             addToast('Movimiento eliminado', 'success');

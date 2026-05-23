@@ -26,6 +26,7 @@ import Cheques from './pages/Cheques';
 import ChequesContado from './pages/ChequesContado';
 import BackupDBCheck from './pages/BackupDBCheck';
 import { ToastProvider } from './components/Toast';
+import { ConfirmProvider } from './components/ConfirmDialog';
 
 const ProtectedRoute = ({ children }) => {
     const token = localStorage.getItem('token');
@@ -43,7 +44,8 @@ const PermissionRoute = ({ pathKey, children }) => {
 function App() {
     return (
         <ToastProvider>
-            <BrowserRouter>
+            <ConfirmProvider>
+                <BrowserRouter>
                 <Routes>
                     <Route path="/login" element={<Login />} />
                     <Route
@@ -83,6 +85,7 @@ function App() {
                     <Route path="*" element={<Navigate to="/login" replace />} />
                 </Routes>
             </BrowserRouter>
+            </ConfirmProvider>
         </ToastProvider>
     );
 }

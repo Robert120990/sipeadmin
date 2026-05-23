@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, X, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, AlertTriangle, Ban, Clock, DollarSign, User } from 'lucide-react';
 
 export default function Cheques() {
@@ -40,6 +41,7 @@ export default function Cheques() {
     const [editingCheque, setEditingCheque] = useState(null);
     const originalValues = useRef({ valor: '', a_nombre: '', concepto: '' });
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
 
     useEffect(() => {
         fetchInitialCatalogs();
@@ -151,7 +153,7 @@ export default function Cheques() {
     };
 
     const handleDelete = async (id) => {
-        if (!window.confirm('¿Está seguro de eliminar este cheque?')) return;
+        if (!await confirm('¿Está seguro de eliminar este cheque?', { variant: 'danger' })) return;
         try {
             await api.delete(`/cheques/${id}`);
             addToast('Cheque eliminado', 'success');
