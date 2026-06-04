@@ -5,6 +5,7 @@ import { BarChart3, FileSpreadsheet, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { todayStr } from '../utils/date';
 
 export default function Consultas({ type, title, description }) {
     const [data, setData] = useState([]);
@@ -34,7 +35,7 @@ export default function Consultas({ type, title, description }) {
         const worksheet = XLSX.utils.json_to_sheet(data);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "Reporte");
-        XLSX.writeFile(workbook, `${title.replace(/ /g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`);
+        XLSX.writeFile(workbook, `${title.replace(/ /g, '_')}_${todayStr()}.xlsx`);
         addToast('Archivo Excel descargado', 'success');
     };
 
@@ -69,7 +70,7 @@ export default function Consultas({ type, title, description }) {
             alternateRowStyles: { fillColor: [245, 245, 245] }
         });
 
-        doc.save(`${title.replace(/ /g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+        doc.save(`${title.replace(/ /g, '_')}_${todayStr()}.pdf`);
         addToast('Documento PDF descargado', 'success');
     };
 

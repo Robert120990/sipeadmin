@@ -126,7 +126,7 @@ export default function Users() {
                                     </button>
                                 </td>
                                 <td style={{ color: 'var(--text-muted)' }}>
-                                    {new Date(user.created_at).toLocaleDateString()}
+                                    {user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}
                                 </td>
                                 <td>
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>

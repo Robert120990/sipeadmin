@@ -5,17 +5,16 @@ import { useToast } from '../components/Toast';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { todayStr } from '../utils/date';
 
 export default function Lubricantes() {
-    // Default dates: start of month and today
     const current = new Date();
     const firstDay = new Date(current.getFullYear(), current.getMonth(), 1);
     
-    // Formatting helper
-    const formatDate = (d) => d.toISOString().split('T')[0];
+    const fmtDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-    const [fechaInicial, setFechaInicial] = useState(formatDate(firstDay));
-    const [fechaFinal, setFechaFinal] = useState(formatDate(current));
+    const [fechaInicial, setFechaInicial] = useState(fmtDate(firstDay));
+    const [fechaFinal, setFechaFinal] = useState(todayStr());
 
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(false);

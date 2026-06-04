@@ -4,6 +4,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import api from '../services/api';
 import { socket } from '../services/socket';
+import { todayStr } from '../utils/date';
 
 export default function PedidosCombustible() {
     const { addToast } = useToast();
@@ -103,9 +104,14 @@ export default function PedidosCombustible() {
                 const resP = await api.get('/tankers');
                 setPipas(resP.data || []);
 
-                // Fecha del servidor - calcular fallback primero
-                let fechaHoy = new Date().toISOString().split('T')[0];
+                let fechaHoy = todayStr();
                 
+                const addDay = (str) => {
+                    const [y, m, d] = str.split('-').map(Number);
+                    const dt = new Date(y, m - 1, d + 1);
+                    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+                };
+
                 try {
                     const resFecha = await api.get('/operaciones/fecha-servidor-global');
                     const fa = resFecha.data?.fecha_ayer;
@@ -113,21 +119,16 @@ export default function PedidosCombustible() {
                     if (fa) {
                         setFechaServidor(fa);
                         setFechaConsulta(fa);
-                        // fecha pedido = dia siguiente a datos al dia (fecha_ayer + 1 = fecha_actual)
                         setFechaPedido(fp || fa);
                     } else {
                         setFechaServidor(fechaHoy);
                         setFechaConsulta(fechaHoy);
-                        const fSig = new Date(fechaHoy);
-                        fSig.setDate(fSig.getDate() + 1);
-                        setFechaPedido(fSig.toISOString().split('T')[0]);
+                        setFechaPedido(addDay(fechaHoy));
                     }
                 } catch (e) {
                     setFechaServidor(fechaHoy);
                     setFechaConsulta(fechaHoy);
-                    const fSig = new Date(fechaHoy);
-                    fSig.setDate(fSig.getDate() + 1);
-                    setFechaPedido(fSig.toISOString().split('T')[0]);
+                    setFechaPedido(addDay(fechaHoy));
                 }
             } catch (e) { addToast("Error cargando catálogos maestros", "error"); }
         };
@@ -202,11 +203,11 @@ export default function PedidosCombustible() {
             let fechaDur = "";
             let nomDia = "";
             if (durDias > 0 && fechaConsulta) {
-                const target = new Date(fechaConsulta);
-                target.setDate(target.getDate() + Math.floor(durDias));
-                fechaDur = target.toISOString().split('T')[0];
+                const [y, m, d] = fechaConsulta.split('-').map(Number);
+                const target = new Date(y, m - 1, d + Math.floor(durDias));
+                fechaDur = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
                 const days = ['DOMINGO','LUNES','MARTES','MIERCOLES','JUEVES','VIERNES','SABADO'];
-                nomDia = days[target.getUTCDay()];
+                nomDia = days[target.getDay()];
             }
 
             let nivel = 0;

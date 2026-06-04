@@ -3,6 +3,7 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, X, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin } from 'lucide-react';
+import { todayStr } from '../utils/date';
 
 export default function MovimientosBancarios() {
     const [movements, setMovements] = useState([]);
@@ -21,20 +22,19 @@ export default function MovimientosBancarios() {
     const [filters, setFilters] = useState({
         id_empresa: '',
         numero_cuenta: '',
-        desde: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        hasta: new Date().toISOString().split('T')[0]
+        desde: (() => { const d = new Date(); d.setDate(d.getDate() - 30); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })(),
+        hasta: todayStr()
     });
 
-    // Form
     const [formData, setFormData] = useState({
         id_empresa: '',
         numero_cuenta: '',
-        fecha: new Date().toISOString().split('T')[0],
+        fecha: todayStr(),
         fecha_aplicado: '',
         documento: '',
         concepto: '',
         monto: '',
-        tipo: 'ABONO', // Will be calculated
+        tipo: 'ABONO',
         cod_remesa: '',
         cod_cta: '',
         num_partida: ''
@@ -137,7 +137,7 @@ export default function MovimientosBancarios() {
             setFormData({
                 id_empresa: '',
                 numero_cuenta: '',
-                fecha: new Date().toISOString().split('T')[0],
+                fecha: todayStr(),
                 fecha_aplicado: '',
                 documento: '',
                 concepto: '',

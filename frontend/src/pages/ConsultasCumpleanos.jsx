@@ -5,6 +5,7 @@ import { FileSpreadsheet, FileText, Cake, Building2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { parseDateOnly, dateOnlyToDate, formatDateDisplay, isBirthdayToday, todayStr } from '../utils/date';
 
 export default function ConsultasCumpleanos() {
     const [data, setData] = useState([]);
@@ -32,7 +33,7 @@ export default function ConsultasCumpleanos() {
         const worksheet = XLSX.utils.json_to_sheet(data);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "Cumpleañeros");
-        XLSX.writeFile(workbook, `Cumpleañeros_${new Date().toISOString().split('T')[0]}.xlsx`);
+        XLSX.writeFile(workbook, `Cumpleañeros_${todayStr()}.xlsx`);
         addToast('Archivo Excel descargado', 'success');
     };
 
@@ -49,7 +50,7 @@ export default function ConsultasCumpleanos() {
         const tableRows = data.map(item => [
             item.nombre,
             item.departamento || 'N/A',
-            new Date(item.fecha_nacimiento).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }),
+            formatDateDisplay(item.fecha_nacimiento),
             item.empresa
         ]);
 
@@ -61,7 +62,7 @@ export default function ConsultasCumpleanos() {
             headStyles: { fillColor: [16, 185, 129] } // Success color
         });
 
-        doc.save(`Cumpleaños_${new Date().toISOString().split('T')[0]}.pdf`);
+        doc.save(`Cumpleaños_${todayStr()}.pdf`);
         addToast('Documento PDF descargado', 'success');
     };
 
@@ -120,17 +121,17 @@ export default function ConsultasCumpleanos() {
                                 </thead>
                                 <tbody>
                                     {groupedData[empresa].map((emp, idx) => {
-                                        const birthDate = new Date(emp.fecha_nacimiento);
-                                        const isToday = birthDate.getDate() === new Date().getDate();
+                                        const birthParts = parseDateOnly(emp.fecha_nacimiento);
+                                        const today = isBirthdayToday(emp.fecha_nacimiento);
                                         
                                         return (
                                             <tr key={idx} style={{ 
                                                 borderBottom: '1px solid rgba(255,255,255,0.05)',
-                                                backgroundColor: isToday ? 'rgba(16, 185, 129, 0.05)' : 'transparent'
+                                                backgroundColor: today ? 'rgba(16, 185, 129, 0.05)' : 'transparent'
                                             }}>
                                                 <td style={{ padding: '1rem', fontWeight: '500' }}>
                                                     {emp.nombre}
-                                                    {isToday && <span style={{ marginLeft: '0.5rem', fontSize: '1.25rem' }}>🎂</span>}
+                                                    {today && <span style={{ marginLeft: '0.5rem', fontSize: '1.25rem' }}>🎂</span>}
                                                 </td>
                                                 <td style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                                                     {emp.departamento || 'Sin asignar'}
@@ -143,11 +144,11 @@ export default function ConsultasCumpleanos() {
                                                         backgroundColor: 'rgba(255,255,255,0.05)',
                                                         fontWeight: 'bold'
                                                     }}>
-                                                        {birthDate.getDate()}
+                                                        {birthParts ? birthParts.day : ''}
                                                     </span>
                                                 </td>
                                                 <td style={{ padding: '1rem', color: 'var(--text-muted)' }}>
-                                                    {birthDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
+                                                    {formatDateDisplay(emp.fecha_nacimiento)}
                                                 </td>
                                             </tr>
                                         );

@@ -3,6 +3,7 @@ import { Calendar, AlertCircle, ArrowRight, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import CalendarGrid from '../components/CalendarGrid';
+import { parseDateOnly, formatDateDisplay, daysFromNow, isTodayOrPast, todayStr } from '../utils/date';
 
 const Dashboard = () => {
     const [weeklyPayments, setWeeklyPayments] = useState([]);
@@ -54,9 +55,7 @@ const Dashboard = () => {
         const byDay = {};
         monthPayments.forEach(p => {
             if (!p.vence) return;
-            const d = new Date(p.vence);
-            if (isNaN(d.getTime())) return;
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            const key = p.vence.split('T')[0];
             if (!byDay[key]) byDay[key] = [];
             byDay[key].push(p);
         });
@@ -64,16 +63,15 @@ const Dashboard = () => {
     }, [monthPayments]);
 
     const formatDate = (dateStr) => {
-        if (!dateStr) return '';
-        const date = new Date(dateStr);
-        return date.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        return formatDateDisplay(dateStr, { day: '2-digit', month: '2-digit', year: 'numeric' });
     };
 
     const getStatusInfo = (dateStr) => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const vence = new Date(dateStr);
-        vence.setHours(0, 0, 0, 0);
+        const parts = parseDateOnly(dateStr);
+        if (!parts) return { color: '#3b82f6', label: 'PENDIENTE', bg: 'transparent' };
+        const vence = new Date(parts.year, parts.month - 1, parts.day);
         
         if (vence < today) return { color: '#ef4444', label: 'VENCIDO', bg: 'rgba(239, 68, 68, 0.1)' };
         if (vence.getTime() === today.getTime()) return { color: '#f97316', label: 'HOY', bg: 'rgba(249, 115, 22, 0.1)' };
@@ -92,9 +90,7 @@ const Dashboard = () => {
     };
 
     const expiredPayments = weeklyPayments.filter(p => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        return new Date(p.vence) < today;
+        return isTodayOrPast(p.vence);
     });
 
     const expiredCount = expiredPayments.length;

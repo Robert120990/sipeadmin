@@ -6,6 +6,7 @@ import autoTable from 'jspdf-autotable';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import { parseDateOnly, todayStr } from '../utils/date';
 
 export default function ControlRecordatorios() {
     const { addToast } = useToast();
@@ -23,16 +24,12 @@ export default function ControlRecordatorios() {
         return debouncedValue;
     };
     
-    // Filters
     const getFirstDayOfMonth = () => {
         const d = new Date();
-        d.setDate(1);
-        return d.toISOString().split('T')[0];
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
     };
-    const firstDayStr = getFirstDayOfMonth();
-    const todayStr = new Date().toISOString().split('T')[0];
-    const [fechaDesde, setFechaDesde] = useState(firstDayStr);
-    const [fechaHasta, setFechaHasta] = useState(todayStr);
+    const [fechaDesde, setFechaDesde] = useState(getFirstDayOfMonth());
+    const [fechaHasta, setFechaHasta] = useState(todayStr());
     const [estadoFilter, setEstadoFilter] = useState('ALL'); // P, C, ALL
     
     // UI State
@@ -51,12 +48,12 @@ export default function ControlRecordatorios() {
     
     // Form State (Parent Recordatorio)
     const [formData, setFormData] = useState({
-        id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr, 
+        id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr(), 
         activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', 
-        forma_pago: '', pagado: false, fecPago: todayStr, formaPago2: ''
+        forma_pago: '', pagado: false, fecPago: todayStr(), formaPago2: ''
     });
 
-    const [pagoData, setPagoData] = useState({ id_vencimiento: '', fecPago: todayStr, formaPago: '' });
+    const [pagoData, setPagoData] = useState({ id_vencimiento: '', fecPago: todayStr(), formaPago: '' });
 
     // AI Chat State
     const [isChatOpen, setIsChatOpen] = useState(false);
@@ -150,7 +147,7 @@ export default function ControlRecordatorios() {
                 const id = iaResponse.action_params?.id_recordatorio;
                 const rec = displayRecordatorios.find(r => String(r.id) === String(id) || String(r.id_recordatorio) === String(id));
                 if (rec) {
-                    setPagoData({ id_vencimiento: rec.id, fecPago: todayStr, formaPago: 'Aprobado vía IA Asistente' });
+                    setPagoData({ id_vencimiento: rec.id, fecPago: todayStr(), formaPago: 'Aprobado vía IA Asistente' });
                     setIsPagoModalOpen(true);
                 } else {
                     setChatHistory(prev => [...prev, { role: 'ai', text: 'No logré localizar ese ID en la tabla mostrada.' }]);
@@ -163,14 +160,11 @@ export default function ControlRecordatorios() {
         }
     };
 
-    // Format Currency & Dates
     const formatDate = (date) => {
         if (!date) return '';
-        const d = new Date(date);
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const year = d.getFullYear();
-        return `${day}/${month}/${year}`;
+        const d = parseDateOnly(date);
+        if (!d) return date;
+        return `${String(d.day).padStart(2, '0')}/${String(d.month).padStart(2, '0')}/${d.year}`;
     };
 
     const mc = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
@@ -210,7 +204,7 @@ export default function ControlRecordatorios() {
                 repetir_desc: p.repetir_desc,
                 forma_pago: p.forma_pago || '',
                 pagado: false,
-                fecPago: todayStr,
+                fecPago: todayStr(),
                 formaPago2: ''
             });
             setIsFormModalOpen(true);
@@ -338,7 +332,7 @@ export default function ControlRecordatorios() {
                         <Search size={18} /> Buscar
                     </button>
                     <button className="btn-success" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={() => {
-                        setFormData({ id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr, activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', forma_pago: '', pagado: false, fecPago: todayStr, formaPago2: '' });
+                        setFormData({ id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr(), activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', forma_pago: '', pagado: false, fecPago: todayStr(), formaPago2: '' });
                         setIsFormModalOpen(true);
                     }}>
                         <Plus size={18} /> Nuevo Recordatorio
@@ -477,7 +471,7 @@ export default function ControlRecordatorios() {
                                 <td style={{ padding: '0.5rem' }}>{formatDate(r.fecha_cancelacion)}</td>
                                 <td style={{ display: 'flex', gap: '0.2rem', justifyContent: 'center', padding: '0.5rem' }}>
                                     <button className="btn-primary" style={{ padding: '0.3rem' }} title="Marcar como Pagado" disabled={r.estado === 'CANCELADO'} onClick={() => {
-                                        setPagoData({ id_vencimiento: r.id, fecPago: todayStr, formaPago: '' });
+                                        setPagoData({ id_vencimiento: r.id, fecPago: todayStr(), formaPago: '' });
                                         setIsPagoModalOpen(true);
                                     }}>
                                         <CheckCircle size={14} />
@@ -658,7 +652,7 @@ export default function ControlRecordatorios() {
                                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', fontWeight: 'bold', color: '#4ade80' }}>
                                             <input type="checkbox" checked={formData.pagado} onChange={e => {
                                                 const chk = e.target.checked;
-                                                setFormData({...formData, pagado: chk, fecPago: chk ? todayStr : '', formaPago2: chk ? formData.formaPago2 : ''})
+                                                setFormData({...formData, pagado: chk, fecPago: chk ? todayStr() : '', formaPago2: chk ? formData.formaPago2 : ''})
                                             }} style={{ width: '18px', height: '18px' }} /> MARCAR COMO PAGADO AL REGISTRAR
                                         </label>
                                     </div>

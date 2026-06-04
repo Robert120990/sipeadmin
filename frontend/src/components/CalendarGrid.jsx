@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, X } from 'lucide-react';
+import { parseDateOnly, dateFromParts, daysFromNow } from '../utils/date';
 
 const DAYS = ['Do', 'Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sa'];
 const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -7,8 +8,9 @@ const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 
 function getStatusColor(dateStr) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const vence = new Date(dateStr);
-    vence.setHours(0, 0, 0, 0);
+    const parts = parseDateOnly(dateStr);
+    if (!parts) return '#3b82f6';
+    const vence = dateFromParts(parts);
     if (vence < today) return '#ef4444';
     if (vence.getTime() === today.getTime()) return '#f97316';
     const diffDays = Math.ceil((vence - today) / (1000 * 60 * 60 * 24));
@@ -175,7 +177,11 @@ export default function CalendarGrid({ paymentsByDay, currentMonth, onMonthChang
                 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
                         <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>
-                            {new Date(selectedDay).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
+                            {(() => {
+                                const d = parseDateOnly(selectedDay);
+                                if (!d) return selectedDay;
+                                return dateFromParts(d).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+                            })()}
                         </span>
                         <button onClick={() => setSelectedDay(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px', display: 'flex' }}>
                             <X size={14} />

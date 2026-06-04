@@ -5,10 +5,11 @@ import api from '../services/api';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import { todayStr } from '../utils/date';
 
 export default function DiferenciasCombustible() {
-    const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
-    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+    const [startDate, setStartDate] = useState(todayStr());
+    const [endDate, setEndDate] = useState(todayStr());
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(false);
     const { addToast } = useToast();

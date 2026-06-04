@@ -11,11 +11,12 @@ const getDbConfig = () => {
         password: process.env.DB_PASSWORD || 'QwErTy123',
         database: process.env.DB_NAME || 'db_sipe_admin',
         port: parseInt(process.env.DB_PORT || '3306'),
-        connectTimeout: 10000, // 10s timeout
+        connectTimeout: 10000,
         waitForConnections: true,
         connectionLimit: 10,
         enableKeepAlive: true,
-        keepAliveInitialDelay: 0
+        keepAliveInitialDelay: 0,
+        timezone: 'Z'
     };
 
     if (process.env.DATABASE_URL) {
@@ -31,7 +32,8 @@ const getDbConfig = () => {
                 waitForConnections: true,
                 connectionLimit: 10,
                 enableKeepAlive: true,
-                keepAliveInitialDelay: 0
+                keepAliveInitialDelay: 0,
+                timezone: 'Z'
             };
         } catch (e) {
             console.error('Error parsing DATABASE_URL:', e);
@@ -397,7 +399,8 @@ const getExternalDb = async () => {
             password: config.password,
             database: config.database_name,
             port: config.port || 3306,
-            connectionLimit: 10
+            connectionLimit: 10,
+            timezone: 'Z'
         });
         externalPools[poolKey] = externalDb;
     }
@@ -430,7 +433,8 @@ const getAccountingDb = async () => {
             password: config.password,
             database: config.database_name,
             port: config.port || 3306,
-            connectionLimit: 10
+            connectionLimit: 10,
+            timezone: 'Z'
         });
         externalPools[poolKey] = externalDb;
     }

@@ -5,9 +5,10 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import api from '../services/api';
+import { todayStr } from '../utils/date';
 
 export default function PreciosEstacion() {
-    const defaultDate = new Date().toISOString().split('T')[0];
+    const defaultDate = todayStr();
 
     const [fecha, setFecha] = useState(defaultDate);
     const [data, setData] = useState([]);
