@@ -45,6 +45,10 @@ export default function VentasEstaciones() {
 
     const formatMsDate = (msDateStr) => {
         if (!msDateStr) return '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(msDateStr)) {
+            const [year, month, day] = msDateStr.split('-');
+            return `${day}/${month}/${year}`;
+        }
         const ms = parseInt(msDateStr.replace(/[^0-9-]/g, ''));
         if (isNaN(ms)) return msDateStr;
         return new Date(ms).toLocaleDateString();
@@ -234,13 +238,13 @@ export default function VentasEstaciones() {
                             <tr>
                                 <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Sucursal</th>
                                 <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Diesel</th>
-                                <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>IonDiesel</th>
-                                <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Super</th>
                                 <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Regular</th>
+                                <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Super</th>
+                                <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>IonDiesel</th>
                                 <th style={{ textAlign: 'center', padding: '0.75rem 0.25rem' }}>D.D</th>
-                                <th style={{ textAlign: 'center', padding: '0.75rem 0.25rem' }}>D.I</th>
-                                <th style={{ textAlign: 'center', padding: '0.75rem 0.25rem' }}>D.S</th>
                                 <th style={{ textAlign: 'center', padding: '0.75rem 0.25rem' }}>D.R</th>
+                                <th style={{ textAlign: 'center', padding: '0.75rem 0.25rem' }}>D.S</th>
+                                <th style={{ textAlign: 'center', padding: '0.75rem 0.25rem' }}>D.I</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -254,13 +258,13 @@ export default function VentasEstaciones() {
                                 <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
                                     <td style={{ padding: '0.5rem 1rem' }}>{inv.empresa}</td>
                                     <td style={{ padding: '0.5rem 1rem' }}>{numFmt(inv.diesel || 0)}</td>
-                                    <td style={{ padding: '0.5rem 1rem' }}>{numFmt(inv.iondiesel || 0)}</td>
-                                    <td style={{ padding: '0.5rem 1rem' }}>{numFmt(inv.super || 0)}</td>
                                     <td style={{ padding: '0.5rem 1rem' }}>{numFmt(inv.regular || 0)}</td>
+                                    <td style={{ padding: '0.5rem 1rem' }}>{numFmt(inv.super || 0)}</td>
+                                    <td style={{ padding: '0.5rem 1rem' }}>{numFmt(inv.iondiesel || 0)}</td>
                                     <td style={{ padding: '0.5rem 0.25rem', textAlign: 'center' }}><BadgeSquare val={(inv.duracion_diesel || 0).toFixed(1)} color={mapColor(inv.duracion_diesel || 0, {red: 1.5, orange: 3})} /></td>
-                                    <td style={{ padding: '0.5rem 0.25rem', textAlign: 'center' }}><BadgeSquare val={(inv.duracion_ion || 0).toFixed(1)} color={mapColor(inv.duracion_ion || 0, {red: 1.5, orange: 3})} /></td>
-                                    <td style={{ padding: '0.5rem 0.25rem', textAlign: 'center' }}><BadgeSquare val={(inv.duracion_super || 0).toFixed(1)} color={mapColor(inv.duracion_super || 0, {red: 1.5, orange: 3})} /></td>
                                     <td style={{ padding: '0.5rem 0.25rem', textAlign: 'center' }}><BadgeSquare val={(inv.duracion_regular || 0).toFixed(1)} color={mapColor(inv.duracion_regular || 0, {red: 1.5, orange: 3})} /></td>
+                                    <td style={{ padding: '0.5rem 0.25rem', textAlign: 'center' }}><BadgeSquare val={(inv.duracion_super || 0).toFixed(1)} color={mapColor(inv.duracion_super || 0, {red: 1.5, orange: 3})} /></td>
+                                    <td style={{ padding: '0.5rem 0.25rem', textAlign: 'center' }}><BadgeSquare val={(inv.duracion_ion || 0).toFixed(1)} color={mapColor(inv.duracion_ion || 0, {red: 1.5, orange: 3})} /></td>
                                 </tr>
                             )})}
                             {dataInventario.length === 0 && !loading && (
