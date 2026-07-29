@@ -525,22 +525,22 @@ export default function PedidosCombustible() {
                     {/* Inline InputSets to prevent Unmount/Remount Focus Loss */}
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>DIESEL</span>
-                        <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})}
+                        <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
                             style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>REGULAR</span>
-                        <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})}
+                        <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
                             style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>SUPER</span>
-                        <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})}
+                        <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
                             style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>IONDIESEL</span>
-                        <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})}
+                        <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
                             style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
                     </div>
 
@@ -692,21 +692,21 @@ export default function PedidosCombustible() {
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                 <label style={{ fontSize: '0.7rem' }}>Costo D</label>
-                                <input type="number" step="0.01" value={confirmData.costo_d} onChange={e=>setConfirmData({...confirmData, costo_d: e.target.value})} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                                <input type="number" step="0.01" value={confirmData.costo_d} onChange={e=>setConfirmData({...confirmData, costo_d: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
                             </div>
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                 <label style={{ fontSize: '0.7rem' }}>Costo R</label>
-                                <input type="number" step="0.01" value={confirmData.costo_r} onChange={e=>setConfirmData({...confirmData, costo_r: e.target.value})} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                                <input type="number" step="0.01" value={confirmData.costo_r} onChange={e=>setConfirmData({...confirmData, costo_r: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                 <label style={{ fontSize: '0.7rem' }}>Costo S</label>
-                                <input type="number" step="0.01" value={confirmData.costo_s} onChange={e=>setConfirmData({...confirmData, costo_s: e.target.value})} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                                <input type="number" step="0.01" value={confirmData.costo_s} onChange={e=>setConfirmData({...confirmData, costo_s: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
                             </div>
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                 <label style={{ fontSize: '0.7rem' }}>Costo Ion</label>
-                                <input type="number" step="0.01" value={confirmData.costo_i} onChange={e=>setConfirmData({...confirmData, costo_i: e.target.value})} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                                <input type="number" step="0.01" value={confirmData.costo_i} onChange={e=>setConfirmData({...confirmData, costo_i: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
                             </div>
                         </div>
 
