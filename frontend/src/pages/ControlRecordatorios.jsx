@@ -295,8 +295,8 @@ export default function ControlRecordatorios() {
             "Descripción": r.descripcion,
             "Vence": formatDate(r.vence),
             "Observación": r.observacion,
-            "Forma Pago": r.forma_pago,
             "Monto": Number(r.monto),
+            "Forma Pago": r.forma_pago,
             "Estado": r.estado,
             "Fec Pago": formatDate(r.fecha_cancelacion)
         }));
@@ -312,10 +312,10 @@ export default function ControlRecordatorios() {
         doc.text("Control de Pagos (Recordatorios)", 14, 15);
         autoTable(doc, {
             startY: 20,
-            head: [['Ubicación', 'Descripción', 'Vence', 'Obs', 'Método', 'Monto', 'Estado', 'Pág']],
+            head: [['Ubicación', 'Descripción', 'Vence', 'Obs', 'Monto', 'Método', 'Estado', 'Pág']],
             body: recordatorios.map(r => [
                 r.ubicacion, r.descripcion, formatDate(r.vence), r.observacion,
-                r.forma_pago, mc(r.monto), r.estado, formatDate(r.fecha_cancelacion)
+                mc(r.monto), r.forma_pago, r.estado, formatDate(r.fecha_cancelacion)
             ]),
             styles: { fontSize: 8 }
         });
@@ -437,8 +437,8 @@ export default function ControlRecordatorios() {
                             <th style={{ padding: '0.75rem 0.5rem' }}>DESCRIPCION</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>VENCE</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>OBSERVACION</th>
-                            <th style={{ padding: '0.75rem 0.5rem' }}>FORMA PAGO</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>MONTO</th>
+                            <th style={{ padding: '0.75rem 0.5rem' }}>FORMA PAGO</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>ESTADO</th>
                             <th style={{ padding: '0.75rem 0.5rem' }}>FEC. PAGO</th>
                             <th style={{ textAlign: 'center', padding: '0.75rem 0.5rem' }}>ACCIONES</th>
@@ -457,8 +457,8 @@ export default function ControlRecordatorios() {
                                 <td style={{ padding: '0.5rem' }}>{r.descripcion}</td>
                                 <td style={{ padding: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>{formatDate(r.vence)}</td>
                                 <td style={{ padding: '0.5rem' }}>{r.observacion}</td>
-                                <td style={{ padding: '0.5rem' }}>{r.forma_pago}</td>
                                 <td style={{ padding: '0.5rem', fontWeight: 'bold', color: 'var(--primary)' }}>{mc(r.monto)}</td>
+                                <td style={{ padding: '0.5rem' }}>{r.forma_pago}</td>
                                 <td style={{ padding: '0.5rem' }}>
                                     <span style={{ 
                                         padding: '0.15rem 0.4rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold',
