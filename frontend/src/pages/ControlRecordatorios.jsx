@@ -6,6 +6,7 @@ import autoTable from 'jspdf-autotable';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 import { parseDateOnly, todayStr } from '../utils/date';
 
 export default function ControlRecordatorios() {
@@ -325,7 +326,7 @@ export default function ControlRecordatorios() {
 
     return (
         <div style={{ padding: '2rem', height: '100%', position: 'relative' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <h1 style={{ margin: 0, color: 'var(--primary)' }}>Control de Recordatorios</h1>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={openSearchModal}>
@@ -497,22 +498,14 @@ export default function ControlRecordatorios() {
             {/* AGENTE IA FLOATING BUTTON & CHAT */}
             <button 
                 onClick={() => setIsChatOpen(!isChatOpen)}
-                style={{
-                    position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 1050,
-                    backgroundColor: 'var(--primary)', color: 'white', border: 'none', borderRadius: '50%',
-                    width: '60px', height: '60px', display: 'flex', justifyContent: 'center', alignItems: 'center',
-                    boxShadow: '0 4px 15px rgba(99, 102, 241, 0.5)', cursor: 'pointer', transition: 'transform 0.3s'
-                }}
+                className="ai-fab"
+                style={{ minHeight: 0 }}
             >
                 {isChatOpen ? <X size={28} /> : <Sparkles size={28} />}
             </button>
 
             {isChatOpen && (
-                <div className="card glass" style={{
-                    position: 'fixed', bottom: '6.5rem', right: '2rem', zIndex: 1050,
-                    width: '380px', height: '500px', display: 'flex', flexDirection: 'column',
-                    boxShadow: '0 10px 40px rgba(0,0,0,0.5)', overflow: 'hidden'
-                }}>
+                <div className="card glass ai-chat" style={{ padding: 0 }}>
                     <div style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.1)', background: 'rgba(99, 102, 241, 0.1)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <div style={{ padding: '0.5rem', background: 'var(--primary)', borderRadius: '50%', display: 'flex' }}>
                             <Sparkles size={18} color="white" />
@@ -568,222 +561,192 @@ export default function ControlRecordatorios() {
             )}
 
             {/* MODAL 1: NUEVO/EDITAR RECORDATORIO */}
-            {isFormModalOpen && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(4px)', overflow: 'auto', padding: '2rem' }}>
-                    <div className="card glass" style={{ width: '600px', padding: '2rem', maxHeight: '90vh', overflowY: 'auto' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1rem' }}>
-                            <h2 style={{ margin: 0 }}>{formData.id ? 'Editar Recordatorio' : 'Nueva Operación de Pago'}</h2>
-                            <button onClick={() => setIsFormModalOpen(false)} style={{ background: 'none', color: 'var(--text-muted)' }}><X size={24} /></button>
+            <Modal open={isFormModalOpen} onClose={() => setIsFormModalOpen(false)} title={formData.id ? 'Editar Recordatorio' : 'Nueva Operación de Pago'}>
+                <form onSubmit={handleFormSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>DESCRIPCIÓN DEL PAGO</label>
+                        <input type="text" className="form-control" value={formData.descripcion} onChange={e => setFormData({...formData, descripcion: e.target.value})} required placeholder="Ej. Pago de Alquiler, Seguro..." />
+                    </div>
+                    
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>UBICACIÓN / EMPRESA</label>
+                            <select 
+                                style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)', outline: 'none' }}
+                                value={formData.id_ubicacion} 
+                                onChange={e => setFormData({...formData, id_ubicacion: e.target.value})} 
+                                required
+                            >
+                                <option value="">-- Seleccionar --</option>
+                                {ubicaciones.map(u => <option value={u.id} key={u.id}>{u.descripcion}</option>)}
+                            </select>
                         </div>
-                        <form onSubmit={handleFormSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>DESCRIPCIÓN DEL PAGO</label>
-                                    <input type="text" className="form-control" value={formData.descripcion} onChange={e => setFormData({...formData, descripcion: e.target.value})} required placeholder="Ej. Pago de Alquiler, Seguro..." />
-                                </div>
-                            </div>
-                            
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>UBICACIÓN / EMPRESA</label>
-                                    <select 
-                                        style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)', outline: 'none' }}
-                                        value={formData.id_ubicacion} 
-                                        onChange={e => setFormData({...formData, id_ubicacion: e.target.value})} 
-                                        required
-                                    >
-                                        <option value="">-- Seleccionar --</option>
-                                        {ubicaciones.map(u => <option value={u.id} key={u.id}>{u.descripcion}</option>)}
-                                    </select>
-                                </div>
 
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>FECHA DE INICIO</label>
-                                    <input type="date" className="form-control" value={formData.iniciar} onChange={e => setFormData({...formData, iniciar: e.target.value})} required />
-                                </div>
-                            </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>FECHA DE INICIO</label>
+                            <input type="date" className="form-control" value={formData.iniciar} onChange={e => setFormData({...formData, iniciar: e.target.value})} required />
+                        </div>
+                    </div>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MONTO ($)</label>
-                                    <input type="number" step="0.01" className="form-control" value={formData.monto} onChange={e => setFormData({...formData, monto: e.target.value})} required style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--primary)' }} />
-                                </div>
+                    <div className="form-grid form-grid-3">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MONTO ($)</label>
+                            <input type="number" step="0.01" className="form-control" value={formData.monto} onChange={e => setFormData({...formData, monto: e.target.value})} required style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--primary)' }} />
+                        </div>
 
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>CANTIDAD</label>
-                                    <input type="number" min="1" className="form-control" value={formData.repetir} onChange={e => setFormData({...formData, repetir: e.target.value})} required />
-                                </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>CANTIDAD</label>
+                            <input type="number" min="1" className="form-control" value={formData.repetir} onChange={e => setFormData({...formData, repetir: e.target.value})} required />
+                        </div>
 
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>REPETICIÓN</label>
-                                    <select 
-                                        style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)', outline: 'none' }}
-                                        value={formData.repetir_desc} 
-                                        onChange={e => {
-                                            setFormData({
-                                                ...formData, 
-                                                repetir_desc: e.target.value,
-                                                pagado: e.target.value === 'VEZ' ? formData.pagado : false
-                                            })
-                                        }}
-                                    >
-                                        <option value="VEZ">UNA VEZ</option>
-                                        <option value="DIAS">DÍAS</option>
-                                        <option value="MES">MESES</option>
-                                        <option value="AÑO">AÑOS</option>
-                                    </select>
-                                </div>
-                            </div>
-                            
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>OBSERVACIÓN / REFERENCIA</label>
-                                <input type="text" className="form-control" value={formData.forma_pago} onChange={e => setFormData({...formData, forma_pago: e.target.value})} placeholder="Ej. Factura #123, Transferencia..." />
-                            </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>REPETICIÓN</label>
+                            <select 
+                                style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)', outline: 'none' }}
+                                value={formData.repetir_desc} 
+                                onChange={e => {
+                                    setFormData({
+                                        ...formData, 
+                                        repetir_desc: e.target.value,
+                                        pagado: e.target.value === 'VEZ' ? formData.pagado : false
+                                    })
+                                }}
+                            >
+                                <option value="VEZ">UNA VEZ</option>
+                                <option value="DIAS">DÍAS</option>
+                                <option value="MES">MESES</option>
+                                <option value="AÑO">AÑOS</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>OBSERVACIÓN / REFERENCIA</label>
+                        <input type="text" className="form-control" value={formData.forma_pago} onChange={e => setFormData({...formData, forma_pago: e.target.value})} placeholder="Ej. Factura #123, Transferencia..." />
+                    </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.9rem' }}>
-                                    <input type="checkbox" checked={formData.activo} onChange={e => setFormData({...formData, activo: e.target.checked})} style={{ width: '18px', height: '18px' }} /> ESTADO ACTIVO
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                            <input type="checkbox" checked={formData.activo} onChange={e => setFormData({...formData, activo: e.target.checked})} style={{ width: '18px', height: '18px' }} /> ESTADO ACTIVO
+                        </label>
+                    </div>
+
+                    {formData.repetir_desc === 'VEZ' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.25rem', backgroundColor: 'rgba(34, 197, 94, 0.05)', border: '1px solid rgba(34, 197, 94, 0.2)', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', fontWeight: 'bold', color: '#4ade80' }}>
+                                    <input type="checkbox" checked={formData.pagado} onChange={e => {
+                                        const chk = e.target.checked;
+                                        setFormData({...formData, pagado: chk, fecPago: chk ? todayStr() : '', formaPago2: chk ? formData.formaPago2 : ''})
+                                    }} style={{ width: '18px', height: '18px' }} /> MARCAR COMO PAGADO AL REGISTRAR
                                 </label>
                             </div>
-
-                            {formData.repetir_desc === 'VEZ' && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.25rem', backgroundColor: 'rgba(34, 197, 94, 0.05)', border: '1px solid rgba(34, 197, 94, 0.2)', borderRadius: '8px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', fontWeight: 'bold', color: '#4ade80' }}>
-                                            <input type="checkbox" checked={formData.pagado} onChange={e => {
-                                                const chk = e.target.checked;
-                                                setFormData({...formData, pagado: chk, fecPago: chk ? todayStr() : '', formaPago2: chk ? formData.formaPago2 : ''})
-                                            }} style={{ width: '18px', height: '18px' }} /> MARCAR COMO PAGADO AL REGISTRAR
-                                        </label>
-                                    </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', opacity: formData.pagado ? 1 : 0.4, pointerEvents: formData.pagado ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
-                                        <div>
-                                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>FECHA DE PAGO</label>
-                                            <input type="date" className="form-control" disabled={!formData.pagado} value={formData.fecPago} onChange={e => setFormData({...formData, fecPago: e.target.value})} />
-                                        </div>
-                                        <div>
-                                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MODALIDAD DE PAGO</label>
-                                            <input type="text" className="form-control" placeholder="Ej. Cheque, Transferencia..." disabled={!formData.pagado} value={formData.formaPago2} onChange={e => setFormData({...formData, formaPago2: e.target.value})} />
-                                        </div>
-                                    </div>
+                            <div className="form-grid form-grid-2" style={{ opacity: formData.pagado ? 1 : 0.4, pointerEvents: formData.pagado ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>FECHA DE PAGO</label>
+                                    <input type="date" className="form-control" disabled={!formData.pagado} value={formData.fecPago} onChange={e => setFormData({...formData, fecPago: e.target.value})} />
                                 </div>
-                            )}
-                            
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.5rem' }}>
-                                <button type="button" className="btn-secondary" onClick={() => setIsFormModalOpen(false)} style={{ padding: '0.6rem 2rem' }}>Cancelar</button>
-                                <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 2rem' }}>
-                                    <Save size={20} /> Guardar Cambios
-                                </button>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MODALIDAD DE PAGO</label>
+                                    <input type="text" className="form-control" placeholder="Ej. Cheque, Transferencia..." disabled={!formData.pagado} value={formData.formaPago2} onChange={e => setFormData({...formData, formaPago2: e.target.value})} />
+                                </div>
                             </div>
-                        </form>
+                        </div>
+                    )}
+                    
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.5rem', flexWrap: 'wrap' }}>
+                        <button type="button" className="btn-secondary" onClick={() => setIsFormModalOpen(false)} style={{ padding: '0.6rem 2rem' }}>Cancelar</button>
+                        <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 2rem' }}>
+                            <Save size={20} /> Guardar Cambios
+                        </button>
                     </div>
-                </div>
-            )}
+                </form>
+            </Modal>
 
             {/* MODAL 2: PAGAR RECORDATORIO */}
-            {isPagoModalOpen && (
-                <div className="modal-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-                    <div className="card glass modal-content" style={{ maxWidth: '400px', width: '100%', margin: '0 auto' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                            <h2 style={{ color: 'var(--primary)' }}>Realizar Pago</h2>
-                            <button onClick={() => setIsPagoModalOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <form onSubmit={handlePagoSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                            <div>
-                                <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>FECHA DEL PAGO</label>
-                                <input type="date" className="form-control" value={pagoData.fecPago} onChange={e => setPagoData({...pagoData, fecPago: e.target.value})} required />
-                            </div>
-                            <div>
-                                <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>FORMA DE PAGO</label>
-                                <input type="text" className="form-control" placeholder="Efectivo, Cheque..." value={pagoData.formaPago} onChange={e => setPagoData({...pagoData, formaPago: e.target.value})} required />
-                            </div>
-                            
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
-                                <button type="button" className="btn-danger" onClick={() => setIsPagoModalOpen(false)}>Cancelar</button>
-                                <button type="submit" className="btn-success" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <CheckCircle size={18} /> Procesar
-                                </button>
-                            </div>
-                        </form>
+            <Modal open={isPagoModalOpen} onClose={() => setIsPagoModalOpen(false)} title="Realizar Pago" size="sm">
+                <form onSubmit={handlePagoSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div>
+                        <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>FECHA DEL PAGO</label>
+                        <input type="date" className="form-control" value={pagoData.fecPago} onChange={e => setPagoData({...pagoData, fecPago: e.target.value})} required />
                     </div>
-                </div>
-            )}
+                    <div>
+                        <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>FORMA DE PAGO</label>
+                        <input type="text" className="form-control" placeholder="Efectivo, Cheque..." value={pagoData.formaPago} onChange={e => setPagoData({...pagoData, formaPago: e.target.value})} required />
+                    </div>
+                    
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
+                        <button type="button" className="btn-danger" onClick={() => setIsPagoModalOpen(false)}>Cancelar</button>
+                        <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <CheckCircle size={18} /> Procesar
+                        </button>
+                    </div>
+                </form>
+            </Modal>
 
             {/* MODAL 3: BUSCADOR DE MATRICES */}
-            {isSearchModalOpen && (
-                <div className="modal-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-                    <div className="card glass modal-content" style={{ maxWidth: '900px', width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column', margin: '0 auto' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                            <h2 style={{ color: 'var(--primary)' }}>Buscar Recordatorio (Matriz)</h2>
-                            <button onClick={() => setIsSearchModalOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <div className="table-responsive" style={{ flex: 1, overflowY: 'auto', backgroundColor: 'rgba(20,25,30,0.5)', borderRadius: '8px' }}>
-                            <table className="data-table" style={{ fontSize: '0.8rem' }}>
-                                <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: 'rgba(30,35,42,1)' }}>
-                                    <tr>
-                                        <th style={{ width: '100px' }}>ID PRINCIPAL</th>
-                                        <th>
-                                            Descripcion
-                                            <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.descripcion} onChange={e => setSearchFilters({...searchFilters, descripcion: e.target.value})} placeholder="Buscar..." />
-                                        </th>
-                                        <th>
-                                            FechaInicio
-                                            <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.fecha_inicio} onChange={e => setSearchFilters({...searchFilters, fecha_inicio: e.target.value})} placeholder="Buscar..." />
-                                        </th>
-                                        <th>
-                                            Ubicacion
-                                            <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.ubicacion} onChange={e => setSearchFilters({...searchFilters, ubicacion: e.target.value})} placeholder="Buscar..." />
-                                        </th>
-                                        <th>
-                                            Monto
-                                            <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.monto} onChange={e => setSearchFilters({...searchFilters, monto: e.target.value})} placeholder="Buscar..." />
-                                        </th>
-                                        <th>
-                                            Observacion
-                                            <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.observacion} onChange={e => setSearchFilters({...searchFilters, observacion: e.target.value})} placeholder="Buscar..." />
-                                        </th>
-                                        <th>
-                                            Cuotas
-                                            <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.cuotas} onChange={e => setSearchFilters({...searchFilters, cuotas: e.target.value})} placeholder="Buscar..." />
-                                        </th>
-                                        <th>
-                                            Repetición
-                                            <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
-                                                   value={searchFilters.repetir_desc} onChange={e => setSearchFilters({...searchFilters, repetir_desc: e.target.value})} placeholder="Buscar..." />
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredParents.length === 0 ? (
-                                        <tr><td colSpan="6" style={{ textAlign: 'center', padding: '1rem' }}>No se encontraron matrices</td></tr>
-                                    ) : filteredParents.map((p, idx) => (
-                                        <tr key={idx} style={{ cursor: 'pointer' }} onClick={() => handleSelectParent(p)}>
-                                            <td style={{ fontWeight: 'bold', color: 'var(--text-muted)' }}>{p.id}</td>
-                                            <td style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{p.descripcion}</td>
-                                            <td>{formatDate(p.fecha_inicio)}</td>
-                                            <td>{p.ubicacion}</td>
-                                            <td>{p.monto}</td>
-                                            <td>{p.observacion}</td>
-                                            <td>{p.cuotas}</td>
-                                            <td>{p.repetir_desc}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+            <Modal open={isSearchModalOpen} onClose={() => setIsSearchModalOpen(false)} title="Buscar Recordatorio (Matriz)" size="lg">
+                <div className="table-responsive" style={{ overflowY: 'auto', backgroundColor: 'rgba(20,25,30,0.5)', borderRadius: '8px' }}>
+                    <table className="data-table" style={{ fontSize: '0.8rem' }}>
+                        <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: 'rgba(30,35,42,1)' }}>
+                            <tr>
+                                <th style={{ width: '100px' }}>ID PRINCIPAL</th>
+                                <th>
+                                    Descripcion
+                                    <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
+                                           value={searchFilters.descripcion} onChange={e => setSearchFilters({...searchFilters, descripcion: e.target.value})} placeholder="Buscar..." />
+                                </th>
+                                <th>
+                                    FechaInicio
+                                    <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
+                                           value={searchFilters.fecha_inicio} onChange={e => setSearchFilters({...searchFilters, fecha_inicio: e.target.value})} placeholder="Buscar..." />
+                                </th>
+                                <th>
+                                    Ubicacion
+                                    <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
+                                           value={searchFilters.ubicacion} onChange={e => setSearchFilters({...searchFilters, ubicacion: e.target.value})} placeholder="Buscar..." />
+                                </th>
+                                <th>
+                                    Monto
+                                    <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
+                                           value={searchFilters.monto} onChange={e => setSearchFilters({...searchFilters, monto: e.target.value})} placeholder="Buscar..." />
+                                </th>
+                                <th>
+                                    Observacion
+                                    <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
+                                           value={searchFilters.observacion} onChange={e => setSearchFilters({...searchFilters, observacion: e.target.value})} placeholder="Buscar..." />
+                                </th>
+                                <th>
+                                    Cuotas
+                                    <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
+                                           value={searchFilters.cuotas} onChange={e => setSearchFilters({...searchFilters, cuotas: e.target.value})} placeholder="Buscar..." />
+                                </th>
+                                <th>
+                                    Repetición
+                                    <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
+                                           value={searchFilters.repetir_desc} onChange={e => setSearchFilters({...searchFilters, repetir_desc: e.target.value})} placeholder="Buscar..." />
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filteredParents.length === 0 ? (
+                                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '1rem' }}>No se encontraron matrices</td></tr>
+                            ) : filteredParents.map((p, idx) => (
+                                <tr key={idx} style={{ cursor: 'pointer' }} onClick={() => handleSelectParent(p)}>
+                                    <td style={{ fontWeight: 'bold', color: 'var(--text-muted)' }}>{p.id}</td>
+                                    <td style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{p.descripcion}</td>
+                                    <td>{formatDate(p.fecha_inicio)}</td>
+                                    <td>{p.ubicacion}</td>
+                                    <td>{p.monto}</td>
+                                    <td>{p.observacion}</td>
+                                    <td>{p.cuotas}</td>
+                                    <td>{p.repetir_desc}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
                 </div>
-            )}
+            </Modal>
 
         </div>
     );

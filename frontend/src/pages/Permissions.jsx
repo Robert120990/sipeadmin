@@ -101,9 +101,9 @@ export default function Permissions() {
     };
 
     return (
-        <div style={{ display: 'flex', gap: '1.5rem', height: 'calc(100vh - 4rem)' }}>
+        <div className="permissions-panels">
             {/* Left Panel: Roles List */}
-            <div className="card glass" style={{ flex: '0 0 300px', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+            <div className="card glass permissions-left">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                     <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.25rem' }}>
                         <Shield size={24} color="var(--primary)" /> Roles

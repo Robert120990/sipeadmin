@@ -103,7 +103,7 @@ const Dashboard = () => {
                 <p style={{ color: 'var(--text-muted)' }}>Bienvenido al panel de control administrativo de SIPE.</p>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '2rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(350px, 100%), 1fr))', gap: '2rem' }}>
                 {/* CARD: PAGOS DE LA SEMANA */}
                 <div className="card glass" style={{ 
                     padding: '1.25rem', 

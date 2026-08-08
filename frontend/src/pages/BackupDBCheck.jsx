@@ -83,7 +83,7 @@ const BackupDBCheck = () => {
 
     return (
         <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <HardDrive size={32} color="var(--primary)" />
                     <div>

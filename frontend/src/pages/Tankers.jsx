@@ -3,6 +3,7 @@ import api from '../services/api';
 import { socket } from '../services/socket';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 import { Container, Edit2, Trash2, X, Save, Plus, Minus } from 'lucide-react';
 
 export default function Tankers() {
@@ -157,7 +158,7 @@ export default function Tankers() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div>
                     <h1>Pipas y Compartimientos</h1>
                     <p style={{ color: 'var(--text-muted)' }}>Catálogo de unidades de transporte y sus capacidades.</p>
@@ -168,7 +169,7 @@ export default function Tankers() {
                 </button>
             </div>
 
-            <div className="card glass">
+            <div className="card glass table-responsive">
                 <table>
                     <thead>
                         <tr>
@@ -207,96 +208,88 @@ export default function Tankers() {
                 </table>
             </div>
 
-            {showModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(4px)', overflow: 'auto', padding: '2rem' }}>
-                    <div className="card glass" style={{ width: '500px', padding: '2rem', maxHeight: '90vh', overflowY: 'auto' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-                            <h2>{editingTanker ? 'Editar Pipa' : 'Nueva Pipa'}</h2>
-                            <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)' }}><X size={20} /></button>
+            <Modal open={showModal} onClose={() => setShowModal(false)} title={editingTanker ? 'Editar Pipa' : 'Nueva Pipa'}>
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Código / Placa</label>
+                            <input type="text" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} required placeholder="Ej. PIP-01" />
                         </div>
-                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Código / Placa</label>
-                                    <input type="text" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} required placeholder="Ej. PIP-01" />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Transportista</label>
-                                    <select 
-                                        style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
-                                        value={formData.carrier_id}
-                                        onChange={e => setFormData({...formData, carrier_id: e.target.value})}
-                                        required
-                                    >
-                                        <option value="" disabled>Seleccionar...</option>
-                                        {carriers.map(c => <option key={c.id} value={c.id}>{c.description} ({c.code})</option>)}
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div style={{ marginTop: '1rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                                    <h3 style={{ fontSize: '1rem' }}>Compartimientos</h3>
-                                    <button type="button" onClick={handleAddCompartment} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(37, 99, 235, 0.2)', color: 'var(--primary)', padding: '4px 8px', borderRadius: '4px', border: 'none', fontSize: '0.8rem', cursor: 'pointer' }}>
-                                        <Plus size={14} /> Agregar
-                                    </button>
-                                </div>
-                                
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                    {compartments.map((comp, i) => (
-                                        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', padding: '1rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>Compartimiento #{comp.number}</span>
-                                                <button type="button" onClick={() => handleRemoveCompartment(i)} disabled={compartments.length === 1} style={{ background: 'none', border: 'none', color: compartments.length === 1 ? 'transparent' : 'var(--danger)', cursor: compartments.length === 1 ? 'default' : 'pointer' }}>
-                                                    <Minus size={16} />
-                                                </button>
-                                            </div>
-                                            
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingLeft: '1rem', borderLeft: '2px solid var(--border)' }}>
-                                                {comp.separations.map((sep, j) => (
-                                                    <div key={j} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '70px' }}>Sep. {j + 1}:</span>
-                                                        <div style={{ flex: 1, position: 'relative' }}>
-                                                            <input 
-                                                                type="number" 
-                                                                value={sep.capacity} 
-                                                                onChange={(e) => handleSeparationChange(i, j, e.target.value)} 
-                                                                placeholder="Galones" 
-                                                                required 
-                                                                min="1"
-                                                                style={{ padding: '0.5rem', fontSize: '0.85rem' }}
-                                                            />
-                                                        </div>
-                                                        <button type="button" onClick={() => handleRemoveSeparation(i, j)} disabled={comp.separations.length === 1} style={{ background: 'none', border: 'none', color: comp.separations.length === 1 ? 'transparent' : 'var(--text-muted)', cursor: comp.separations.length === 1 ? 'default' : 'pointer' }}>
-                                                            <X size={14} />
-                                                        </button>
-                                                    </div>
-                                                ))}
-                                                <button type="button" onClick={() => handleAddSeparation(i)} style={{ alignSelf: 'flex-start', fontSize: '0.7rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '0.25rem' }}>
-                                                    <Plus size={12} /> Añadir Separación
-                                                </button>
-                                            </div>
-                                            
-                                            <div style={{ textAlign: 'right', fontSize: '0.8rem', fontWeight: 'bold', marginTop: '0.5rem', borderTop: '1px dashed var(--border)', paddingTop: '0.5rem' }}>
-                                                Capacidad Comp: {comp.separations.reduce((sum, s) => sum + (parseFloat(s.capacity) || 0), 0).toLocaleString()} Gal
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                                <div style={{ marginTop: '1rem', textAlign: 'right', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                                    Capacidad Total: <span style={{ fontWeight: 'bold', color: 'var(--text)' }}>
-                                        {compartments.reduce((sum, c) => sum + (c.separations.reduce((sSum, s) => sSum + (parseFloat(s.capacity) || 0), 0) || 0), 0).toLocaleString()} Gal
-                                    </span>
-                                </div>
-                            </div>
-
-                            <button type="submit" className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
-                                <Save size={18} /> {editingTanker ? 'Actualizar' : 'Guardar'}
-                            </button>
-                        </form>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Transportista</label>
+                            <select 
+                                style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
+                                value={formData.carrier_id}
+                                onChange={e => setFormData({...formData, carrier_id: e.target.value})}
+                                required
+                            >
+                                <option value="" disabled>Seleccionar...</option>
+                                {carriers.map(c => <option key={c.id} value={c.id}>{c.description} ({c.code})</option>)}
+                            </select>
+                        </div>
                     </div>
-                </div>
-            )}
+
+                    <div style={{ marginTop: '1rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                            <h3 style={{ fontSize: '1rem' }}>Compartimientos</h3>
+                            <button type="button" onClick={handleAddCompartment} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(37, 99, 235, 0.2)', color: 'var(--primary)', padding: '4px 8px', borderRadius: '4px', border: 'none', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                <Plus size={14} /> Agregar
+                            </button>
+                        </div>
+                        
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            {compartments.map((comp, i) => (
+                                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', padding: '1rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>Compartimiento #{comp.number}</span>
+                                        <button type="button" onClick={() => handleRemoveCompartment(i)} disabled={compartments.length === 1} style={{ background: 'none', border: 'none', color: compartments.length === 1 ? 'transparent' : 'var(--danger)', cursor: compartments.length === 1 ? 'default' : 'pointer' }}>
+                                            <Minus size={16} />
+                                        </button>
+                                    </div>
+                                    
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingLeft: '1rem', borderLeft: '2px solid var(--border)' }}>
+                                        {comp.separations.map((sep, j) => (
+                                            <div key={j} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '70px' }}>Sep. {j + 1}:</span>
+                                                <div style={{ flex: 1, position: 'relative' }}>
+                                                    <input 
+                                                        type="number" 
+                                                        value={sep.capacity} 
+                                                        onChange={(e) => handleSeparationChange(i, j, e.target.value)} 
+                                                        placeholder="Galones" 
+                                                        required 
+                                                        min="1"
+                                                        style={{ padding: '0.5rem', fontSize: '0.85rem' }}
+                                                    />
+                                                </div>
+                                                <button type="button" onClick={() => handleRemoveSeparation(i, j)} disabled={comp.separations.length === 1} style={{ background: 'none', border: 'none', color: comp.separations.length === 1 ? 'transparent' : 'var(--text-muted)', cursor: comp.separations.length === 1 ? 'default' : 'pointer' }}>
+                                                    <X size={14} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                        <button type="button" onClick={() => handleAddSeparation(i)} style={{ alignSelf: 'flex-start', fontSize: '0.7rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '0.25rem' }}>
+                                            <Plus size={12} /> Añadir Separación
+                                        </button>
+                                    </div>
+                                    
+                                    <div style={{ textAlign: 'right', fontSize: '0.8rem', fontWeight: 'bold', marginTop: '0.5rem', borderTop: '1px dashed var(--border)', paddingTop: '0.5rem' }}>
+                                        Capacidad Comp: {comp.separations.reduce((sum, s) => sum + (parseFloat(s.capacity) || 0), 0).toLocaleString()} Gal
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ marginTop: '1rem', textAlign: 'right', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                            Capacidad Total: <span style={{ fontWeight: 'bold', color: 'var(--text)' }}>
+                                {compartments.reduce((sum, c) => sum + (c.separations.reduce((sSum, s) => sSum + (parseFloat(s.capacity) || 0), 0) || 0), 0).toLocaleString()} Gal
+                            </span>
+                        </div>
+                    </div>
+
+                    <button type="submit" className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                        <Save size={18} /> {editingTanker ? 'Actualizar' : 'Guardar'}
+                    </button>
+                </form>
+            </Modal>
         </div>
     );
 }

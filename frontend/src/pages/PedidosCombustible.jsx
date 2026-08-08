@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Truck, CheckCircle, Save, XCircle, Search, Calendar, CheckSquare, PlusSquare } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 import api from '../services/api';
 import { socket } from '../services/socket';
 import { todayStr } from '../utils/date';
@@ -456,7 +457,7 @@ export default function PedidosCombustible() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', zoom: 0.95 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
                 <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '1.2rem', margin: 0 }}>
                     <Truck size={24} color="var(--primary)" /> Pedidos de Combustible
@@ -470,11 +471,11 @@ export default function PedidosCombustible() {
             </div>
 
             {/* Top Toolbar */}
-            <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '200px' }}>
                     <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>ESTACION</label>
                     <select value={selectedEstacion} onChange={e => setSelectedEstacion(e.target.value)} disabled={isLoading}
-                        style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', minWidth: '250px' }}>
+                        style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', width: '100%' }}>
                         <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Estación --</option>
                         {estaciones.map(e => <option key={e.id_empresa} value={e.id_empresa} style={{ background: '#1e293b', color: 'white' }}>{e.titulo}</option>)}
                     </select>
@@ -485,7 +486,7 @@ export default function PedidosCombustible() {
                 </span>}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(350px, 1fr) 2fr', gap: '1rem', alignItems: 'start', opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
+            <div className="pedidos-grid" style={{ display: 'grid', gap: '1rem', alignItems: 'start', opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
                 {/* Panel Izquierdo: Formulario */}
                 <div className="card glass" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem' }}>
                     <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', borderBottom: '1px solid var(--primary)', paddingBottom: '0.5rem' }}>OPERACIONES PARA AGREGAR PEDIDO</h3>
@@ -676,47 +677,44 @@ export default function PedidosCombustible() {
                 </div>
             </div>
 
-            {/* Modal Confirmacion Falsa/MVP */}
-            {showConfirmModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-                    <div className="card glass" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <h3 style={{ margin: 0, borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>Confirmar Transacción</h3>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>NÚMERO DE PEDIDO</label>
-                            <input type="text" placeholder="Ingrese número de pedido" value={confirmData.numero_pedido} onChange={e=>setConfirmData({...confirmData, numero_pedido: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
+            {/* Modal Confirmacion */}
+            <Modal open={showConfirmModal} onClose={() => setShowConfirmModal(false)} title="Confirmar Transacción">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>NÚMERO DE PEDIDO</label>
+                        <input type="text" placeholder="Ingrese número de pedido" value={confirmData.numero_pedido} onChange={e=>setConfirmData({...confirmData, numero_pedido: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>FORMA DE PAGO</label>
+                        <input type="text" placeholder="Ej. CREDITO, EFECTIVO, CHEQUE..." value={confirmData.forma_pago} onChange={e=>setConfirmData({...confirmData, forma_pago: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
+                    </div>
+                    <div className="form-grid form-grid-2">
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <label style={{ fontSize: '0.7rem' }}>Costo D</label>
+                            <input type="number" step="0.01" value={confirmData.costo_d} onChange={e=>setConfirmData({...confirmData, costo_d: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>FORMA DE PAGO</label>
-                            <input type="text" placeholder="Ej. CREDITO, EFECTIVO, CHEQUE..." value={confirmData.forma_pago} onChange={e=>setConfirmData({...confirmData, forma_pago: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                                <label style={{ fontSize: '0.7rem' }}>Costo D</label>
-                                <input type="number" step="0.01" value={confirmData.costo_d} onChange={e=>setConfirmData({...confirmData, costo_d: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
-                            </div>
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                                <label style={{ fontSize: '0.7rem' }}>Costo R</label>
-                                <input type="number" step="0.01" value={confirmData.costo_r} onChange={e=>setConfirmData({...confirmData, costo_r: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
-                            </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                                <label style={{ fontSize: '0.7rem' }}>Costo S</label>
-                                <input type="number" step="0.01" value={confirmData.costo_s} onChange={e=>setConfirmData({...confirmData, costo_s: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
-                            </div>
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                                <label style={{ fontSize: '0.7rem' }}>Costo Ion</label>
-                                <input type="number" step="0.01" value={confirmData.costo_i} onChange={e=>setConfirmData({...confirmData, costo_i: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-                            <button className="btn-secondary" onClick={() => setShowConfirmModal(false)}>Cancelar</button>
-                            <button className="btn-primary" onClick={executeConfirmTransaction}>Aplicar Confirmación</button>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <label style={{ fontSize: '0.7rem' }}>Costo R</label>
+                            <input type="number" step="0.01" value={confirmData.costo_r} onChange={e=>setConfirmData({...confirmData, costo_r: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
                         </div>
                     </div>
+                    <div className="form-grid form-grid-2">
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <label style={{ fontSize: '0.7rem' }}>Costo S</label>
+                            <input type="number" step="0.01" value={confirmData.costo_s} onChange={e=>setConfirmData({...confirmData, costo_s: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <label style={{ fontSize: '0.7rem' }}>Costo Ion</label>
+                            <input type="number" step="0.01" value={confirmData.costo_i} onChange={e=>setConfirmData({...confirmData, costo_i: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+                        <button className="btn-secondary" onClick={() => setShowConfirmModal(false)}>Cancelar</button>
+                        <button className="btn-primary" onClick={executeConfirmTransaction}>Aplicar Confirmación</button>
+                    </div>
                 </div>
-            )}
+            </Modal>
         </div>
     );
 }

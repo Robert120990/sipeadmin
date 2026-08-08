@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 
+// Globals only used inside puppeteer page.evaluate() (browser context)
+/* global document, window, navigator */
+
 // ── In-memory cache (10 min TTL) ─────────────────────────────────────────────
 let cachedResult = null;
 let cacheTimestamp = 0;
@@ -90,8 +93,7 @@ const parseRelativeDate = (str) => {
     const months = {
         ene: 0, feb: 1, mar: 2, abr: 3, may: 4, jun: 5,
         jul: 6, ago: 7, sep: 8, oct: 9, nov: 10, dic: 11,
-        jan: 0, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-        apr: 3
+        jan: 0, aug: 7, dec: 11, apr: 3
     };
     const spanishDate = lower.match(/(\d{1,2})\s+(?:de\s+)?([a-z]{3})\.?\s+(?:de\s+)?(\d{4})/);
     if (spanishDate) {
@@ -370,7 +372,7 @@ router.get('/onedrive/estado', authenticateToken, async (req, res) => {
                 try {
                     await page.goBack({ waitUntil: 'networkidle2', timeout: 8000 }).catch(() => {});
                     await waitForRows(page, 5000);
-                } catch {}
+                } catch { /* folder navigation failure is non-fatal */ }
             }
         }
 

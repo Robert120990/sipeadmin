@@ -6,6 +6,7 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { useToast } from '../components/Toast';
+import Modal from '../components/Modal';
 
 const ConsultasPreciosCompetencia = () => {
     const [data, setData] = useState([]);
@@ -216,7 +217,7 @@ const ConsultasPreciosCompetencia = () => {
     return (
         <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
             {/* Header section */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div>
                         <h1 style={{ color: 'var(--primary)', marginBottom: '0.25rem' }}>Precios de Competencia</h1>
@@ -352,95 +353,81 @@ const ConsultasPreciosCompetencia = () => {
                 </div>
             </div>
 
-            {showUploadModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(8px)' }}>
-                    <div className="card glass" style={{ width: '95%', maxWidth: '1100px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', padding: '1.5rem', border: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', alignItems: 'center', flexShrink: 0 }}>
-                            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
-                                <FileSpreadsheet size={24} color="var(--primary)" />
-                                Cargar Precios de Competencia
-                            </h2>
-                            <button onClick={() => setShowUploadModal(false)} style={{ background: 'none', color: 'var(--text-muted)', border: 'none', cursor: 'pointer' }}><X size={24} /></button>
+            <Modal open={showUploadModal} onClose={() => setShowUploadModal(false)} title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><FileSpreadsheet size={20} color="var(--primary)" />Cargar Precios de Competencia</span>} size="xl">
+                {csvData.length === 0 ? (
+                    <div style={{ border: '2px dashed var(--border)', borderRadius: '8px', padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <Upload size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                        <p style={{ marginBottom: '1rem' }}>Seleccione un archivo .csv con los precios de competencia</p>
+                        <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 2rem' }}>
+                            <FileSpreadsheet size={18} /> Seleccionar Archivo
+                            <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+                        </label>
+                    </div>
+                ) : (
+                    <>
+                        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                                <FileSpreadsheet size={14} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} />
+                                {csvFileName} ({csvData.length} filas)
+                            </span>
+                            <div style={{ flex: 1 }} />
+                            {!validado && (
+                                <button onClick={handleValidar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <CheckCircle size={16} /> Validar
+                                </button>
+                            )}
+                            {validado && !filtrado && (
+                                <button onClick={handleFiltrar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <Filter size={16} /> Filtrar
+                                </button>
+                            )}
+                            {filtrado && (
+                                <button onClick={handleActualizar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} disabled={uploading}>
+                                    <Upload size={16} /> {uploading ? 'Actualizando...' : 'Actualizar BD'}
+                                </button>
+                            )}
+                            <button onClick={() => { setCsvData([]); setCsvFileName(''); setValidado(false); setFiltrado(false); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <X size={16} /> Limpiar
+                            </button>
                         </div>
 
-                        {csvData.length === 0 ? (
-                            <div style={{ border: '2px dashed var(--border)', borderRadius: '8px', padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                <Upload size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
-                                <p style={{ marginBottom: '1rem' }}>Seleccione un archivo .csv con los precios de competencia</p>
-                                <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 2rem' }}>
-                                    <FileSpreadsheet size={18} /> Seleccionar Archivo
-                                    <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
-                                </label>
-                            </div>
-                        ) : (
-                            <>
-                                <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexShrink: 0, alignItems: 'center' }}>
-                                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                                        <FileSpreadsheet size={14} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} />
-                                        {csvFileName} ({csvData.length} filas)
-                                    </span>
-                                    <div style={{ flex: 1 }} />
-                                    {!validado && (
-                                        <button onClick={handleValidar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                            <CheckCircle size={16} /> Validar
-                                        </button>
-                                    )}
-                                    {validado && !filtrado && (
-                                        <button onClick={handleFiltrar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                            <Filter size={16} /> Filtrar
-                                        </button>
-                                    )}
-                                    {filtrado && (
-                                        <button onClick={handleActualizar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} disabled={uploading}>
-                                            <Upload size={16} /> {uploading ? 'Actualizando...' : 'Actualizar BD'}
-                                        </button>
-                                    )}
-                                    <button onClick={() => { setCsvData([]); setCsvFileName(''); setValidado(false); setFiltrado(false); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <X size={16} /> Limpiar
-                                    </button>
-                                </div>
-
-                                <div style={{ flex: 1, border: '1px solid var(--border)', borderRadius: '4px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                                    <div style={{ overflow: 'auto', flex: 1 }}>
-                                    <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.75rem' }}>
-                                        <thead>
-                                            <tr>
-                                                <th style={{ padding: '0.5rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Estación</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)', width: '100px' }}>Modificación</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super C</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular C</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Ion C</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel C</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super A</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular A</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Ion A</th>
-                                                <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel A</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {csvData.map((row, idx) => (
-                                                <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                                    <td style={{ padding: '0.4rem 0.5rem' }}>{row[0]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem' }}>{row[1]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[2]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[3]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[4]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[5]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[6]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[7]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[8]}</td>
-                                                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[9]}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                    </div>
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
-            )}
+                        <div style={{ border: '1px solid var(--border)', borderRadius: '4px', overflow: 'auto', maxHeight: '65vh' }}>
+                            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.75rem' }}>
+                                <thead>
+                                    <tr>
+                                        <th style={{ padding: '0.5rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Estación</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)', width: '100px' }}>Modificación</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super C</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular C</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Ion C</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel C</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super A</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular A</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Ion A</th>
+                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel A</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {csvData.map((row, idx) => (
+                                        <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <td style={{ padding: '0.4rem 0.5rem' }}>{row[0]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem' }}>{row[1]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[2]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[3]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[4]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[5]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[6]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[7]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[8]}</td>
+                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[9]}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </>
+                )}
+            </Modal>
         </div>
     );
 };

@@ -1,7 +1,8 @@
 ﻿import React, { useEffect, useState, useMemo } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
-import { Landmark, User, Hash, Edit2, X, Save, Plus, CheckCircle, XCircle, FileText, Search, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
+import Modal from '../components/Modal';
+import { Landmark, User, Hash, Edit2, Save, Plus, CheckCircle, XCircle, FileText, Search, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 
 export default function CuentasBancarias() {
     const [accounts, setAccounts] = useState([]);
@@ -181,7 +182,7 @@ export default function CuentasBancarias() {
 
     return (
         <div style={{ padding: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div>
                     <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <Landmark size={32} color="var(--primary)" />
@@ -195,7 +196,7 @@ export default function CuentasBancarias() {
                         <input 
                             type="text" 
                             placeholder="Buscar cuenta..." 
-                            style={{ paddingLeft: '3rem', width: '300px' }}
+                            style={{ paddingLeft: '3rem', width: '100%', minWidth: '200px' }}
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}
                         />
@@ -207,7 +208,7 @@ export default function CuentasBancarias() {
                 </div>
             </div>
 
-            <div className="card glass" style={{ overflow: 'hidden' }}>
+            <div className="card glass table-responsive">
                 <table style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)' }}>
@@ -315,204 +316,185 @@ export default function CuentasBancarias() {
                 )}
             </div>
 
-            {showModal && (
-                    <div style={{ 
-                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-                        background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', 
-                        alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(8px)' 
-                    }}>
-                        <div className="card glass shadow-xl" style={{ width: '600px', padding: '2rem', border: '1px solid rgba(255,255,255,0.1)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
-                                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    {editingAccount ? <Edit2 size={24} /> : <Plus size={24} />}
-                                    {editingAccount ? 'Editar Cuenta' : 'Nueva Cuenta Bancaria'}
-                                </h2>
-                                <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)' }}>
-                                    <X size={24} />
-                                </button>
-                            </div>
-                            
-                            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Empresa</label>
-                                        <select 
-                                            style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
-                                            value={formData.id_empresa}
-                                            onChange={e => handleCompanyChange(e.target.value)}
-                                            required
-                                        >
-                                            <option value="">Seleccione Empresa</option>
-                                            {empresas.map(emp => (
-                                                <option key={emp.id} value={emp.id}>{emp.nombre}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Estado</label>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0' }}>
-                                            <button
-                                                type="button"
-                                                onClick={() => setFormData({...formData, activa: formData.activa === 'S' ? 'N' : 'S'})}
-                                                style={{
-                                                    position: 'relative',
-                                                    width: '44px',
-                                                    height: '22px',
-                                                    background: formData.activa === 'S' ? 'var(--primary)' : 'rgba(255,255,255,0.2)',
-                                                    border: 'none',
-                                                    borderRadius: '11px',
-                                                    cursor: 'pointer',
-                                                    transition: 'background 0.3s',
-                                                    padding: 0
-                                                }}
-                                            >
-                                                <div
-                                                    style={{
-                                                        position: 'absolute',
-                                                        top: '2px',
-                                                        left: formData.activa === 'S' ? '24px' : '2px',
-                                                        width: '18px',
-                                                        height: '18px',
-                                                        background: 'white',
-                                                        borderRadius: '50%',
-                                                        transition: 'left 0.3s'
-                                                    }}
-                                                />
-                                            </button>
-                                            <span style={{ fontSize: '0.8rem', color: formData.activa === 'S' ? 'var(--text)' : 'var(--text-muted)' }}>
-                                                {formData.activa === 'S' ? 'Activa' : 'Inactiva'}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Banco</label>
-                                        <select 
-                                            style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
-                                            value={formData.cod_banco}
-                                            onChange={e => setFormData({...formData, cod_banco: e.target.value})}
-                                            required
-                                            disabled={!formData.id_empresa}
-                                        >
-                                            <option value="">Seleccione Banco</option>
-                                            {bancos.map(ban => (
-                                                <option key={ban.id} value={ban.id}>{ban.descripcion}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Tipo de Cuenta</label>
-                                        <select 
-                                            style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
-                                            value={formData.cod_tipo}
-                                            onChange={e => setFormData({...formData, cod_tipo: e.target.value})}
-                                            required
-                                            disabled={!formData.id_empresa}
-                                        >
-                                            <option value="">Seleccione Tipo</option>
-                                            {tipos.map(t => (
-                                                <option key={t.id} value={t.id}>{t.descripcion}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                </div>
-
-                                <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: '1rem' }}>
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Número de Cuenta</label>
-                                        <div style={{ position: 'relative' }}>
-                                            <Hash size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                            <input 
-                                                type="text" 
-                                                style={{ paddingLeft: '3rem' }}
-                                                placeholder="000-0000000-00"
-                                                value={formData.numero} 
-                                                onChange={e => setFormData({...formData, numero: e.target.value})}
-                                                required 
-                                            />
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cta. Contable</label>
-                                        <div style={{ position: 'relative' }}>
-                                            <FileText size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                            <input 
-                                                type="text" 
-                                                style={{ paddingLeft: '3rem' }}
-                                                placeholder="1101-01-01"
-                                                value={formData.cod_cta} 
-                                                onChange={e => setFormData({...formData, cod_cta: e.target.value})}
-                                            />
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Orden</label>
-                                        <input 
-                                            type="number" 
-                                            placeholder="0"
-                                            value={formData.orden === undefined ? '' : formData.orden} 
-                                            onChange={e => setFormData({...formData, orden: e.target.value})}
-                                            min="0"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Nombre Alterno / Representante</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <User size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input 
-                                            type="text" 
-                                            style={{ paddingLeft: '3rem' }}
-                                            placeholder="Ej: Cuenta de Planilla o Nombre del dueño"
-                                            value={formData.nombre} 
-                                            onChange={e => setFormData({...formData, nombre: e.target.value})}
-                                            required 
-                                        />
-                                    </div>
-                                </div>
-
-                                <div style={{ marginTop: '0.5rem', display: 'flex', gap: '1rem' }}>
-                                    <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>
-                                        Cancelar
-                                    </button>
-                                    <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
-                                        <Save size={18} />
-                                        {editingAccount ? 'Actualizar Cuenta' : 'Guardar Cuenta'}
-                                    </button>
-                                </div>
-                            </form>
+            <Modal
+                open={showModal}
+                onClose={() => setShowModal(false)}
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>{editingAccount ? <Edit2 size={20} /> : <Plus size={20} />}{editingAccount ? 'Editar Cuenta' : 'Nueva Cuenta Bancaria'}</span>}
+            >
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Empresa</label>
+                            <select 
+                                style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
+                                value={formData.id_empresa}
+                                onChange={e => handleCompanyChange(e.target.value)}
+                                required
+                            >
+                                <option value="">Seleccione Empresa</option>
+                                {empresas.map(emp => (
+                                    <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+                                ))}
+                            </select>
                         </div>
-                    </div>
-                )}
-
-                {showConfirmModal && pendingToggle && (
-                    <div style={{ 
-                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-                        background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', 
-                        alignItems: 'center', zIndex: 1100, backdropFilter: 'blur(8px)' 
-                    }}>
-                        <div className="card glass shadow-xl" style={{ width: '450px', padding: '2rem', border: '1px solid rgba(255,255,255,0.1)' }}>
-                            <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-                                <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem' }}>Confirmar Acción</h3>
-                                <p style={{ color: 'var(--text-muted)', margin: 0, fontSize: '0.9rem' }}>
-                                    ¿Está seguro que desea {pendingToggle.newStatus === 'S' ? 'activar' : 'desactivar'} la cuenta{' '}
-                                    <strong>{pendingToggle.account.numero}</strong>?
-                                </p>
-                            </div>
-                            <div style={{ display: 'flex', gap: '1rem' }}>
-                                <button type="button" onClick={cancelToggle} className="btn-secondary" style={{ flex: 1 }}>
-                                    Cancelar
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Estado</label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setFormData({...formData, activa: formData.activa === 'S' ? 'N' : 'S'})}
+                                    style={{
+                                        position: 'relative',
+                                        width: '44px',
+                                        height: '22px',
+                                        minHeight: 0,
+                                        background: formData.activa === 'S' ? 'var(--primary)' : 'rgba(255,255,255,0.2)',
+                                        border: 'none',
+                                        borderRadius: '11px',
+                                        cursor: 'pointer',
+                                        transition: 'background 0.3s',
+                                        padding: 0
+                                    }}
+                                >
+                                    <div
+                                        style={{
+                                            position: 'absolute',
+                                            top: '2px',
+                                            left: formData.activa === 'S' ? '24px' : '2px',
+                                            width: '18px',
+                                            height: '18px',
+                                            background: 'white',
+                                            borderRadius: '50%',
+                                            transition: 'left 0.3s'
+                                        }}
+                                    />
                                 </button>
-                                <button type="button" onClick={confirmToggle} className="btn-primary" style={{ flex: 1 }}>
-                                    Confirmar
-                                </button>
+                                <span style={{ fontSize: '0.8rem', color: formData.activa === 'S' ? 'var(--text)' : 'var(--text-muted)' }}>
+                                    {formData.activa === 'S' ? 'Activa' : 'Inactiva'}
+                                </span>
                             </div>
                         </div>
                     </div>
-                )}
+
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Banco</label>
+                            <select 
+                                style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
+                                value={formData.cod_banco}
+                                onChange={e => setFormData({...formData, cod_banco: e.target.value})}
+                                required
+                                disabled={!formData.id_empresa}
+                            >
+                                <option value="">Seleccione Banco</option>
+                                {bancos.map(ban => (
+                                    <option key={ban.id} value={ban.id}>{ban.descripcion}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Tipo de Cuenta</label>
+                            <select 
+                                style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
+                                value={formData.cod_tipo}
+                                onChange={e => setFormData({...formData, cod_tipo: e.target.value})}
+                                required
+                                disabled={!formData.id_empresa}
+                            >
+                                <option value="">Seleccione Tipo</option>
+                                {tipos.map(t => (
+                                    <option key={t.id} value={t.id}>{t.descripcion}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="form-grid form-grid-3">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Número de Cuenta</label>
+                            <div style={{ position: 'relative' }}>
+                                <Hash size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input 
+                                    type="text" 
+                                    style={{ paddingLeft: '3rem' }}
+                                    placeholder="000-0000000-00"
+                                    value={formData.numero} 
+                                    onChange={e => setFormData({...formData, numero: e.target.value})}
+                                    required 
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cta. Contable</label>
+                            <div style={{ position: 'relative' }}>
+                                <FileText size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input 
+                                    type="text" 
+                                    style={{ paddingLeft: '3rem' }}
+                                    placeholder="1101-01-01"
+                                    value={formData.cod_cta} 
+                                    onChange={e => setFormData({...formData, cod_cta: e.target.value})}
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Orden</label>
+                            <input 
+                                type="number" 
+                                placeholder="0"
+                                value={formData.orden === undefined ? '' : formData.orden} 
+                                onChange={e => setFormData({...formData, orden: e.target.value})}
+                                min="0"
+                            />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Nombre Alterno / Representante</label>
+                        <div style={{ position: 'relative' }}>
+                            <User size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                            <input 
+                                type="text" 
+                                style={{ paddingLeft: '3rem' }}
+                                placeholder="Ej: Cuenta de Planilla o Nombre del dueño"
+                                value={formData.nombre} 
+                                onChange={e => setFormData({...formData, nombre: e.target.value})}
+                                required 
+                            />
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: '0.5rem', display: 'flex', gap: '1rem' }}>
+                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>
+                            Cancelar
+                        </button>
+                        <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                            <Save size={18} />
+                            {editingAccount ? 'Actualizar Cuenta' : 'Guardar Cuenta'}
+                        </button>
+                    </div>
+                </form>
+            </Modal>
+
+            <Modal
+                open={showConfirmModal && !!pendingToggle}
+                onClose={cancelToggle}
+                title="Confirmar Acción"
+                size="sm"
+            >
+                <p style={{ color: 'var(--text-muted)', margin: 0, fontSize: '0.9rem' }}>
+                    ¿Está seguro que desea {pendingToggle?.newStatus === 'S' ? 'activar' : 'desactivar'} la cuenta{' '}
+                    <strong>{pendingToggle?.account?.numero}</strong>?
+                </p>
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
+                    <button type="button" onClick={cancelToggle} className="btn-secondary" style={{ flex: 1 }}>
+                        Cancelar
+                    </button>
+                    <button type="button" onClick={confirmToggle} className="btn-primary" style={{ flex: 1 }}>
+                        Confirmar
+                    </button>
+                </div>
+            </Modal>
             </div>
     );
 }

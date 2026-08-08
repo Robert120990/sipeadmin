@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
-import { Truck, Edit2, Trash2, X, Save } from 'lucide-react';
+import Modal from '../components/Modal';
+import { Truck, Edit2, Trash2, Save } from 'lucide-react';
 
 export default function Carriers() {
     const [carriers, setCarriers] = useState([]);
@@ -71,7 +72,7 @@ export default function Carriers() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div>
                     <h1>Transportistas</h1>
                     <p style={{ color: 'var(--text-muted)' }}>Catálogo de empresas de transporte.</p>
@@ -117,29 +118,21 @@ export default function Carriers() {
                 </table>
             </div>
 
-            {showModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
-                    <div className="card glass" style={{ width: '400px', padding: '2rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-                            <h2>{editingCarrier ? 'Editar Transportista' : 'Nuevo Transportista'}</h2>
-                            <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)' }}><X size={20} /></button>
-                        </div>
-                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Código</label>
-                                <input type="text" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} required placeholder="Ej. TR-001" />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Descripción / Nombre</label>
-                                <input type="text" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} required placeholder="Nombre de la empresa" />
-                            </div>
-                            <button type="submit" className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
-                                <Save size={18} /> {editingCarrier ? 'Actualizar' : 'Guardar'}
-                            </button>
-                        </form>
+            <Modal open={showModal} onClose={() => setShowModal(false)} title={editingCarrier ? 'Editar Transportista' : 'Nuevo Transportista'}>
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Código</label>
+                        <input type="text" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} required placeholder="Ej. TR-001" />
                     </div>
-                </div>
-            )}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Descripción / Nombre</label>
+                        <input type="text" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} required placeholder="Nombre de la empresa" />
+                    </div>
+                    <button type="submit" className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                        <Save size={18} /> {editingCarrier ? 'Actualizar' : 'Guardar'}
+                    </button>
+                </form>
+            </Modal>
         </div>
     );
 }

@@ -83,9 +83,9 @@ export default function VentasEstaciones() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', zoom: 0.95 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {/* Control Bar */}
-            <div className="card glass" style={{ display: 'flex', gap: '1rem', alignItems: 'center', padding: '1rem' }}>
+            <div className="card glass" style={{ display: 'flex', gap: '1rem', alignItems: 'center', padding: '1rem', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', overflow: 'hidden', padding: '0 0.5rem', background: 'var(--bg-color)' }}>
                     <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginRight: '0.5rem' }}>Fecha:</span>
                     <Calendar size={16} color="var(--text-muted)" />

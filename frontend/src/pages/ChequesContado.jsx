@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Search, FileText, CheckCircle, X, CreditCard } from 'lucide-react';
+import { Search, FileText, CheckCircle, CreditCard } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import Modal from '../components/Modal';
 
 const ToggleSwitch = ({ checked, onChange }) => (
     <button
@@ -11,6 +12,7 @@ const ToggleSwitch = ({ checked, onChange }) => (
             position: 'relative',
             width: '44px',
             height: '22px',
+            minHeight: 0,
             background: checked ? 'var(--primary)' : 'rgba(255,255,255,0.2)',
             border: 'none',
             borderRadius: '11px',
@@ -132,7 +134,7 @@ const ChequesContado = () => {
 
     return (
         <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div>
                     <h1 style={{ color: 'var(--primary)', marginBottom: '0.25rem' }}>Emisión de Cheques de Contado</h1>
                     <p style={{ color: 'var(--text-muted)' }}>Generar cheques a partir de solicitudes de pago de contado.</p>
@@ -142,7 +144,7 @@ const ChequesContado = () => {
             <div className="card glass" style={{ padding: '1.25rem', marginBottom: '2rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <label style={{ fontSize: '0.8rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>ESTACIÓN</label>
-                    <select value={estacion} onChange={e => setEstacion(e.target.value)} style={{ minWidth: '250px' }}>
+                    <select value={estacion} onChange={e => setEstacion(e.target.value)} style={{ width: '100%', maxWidth: '280px' }}>
                         <option value="">Seleccione...</option>
                         {estaciones.map(emp => (
                             <option key={emp.id} value={emp.id}>{emp.id} - {emp.nombre}</option>
@@ -227,66 +229,54 @@ const ChequesContado = () => {
                 </div>
             </div>
 
-            {showModal && selectedSolicitud && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(8px)' }}>
-                    <div className="card glass" style={{ width: '550px', padding: '2rem', border: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem', alignItems: 'center' }}>
-                            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
-                                <CreditCard size={24} color="var(--primary)" />
-                                Generar Cheque de Contado
-                            </h2>
-                            <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)', border: 'none', cursor: 'pointer' }}><X size={24} /></button>
+            <Modal open={showModal && !!selectedSolicitud} onClose={() => setShowModal(false)} title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><CreditCard size={20} color="var(--primary)" />Generar Cheque de Contado</span>}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Fecha</label>
+                            <input type="text" value={fmtFecha(selectedSolicitud?.fecha)} readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
                         </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Fecha</label>
-                                    <input type="text" value={fmtFecha(selectedSolicitud.fecha)} readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Monto</label>
-                                    <input type="text" value={fmtMonto(selectedSolicitud.monto)} readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
-                                </div>
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Beneficiario</label>
-                                <input type="text" value={selectedSolicitud.nombre} readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuenta Bancaria *</label>
-                                <select value={cuentaSelected} onChange={e => setCuentaSelected(e.target.value)} style={{ width: '100%' }}>
-                                    <option value="">Seleccione cuenta...</option>
-                                    {cuentas.map(c => (
-                                        <option key={c.corr} value={c.corr}>
-                                            {c.banco} | {c.numero} | {c.nombre} ({c.empresa_nombre})
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>No. Cheque *</label>
-                                <input type="text" value={chequeNum} onChange={e => setChequeNum(e.target.value)} placeholder="Número de cheque" style={{ width: '200px' }} />
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Concepto</label>
-                                <input type="text" value="PAGO A PROVEEDOR (CONTADO)" readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
-                            </div>
-
-                            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                                <button onClick={() => setShowModal(false)} className="btn-secondary" style={{ padding: '0.6rem 2rem' }}>Cancelar</button>
-                                <button onClick={handleGenerar} className="btn-primary" style={{ padding: '0.6rem 2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <CheckCircle size={16} /> Generar Cheque
-                                </button>
-                            </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Monto</label>
+                            <input type="text" value={fmtMonto(selectedSolicitud?.monto)} readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
                         </div>
                     </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Beneficiario</label>
+                        <input type="text" value={selectedSolicitud?.nombre} readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuenta Bancaria *</label>
+                        <select value={cuentaSelected} onChange={e => setCuentaSelected(e.target.value)} style={{ width: '100%' }}>
+                            <option value="">Seleccione cuenta...</option>
+                            {cuentas.map(c => (
+                                <option key={c.corr} value={c.corr}>
+                                    {c.banco} | {c.numero} | {c.nombre} ({c.empresa_nombre})
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>No. Cheque *</label>
+                        <input type="text" value={chequeNum} onChange={e => setChequeNum(e.target.value)} placeholder="Número de cheque" style={{ width: '200px' }} />
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Concepto</label>
+                        <input type="text" value="PAGO A PROVEEDOR (CONTADO)" readOnly style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text)', width: '100%' }} />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                        <button onClick={() => setShowModal(false)} className="btn-secondary" style={{ padding: '0.6rem 2rem' }}>Cancelar</button>
+                        <button onClick={handleGenerar} className="btn-primary" style={{ padding: '0.6rem 2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <CheckCircle size={16} /> Generar Cheque
+                        </button>
+                    </div>
                 </div>
-            )}
+            </Modal>
         </div>
     );
 };

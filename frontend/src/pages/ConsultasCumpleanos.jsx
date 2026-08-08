@@ -109,7 +109,7 @@ export default function ConsultasCumpleanos() {
                             </span>
                         </div>
                         
-                        <div className="card glass overflow-hidden">
+                        <div className="card glass table-responsive">
                             <table style={{ minWidth: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>

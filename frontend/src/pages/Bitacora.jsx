@@ -179,7 +179,7 @@ export default function Bitacora() {
             </div>
 
             {/* Table */}
-            <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div style={{ flex: 1, overflow: 'auto' }}>
                 {loading ? (
                     <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
                         <p>Cargando bitácora...</p>

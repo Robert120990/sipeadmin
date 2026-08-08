@@ -53,7 +53,7 @@ export default function ConfiguracionContabilidad() {
 
             <div className="card glass shadow-lg" style={{ padding: '2rem' }}>
                 <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                    <div className="form-grid form-grid-2">
                         <div>
                             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500' }}>Host / IP</label>
                             <input 
@@ -97,7 +97,7 @@ export default function ConfiguracionContabilidad() {
                                 required 
                             />
                         </div>
-                        <div style={{ gridColumn: 'span 2' }}>
+                        <div className="span-2">
                             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500' }}>Nombre de la Base de Datos</label>
                             <input 
                                 type="text" 

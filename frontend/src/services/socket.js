@@ -1,13 +1,10 @@
 import { io } from 'socket.io-client';
 
-// Forzamos el host local y puerto 5001 donde el backend sabemos que está escuchando.
-// Ignoramos VITE_API_URL en desarrollo porque apunta incorrectamente a 5002.
-const URL = 'http://127.0.0.1:5001';
-
-
-export const socket = io(URL, {
+// Conecta al mismo origen (el proxy de Vite reenvía /socket.io en dev;
+// en producción el backend Express corre en el mismo dominio).
+export const socket = io({
+    path: '/socket.io',
     transports: ['polling', 'websocket'],
-
     autoConnect: true,
     reconnection: true
 });

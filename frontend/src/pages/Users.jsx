@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
-import { UserPlus, Edit2, Trash2, X, Save, AlertTriangle } from 'lucide-react';
+import Modal from '../components/Modal';
+import { UserPlus, Edit2, Trash2, Save, AlertTriangle } from 'lucide-react';
 
 export default function Users() {
     const [users, setUsers] = useState([]);
@@ -87,7 +88,7 @@ export default function Users() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div>
                     <h1>Gestión de Usuarios</h1>
                     <p style={{ color: 'var(--text-muted)' }}>Administra las cuentas de usuario y sus roles.</p>
@@ -152,85 +153,73 @@ export default function Users() {
                 </table>
             </div>
 
-            {showModal && (
-                <div style={{ 
-                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-                    background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', 
-                    alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' 
-                }}>
-                    <div className="card glass" style={{ width: '450px', padding: '2rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-                            <h2>{editingUser ? 'Editar Usuario' : 'Nuevo Usuario'}</h2>
-                            <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)' }}><X size={20} /></button>
-                        </div>
-                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Nombre de Usuario</label>
-                                <input 
-                                    type="text" 
-                                    value={formData.username} 
-                                    onChange={e => setFormData({...formData, username: e.target.value})}
-                                    required 
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Nombre Completo</label>
-                                <input 
-                                    type="text" 
-                                    value={formData.nombre} 
-                                    onChange={e => setFormData({...formData, nombre: e.target.value})}
-                                    required 
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Correo Electrónico (Opcional)</label>
-                                <input 
-                                    type="email" 
-                                    value={formData.email} 
-                                    onChange={e => setFormData({...formData, email: e.target.value})}
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
-                                    Contraseña {editingUser && <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(dejar en blanco para no cambiar)</span>}
-                                </label>
-                                <input 
-                                    type="password" 
-                                    value={formData.password} 
-                                    onChange={e => setFormData({...formData, password: e.target.value})}
-                                    required={!editingUser}
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Rol</label>
-                                <select 
-                                    style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
-                                    value={formData.role_id}
-                                    onChange={e => setFormData({...formData, role_id: e.target.value})}
-                                    required
-                                >
-                                    {roles.map(role => <option key={role.id} value={role.id}>{role.name}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Estado</label>
-                                <select 
-                                    style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
-                                    value={formData.status}
-                                    onChange={e => setFormData({...formData, status: e.target.value})}
-                                >
-                                    <option value="active">Activo</option>
-                                    <option value="inactive">Inactivo</option>
-                                </select>
-                            </div>
-                            <button type="submit" className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
-                                <Save size={18} />
-                                {editingUser ? 'Actualizar' : 'Crear Usuario'}
-                            </button>
-                        </form>
+            <Modal open={showModal} onClose={() => setShowModal(false)} title={editingUser ? 'Editar Usuario' : 'Nuevo Usuario'} size="md">
+                <form onSubmit={handleSubmit} className="form-grid">
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Nombre de Usuario</label>
+                        <input 
+                            type="text" 
+                            value={formData.username} 
+                            onChange={e => setFormData({...formData, username: e.target.value})}
+                            required 
+                        />
                     </div>
-                </div>
-            )}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Nombre Completo</label>
+                        <input 
+                            type="text" 
+                            value={formData.nombre} 
+                            onChange={e => setFormData({...formData, nombre: e.target.value})}
+                            required 
+                        />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Correo Electrónico (Opcional)</label>
+                        <input 
+                            type="email" 
+                            value={formData.email} 
+                            onChange={e => setFormData({...formData, email: e.target.value})}
+                        />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+                            Contraseña {editingUser && <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(dejar en blanco para no cambiar)</span>}
+                        </label>
+                        <input 
+                            type="password" 
+                            value={formData.password} 
+                            onChange={e => setFormData({...formData, password: e.target.value})}
+                            required={!editingUser}
+                        />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Rol</label>
+                        <select 
+                            style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
+                            value={formData.role_id}
+                            onChange={e => setFormData({...formData, role_id: e.target.value})}
+                            required
+                        >
+                            {roles.map(role => <option key={role.id} value={role.id}>{role.name}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Estado</label>
+                        <select 
+                            style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
+                            value={formData.status}
+                            onChange={e => setFormData({...formData, status: e.target.value})}
+                        >
+                            <option value="active">Activo</option>
+                            <option value="inactive">Inactivo</option>
+                        </select>
+                    </div>
+                    <button type="submit" className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                        <Save size={18} />
+                        {editingUser ? 'Actualizar' : 'Crear Usuario'}
+                    </button>
+                </form>
+            </Modal>
         </div>
     );
 }

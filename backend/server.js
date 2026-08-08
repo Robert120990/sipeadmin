@@ -80,7 +80,7 @@ app.get('/api/debug-db', async (req, res) => {
 });
 
 // Global error handler
-app.use((err, req, res, next) => {
+app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Express requires 4 args to detect error handlers
     console.error('Unhandled error:', err);
     res.status(err.status || 500).json({ message: err.message || 'Error interno del servidor' });
 });

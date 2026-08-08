@@ -29,6 +29,7 @@ import Bitacora from './pages/Bitacora';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
 import { ThemeProvider } from './components/ThemeProvider';
+import UpdateNotifier from './components/UpdateNotifier';
 
 const ProtectedRoute = ({ children }) => {
     const token = localStorage.getItem('token');
@@ -48,6 +49,7 @@ function App() {
         <ThemeProvider>
             <ToastProvider>
                 <ConfirmProvider>
+                    <UpdateNotifier />
                     <BrowserRouter>
                 <Routes>
                     <Route path="/login" element={<Login />} />

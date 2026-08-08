@@ -71,7 +71,7 @@ export default function ConfiguracionEmail() {
 
             <div className="card glass shadow-lg" style={{ padding: '2rem' }}>
                 <form onSubmit={handleEmailSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                    <div className="form-grid form-grid-2">
                         <div>
                             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500' }}>Servidor SMTP (Host)</label>
                             <input 
@@ -142,7 +142,7 @@ export default function ConfiguracionEmail() {
                     
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '1.5rem', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                         
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: '300px' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: '240px' }}>
                             <input 
                                 type="email" 
                                 className="form-control" 

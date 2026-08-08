@@ -1,7 +1,6 @@
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
 
-const path = require('path');
 dotenv.config(); // Standard config works better across environments
 
 const getDbConfig = () => {
@@ -143,7 +142,7 @@ const initDB = async () => {
             );
         `);
 
-        try { await pool.query("ALTER TABLE external_configs ADD COLUMN type VARCHAR(50) DEFAULT 'main'"); } catch(e) {}
+        try { await pool.query("ALTER TABLE external_configs ADD COLUMN type VARCHAR(50) DEFAULT 'main'"); } catch(e) { /* column may already exist */ }
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS email_configs (

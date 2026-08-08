@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon } from 'lucide-react';
+import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
+import { useViewport } from '../hooks/useViewport';
 import { catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering
@@ -34,6 +35,7 @@ export default function DashboardLayout() {
     const navigate = useNavigate();
     const location = useLocation();
     const { theme, toggleTheme } = useTheme();
+    const { isMobile } = useViewport();
     
     // UI State
     const [isCollapsed, setIsCollapsed] = useState(false);
@@ -54,6 +56,10 @@ export default function DashboardLayout() {
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard }
     ]);
     const [activeTabPath, setActiveTabPath] = useState('/dashboard');
+
+    // Mobile UI State
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [moreOpen, setMoreOpen] = useState(false);
 
     const user = JSON.parse(localStorage.getItem('user')) || {};
     const hasPermission = (path) => user.role_id === 1 || user.permissions?.includes(path);
@@ -111,6 +117,16 @@ export default function DashboardLayout() {
         }
     }, [location.pathname]);
 
+    // Android back: close mobile overlays before leaving the app
+    useEffect(() => {
+        const onPopState = () => {
+            setDrawerOpen(false);
+            setMoreOpen(false);
+        };
+        window.addEventListener('popstate', onPopState);
+        return () => window.removeEventListener('popstate', onPopState);
+    }, []);
+
     const handleLogout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
@@ -118,11 +134,17 @@ export default function DashboardLayout() {
     };
 
     const openTab = (item) => {
-        setTabs(prev => {
-            if (prev.find(t => t.path === item.path)) return prev;
-            return [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }];
-        });
+        if (isMobile) {
+            // Mobile: single active view — the new module replaces the current one
+            setTabs([{ name: item.name, path: item.path, icon: item.icon || FileText }]);
+        } else {
+            setTabs(prev => {
+                if (prev.find(t => t.path === item.path)) return prev;
+                return [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }];
+            });
+        }
         setActiveTabPath(item.path);
+        setDrawerOpen(false);
         if (location.pathname !== item.path) {
             navigate(item.path);
         }
@@ -140,6 +162,27 @@ export default function DashboardLayout() {
             setActiveTabPath(nextTab.path);
             navigate(nextTab.path);
         }
+    };
+
+    // Mobile overlays: push a history state so Android back closes them first
+    const openDrawer = () => {
+        setDrawerOpen(true);
+        window.history.pushState({ overlay: 'drawer' }, '');
+    };
+
+    const openMore = () => {
+        setMoreOpen(true);
+        window.history.pushState({ overlay: 'more' }, '');
+    };
+
+    const closeDrawer = () => {
+        setDrawerOpen(false);
+        if (window.history.state?.overlay) window.history.back();
+    };
+
+    const closeMore = () => {
+        setMoreOpen(false);
+        if (window.history.state?.overlay) window.history.back();
     };
 
     // Filtered Menus
@@ -181,7 +224,150 @@ export default function DashboardLayout() {
         );
     };
 
-    return (
+    const renderNavSections = (variant) => {
+        const navClassName = variant === 'drawer' ? 'drawer-nav' : 'sidebar-nav';
+        return (
+            <nav className={navClassName} style={variant === 'drawer' ? undefined : { flex: 1, overflowY: 'auto' }}>
+                {renderNavItem({ name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard })}
+
+                {filteredCatalogs.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('catalogs')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <Folder size={20} />
+                                {!isCollapsed && <span>Catálogos</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.catalogs ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.catalogs && !isCollapsed && filteredCatalogs.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
+
+                {filteredOperaciones.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('operaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <Folder size={20} />
+                                {!isCollapsed && <span>Operaciones</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.operaciones ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.operaciones && !isCollapsed && filteredOperaciones.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
+
+                {filteredBancosMenu.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('bancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <Folder size={20} />
+                                {!isCollapsed && <span>Bancos</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.bancos ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.bancos && !isCollapsed && filteredBancosMenu.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
+
+                {/* Consultas Section */}
+                {(filteredEstaciones.length > 0 || filteredBancos.length > 0 || filteredOtras.length > 0) && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('consultas')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <FileText size={20} />
+                                {!isCollapsed && <span>Consultas</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.consultas ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.consultas && !isCollapsed && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                {/* Estaciones Submenu */}
+                                {filteredEstaciones.length > 0 && (
+                                    <div>
+                                        <button className="nav-item" onClick={() => toggleMenu('consultasEstaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                            <span>Estaciones</span>
+                                            {openMenus.consultasEstaciones ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                        </button>
+                                        {openMenus.consultasEstaciones && filteredEstaciones.map(item => renderNavItem(item, true))}
+                                    </div>
+                                )}
+                                {/* Bancos Submenu */}
+                                {filteredBancos.length > 0 && (
+                                    <div>
+                                        <button className="nav-item" onClick={() => toggleMenu('consultasBancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                            <span>Bancos</span>
+                                            {openMenus.consultasBancos ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                        </button>
+                                        {openMenus.consultasBancos && filteredBancos.map(item => renderNavItem(item, true))}
+                                    </div>
+                                )}
+                                {/* Otras Submenu */}
+                                {filteredOtras.length > 0 && (
+                                    <div>
+                                        <button className="nav-item" onClick={() => toggleMenu('consultasOtras')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                            <span>Otras</span>
+                                            {openMenus.consultasOtras ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                        </button>
+                                        {openMenus.consultasOtras && filteredOtras.map(item => renderNavItem(item, true))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {filteredSecurity.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('security')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <Shield size={20} />
+                                {!isCollapsed && <span>Seguridad</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.security ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.security && !isCollapsed && filteredSecurity.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
+
+                {filteredConfiguracionMenu.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('configuracion')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <SettingsIcon size={20} />
+                                {!isCollapsed && <span>Configuración</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.configuracion ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.configuracion && !isCollapsed && filteredConfiguracionMenu.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
+            </nav>
+        );
+    };
+
+    const renderContent = () => (
+        <div className="tab-content-container">
+            {tabs.map(tab => (
+                <div 
+                    key={tab.path} 
+                    className={`tab-panel ${activeTabPath === tab.path ? 'active' : ''}`}
+                >
+                    {hasPermission(tab.path) || tab.path === '/dashboard' ? (
+                        componentRegistry[tab.path] || <div className="card glass">Módulo no registrado: {tab.path}</div>
+                    ) : (
+                        <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
+                            <Shield size={48} color="var(--danger)" style={{ marginBottom: '1rem' }} />
+                            <h2>Acceso Restringido</h2>
+                            <p>No tiene permisos suficientes para ver el módulo {tab.path}.</p>
+                        </div>
+                    )}
+                </div>
+            ))}
+        </div>
+    );
+
+    // ─────────────── Desktop Shell (sidebar + tabs) ───────────────
+    const desktopShell = (
         <div className={`dashboard-layout ${isCollapsed ? 'collapsed' : ''}`}>
             <aside className="sidebar">
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'space-between', padding: '0.5rem 0', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)' }}>
@@ -203,121 +389,7 @@ export default function DashboardLayout() {
                     </div>
                 </div>
 
-                <nav className="sidebar-nav" style={{ flex: 1, overflowY: 'auto' }}>
-                    {renderNavItem({ name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard })}
-
-                    {filteredCatalogs.length > 0 && (
-                        <div>
-                            <button className="nav-item" onClick={() => toggleMenu('catalogs')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                    <Folder size={20} />
-                                    {!isCollapsed && <span>Catálogos</span>}
-                                </div>
-                                {!isCollapsed && (openMenus.catalogs ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
-                            </button>
-                            {openMenus.catalogs && !isCollapsed && filteredCatalogs.map(item => renderNavItem(item, true))}
-                        </div>
-                    )}
-
-                    {filteredOperaciones.length > 0 && (
-                        <div>
-                            <button className="nav-item" onClick={() => toggleMenu('operaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                    <Folder size={20} />
-                                    {!isCollapsed && <span>Operaciones</span>}
-                                </div>
-                                {!isCollapsed && (openMenus.operaciones ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
-                            </button>
-                            {openMenus.operaciones && !isCollapsed && filteredOperaciones.map(item => renderNavItem(item, true))}
-                        </div>
-                    )}
-
-                    {filteredBancosMenu.length > 0 && (
-                        <div>
-                            <button className="nav-item" onClick={() => toggleMenu('bancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                    <Folder size={20} />
-                                    {!isCollapsed && <span>Bancos</span>}
-                                </div>
-                                {!isCollapsed && (openMenus.bancos ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
-                            </button>
-                            {openMenus.bancos && !isCollapsed && filteredBancosMenu.map(item => renderNavItem(item, true))}
-                        </div>
-                    )}
-
-                    {/* Consultas Section */}
-                    {(filteredEstaciones.length > 0 || filteredBancos.length > 0 || filteredOtras.length > 0) && (
-                        <div>
-                            <button className="nav-item" onClick={() => toggleMenu('consultas')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                    <FileText size={20} />
-                                    {!isCollapsed && <span>Consultas</span>}
-                                </div>
-                                {!isCollapsed && (openMenus.consultas ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
-                            </button>
-                            {openMenus.consultas && !isCollapsed && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                                    {/* Estaciones Submenu */}
-                                    {filteredEstaciones.length > 0 && (
-                                        <div>
-                                            <button className="nav-item" onClick={() => toggleMenu('consultasEstaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                                                <span>Estaciones</span>
-                                                {openMenus.consultasEstaciones ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                            </button>
-                                            {openMenus.consultasEstaciones && filteredEstaciones.map(item => renderNavItem(item, true))}
-                                        </div>
-                                    )}
-                                    {/* Bancos Submenu */}
-                                    {filteredBancos.length > 0 && (
-                                        <div>
-                                            <button className="nav-item" onClick={() => toggleMenu('consultasBancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                                                <span>Bancos</span>
-                                                {openMenus.consultasBancos ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                            </button>
-                                            {openMenus.consultasBancos && filteredBancos.map(item => renderNavItem(item, true))}
-                                        </div>
-                                    )}
-                                    {/* Otras Submenu */}
-                                    {filteredOtras.length > 0 && (
-                                        <div>
-                                            <button className="nav-item" onClick={() => toggleMenu('consultasOtras')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                                                <span>Otras</span>
-                                                {openMenus.consultasOtras ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                            </button>
-                                            {openMenus.consultasOtras && filteredOtras.map(item => renderNavItem(item, true))}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {filteredSecurity.length > 0 && (
-                        <div>
-                            <button className="nav-item" onClick={() => toggleMenu('security')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                    <Shield size={20} />
-                                    {!isCollapsed && <span>Seguridad</span>}
-                                </div>
-                                {!isCollapsed && (openMenus.security ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
-                            </button>
-                            {openMenus.security && !isCollapsed && filteredSecurity.map(item => renderNavItem(item, true))}
-                        </div>
-                    )}
-
-                    {filteredConfiguracionMenu.length > 0 && (
-                        <div>
-                            <button className="nav-item" onClick={() => toggleMenu('configuracion')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                    <SettingsIcon size={20} />
-                                    {!isCollapsed && <span>Configuración</span>}
-                                </div>
-                                {!isCollapsed && (openMenus.configuracion ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
-                            </button>
-                            {openMenus.configuracion && !isCollapsed && filteredConfiguracionMenu.map(item => renderNavItem(item, true))}
-                        </div>
-                    )}
-                </nav>
+                {renderNavSections('sidebar')}
 
                 <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem', justifyContent: isCollapsed ? 'center' : 'flex-start' }}>
@@ -363,25 +435,101 @@ export default function DashboardLayout() {
                     })}
                 </div>
                 
-                <div className="tab-content-container">
-                    {tabs.map(tab => (
-                        <div 
-                            key={tab.path} 
-                            className={`tab-panel ${activeTabPath === tab.path ? 'active' : ''}`}
-                        >
-                            {hasPermission(tab.path) || tab.path === '/dashboard' ? (
-                                componentRegistry[tab.path] || <div className="card glass">Módulo no registrado: {tab.path}</div>
-                            ) : (
-                                <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
-                                    <Shield size={48} color="var(--danger)" style={{ marginBottom: '1rem' }} />
-                                    <h2>Acceso Restringido</h2>
-                                    <p>No tiene permisos suficientes para ver el módulo {tab.path}.</p>
-                                </div>
-                            )}
-                        </div>
-                    ))}
-                </div>
+                {renderContent()}
             </main>
         </div>
     );
+
+    // ─────────────── Mobile Shell (single active view) ───────────────
+    const currentTab = tabs.find(t => t.path === activeTabPath);
+    const headerTitle = activeTabPath === '/dashboard' ? 'SIPE Admin' : (currentTab?.name || 'SIPE Admin');
+
+    const mobileShell = (
+        <div className="mobile-shell">
+            <header className="mobile-header">
+                <button className="header-btn" onClick={openDrawer} aria-label="Abrir menú">
+                    <MenuIcon size={22} />
+                </button>
+                <div style={{ flex: 1, textAlign: 'center', overflow: 'hidden' }}>
+                    <div className="header-title">{headerTitle}</div>
+                </div>
+                <button className="header-btn" onClick={openMore} aria-label="Más opciones">
+                    <MoreHorizontal size={22} />
+                </button>
+            </header>
+
+            <main className="main-content">
+                {renderContent()}
+            </main>
+
+            <nav className="bottom-nav">
+                <button className={activeTabPath === '/dashboard' ? 'active' : ''} onClick={() => openTab({ name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard })}>
+                    <Home size={20} />
+                    <span>Inicio</span>
+                </button>
+                <button onClick={openDrawer}>
+                    <MenuIcon size={20} />
+                    <span>Menú</span>
+                </button>
+                <button onClick={openMore}>
+                    <MoreHorizontal size={20} />
+                    <span>Más</span>
+                </button>
+            </nav>
+
+            {drawerOpen && (
+                <div className="drawer-overlay" onClick={closeDrawer}>
+                    <div className="drawer" onClick={e => e.stopPropagation()}>
+                        <div className="drawer-header">
+                            <h2 style={{ margin: 0, color: 'var(--primary)' }}>SIPE Admin</h2>
+                            <button className="header-btn" onClick={closeDrawer} aria-label="Cerrar menú">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        {renderNavSections('drawer')}
+                        <div className="drawer-footer">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', marginBottom: '0.25rem' }}>
+                                <UserCircle size={32} color="var(--primary)" />
+                                <div>
+                                    <div style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{user.nombre || user.username}</div>
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
+                                </div>
+                            </div>
+                            <button onClick={handleLogout} className="nav-item" style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', color: '#ef4444' }}>
+                                <LogOut size={20} />
+                                <span>Cerrar Sesión</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {moreOpen && (
+                <div className="more-sheet-overlay" onClick={closeMore}>
+                    <div className="more-sheet" onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                            <UserCircle size={40} color="var(--primary)" />
+                            <div>
+                                <div style={{ fontWeight: 'bold' }}>{user.nombre || user.username}</div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
+                            </div>
+                        </div>
+                        <button className="sheet-item" onClick={toggleTheme}>
+                            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+                            {theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
+                        </button>
+                        <button className="sheet-item danger" onClick={handleLogout}>
+                            <LogOut size={18} />
+                            Cerrar Sesión
+                        </button>
+                        <div style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--primary)', opacity: 0.9, marginTop: '0.75rem', fontWeight: 500 }}>
+                            version: {pkg.version}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+
+    return isMobile ? mobileShell : desktopShell;
 }

@@ -177,7 +177,7 @@ router.post('/operaciones/pedidos/confirmar', authenticateToken, async (req, res
         try {
             const [fRows] = await externalDb.query(`SELECT ${fleteCol} as cost FROM web_fletes WHERE id_estacion = ? AND id_transportista = ?`, [id_estacion, p.id_transportista || p.id_carrier_local]);
             if (fRows.length) flete = fRows[0].cost || 0;
-        } catch(e) {}
+        } catch(e) { /* flete lookup is optional */ }
         const cDate = p.fecha instanceof Date ? p.fecha.toISOString().split('T')[0] : p.fecha;
         const connection = await externalDb.getConnection();
         await connection.beginTransaction();

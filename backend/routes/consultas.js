@@ -227,7 +227,7 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
             const insertSql = 'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?';
             const cleanNum = (val) => {
                 const s = String(val || '');
-                const cleaned = s.replace(/[^0-9.\-]/g, '');
+                const cleaned = s.replace(/[^0-9.-]/g, '');
                 const n = Number(cleaned);
                 return isNaN(n) ? 0 : n;
             };

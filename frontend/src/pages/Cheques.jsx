@@ -2,7 +2,8 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
-import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, X, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, AlertTriangle, Ban, Clock, DollarSign, User } from 'lucide-react';
+import Modal from '../components/Modal';
+import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, AlertTriangle, Ban, Clock, DollarSign, User } from 'lucide-react';
 import { todayStr } from '../utils/date';
 
 export default function Cheques() {
@@ -199,6 +200,7 @@ export default function Cheques() {
                 position: 'relative',
                 width: '44px',
                 height: '22px',
+                minHeight: 0,
                 background: checked ? 'var(--primary)' : 'rgba(255,255,255,0.2)',
                 border: 'none',
                 borderRadius: '11px',
@@ -223,7 +225,7 @@ export default function Cheques() {
 
     return (
         <div style={{ padding: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div>
                     <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <DollarSign size={32} color="var(--primary)" />
@@ -287,7 +289,7 @@ export default function Cheques() {
                 </div>
             </div>
 
-            <div className="card glass" style={{ overflow: 'hidden' }}>
+            <div className="card glass table-responsive">
                 <table style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
@@ -386,126 +388,118 @@ export default function Cheques() {
                 )}
             </div>
 
-            {showModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(8px)' }}>
-                    <div className="card glass shadow-xl" style={{ width: '700px', padding: '2rem', border: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem', alignItems: 'center' }}>
-                            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
-                                {editingCheque ? <Edit2 size={24} color="var(--primary)" /> : <Plus size={24} color="var(--primary)" />}
-                                {editingCheque ? 'Editar Cheque' : 'Nuevo Cheque'}
-                            </h2>
-                            <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)' }}><X size={24} /></button>
+            <Modal
+                open={showModal}
+                onClose={() => setShowModal(false)}
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>{editingCheque ? <Edit2 size={20} color="var(--primary)" /> : <Plus size={20} color="var(--primary)" />}{editingCheque ? 'Editar Cheque' : 'Nuevo Cheque'}</span>}
+            >
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Empresa</label>
+                            <select style={{ width: '100%' }} value={formData.id_empresa} onChange={e => handleCompanyChange(e.target.value)} required>
+                                <option value="">Seleccione Empresa...</option>
+                                {empresas.map(emp => (
+                                    <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+                                ))}
+                            </select>
                         </div>
-
-                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Empresa</label>
-                                    <select style={{ width: '100%' }} value={formData.id_empresa} onChange={e => handleCompanyChange(e.target.value)} required>
-                                        <option value="">Seleccione Empresa...</option>
-                                        {empresas.map(emp => (
-                                            <option key={emp.id} value={emp.id}>{emp.nombre}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>No. Partida</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <FileText size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input type="text" style={{ paddingLeft: '3rem' }} placeholder="Partida" value={formData.num_partida} onChange={e => setFormData({...formData, num_partida: e.target.value})} />
-                                    </div>
-                                </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>No. Partida</label>
+                            <div style={{ position: 'relative' }}>
+                                <FileText size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input type="text" style={{ paddingLeft: '3rem' }} placeholder="Partida" value={formData.num_partida} onChange={e => setFormData({...formData, num_partida: e.target.value})} />
                             </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
-                                <select style={{ width: '100%' }} value={formData.numero_cuenta} onChange={e => setFormData({...formData, numero_cuenta: e.target.value})} disabled={!formData.id_empresa} required>
-                                    <option value="">Seleccione Cuenta...</option>
-                                    {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
-                                        <option key={c.corr} value={c.numero}>{c.nombre} - {c.numero}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha} onChange={e => setFormData({...formData, fecha: e.target.value})} required />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha Aplicado</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha_aplicado} onChange={e => setFormData({...formData, fecha_aplicado: e.target.value})} />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cheque #</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <Hash size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input type="text" style={{ paddingLeft: '3rem' }} placeholder="Número de cheque" value={formData.cheque} onChange={e => setFormData({...formData, cheque: e.target.value})} required />
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Valor ($)</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <span style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--primary)', fontWeight: 'bold', fontSize: '1.2rem' }}>$</span>
-                                        <input type="number" step="0.01" placeholder="0.00" style={{ paddingLeft: '2.5rem', fontSize: '1.25rem', fontWeight: 'bold', color: formData.cheque_anulado ? 'rgba(255,255,255,0.3)' : 'var(--primary)', textDecoration: formData.cheque_anulado ? 'line-through' : 'none' }} value={formData.valor} onChange={e => setFormData({...formData, valor: e.target.value})} onFocus={(e) => e.target.select()} disabled={formData.cheque_anulado} />
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>A Nombre</label>
-                                <div style={{ position: 'relative' }}>
-                                    <User size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                    <input type="text" style={{ paddingLeft: '3rem', color: formData.cheque_anulado ? 'var(--danger)' : 'var(--text)' }} placeholder="Beneficiario del cheque" value={formData.a_nombre} onChange={e => setFormData({...formData, a_nombre: e.target.value})} disabled={formData.cheque_anulado} />
-                                </div>
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Concepto</label>
-                                <input type="text" placeholder="Descripción del cheque..." style={{ width: '100%', textTransform: 'uppercase', color: formData.cheque_anulado ? 'var(--danger)' : 'var(--text)' }} value={formData.concepto} onChange={e => setFormData({...formData, concepto: e.target.value.toUpperCase()})} disabled={formData.cheque_anulado} />
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Estado del Cheque</label>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <ToggleSwitch checked={formData.cheque_anulado} onChange={v => {
-                                            setFormData(prev => {
-                                                if (v) {
-                                                    originalValues.current = { valor: prev.valor, a_nombre: prev.a_nombre, concepto: prev.concepto };
-                                                    return { ...prev, cheque_anulado: true, valor: '0', a_nombre: '***** CHEQUE ANULADO *****', concepto: '***** CHEQUE ANULADO *****' };
-                                                }
-                                                return { ...prev, cheque_anulado: false, valor: originalValues.current.valor, a_nombre: originalValues.current.a_nombre, concepto: originalValues.current.concepto };
-                                            });
-                                        }} />
-                                        <span style={{ fontSize: '0.8rem', color: formData.cheque_anulado ? '#ef4444' : 'var(--text-muted)' }}>Anulado</span>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <ToggleSwitch checked={formData.fue_noemitido} onChange={v => setFormData({...formData, fue_noemitido: v})} />
-                                        <span style={{ fontSize: '0.8rem', color: formData.fue_noemitido ? '#6b7280' : 'var(--text-muted)' }}>No Emitido</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
-                                <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
-                                <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
-                                    <Save size={18} />
-                                    {editingCheque ? 'Actualizar Cheque' : 'Guardar Cheque'}
-                                </button>
-                            </div>
-                        </form>
+                        </div>
                     </div>
-                </div>
-            )}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
+                        <select style={{ width: '100%' }} value={formData.numero_cuenta} onChange={e => setFormData({...formData, numero_cuenta: e.target.value})} disabled={!formData.id_empresa} required>
+                            <option value="">Seleccione Cuenta...</option>
+                            {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
+                                <option key={c.corr} value={c.numero}>{c.nombre} - {c.numero}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="form-grid form-grid-3">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha</label>
+                            <div style={{ position: 'relative' }}>
+                                <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha} onChange={e => setFormData({...formData, fecha: e.target.value})} required />
+                            </div>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha Aplicado</label>
+                            <div style={{ position: 'relative' }}>
+                                <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha_aplicado} onChange={e => setFormData({...formData, fecha_aplicado: e.target.value})} />
+                            </div>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cheque #</label>
+                            <div style={{ position: 'relative' }}>
+                                <Hash size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input type="text" style={{ paddingLeft: '3rem' }} placeholder="Número de cheque" value={formData.cheque} onChange={e => setFormData({...formData, cheque: e.target.value})} required />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Valor ($)</label>
+                            <div style={{ position: 'relative' }}>
+                                <span style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--primary)', fontWeight: 'bold', fontSize: '1.2rem' }}>$</span>
+                                <input type="number" step="0.01" placeholder="0.00" style={{ paddingLeft: '2.5rem', fontSize: '1.25rem', fontWeight: 'bold', color: formData.cheque_anulado ? 'rgba(255,255,255,0.3)' : 'var(--primary)', textDecoration: formData.cheque_anulado ? 'line-through' : 'none' }} value={formData.valor} onChange={e => setFormData({...formData, valor: e.target.value})} onFocus={(e) => e.target.select()} disabled={formData.cheque_anulado} />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>A Nombre</label>
+                        <div style={{ position: 'relative' }}>
+                            <User size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                            <input type="text" style={{ paddingLeft: '3rem', color: formData.cheque_anulado ? 'var(--danger)' : 'var(--text)' }} placeholder="Beneficiario del cheque" value={formData.a_nombre} onChange={e => setFormData({...formData, a_nombre: e.target.value})} disabled={formData.cheque_anulado} />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Concepto</label>
+                        <input type="text" placeholder="Descripción del cheque..." style={{ width: '100%', textTransform: 'uppercase', color: formData.cheque_anulado ? 'var(--danger)' : 'var(--text)' }} value={formData.concepto} onChange={e => setFormData({...formData, concepto: e.target.value.toUpperCase()})} disabled={formData.cheque_anulado} />
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Estado del Cheque</label>
+                        <div className="form-grid form-grid-2">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <ToggleSwitch checked={formData.cheque_anulado} onChange={v => {
+                                    setFormData(prev => {
+                                        if (v) {
+                                            originalValues.current = { valor: prev.valor, a_nombre: prev.a_nombre, concepto: prev.concepto };
+                                            return { ...prev, cheque_anulado: true, valor: '0', a_nombre: '***** CHEQUE ANULADO *****', concepto: '***** CHEQUE ANULADO *****' };
+                                        }
+                                        return { ...prev, cheque_anulado: false, valor: originalValues.current.valor, a_nombre: originalValues.current.a_nombre, concepto: originalValues.current.concepto };
+                                    });
+                                }} />
+                                <span style={{ fontSize: '0.8rem', color: formData.cheque_anulado ? '#ef4444' : 'var(--text-muted)' }}>Anulado</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <ToggleSwitch checked={formData.fue_noemitido} onChange={v => setFormData({...formData, fue_noemitido: v})} />
+                                <span style={{ fontSize: '0.8rem', color: formData.fue_noemitido ? '#6b7280' : 'var(--text-muted)' }}>No Emitido</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
+                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
+                        <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                            <Save size={18} />
+                            {editingCheque ? 'Actualizar Cheque' : 'Guardar Cheque'}
+                        </button>
+                    </div>
+                </form>
+            </Modal>
 
             <style dangerouslySetInnerHTML={{ __html: `
                 .hover-row:hover { background: rgba(255,255,255,0.03); }

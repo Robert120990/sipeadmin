@@ -2,7 +2,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
-import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, X, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin } from 'lucide-react';
+import Modal from '../components/Modal';
+import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin } from 'lucide-react';
 import { todayStr } from '../utils/date';
 
 export default function MovimientosBancarios() {
@@ -210,7 +211,7 @@ export default function MovimientosBancarios() {
     return (
         <div style={{ padding: '2rem' }}>
             {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div className="page-header">
                 <div>
                     <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <Landmark size={32} color="var(--primary)" />
@@ -294,7 +295,7 @@ export default function MovimientosBancarios() {
             </div>
 
             {/* Main Table */}
-            <div className="card glass" style={{ overflow: 'hidden' }}>
+            <div className="card glass table-responsive">
                 <table style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
@@ -389,147 +390,138 @@ export default function MovimientosBancarios() {
                 )}
             </div>
 
-            {/* Modal de Ingreso/Edición */}
-            {showModal && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(8px)' }}>
-                    <div className="card glass shadow-xl" style={{ width: '650px', padding: '2rem', border: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem', alignItems: 'center' }}>
-                            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
-                                {editingMovement ? <Edit2 size={24} color="var(--primary)" /> : <Plus size={24} color="var(--primary)" />}
-                                {editingMovement ? 'Editar Movimiento' : 'Nuevo Movimiento Bancario'}
-                            </h2>
-                            <button onClick={() => setShowModal(false)} style={{ background: 'none', color: 'var(--text-muted)' }}><X size={24} /></button>
+            <Modal
+                open={showModal}
+                onClose={() => setShowModal(false)}
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>{editingMovement ? <Edit2 size={20} color="var(--primary)" /> : <Plus size={20} color="var(--primary)" />}{editingMovement ? 'Editar Movimiento' : 'Nuevo Movimiento Bancario'}</span>}
+            >
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    {/* Empresa y Cuenta */}
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Empresa</label>
+                            <select 
+                                style={{ width: '100%' }}
+                                value={formData.id_empresa}
+                                onChange={e => handleCompanyChange(e.target.value)}
+                                required
+                            >
+                                <option value="">Seleccione Empresa...</option>
+                                {empresas.map(emp => (
+                                    <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+                                ))}
+                            </select>
                         </div>
-
-                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                            {/* Empresa y Cuenta */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Empresa</label>
-                                    <select 
-                                        style={{ width: '100%' }}
-                                        value={formData.id_empresa}
-                                        onChange={e => handleCompanyChange(e.target.value)}
-                                        required
-                                    >
-                                        <option value="">Seleccione Empresa...</option>
-                                        {empresas.map(emp => (
-                                            <option key={emp.id} value={emp.id}>{emp.nombre}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Partida Contable</label>
-                                    <div style={{ padding: '0 0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', fontSize: '0.9rem', height: '42px', display: 'flex', alignItems: 'center' }}>
-                                        {formData.num_partida || <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Sin partida</span>}
-                                    </div>
-                                </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Partida Contable</label>
+                            <div style={{ padding: '0 0.75rem', background: 'rgba(255,255,255,0.05)', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', fontSize: '0.9rem', height: '42px', display: 'flex', alignItems: 'center' }}>
+                                {formData.num_partida || <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Sin partida</span>}
                             </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
-                                <select 
-                                    style={{ width: '100%' }}
-                                    value={formData.numero_cuenta}
-                                    onChange={e => setFormData({...formData, numero_cuenta: e.target.value})}
-                                    disabled={!formData.id_empresa}
-                                    required
-                                >
-                                    <option value="">Seleccione Cuenta...</option>
-                                    {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
-                                        <option key={c.corr} value={c.numero}>{c.nombre} - {c.numero}</option>
-                                    ))}
-                                </select>
-                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
+                        <select 
+                            style={{ width: '100%' }}
+                            value={formData.numero_cuenta}
+                            onChange={e => setFormData({...formData, numero_cuenta: e.target.value})}
+                            disabled={!formData.id_empresa}
+                            required
+                        >
+                            <option value="">Seleccione Cuenta...</option>
+                            {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
+                                <option key={c.corr} value={c.numero}>{c.nombre} - {c.numero}</option>
+                            ))}
+                        </select>
+                    </div>
 
-                            {/* Fecha y Documento */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha Mov.</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha} onChange={e => setFormData({...formData, fecha: e.target.value})} required />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha Aplicado</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha_aplicado} onChange={e => setFormData({...formData, fecha_aplicado: e.target.value})} />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Documento / Ref</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <FileText size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                        <input type="text" style={{ paddingLeft: '3rem', textTransform: 'uppercase' }} placeholder="Ej: 12345" value={formData.documento} onChange={e => setFormData({...formData, documento: e.target.value.toUpperCase()})} required />
-                                    </div>
-                                </div>
+                    {/* Fecha y Documento */}
+                    <div className="form-grid form-grid-3">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha Mov.</label>
+                            <div style={{ position: 'relative' }}>
+                                <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha} onChange={e => setFormData({...formData, fecha: e.target.value})} required />
                             </div>
-
-                            {/* Remesa y Monto */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Tipo Movimientos</label>
-                                    <select 
-                                        style={{ width: '100%' }}
-                                        value={formData.cod_remesa}
-                                        onChange={e => setFormData({...formData, cod_remesa: e.target.value})}
-                                        disabled={!formData.id_empresa}
-                                        required
-                                    >
-                                        <option value="">Seleccione Tipo...</option>
-                                        {remesas.map(r => (
-                                            <option key={r.id} value={r.id}>{r.descripcion}</option>
-                                        ))}
-                                    </select>
-                                    {formData.cod_remesa && (
-                                        <div style={{ fontSize: '0.7rem', marginTop: '0.25rem', color: (formData.cod_remesa === '01' || formData.cod_remesa === '03') ? 'var(--danger)' : 'var(--success)', fontWeight: 'bold' }}>
-                                            Tipo: {(formData.cod_remesa === '01' || formData.cod_remesa === '03') ? 'CARGO (-)' : 'ABONO (+)'}
-                                        </div>
-                                    )}
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Monto ($)</label>
-                                    <div style={{ position: 'relative' }}>
-                                        <span style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--primary)', fontWeight: 'bold', fontSize: '1.2rem' }}>$</span>
-                                        <input 
-                                            type="number" 
-                                            step="0.01" 
-                                            placeholder="0.00" 
-                                            style={{ paddingLeft: '2.5rem', fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--primary)' }}
-                                            value={formData.monto} 
-                                            onChange={e => setFormData({...formData, monto: e.target.value})}
-                                            onFocus={(e) => e.target.select()}
-                                            required 
-                                        />
-                                    </div>
-                                </div>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fecha Aplicado</label>
+                            <div style={{ position: 'relative' }}>
+                                <Calendar size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input type="date" style={{ paddingLeft: '3rem' }} value={formData.fecha_aplicado} onChange={e => setFormData({...formData, fecha_aplicado: e.target.value})} />
                             </div>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Documento / Ref</label>
+                            <div style={{ position: 'relative' }}>
+                                <FileText size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input type="text" style={{ paddingLeft: '3rem', textTransform: 'uppercase' }} placeholder="Ej: 12345" value={formData.documento} onChange={e => setFormData({...formData, documento: e.target.value.toUpperCase()})} required />
+                            </div>
+                        </div>
+                    </div>
 
-                            {/* Concepto */}
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Concepto / Descripción</label>
+                    {/* Remesa y Monto */}
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Tipo Movimientos</label>
+                            <select 
+                                style={{ width: '100%' }}
+                                value={formData.cod_remesa}
+                                onChange={e => setFormData({...formData, cod_remesa: e.target.value})}
+                                disabled={!formData.id_empresa}
+                                required
+                            >
+                                <option value="">Seleccione Tipo...</option>
+                                {remesas.map(r => (
+                                    <option key={r.id} value={r.id}>{r.descripcion}</option>
+                                ))}
+                            </select>
+                            {formData.cod_remesa && (
+                                <div style={{ fontSize: '0.7rem', marginTop: '0.25rem', color: (formData.cod_remesa === '01' || formData.cod_remesa === '03') ? 'var(--danger)' : 'var(--success)', fontWeight: 'bold' }}>
+                                    Tipo: {(formData.cod_remesa === '01' || formData.cod_remesa === '03') ? 'CARGO (-)' : 'ABONO (+)'}
+                                </div>
+                            )}
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Monto ($)</label>
+                            <div style={{ position: 'relative' }}>
+                                <span style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--primary)', fontWeight: 'bold', fontSize: '1.2rem' }}>$</span>
                                 <input 
-                                    type="text"
-                                    placeholder="Descripción del movimiento..."
-                                    style={{ width: '100%', textTransform: 'uppercase' }}
-                                    value={formData.concepto} 
-                                    onChange={e => setFormData({...formData, concepto: e.target.value.toUpperCase()})}
-                                    required
+                                    type="number" 
+                                    step="0.01" 
+                                    placeholder="0.00" 
+                                    style={{ paddingLeft: '2.5rem', fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--primary)' }}
+                                    value={formData.monto} 
+                                    onChange={e => setFormData({...formData, monto: e.target.value})}
+                                    onFocus={(e) => e.target.select()}
+                                    required 
                                 />
                             </div>
-
-                            <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
-                                <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
-                                <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
-                                    <Save size={18} />
-                                    {editingMovement ? 'Actualizar Movimiento' : 'Guardar Movimiento'}
-                                </button>
-                            </div>
-                        </form>
+                        </div>
                     </div>
-                </div>
-            )}
+
+                    {/* Concepto */}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Concepto / Descripción</label>
+                        <input 
+                            type="text"
+                            placeholder="Descripción del movimiento..."
+                            style={{ width: '100%', textTransform: 'uppercase' }}
+                            value={formData.concepto} 
+                            onChange={e => setFormData({...formData, concepto: e.target.value.toUpperCase()})}
+                            required
+                        />
+                    </div>
+
+                    <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
+                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
+                        <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                            <Save size={18} />
+                            {editingMovement ? 'Actualizar Movimiento' : 'Guardar Movimiento'}
+                        </button>
+                    </div>
+                </form>
+            </Modal>
 
             <style dangerouslySetInnerHTML={{ __html: `
                 .hover-row:hover { background: rgba(255,255,255,0.03); }
