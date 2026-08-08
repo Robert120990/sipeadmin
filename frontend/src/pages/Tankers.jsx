@@ -170,7 +170,7 @@ export default function Tankers() {
             </div>
 
             <div className="card glass table-responsive">
-                <table>
+                <table className="table-to-cards">
                     <thead>
                         <tr>
                             <th>Código/Placa</th>
@@ -185,11 +185,11 @@ export default function Tankers() {
                             const compsArray = typeof t.compartments === 'string' ? JSON.parse(t.compartments) : (t.compartments || []);
                             return (
                             <tr key={t.id}>
-                                <td style={{ fontWeight: '500' }}>{t.code}</td>
-                                <td>{t.carrier_desc || 'N/A'}</td>
-                                <td>{compsArray.length}</td>
-                                <td>{getTotalCapacity(t.compartments).toLocaleString()} Gal</td>
-                                <td>
+                                <td data-label="Código/Placa" style={{ fontWeight: '500' }}>{t.code}</td>
+                                <td data-label="Transportista">{t.carrier_desc || 'N/A'}</td>
+                                <td data-label="Compartimientos">{compsArray.length}</td>
+                                <td data-label="Capacidad Total">{getTotalCapacity(t.compartments).toLocaleString()} Gal</td>
+                                <td data-label="Acciones">
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                                         <button onClick={() => handleOpenModal(t)} style={{ background: 'none', color: 'var(--text-muted)' }} title="Editar">
                                             <Edit2 size={16} />

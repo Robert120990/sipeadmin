@@ -801,6 +801,55 @@ td {
   }
 }
 
+/* ---------- Table → stacked cards (mobile only) ---------- */
+
+@media (max-width: 768px) {
+  .table-to-cards thead {
+    display: none;
+  }
+
+  .table-to-cards tr {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+    background: var(--card-bg);
+    overflow: hidden;
+  }
+
+  .table-to-cards td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-to-cards td:last-child {
+    border-bottom: none;
+  }
+
+  .table-to-cards td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+    text-transform: uppercase;
+  }
+
+  .table-to-cards td[colspan] {
+    display: block;
+    text-align: center;
+  }
+
+  .table-to-cards td > * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
 /* ---------- Media queries ---------- */
 
 @media (max-width: 768px) {

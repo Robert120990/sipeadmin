@@ -100,7 +100,7 @@ export default function Users() {
             </div>
 
             <div className="card glass">
-                <table>
+                <table className="table-to-cards">
                     <thead>
                         <tr>
                             <th>Usuario (Login)</th>
@@ -115,21 +115,21 @@ export default function Users() {
                     <tbody>
                         {users.map(user => (
                             <tr key={user.id}>
-                                <td style={{ fontWeight: '500' }}>{user.username}</td>
-                                <td>{user.nombre || '-'}</td>
-                                <td>{user.email || '-'}</td>
-                                <td>{user.role_name}</td>
-                                <td>
+                                <td data-label="Usuario" style={{ fontWeight: '500' }}>{user.username}</td>
+                                <td data-label="Nombre">{user.nombre || '-'}</td>
+                                <td data-label="Email">{user.email || '-'}</td>
+                                <td data-label="Rol">{user.role_name}</td>
+                                <td data-label="Estado">
                                     <button onClick={() => toggleStatus(user)} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} title="Clic para cambiar estado">
                                         <span className={`badge badge-${user.status}`}>
                                             {user.status === 'active' ? 'Activo' : 'Inactivo'}
                                         </span>
                                     </button>
                                 </td>
-                                <td style={{ color: 'var(--text-muted)' }}>
+                                <td data-label="Fecha" style={{ color: 'var(--text-muted)' }}>
                                     {user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}
                                 </td>
-                                <td>
+                                <td data-label="Acciones">
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                                         <button 
                                             onClick={() => handleOpenModal(user)}

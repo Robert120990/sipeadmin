@@ -110,7 +110,7 @@ export default function ConsultasCumpleanos() {
                         </div>
                         
                         <div className="card glass table-responsive">
-                            <table style={{ minWidth: '100%', borderCollapse: 'collapse' }}>
+                            <table className="table-to-cards" style={{ minWidth: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
                                         <th style={{ padding: '1rem' }}>Nombre</th>
@@ -129,14 +129,14 @@ export default function ConsultasCumpleanos() {
                                                 borderBottom: '1px solid rgba(255,255,255,0.05)',
                                                 backgroundColor: today ? 'rgba(16, 185, 129, 0.05)' : 'transparent'
                                             }}>
-                                                <td style={{ padding: '1rem', fontWeight: '500' }}>
+                                                <td data-label="Nombre" style={{ padding: '1rem', fontWeight: '500' }}>
                                                     {emp.nombre}
                                                     {today && <span style={{ marginLeft: '0.5rem', fontSize: '1.25rem' }}>🎂</span>}
                                                 </td>
-                                                <td style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                                                <td data-label="Departamento" style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                                                     {emp.departamento || 'Sin asignar'}
                                                 </td>
-                                                <td style={{ padding: '1rem' }}>
+                                                <td data-label="Día" style={{ padding: '1rem' }}>
                                                     <span style={{ 
                                                         display: 'inline-block',
                                                         padding: '0.25rem 0.75rem',
@@ -147,7 +147,7 @@ export default function ConsultasCumpleanos() {
                                                         {birthParts ? birthParts.day : ''}
                                                     </span>
                                                 </td>
-                                                <td style={{ padding: '1rem', color: 'var(--text-muted)' }}>
+                                                <td data-label="Fecha" style={{ padding: '1rem', color: 'var(--text-muted)' }}>
                                                     {formatDateDisplay(emp.fecha_nacimiento)}
                                                 </td>
                                             </tr>

@@ -84,7 +84,7 @@ export default function Carriers() {
             </div>
 
             <div className="card glass">
-                <table>
+                <table className="table-to-cards">
                     <thead>
                         <tr>
                             <th>Código</th>
@@ -96,10 +96,10 @@ export default function Carriers() {
                     <tbody>
                         {carriers.map(c => (
                             <tr key={c.id}>
-                                <td style={{ fontWeight: '500', color: 'var(--primary)' }}>{c.code}</td>
-                                <td>{c.description}</td>
-                                <td style={{ color: 'var(--text-muted)' }}>{new Date(c.created_at).toLocaleDateString()}</td>
-                                <td>
+                                <td data-label="Código" style={{ fontWeight: '500', color: 'var(--primary)' }}>{c.code}</td>
+                                <td data-label="Descripción">{c.description}</td>
+                                <td data-label="Registro" style={{ color: 'var(--text-muted)' }}>{new Date(c.created_at).toLocaleDateString()}</td>
+                                <td data-label="Acciones">
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                                         <button onClick={() => handleOpenModal(c)} style={{ background: 'none', color: 'var(--text-muted)' }} title="Editar">
                                             <Edit2 size={16} />
