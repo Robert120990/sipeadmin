@@ -209,7 +209,7 @@ export default function MovimientosBancarios() {
     };
 
     return (
-        <div style={{ padding: '2rem' }}>
+        <div>
             {/* Header */}
             <div className="page-header">
                 <div>
@@ -296,7 +296,7 @@ export default function MovimientosBancarios() {
 
             {/* Main Table */}
             <div className="card glass table-responsive">
-                <table style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
+                <table style={{ fontSize: '0.75rem', width: '100%', minWidth: '900px', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
                             <th style={{ padding: '1rem', textAlign: 'left' }}>Fecha</th>
@@ -377,7 +377,7 @@ export default function MovimientosBancarios() {
 
                 {/* Pagination */}
                 {totalPages > 1 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem', borderTop: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '1rem 1.5rem', borderTop: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
                         <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                             Mostrando {paginatedMovements.length} de {filteredMovements.length} movimientos
                         </div>
