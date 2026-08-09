@@ -325,7 +325,7 @@ export default function ControlRecordatorios() {
     };
 
     return (
-        <div style={{ padding: '2rem', height: '100%', position: 'relative' }}>
+        <div style={{ height: '100%', position: 'relative' }}>
             <div className="page-header">
                 <h1 style={{ margin: 0, color: 'var(--primary)' }}>Control de Recordatorios</h1>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -366,7 +366,7 @@ export default function ControlRecordatorios() {
                     </div>
                 )}
                 
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
                     <button onClick={fetchData} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1.5rem' }}>
                         <Search size={18} /> CONSULTAR
                     </button>
@@ -378,7 +378,7 @@ export default function ControlRecordatorios() {
                     </button>
                 </div>
 
-                <div style={{ marginLeft: '1rem', display: 'flex', gap: '0.5rem', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '1.5rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
                     <button 
                         onClick={() => setEstadoFilter('P')}
                         style={{ 
@@ -430,7 +430,8 @@ export default function ControlRecordatorios() {
                         <p style={{ marginTop: '1rem', color: 'var(--primary)', fontWeight: 'bold' }}>Sincronizando Módulos...</p>
                     </div>
                 )}
-                <table className="data-table" style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
+                <div className="table-responsive">
+                    <table className="data-table" style={{ fontSize: '0.75rem', width: '100%', minWidth: '900px', borderCollapse: 'collapse' }}>
                     <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#1E232A' }}>
                         <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
                             <th style={{ padding: '0.75rem 0.5rem', width: '100px' }}>ID PRINCIPAL</th>
@@ -447,7 +448,7 @@ export default function ControlRecordatorios() {
                     </thead>
                     <tbody>
                         {displayRecordatorios.length === 0 ? (
-                            <tr><td colSpan="9" style={{ textAlign: 'center', padding: '2rem' }}>No hay registros coincidentes</td></tr>
+                            <tr><td colSpan="10" style={{ textAlign: 'center', padding: '2rem' }}>No hay registros coincidentes</td></tr>
                         ) : displayRecordatorios.map((r, idx) => (
                             <tr key={idx} style={{ 
                                 borderBottom: '1px solid rgba(255,255,255,0.05)',
@@ -488,9 +489,10 @@ export default function ControlRecordatorios() {
                         ))}
                     </tbody>
                 </table>
+                </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '1rem', padding: '1rem', backgroundColor: 'rgba(25, 30, 36, 0.6)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '1rem', padding: '1rem', backgroundColor: 'rgba(25, 30, 36, 0.6)', borderRadius: '12px', border: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MONTO TOTAL (Pendiente):</span>
                 <span style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--danger)' }}>{mc(totalMonto)}</span>
             </div>
