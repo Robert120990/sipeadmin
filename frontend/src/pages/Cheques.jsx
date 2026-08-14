@@ -3,8 +3,12 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
-import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, AlertTriangle, Ban, Clock, DollarSign, User } from 'lucide-react';
+import { Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, DollarSign, User, Printer } from 'lucide-react';
 import { todayStr } from '../utils/date';
+import PrintEngine from '../modules/check-designer/services/PrintEngine';
+import DesignerService from '../modules/check-designer/services/DesignerService';
+import { numeroALetras, formatMonto } from '../utils/numeroALetras';
+import { useNavigate } from 'react-router-dom';
 
 export default function Cheques() {
     const [cheques, setCheques] = useState([]);
@@ -44,6 +48,7 @@ export default function Cheques() {
     const originalValues = useRef({ valor: '', a_nombre: '', concepto: '' });
     const { addToast } = useToast();
     const { confirm } = useConfirm();
+    const navigate = useNavigate();
 
     useEffect(() => {
         fetchInitialCatalogs();
@@ -162,6 +167,57 @@ export default function Cheques() {
             fetchCheques();
         } catch (err) {
             addToast('Error al eliminar cheque', 'error');
+        }
+    };
+
+    const handlePrint = async (cheque) => {
+        try {
+            if (!cheque.banco_id) {
+                addToast('El cheque no tiene banco asociado', 'warning');
+                return;
+            }
+
+            // Verificar que exista un formato de impresión guardado para el banco
+            // El banco puede tener varios ids (uno por empresa): se busca por id y, si no,
+            // por la descripción del banco (ej. "PROMERICA" con banco_id 641 vs 643).
+            let formats = await DesignerService.getFormats({ banco_id: cheque.banco_id, is_active: true });
+            if (!Array.isArray(formats) || formats.length === 0) {
+                formats = await DesignerService.getFormats({ banco_nombre: cheque.banco_nombre, is_active: true });
+            }
+            const formato = Array.isArray(formats) ? formats.find(f => f.is_active !== false) || formats[0] : null;
+
+            if (!formato) {
+                const irAlDisenador = await confirm(
+                    `No existe un formato de impresión guardado para el banco "${cheque.banco_nombre || cheque.banco_id}".\n\nDebe crear un formato en el Diseñador de Cheques antes de imprimir.`,
+                    { title: 'Formato no encontrado', confirmText: 'Ir al Diseñador', cancelText: 'Cancelar', variant: 'primary' }
+                );
+                if (irAlDisenador) navigate('/dashboard/bancos/check-designer');
+                return;
+            }
+
+            const user = JSON.parse(localStorage.getItem('user')) || {};
+            const partesFecha = (cheque.fecha || '').split('/');
+            const datos = {
+                fecha: cheque.fecha || '',
+                dia: partesFecha[0] || '',
+                mes: partesFecha[1] || '',
+                anio: partesFecha[2] || '',
+                beneficiario: cheque.a_nombre || '',
+                monto_numeros: formatMonto(cheque.valor),
+                monto_letras: numeroALetras(cheque.valor),
+                concepto: cheque.concepto || '',
+                numero_cheque: cheque.cheque || cheque.llave || '',
+                ciudad: '',
+                empresa: cheque.empresa_nombre || '',
+                cuenta_bancaria: cheque.cuenta_nombre ? `${cheque.cuenta_nombre} - ${cheque.numero_cuenta}` : (cheque.numero_cuenta || ''),
+                usuario_impresion: user.nombre || user.username || '',
+                sucursal: '',
+                observaciones: '',
+            };
+
+            await PrintEngine.printCheck(formato, formato.design_json?.campos || [], datos, formato.printer_name || null);
+        } catch (err) {
+            addToast('Error al imprimir cheque', 'error');
         }
     };
 
@@ -353,6 +409,9 @@ export default function Cheques() {
                                 </td>
                                 <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
                                     <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                                        <button onClick={() => handlePrint(c)} style={{ background: 'none', color: 'var(--primary)', padding: '0.25rem' }} title="Imprimir cheque">
+                                            <Printer size={16} />
+                                        </button>
                                         {c.es_contabilizado !== 'S' ? (
                                             <>
                                                 <button onClick={() => handleOpenModal(c)} style={{ background: 'none', color: 'var(--text-muted)', padding: '0.25rem' }} title="Editar">

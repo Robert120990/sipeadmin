@@ -27,6 +27,7 @@ import ConsultasCumpleanos from './ConsultasCumpleanos';
 import MovimientosBancarios from './MovimientosBancarios';
 import Cheques from './Cheques';
 import ChequesContado from './ChequesContado';
+import CheckDesigner from './CheckDesigner';
 import BackupDBCheck from './BackupDBCheck';
 import Bitacora from './Bitacora';
 import pkg from '../../package.json';
@@ -86,6 +87,7 @@ export default function DashboardLayout() {
         '/dashboard/bancos/movimientos': <MovimientosBancarios />,
         '/dashboard/bancos/cheques': <Cheques />,
         '/dashboard/bancos/cheques-contado': <ChequesContado />,
+        '/dashboard/bancos/check-designer': <CheckDesigner />,
         '/dashboard/consultas/otras/backup-db-check': <BackupDBCheck />,
         '/dashboard/settings/database': <ConfiguracionDb />,
         '/dashboard/settings/accounting': <ConfiguracionContabilidad />,
@@ -109,13 +111,26 @@ export default function DashboardLayout() {
             ...configuracionMenu
         ];
         
-        const item = allNavItems.find(i => i.path === location.pathname);
+        let item = allNavItems.find(i => i.path === location.pathname);
+        // Rutas hijas (ej. check-designer/edit/1): abrir el tab del módulo padre
+        if (!item) {
+            item = allNavItems
+                .filter(i => location.pathname.startsWith(i.path + '/'))
+                .sort((a, b) => b.path.length - a.path.length)[0];
+        }
         if (item) {
-            openTab(item);
+            // Abrir el tab SIN navegar (preserva la URL actual, p. ej. /edit/:formatId)
+            if (isMobile) {
+                setTabs([{ name: item.name, path: item.path, icon: item.icon || FileText }]);
+            } else {
+                setTabs(prev => prev.find(t => t.path === item.path) ? prev : [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }]);
+            }
+            setActiveTabPath(item.path);
+            setDrawerOpen(false);
         } else if (location.pathname === '/dashboard') {
             setActiveTabPath('/dashboard');
         }
-    }, [location.pathname]);
+    }, [location.pathname, isMobile]);
 
     // Android back: close mobile overlays before leaving the app
     useEffect(() => {

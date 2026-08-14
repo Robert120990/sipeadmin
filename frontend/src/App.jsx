@@ -24,6 +24,7 @@ import ConsultasPreciosCompetencia from './pages/ConsultasPreciosCompetencia';
 import MovimientosBancarios from './pages/MovimientosBancarios';
 import Cheques from './pages/Cheques';
 import ChequesContado from './pages/ChequesContado';
+import CheckDesigner from './pages/CheckDesigner';
 import BackupDBCheck from './pages/BackupDBCheck';
 import Bitacora from './pages/Bitacora';
 import { ToastProvider } from './components/Toast';
@@ -82,6 +83,8 @@ function App() {
                         <Route path="bancos/movimientos" element={<PermissionRoute pathKey="/dashboard/bancos/movimientos"><MovimientosBancarios /></PermissionRoute>} />
                         <Route path="bancos/cheques" element={<PermissionRoute pathKey="/dashboard/bancos/cheques"><Cheques /></PermissionRoute>} />
                         <Route path="bancos/cheques-contado" element={<PermissionRoute pathKey="/dashboard/bancos/cheques-contado"><ChequesContado /></PermissionRoute>} />
+<Route path="bancos/check-designer" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
+<Route path="bancos/check-designer/edit/:formatId" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
                         <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
                         <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />
                         <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />

@@ -50,6 +50,7 @@ const chequesRoutes = require('./routes/cheques');
 const onedriveRoutes = require('./routes/onedrive');
 const aiRoutes = require('./routes/ai');
 const bitacoraRoutes = require('./routes/bitacora');
+const checkDesignerRoutes = require('./routes/checkDesigner');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
@@ -62,6 +63,7 @@ app.use('/api/cheques', chequesRoutes);
 app.use('/api', onedriveRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api', bitacoraRoutes);
+app.use('/api/check-designer', checkDesignerRoutes);
 
 // Health Check
 app.get('/api/debug-ping', (req, res) => res.json({ message: 'pong' }));

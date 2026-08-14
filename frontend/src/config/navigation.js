@@ -37,6 +37,7 @@ export const bancosMenu = [
     { name: 'Movimientos Bancarios', path: '/dashboard/bancos/movimientos', icon: FileText },
     { name: 'Cheques', path: '/dashboard/bancos/cheques', icon: DollarSign },
     { name: 'Cheques Contado', path: '/dashboard/bancos/cheques-contado', icon: CreditCard },
+    { name: 'Diseñador de Cheques', path: '/dashboard/bancos/check-designer', icon: FileText },
 ];
 
 export const consultasBancos = [

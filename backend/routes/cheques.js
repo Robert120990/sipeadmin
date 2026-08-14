@@ -62,7 +62,8 @@ router.get('/', authenticateToken, async (req, res) => {
     const { id_empresa, numero_cuenta, desde, hasta } = req.query;
     try {
         const db = getDb();
-        let query = 'SELECT ch.id, ch.llave, e.codigo as id_empresa, cb.numero as numero_cuenta, ' +
+        let query = 'SELECT ch.id, ch.llave, e.codigo as id_empresa, cb.numero as numero_cuenta, cb.nombre as cuenta_nombre, ' +
+                    'b.id as banco_id, ' +
                     'ch.fecha, ch.cheque_anulado, ' +
                     'ch.cheque, ch.valor, ch.a_nombre, ch.fecha_aplicado, ch.concepto, ' +
                     'ch.es_reservado, ch.es_pago_contado, ch.fue_noemitido, ch.num_partida, ' +
