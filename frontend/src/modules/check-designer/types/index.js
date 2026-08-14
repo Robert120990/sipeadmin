@@ -69,6 +69,8 @@ export const TIPOS_CAMPO = {
     OBSERVACIONES: 'observaciones',
     TEXTO_FIJO: 'texto_fijo',
     FECHA_LETRAS: 'fecha_letras',
+    FECHA_LETRAS_CORTA: 'fecha_letras_corta',
+    ANIO_CORTO: 'anio_corto',
 };
 
 export const VARIABLES_DISPONIBLES = [
@@ -76,7 +78,9 @@ export const VARIABLES_DISPONIBLES = [
     { tipo: TIPOS_CAMPO.DIA, etiqueta: 'Día' },
     { tipo: TIPOS_CAMPO.MES, etiqueta: 'Mes' },
     { tipo: TIPOS_CAMPO.ANIO, etiqueta: 'Año' },
+    { tipo: TIPOS_CAMPO.ANIO_CORTO, etiqueta: 'Año (2 dígitos)' },
     { tipo: TIPOS_CAMPO.FECHA_LETRAS, etiqueta: 'Fecha en Letras', icon: 'calendar_check' },
+    { tipo: TIPOS_CAMPO.FECHA_LETRAS_CORTA, etiqueta: 'Fecha en Letras (Día Mes)', icon: 'calendar_check' },
     { tipo: TIPOS_CAMPO.BENEFICIARIO, etiqueta: 'Beneficiario', icon: 'person' },
     { tipo: TIPOS_CAMPO.MONTO_NUMEROS, etiqueta: 'Monto en Números', icon: 'numbers' },
     { tipo: TIPOS_CAMPO.MONTO_LETRAS, etiqueta: 'Monto en Letras', icon: 'short_text' },

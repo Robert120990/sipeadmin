@@ -74,3 +74,14 @@ export const formatearFechaEnLetras = (fecha) => {
     const mes = parseInt(partes[1], 10);
     return `${parseInt(partes[0], 10)} DE ${MESES[mes - 1] || partes[1]} DE ${partes[2]}`;
 };
+
+/**
+ * Convierte una fecha en formato DD/MM/YYYY a día y mes en letras (mayúsculas), sin año.
+ * Ej: "14/08/2026" -> "14 DE AGOSTO"
+ */
+export const formatearFechaEnLetrasCorta = (fecha) => {
+    const partes = (fecha || '').split('/');
+    if (partes.length !== 3) return fecha || '';
+    const mes = parseInt(partes[1], 10);
+    return `${parseInt(partes[0], 10)} DE ${MESES[mes - 1] || partes[1]}`;
+};
