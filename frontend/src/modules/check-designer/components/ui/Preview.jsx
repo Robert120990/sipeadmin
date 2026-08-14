@@ -19,6 +19,7 @@ export default function Preview({ formato, campos, isOpen, onClose }) {
     // Datos de ejemplo para la vista previa
     const ejemplo = {
         fecha: '14/08/2026',
+        fecha_letras: '14 DE AGOSTO DE 2026',
         dia: '14',
         mes: '08',
         anio: '2026',
@@ -37,7 +38,7 @@ export default function Preview({ formato, campos, isOpen, onClose }) {
 
     const renderCampo = (campo) => {
         if (campo.visible === false) return null;
-        const valor = ejemplo[campo.tipo] || ejemplo[campo.variable] || '';
+        const valor = ejemplo[campo.tipo] || ejemplo[campo.variable] || (campo.tipo === 'texto_fijo' ? campo.etiqueta : '');
         return (
             <div
                 key={campo.id}

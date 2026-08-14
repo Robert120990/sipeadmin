@@ -67,6 +67,8 @@ export const TIPOS_CAMPO = {
     USUARIO_IMPRESION: 'usuario_impresion',
     SUCURSAL: 'sucursal',
     OBSERVACIONES: 'observaciones',
+    TEXTO_FIJO: 'texto_fijo',
+    FECHA_LETRAS: 'fecha_letras',
 };
 
 export const VARIABLES_DISPONIBLES = [
@@ -74,6 +76,7 @@ export const VARIABLES_DISPONIBLES = [
     { tipo: TIPOS_CAMPO.DIA, etiqueta: 'Día' },
     { tipo: TIPOS_CAMPO.MES, etiqueta: 'Mes' },
     { tipo: TIPOS_CAMPO.ANIO, etiqueta: 'Año' },
+    { tipo: TIPOS_CAMPO.FECHA_LETRAS, etiqueta: 'Fecha en Letras', icon: 'calendar_check' },
     { tipo: TIPOS_CAMPO.BENEFICIARIO, etiqueta: 'Beneficiario', icon: 'person' },
     { tipo: TIPOS_CAMPO.MONTO_NUMEROS, etiqueta: 'Monto en Números', icon: 'numbers' },
     { tipo: TIPOS_CAMPO.MONTO_LETRAS, etiqueta: 'Monto en Letras', icon: 'short_text' },
@@ -85,4 +88,6 @@ export const VARIABLES_DISPONIBLES = [
     { tipo: TIPOS_CAMPO.USUARIO_IMPRESION, etiqueta: 'Usuario que Imprime', icon: 'person_outline' },
     { tipo: TIPOS_CAMPO.SUCURSAL, etiqueta: 'Sucursal', icon: 'store' },
     { tipo: TIPOS_CAMPO.OBSERVACIONES, etiqueta: 'Observaciones', icon: 'chat' },
+    { tipo: TIPOS_CAMPO.TEXTO_FIJO, etiqueta: 'NO NEGOCIABLE', icon: 'stamp' },
+    { tipo: TIPOS_CAMPO.TEXTO_FIJO, etiqueta: 'SAN SALVADOR', icon: 'stamp' },
 ];

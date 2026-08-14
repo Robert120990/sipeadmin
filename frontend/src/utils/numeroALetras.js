@@ -61,3 +61,16 @@ export const formatMonto = (monto) => {
     if (isNaN(valor)) return '0.00';
     return valor.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+
+const MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+
+/**
+ * Convierte una fecha en formato DD/MM/YYYY a su representación en letras (mayúsculas).
+ * Ej: "14/08/2026" -> "14 DE AGOSTO DE 2026"
+ */
+export const formatearFechaEnLetras = (fecha) => {
+    const partes = (fecha || '').split('/');
+    if (partes.length !== 3) return fecha || '';
+    const mes = parseInt(partes[1], 10);
+    return `${parseInt(partes[0], 10)} DE ${MESES[mes - 1] || partes[1]} DE ${partes[2]}`;
+};

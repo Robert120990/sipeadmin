@@ -90,7 +90,7 @@ const PrintEngine = {
         const camposHtml = campos
             .filter(c => c.visible !== false)
             .map(c => {
-                const valor = datos[c.tipo] || datos[c.variable] || '';
+                const valor = datos[c.tipo] || datos[c.variable] || (c.tipo === 'texto_fijo' ? c.etiqueta : '');
                 return `<div style="position:absolute;left:${c.x}px;top:${c.y}px;width:${c.ancho}px;height:${c.alto}px;
                     transform:rotate(${c.rotacion || 0}deg);
                     font-family:${c.fuente || 'Arial'};

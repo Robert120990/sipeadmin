@@ -58,8 +58,18 @@ export default function DesignCanvas({ campos, setCampos, campoSeleccionado, set
 
     const handleDrop = (e) => {
         e.preventDefault();
-        const tipoCampo = e.dataTransfer.getData('text/plain');
-        if (!tipoCampo) return;
+        const raw = e.dataTransfer.getData('text/plain');
+        if (!raw) return;
+
+        let tipoCampo = raw;
+        let etiquetaExtra = null;
+        try {
+            const parsed = JSON.parse(raw);
+            tipoCampo = parsed.tipo;
+            etiquetaExtra = parsed.etiqueta;
+        } catch (err) {
+            // Compatibilidad con formatos antiguos (solo el tipo)
+        }
 
         const stage = stageRef.current;
         if (!stage) return;
@@ -68,7 +78,7 @@ export default function DesignCanvas({ campos, setCampos, campoSeleccionado, set
         const pointer = stage.getRelativePointerPosition();
         if (!pointer) return;
 
-        agregarCampoEnPosicion(tipoCampo, Math.max(0, Math.round(pointer.x)), Math.max(0, Math.round(pointer.y)));
+        agregarCampoEnPosicion(tipoCampo, Math.max(0, Math.round(pointer.x)), Math.max(0, Math.round(pointer.y)), etiquetaExtra);
     };
 
     const handleDragOver = (e) => {

@@ -7,7 +7,7 @@ import { Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, ChevronLe
 import { todayStr } from '../utils/date';
 import PrintEngine from '../modules/check-designer/services/PrintEngine';
 import DesignerService from '../modules/check-designer/services/DesignerService';
-import { numeroALetras, formatMonto } from '../utils/numeroALetras';
+import { numeroALetras, formatMonto, formatearFechaEnLetras } from '../utils/numeroALetras';
 import { useNavigate } from 'react-router-dom';
 
 export default function Cheques() {
@@ -199,6 +199,7 @@ export default function Cheques() {
             const partesFecha = (cheque.fecha || '').split('/');
             const datos = {
                 fecha: cheque.fecha || '',
+                fecha_letras: formatearFechaEnLetras(cheque.fecha),
                 dia: partesFecha[0] || '',
                 mes: partesFecha[1] || '',
                 anio: partesFecha[2] || '',

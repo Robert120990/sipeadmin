@@ -105,13 +105,13 @@ const useDesigner = (formatId) => {
         }
     }, [formato, addToast]);
 
-    const crearCampoNuevo = (tipoCampo, x, y) => {
+    const crearCampoNuevo = (tipoCampo, x, y, etiquetaExtra) => {
         const variable = VARIABLES_DISPONIBLES.find(v => v.tipo === tipoCampo);
         return {
             id: uuidv4(),
             tipo: tipoCampo,
             variable: tipoCampo,
-            etiqueta: `Nuevo ${variable?.etiqueta || tipoCampo}`,
+            etiqueta: tipoCampo === 'texto_fijo' ? (etiquetaExtra || variable?.etiqueta || 'NO NEGOCIABLE') : `Nuevo ${variable?.etiqueta || tipoCampo}`,
         x: snapToGridValue(x, snapToGrid),
         y: snapToGridValue(y, snapToGrid),
         ancho: 150,
@@ -129,16 +129,16 @@ const useDesigner = (formatId) => {
         visible: true,
     };
 };
-    const agregarCampo = useCallback((tipoCampo, x = 10, y = 10) => {
-        const nuevoCampo = crearCampoNuevo(tipoCampo, x, y);
+    const agregarCampo = useCallback((tipoCampo, x = 10, y = 10, etiquetaExtra = null) => {
+        const nuevoCampo = crearCampoNuevo(tipoCampo, x, y, etiquetaExtra);
         pushToHistory();
         setCampos(prev => [...prev, nuevoCampo]);
         setCampoSeleccionado(nuevoCampo);
         setSeleccionMultiple([]);
     }, [snapToGrid, pushToHistory]);
 
-    const agregarCampoEnPosicion = useCallback((tipoCampo, x, y) => {
-        agregarCampo(tipoCampo, x, y);
+    const agregarCampoEnPosicion = useCallback((tipoCampo, x, y, etiquetaExtra = null) => {
+        agregarCampo(tipoCampo, x, y, etiquetaExtra);
     }, [agregarCampo]);
 
     const actualizarCampo = useCallback((id, nuevasPropiedades) => {
