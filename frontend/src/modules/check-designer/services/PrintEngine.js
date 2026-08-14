@@ -36,7 +36,7 @@ const PrintEngine = {
 <title>Hoja de Calibración</title>
 <style>
     body { margin: 0; padding: 0; }
-    @page { size: ${widthMm}mm ${heightMm}mm; margin: 0; }
+    @page { margin: 0; }
     .sheet { position: relative; width: ${widthMm}mm; height: ${heightMm}mm; overflow: hidden; font-family: monospace; }
     .coord { position: absolute; font-size: 6px; color: #999; }
 </style>
@@ -111,7 +111,7 @@ const PrintEngine = {
 <title>Cheque — ${datos.numero_cheque || ''}</title>
 <style>
     body { margin: 0; padding: 0; }
-    @page { size: ${widthMm}mm ${heightMm}mm; margin: 0; }
+    @page { margin: 0; }
     .sheet { position: relative; width: ${widthMm}mm; height: ${heightMm}mm; overflow: hidden; }
     .content { position: absolute; left: 0; top: 0; width: ${widthPx}px; height: ${heightPx}px;
              transform: scale(${calibracion.scale || 1});

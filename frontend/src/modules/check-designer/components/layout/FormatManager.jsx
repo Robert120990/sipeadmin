@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../../../../components/Toast';
+import { useConfirm } from '../../../../components/ConfirmDialog';
 import Modal from '../../../../components/Modal';
 import { Landmark, FileText, Plus, Edit2, Save, Search, ChevronLeft, ChevronRight, Copy, Trash2 } from 'lucide-react';
 import DesignerService from '../../services/DesignerService';
 
 export default function FormatManager({ children, onEditMode, initialFormatId }) {
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
     const navigate = useNavigate();
     const [viewMode, setViewMode] = useState('list'); // 'list' o 'editor'
     const [formats, setFormats] = useState([]);
@@ -33,7 +35,7 @@ export default function FormatManager({ children, onEditMode, initialFormatId })
 
     const fetchData = async () => {
         try {
-            const data = await DesignerService.getFormats();
+            const data = await DesignerService.getFormats({ is_active: true });
             setFormats(data);
         } catch (err) {
             addToast('Error al cargar formatos', 'error');
@@ -124,6 +126,21 @@ export default function FormatManager({ children, onEditMode, initialFormatId })
         }
     };
 
+    const handleDelete = async (format) => {
+        const confirmed = await confirm(
+            `¿Estás seguro de eliminar el formato "${format.name}"?\n\nLos cheques de este banco dejarán de imprimirse con este formato.`,
+            { title: 'Eliminar formato', variant: 'danger' }
+        );
+        if (!confirmed) return;
+        try {
+            await DesignerService.deleteFormat(format.id);
+            addToast('Formato eliminado', 'success');
+            fetchData();
+        } catch (err) {
+            addToast('Error al eliminar el formato', 'error');
+        }
+    };
+
 
     if (viewMode === 'editor') {
         return children;
@@ -177,6 +194,7 @@ export default function FormatManager({ children, onEditMode, initialFormatId })
                                         <button onClick={() => handleEditDesign(f)} style={{ background: 'none', color: 'var(--text-muted)', padding: '0.25rem' }} title="Editar Diseño"><Edit2 size={16} /></button>
                                         <button onClick={() => handleDuplicate(f)} style={{ background: 'none', color: 'var(--text-muted)', padding: '0.25rem' }} title="Duplicar"><Copy size={16} /></button>
                                         <button onClick={() => handleOpenModal(f)} style={{ background: 'none', color: 'var(--text-muted)', padding: '0.25rem' }} title="Editar"><Save size={16} /></button>
+                                        <button onClick={() => handleDelete(f)} style={{ background: 'none', color: 'var(--danger)', padding: '0.25rem' }} title="Eliminar"><Trash2 size={16} /></button>
                                     </div>
                                 </td>
                             </tr>
