@@ -347,19 +347,44 @@ const initDB = async () => {
             console.log('Initial setup completed with "admin" user!');
         }
 
-        // Ensure view_bitacora permission exists for Administrator role
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS validaciones_saldo_banco (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cuenta_bancaria_id INT NOT NULL,
+                fecha_validacion DATETIME NOT NULL,
+                monto_banco DECIMAL(14,2) NOT NULL DEFAULT 0,
+                saldo_chequera DECIMAL(14,2) DEFAULT 0,
+                diferencia DECIMAL(14,2) DEFAULT 0,
+                notas TEXT,
+                created_by INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE CASCADE,
+                INDEX idx_cta_fecha (cuenta_bancaria_id, fecha_validacion)
+            );
+        `);
+
+        // Ensure bank reconciliation permissions exist for Administrator role
         try {
             const [adminRole] = await pool.query('SELECT id FROM roles WHERE name = "Administrator"');
             if (adminRole.length > 0) {
                 const adminRoleId = adminRole[0].id;
-                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', ['view_bitacora', 'Can view audit logs']);
-                const [[perm]] = await pool.query('SELECT id FROM permissions WHERE name = ?', ['view_bitacora']);
-                if (perm) {
-                    await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [adminRoleId, perm.id]);
+                const newPerms = [
+                    ['view_bitacora', 'Can view audit logs'],
+                    ['/dashboard/bancos/conciliacion', 'Acceso a Conciliación Bancaria'],
+                    ['view_conciliacion_bancaria', 'Permite consultar conciliaciones bancarias'],
+                    ['manage_conciliacion_bancaria', 'Permite conciliar y desconciliar movimientos'],
+                    ['edit_monto_conciliacion', 'Permite modificar montos en conciliación']
+                ];
+                for (const [pName, pDesc] of newPerms) {
+                    await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);
+                    const [[perm]] = await pool.query('SELECT id FROM permissions WHERE name = ?', [pName]);
+                    if (perm) {
+                        await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [adminRoleId, perm.id]);
+                    }
                 }
             }
         } catch (e) {
-            if (e.code !== 'ER_DUP_ENTRY') console.error('Migration view_bitacora:', e.message);
+            console.error('Migration permissions conciliacion:', e.message);
         }
 
         return pool;

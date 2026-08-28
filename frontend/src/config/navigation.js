@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -35,6 +35,7 @@ export const operacionesMenu = [
 export const bancosMenu = [
     { name: 'Cuentas Bancarias', path: '/dashboard/bancos/cuentas', icon: Landmark },
     { name: 'Movimientos Bancarios', path: '/dashboard/bancos/movimientos', icon: FileText },
+    { name: 'Conciliación Bancaria', path: '/dashboard/bancos/conciliacion', icon: Scale },
     { name: 'Cheques', path: '/dashboard/bancos/cheques', icon: DollarSign },
     { name: 'Cheques Contado', path: '/dashboard/bancos/cheques-contado', icon: CreditCard },
     { name: 'Diseñador de Cheques', path: '/dashboard/bancos/check-designer', icon: FileText },

@@ -25,6 +25,7 @@ import ConfiguracionEmail from './ConfiguracionEmail';
 import ConfiguracionContabilidad from './ConfiguracionContabilidad';
 import ConsultasCumpleanos from './ConsultasCumpleanos';
 import MovimientosBancarios from './MovimientosBancarios';
+import ConciliacionBancaria from './ConciliacionBancaria';
 import Cheques from './Cheques';
 import ChequesContado from './ChequesContado';
 import CheckDesigner from './CheckDesigner';
@@ -85,6 +86,7 @@ export default function DashboardLayout() {
         '/dashboard/consultas/otras/cumpleanos': <ConsultasCumpleanos />,
         '/dashboard/bancos/cuentas': <CuentasBancarias />,
         '/dashboard/bancos/movimientos': <MovimientosBancarios />,
+        '/dashboard/bancos/conciliacion': <ConciliacionBancaria />,
         '/dashboard/bancos/cheques': <Cheques />,
         '/dashboard/bancos/cheques-contado': <ChequesContado />,
         '/dashboard/bancos/check-designer': <CheckDesigner />,

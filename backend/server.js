@@ -51,9 +51,11 @@ const onedriveRoutes = require('./routes/onedrive');
 const aiRoutes = require('./routes/ai');
 const bitacoraRoutes = require('./routes/bitacora');
 const checkDesignerRoutes = require('./routes/checkDesigner');
+const conciliacionRoutes = require('./routes/conciliacion');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
+app.use('/api/bancos/conciliacion', conciliacionRoutes);
 app.use('/api/bancos', bancosRoutes);
 app.use('/api', catalogosRoutes); // Carriers, Tankers
 app.use('/api', operacionesRoutes); // Dashboard, Operaciones

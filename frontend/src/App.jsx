@@ -22,6 +22,7 @@ import ConfiguracionContabilidad from './pages/ConfiguracionContabilidad';
 import ConsultasCumpleanos from './pages/ConsultasCumpleanos';
 import ConsultasPreciosCompetencia from './pages/ConsultasPreciosCompetencia';
 import MovimientosBancarios from './pages/MovimientosBancarios';
+import ConciliacionBancaria from './pages/ConciliacionBancaria';
 import Cheques from './pages/Cheques';
 import ChequesContado from './pages/ChequesContado';
 import CheckDesigner from './pages/CheckDesigner';
@@ -81,6 +82,7 @@ function App() {
                         <Route path="consultas/otras/backup-db-check" element={<PermissionRoute pathKey="/dashboard/consultas/otras/backup-db-check"><BackupDBCheck /></PermissionRoute>} />
                         <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />
                         <Route path="bancos/movimientos" element={<PermissionRoute pathKey="/dashboard/bancos/movimientos"><MovimientosBancarios /></PermissionRoute>} />
+                        <Route path="bancos/conciliacion" element={<PermissionRoute pathKey="/dashboard/bancos/conciliacion"><ConciliacionBancaria /></PermissionRoute>} />
                         <Route path="bancos/cheques" element={<PermissionRoute pathKey="/dashboard/bancos/cheques"><Cheques /></PermissionRoute>} />
                         <Route path="bancos/cheques-contado" element={<PermissionRoute pathKey="/dashboard/bancos/cheques-contado"><ChequesContado /></PermissionRoute>} />
 <Route path="bancos/check-designer" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
