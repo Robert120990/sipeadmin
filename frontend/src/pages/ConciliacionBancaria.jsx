@@ -715,7 +715,7 @@ export default function ConciliacionBancaria() {
                     </span>
                 </div>
                 <div style={{ fontSize: '1.05rem', background: 'rgba(0,0,0,0.25)', padding: '0.2rem 0.8rem', borderRadius: '4px' }}>
-                    MONTO: ${Number(resumen.ultima_validacion?.monto_banco || resumen.saldo_banco || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    MONTO: {resumen.ultima_validacion ? `$${Number(resumen.ultima_validacion.monto_banco || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00'}
                 </div>
             </div>
 
