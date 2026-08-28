@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -19,8 +19,10 @@ function versionJsonPlugin() {
                 version: pkg.version,
                 buildId: new Date().toISOString().replace(/[:.]/g, '-')
             };
+            const distDir = resolve(__dirname, 'dist');
+            mkdirSync(distDir, { recursive: true });
             writeFileSync(
-                resolve(__dirname, 'dist/version.json'),
+                resolve(distDir, 'version.json'),
                 JSON.stringify(payload, null, 2)
             );
             console.log(`[version-json] dist/version.json -> v${payload.version} (${payload.buildId})`);
