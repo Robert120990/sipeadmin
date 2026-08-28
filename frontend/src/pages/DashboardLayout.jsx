@@ -64,7 +64,7 @@ export default function DashboardLayout() {
     const [moreOpen, setMoreOpen] = useState(false);
 
     const user = JSON.parse(localStorage.getItem('user')) || {};
-    const hasPermission = (path) => user.role_id === 1 || user.permissions?.includes(path);
+    const hasPermission = (path) => user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator' || user.permissions?.includes(path);
 
     // Component Registry Mapping
     const componentRegistry = {

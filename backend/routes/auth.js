@@ -25,8 +25,8 @@ router.post('/login', async (req, res) => {
         const [perms] = await db.query('SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ?', [user.role_id]);
         const permissions = perms.map(p => p.name);
 
-        const token = jwt.sign({ id: user.id, username: user.username, role: user.role_name, permissions }, JWT_SECRET, { expiresIn: '8h' });
-        res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre, role: user.role_name, permissions } });
+        const token = jwt.sign({ id: user.id, username: user.username, role: user.role_name, role_id: user.role_id, permissions }, JWT_SECRET, { expiresIn: '8h' });
+        res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre, role: user.role_name, role_id: user.role_id, permissions } });
     } catch (error) {
         console.error('LOGIN ERROR:', error);
         const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND' || error.code === 'ER_ACCESS_DENIED';

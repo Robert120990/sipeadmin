@@ -41,7 +41,7 @@ const ProtectedRoute = ({ children }) => {
 
 const PermissionRoute = ({ pathKey, children }) => {
     const user = JSON.parse(localStorage.getItem('user')) || {};
-    if (user.role_id === 1) return children;
+    if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return children;
     if (user.permissions?.includes(pathKey)) return children;
     return <Navigate to="/dashboard" replace />;
 };
