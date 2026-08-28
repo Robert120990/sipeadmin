@@ -13,29 +13,45 @@ const toDisplayDate = (dateVal) => {
 const toDBDate = (dateStr) => {
     if (!dateStr) return null;
     if (dateStr instanceof Date) {
-        return dateStr.toISOString().split('T')[0];
+        return isNaN(dateStr.getTime()) ? null : dateStr.toISOString().split('T')[0];
     }
-    // Handle dd/mm/yyyy or yyyy-mm-dd
-    if (dateStr.includes('/')) {
-        const parts = dateStr.split('/');
-        if (parts.length === 3) {
-            const day = parts[0].padStart(2, '0');
-            const month = parts[1].padStart(2, '0');
-            const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-            return `${year}-${month}-${day}`;
+    if (typeof dateStr === 'string') {
+        const str = dateStr.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+        if (str.includes('/')) {
+            const parts = str.split('/');
+            if (parts.length === 3) {
+                const day = parts[0].padStart(2, '0');
+                const month = parts[1].padStart(2, '0');
+                const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+                return `${year}-${month}-${day}`;
+            }
         }
     }
-    const d = new Date(dateStr + 'T12:00:00');
+    const d = new Date(dateStr);
     if (isNaN(d.getTime())) return null;
     return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
+};
+
+const withRetry = async (fn, retries = 2) => {
+    try {
+        return await fn();
+    } catch (err) {
+        if ((err.code === 'ECONNRESET' || err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ETIMEDOUT') && retries > 0) {
+            console.warn(`[CONCILIACION] Retrying DB query due to ${err.code}...`);
+            await new Promise(r => setTimeout(r, 200));
+            return await withRetry(fn, retries - 1);
+        }
+        throw err;
+    }
 };
 
 // ── 1. Catálogos para la pantalla ─────────────────────────────────────────────
 router.get('/catalogos', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
-        const [empresas] = await db.query('SELECT id, codigo, nombre FROM empresas ORDER BY nombre');
-        const [cuentas] = await db.query(
+        const [empresas] = await withRetry(() => db.query('SELECT id, codigo, nombre FROM empresas ORDER BY nombre'));
+        const [cuentas] = await withRetry(() => db.query(
             'SELECT cb.id, cb.empresa_id, e.codigo as empresa_codigo, e.nombre as empresa_nombre, ' +
             'cb.banco_id, b.codigo as banco_codigo, b.descripcion as banco_nombre, ' +
             'cb.numero, cb.nombre, cb.cod_cta, cb.orden ' +
@@ -44,7 +60,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
             'LEFT JOIN bancos b ON cb.banco_id = b.id ' +
             'WHERE cb.activa = TRUE ' +
             'ORDER BY e.nombre ASC, cb.orden ASC, cb.nombre ASC'
-        );
+        ));
         res.json({ empresas, cuentas });
     } catch (error) {
         console.error('Error en catalogos conciliacion:', error);
@@ -63,7 +79,7 @@ router.get('/data', authenticateToken, async (req, res) => {
         const db = getDb();
 
         // 1. Obtener datos de la cuenta bancaria
-        const [[cuenta]] = await db.query(
+        const [[cuenta]] = await withRetry(() => db.query(
             'SELECT cb.*, e.codigo as empresa_codigo, e.nombre as empresa_nombre, ' +
             'b.codigo as banco_codigo, b.descripcion as banco_nombre ' +
             'FROM cuentas_bancarias cb ' +
@@ -71,7 +87,7 @@ router.get('/data', authenticateToken, async (req, res) => {
             'LEFT JOIN bancos b ON cb.banco_id = b.id ' +
             'WHERE cb.id = ?',
             [cuenta_id]
-        );
+        ));
 
         if (!cuenta) {
             return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
@@ -80,14 +96,39 @@ router.get('/data', authenticateToken, async (req, res) => {
         const dbDesde = desde ? toDBDate(desde) : '2000-01-01';
         const dbHasta = hasta ? toDBDate(hasta) : '2099-12-31';
 
+        // Asegurar que la tabla validaciones_saldo_banco exista
+        try {
+            await withRetry(() => db.query(`
+                CREATE TABLE IF NOT EXISTS validaciones_saldo_banco (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    cuenta_bancaria_id INT NOT NULL,
+                    fecha_validacion DATETIME NOT NULL,
+                    monto_banco DECIMAL(14,2) NOT NULL DEFAULT 0,
+                    saldo_chequera DECIMAL(14,2) DEFAULT 0,
+                    diferencia DECIMAL(14,2) DEFAULT 0,
+                    notas TEXT,
+                    created_by INT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE CASCADE,
+                    INDEX idx_cta_fecha (cuenta_bancaria_id, fecha_validacion)
+                )
+            `));
+        } catch (e) { /* ignore if already exists */ }
+
         // 2. Última validación registrada para la cuenta
-        const [[ultimaValidacion]] = await db.query(
-            'SELECT * FROM validaciones_saldo_banco WHERE cuenta_bancaria_id = ? ORDER BY fecha_validacion DESC, id DESC LIMIT 1',
-            [cuenta_id]
-        );
+        let ultimaValidacion = null;
+        try {
+            const [valRows] = await withRetry(() => db.query(
+                'SELECT * FROM validaciones_saldo_banco WHERE cuenta_bancaria_id = ? ORDER BY fecha_validacion DESC, id DESC LIMIT 1',
+                [cuenta_id]
+            ));
+            ultimaValidacion = valRows[0] || null;
+        } catch (e) {
+            console.warn('validaciones_saldo_banco query warning:', e.message);
+        }
 
         // 3. Movimientos bancarios APLICADOS (Conciliados)
-        const [movimientosAplicadosRows] = await db.query(
+        const [movimientosAplicadosRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, m.tipo_remesa_id, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
             'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta ' +
@@ -98,10 +139,10 @@ router.get('/data', authenticateToken, async (req, res) => {
             'AND m.fecha_aplicado BETWEEN ? AND ? ' +
             'ORDER BY m.fecha_aplicado DESC, m.id DESC',
             [cuenta_id, dbDesde, dbHasta]
-        );
+        ));
 
         // 4. Cheques APLICADOS (Cobrados)
-        const [chequesAplicadosRows] = await db.query(
+        const [chequesAplicadosRows] = await withRetry(() => db.query(
             'SELECT ch.id, "CK" as origen_tipo, "CH" as tipo_doc, ' +
             'ch.fecha, ch.fecha_aplicado, ch.cheque as documento, ch.concepto, ch.a_nombre as beneficiario, ' +
             'ch.valor as monto, ch.valor as cargo, 0 as abono, ch.num_partida, "" as cod_cta ' +
@@ -112,7 +153,7 @@ router.get('/data', authenticateToken, async (req, res) => {
             'AND ch.fecha_aplicado BETWEEN ? AND ? ' +
             'ORDER BY ch.fecha_aplicado DESC, ch.id DESC',
             [cuenta_id, dbDesde, dbHasta]
-        );
+        ));
 
         // Unificar y ordenar movimientos conciliados
         const movimientosConciliados = [...movimientosAplicadosRows, ...chequesAplicadosRows]
@@ -127,7 +168,7 @@ router.get('/data', authenticateToken, async (req, res) => {
             }));
 
         // 5. Movimientos bancarios PENDIENTES (Sin fecha aplicado o posterior al rango)
-        const [movimientosPendientesRows] = await db.query(
+        const [movimientosPendientesRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
             'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta ' +
@@ -138,10 +179,10 @@ router.get('/data', authenticateToken, async (req, res) => {
             'AND m.fecha <= ? ' +
             'ORDER BY m.fecha DESC, m.id DESC',
             [cuenta_id, dbHasta, dbHasta]
-        );
+        ));
 
         // 6. Cheques PENDIENTES (En tránsito / No cobrados)
-        const [chequesPendientesRows] = await db.query(
+        const [chequesPendientesRows] = await withRetry(() => db.query(
             'SELECT ch.id, "CK" as origen_tipo, "CH" as tipo_doc, ' +
             'ch.fecha, ch.fecha_aplicado, ch.cheque as documento, ch.concepto, ch.a_nombre as beneficiario, ' +
             'ch.valor as monto, ch.valor as cargo, 0 as abono, ch.num_partida, "" as cod_cta ' +
@@ -152,7 +193,7 @@ router.get('/data', authenticateToken, async (req, res) => {
             'AND ch.cheque_anulado = FALSE AND ch.fue_noemitido = FALSE ' +
             'ORDER BY ch.fecha DESC, ch.id DESC',
             [cuenta_id, dbHasta, dbHasta]
-        );
+        ));
 
         const pendientes = [...movimientosPendientesRows, ...chequesPendientesRows]
             .sort((a, b) => new Date(b.fecha) - new Date(a.fecha) || b.id - a.id)
@@ -166,19 +207,19 @@ router.get('/data', authenticateToken, async (req, res) => {
             }));
 
         // 7. Cálculo del Saldo en Chequera (Acumulado de todos los abonos menos cargos y cheques hasta la fecha fin)
-        const [[movTotales]] = await db.query(
+        const [[movTotales]] = await withRetry(() => db.query(
             'SELECT COALESCE(SUM(abono), 0) as total_abonos, COALESCE(SUM(cargo), 0) as total_cargos ' +
             'FROM movimientos_bancarios ' +
             'WHERE cuenta_bancaria_id = ? AND fecha <= ?',
             [cuenta_id, dbHasta]
-        );
+        ));
 
-        const [[chkTotales]] = await db.query(
+        const [[chkTotales]] = await withRetry(() => db.query(
             'SELECT COALESCE(SUM(valor), 0) as total_cheques ' +
             'FROM cheques ' +
             'WHERE cuenta_bancaria_id = ? AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND fecha <= ?',
             [cuenta_id, dbHasta]
-        );
+        ));
 
         const saldoChequeraCalculado = Number((Number(movTotales.total_abonos) - Number(movTotales.total_cargos) - Number(chkTotales.total_cheques)).toFixed(2));
 

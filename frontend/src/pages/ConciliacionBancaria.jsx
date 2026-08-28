@@ -3,7 +3,7 @@ import {
     Scale, Search, CheckSquare, Square, RefreshCw, UploadCloud, 
     FileSpreadsheet, FileText, Eye, Edit2, CheckCircle2, 
     AlertCircle, ArrowRightLeft, Sparkles, Filter, X, ShieldAlert,
-    Calendar, Building2, Landmark, DollarSign, Check
+    Calendar, Building2, Landmark, DollarSign, Check, Clock
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -27,12 +27,60 @@ export default function ConciliacionBancaria() {
     const [selectedEmpresa, setSelectedEmpresa] = useState('');
     const [selectedCuentaId, setSelectedCuentaId] = useState('');
     
-    // Fechas (por defecto mes actual)
+    // Fechas y Selector de Periodo
+    const [periodoPreset, setPeriodoPreset] = useState('este_mes');
     const today = new Date();
     const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
     const todayStr = today.toISOString().split('T')[0];
     const [desde, setDesde] = useState(firstDay);
     const [hasta, setHasta] = useState(todayStr);
+
+    const handlePeriodoPresetChange = (preset) => {
+        setPeriodoPreset(preset);
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = now.getMonth();
+        const d = now.getDate();
+
+        const pad = (n) => String(n).padStart(2, '0');
+        const toYMD = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+
+        if (preset === 'hoy') {
+            const t = toYMD(now);
+            setDesde(t);
+            setHasta(t);
+        } else if (preset === 'ayer') {
+            const yesterday = new Date(y, m, d - 1);
+            const yStr = toYMD(yesterday);
+            setDesde(yStr);
+            setHasta(yStr);
+        } else if (preset === 'este_mes') {
+            const startOfMonth = toYMD(new Date(y, m, 1));
+            const t = toYMD(now);
+            setDesde(startOfMonth);
+            setHasta(t);
+        } else if (preset === 'mes_anterior') {
+            const startOfPrevMonth = toYMD(new Date(y, m - 1, 1));
+            const endOfPrevMonth = toYMD(new Date(y, m, 0));
+            setDesde(startOfPrevMonth);
+            setHasta(endOfPrevMonth);
+        } else if (preset === 'ultimos_30_dias') {
+            const past30 = toYMD(new Date(y, m, d - 30));
+            const t = toYMD(now);
+            setDesde(past30);
+            setHasta(t);
+        } else if (preset === 'ultimos_3_meses') {
+            const past3m = toYMD(new Date(y, m - 3, d));
+            const t = toYMD(now);
+            setDesde(past3m);
+            setHasta(t);
+        } else if (preset === 'anio_actual') {
+            const startOfYear = toYMD(new Date(y, 0, 1));
+            const t = toYMD(now);
+            setDesde(startOfYear);
+            setHasta(t);
+        }
+    };
 
     // Estado principal
     const [loading, setLoading] = useState(false);
@@ -103,6 +151,21 @@ export default function ConciliacionBancaria() {
         return cuentas.filter(c => String(c.empresa_codigo) === String(selectedEmpresa));
     }, [cuentas, selectedEmpresa]);
 
+    // Sincronizar cuenta seleccionada cuando cambia el filtro de empresa
+    useEffect(() => {
+        if (cuentasFiltradas.length > 0) {
+            const exists = cuentasFiltradas.some(c => String(c.id) === String(selectedCuentaId));
+            if (!exists) {
+                setSelectedCuentaId(String(cuentasFiltradas[0].id));
+            }
+        } else if (cuentas.length > 0 && selectedEmpresa) {
+            setSelectedCuentaId('');
+            setCuentaInfo(null);
+            setMovimientosConciliados([]);
+            setPendientes([]);
+        }
+    }, [cuentasFiltradas, selectedCuentaId, cuentas.length, selectedEmpresa]);
+
     // Cargar datos de conciliación
     const fetchData = useCallback(async () => {
         if (!selectedCuentaId) return;
@@ -111,8 +174,8 @@ export default function ConciliacionBancaria() {
             const res = await api.get('/bancos/conciliacion/data', {
                 params: {
                     cuenta_id: selectedCuentaId,
-                    desde,
-                    hasta
+                    desde: desde || undefined,
+                    hasta: hasta || undefined
                 }
             });
             setCuentaInfo(res.data.cuenta || null);
@@ -122,8 +185,9 @@ export default function ConciliacionBancaria() {
             setSaldoBancoManual(res.data.resumen?.saldo_banco !== undefined ? String(res.data.resumen.saldo_banco) : '0');
             setSelectedPendingKeys(new Set());
         } catch (err) {
-            console.error(err);
-            addToast('Error al consultar conciliación bancaria', 'error');
+            console.error('Error al consultar conciliación:', err);
+            const msg = err.response?.data?.message || 'Error al consultar conciliación bancaria';
+            addToast(msg, 'error');
         } finally {
             setLoading(false);
         }
@@ -565,6 +629,27 @@ export default function ConciliacionBancaria() {
                         </select>
                     </div>
 
+                    {/* Selector de Periodo Rápido */}
+                    <div style={{ flex: '1 1 160px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
+                            <Clock size={14} /> Periodo:
+                        </label>
+                        <select
+                            value={periodoPreset}
+                            onChange={(e) => handlePeriodoPresetChange(e.target.value)}
+                            style={{ width: '100%', height: '38px', borderRadius: 'var(--border-radius)', padding: '0 0.5rem', fontWeight: '500' }}
+                        >
+                            <option value="este_mes">Este Mes (Actual)</option>
+                            <option value="ultimos_30_dias">Últimos 30 Días</option>
+                            <option value="ultimos_3_meses">Últimos 3 Meses</option>
+                            <option value="mes_anterior">Mes Anterior</option>
+                            <option value="hoy">Hoy</option>
+                            <option value="ayer">Ayer</option>
+                            <option value="anio_actual">Año Actual</option>
+                            <option value="custom">Personalizado</option>
+                        </select>
+                    </div>
+
                     {/* Rango de Fechas */}
                     <div style={{ flex: '1 1 140px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
@@ -573,7 +658,7 @@ export default function ConciliacionBancaria() {
                         <input 
                             type="date" 
                             value={desde} 
-                            onChange={e => setDesde(e.target.value)} 
+                            onChange={e => { setDesde(e.target.value); setPeriodoPreset('custom'); }} 
                             style={{ width: '100%', height: '38px' }} 
                         />
                     </div>
@@ -585,12 +670,12 @@ export default function ConciliacionBancaria() {
                         <input 
                             type="date" 
                             value={hasta} 
-                            onChange={e => setHasta(e.target.value)} 
+                            onChange={e => { setHasta(e.target.value); setPeriodoPreset('custom'); }} 
                             style={{ width: '100%', height: '38px' }} 
                         />
                     </div>
 
-                    <div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end' }}>
                         <button 
                             onClick={fetchData} 
                             className="btn-primary" 

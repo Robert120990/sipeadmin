@@ -5,12 +5,25 @@ const jwt = require('jsonwebtoken');
 const { getDb } = require('../db');
 const { authenticateToken, JWT_SECRET } = require('../middleware/auth');
 
+const withRetry = async (fn, retries = 2) => {
+    try {
+        return await fn();
+    } catch (err) {
+        if ((err.code === 'ECONNRESET' || err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ETIMEDOUT') && retries > 0) {
+            console.warn(`[AUTH] Retrying DB query due to ${err.code}...`);
+            await new Promise(r => setTimeout(r, 200));
+            return await withRetry(fn, retries - 1);
+        }
+        throw err;
+    }
+};
+
 // --- Login ---
 router.post('/login', async (req, res) => {
     const { username, password } = req.body;
     try {
         const db = getDb();
-        const [rows] = await db.query('SELECT u.*, r.name as role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.username = ?', [username]);
+        const [rows] = await withRetry(() => db.query('SELECT u.*, r.name as role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.username = ?', [username]));
         const user = rows[0];
 
         if (!user || !(await bcrypt.compare(password, user.password))) {
@@ -22,7 +35,7 @@ router.post('/login', async (req, res) => {
         }
 
         // Fetch permissions
-        const [perms] = await db.query('SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ?', [user.role_id]);
+        const [perms] = await withRetry(() => db.query('SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ?', [user.role_id]));
         const permissions = perms.map(p => p.name);
 
         const token = jwt.sign({ id: user.id, username: user.username, role: user.role_name, role_id: user.role_id, permissions }, JWT_SECRET, { expiresIn: '8h' });

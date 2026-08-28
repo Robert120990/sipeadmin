@@ -13,8 +13,10 @@ const getDbConfig = () => {
         connectTimeout: 10000,
         waitForConnections: true,
         connectionLimit: 10,
+        maxIdle: 5,
+        idleTimeout: 30000,
         enableKeepAlive: true,
-        keepAliveInitialDelay: 0,
+        keepAliveInitialDelay: 10000,
         timezone: 'Z'
     };
 
@@ -30,8 +32,10 @@ const getDbConfig = () => {
                 connectTimeout: 10000,
                 waitForConnections: true,
                 connectionLimit: 10,
+                maxIdle: 5,
+                idleTimeout: 30000,
                 enableKeepAlive: true,
-                keepAliveInitialDelay: 0,
+                keepAliveInitialDelay: 10000,
                 timezone: 'Z'
             };
         } catch (e) {
