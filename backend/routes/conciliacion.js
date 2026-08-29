@@ -46,6 +46,61 @@ const withRetry = async (fn, retries = 2) => {
     }
 };
 
+// Helper para parsear CSV/TSV respetando comillas dobles y saltos de linea dentro de celdas
+const parseCSVorTSV = (text) => {
+    if (!text || typeof text !== 'string') return [];
+    const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const hasTabs = cleanText.includes('\t');
+    const isDelimiter = (char) => {
+        if (hasTabs) return char === '\t';
+        return char === ',' || char === ';';
+    };
+
+    const rows = [];
+    let currentRow = [];
+    let currentCell = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < cleanText.length; i++) {
+        const char = cleanText[i];
+        const nextChar = cleanText[i + 1];
+        
+        if (char === '"') {
+            if (inQuotes && nextChar === '"') {
+                currentCell += '"';
+                i++; // Saltear comilla escapada
+            } else {
+                inQuotes = !inQuotes;
+            }
+        } else if (isDelimiter(char) && !inQuotes) {
+            currentRow.push(currentCell.trim().replace(/^"+|"+$/g, ''));
+            currentCell = '';
+        } else if (char === '\n' && !inQuotes) {
+            currentRow.push(currentCell.trim().replace(/^"+|"+$/g, ''));
+            if (currentRow.some(c => c !== '')) {
+                rows.push(currentRow);
+            }
+            currentRow = [];
+            currentCell = '';
+        } else {
+            // Si está dentro de comillas y es un salto de línea, reemplazar por espacio
+            if (inQuotes && char === '\n') {
+                currentCell += ' ';
+            } else {
+                currentCell += char;
+            }
+        }
+    }
+    
+    if (currentCell !== '' || currentRow.length > 0) {
+        currentRow.push(currentCell.trim().replace(/^"+|"+$/g, ''));
+        if (currentRow.some(c => c !== '')) {
+            rows.push(currentRow);
+        }
+    }
+    return rows;
+};
+
 // ── 1. Catálogos para la pantalla ─────────────────────────────────────────────
 router.get('/catalogos', authenticateToken, async (req, res) => {
     try {
@@ -61,7 +116,10 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
             'WHERE cb.activa = TRUE ' +
             'ORDER BY e.nombre ASC, cb.orden ASC, cb.nombre ASC'
         ));
-        res.json({ empresas, cuentas });
+        const [tiposRemesas] = await withRetry(() => db.query(
+            'SELECT id, empresa_id, codigo, descripcion FROM tipos_remesas ORDER BY id ASC'
+        ));
+        res.json({ empresas, cuentas, tipos_remesas: tiposRemesas });
     } catch (error) {
         console.error('Error en catalogos conciliacion:', error);
         res.status(500).json({ message: 'Error al cargar catálogos', error: error.message });
@@ -335,7 +393,6 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
 
-        // Obtener pendientes de la cuenta para cruce inteligente
         const [movPendientes] = await db.query(
             'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha ' +
             'FROM movimientos_bancarios ' +
@@ -352,14 +409,12 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
 
         const todosPendientes = [...movPendientes, ...chkPendientes];
 
-        // Parsear líneas o filas
+        // Parsear líneas o filas usando parser robusto con soporte de comillas
         let rows = [];
         if (Array.isArray(raw_data)) {
             rows = raw_data;
         } else if (typeof raw_data === 'string') {
-            // Divide por saltos de línea y tabuladores (copiado de Excel o banca web)
-            const lines = raw_data.split(/\r?\n/).filter(l => l.trim() !== '');
-            rows = lines.map(line => line.split(/\t|,|;/).map(c => c.trim()));
+            rows = parseCSVorTSV(raw_data);
         }
 
         const parsedTransactions = [];
@@ -388,7 +443,6 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
                 continue;
             }
 
-            // Normalización según formato o detección automática
             let fecha = null;
             let documento = '';
             let descripcion = '';
@@ -396,21 +450,25 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
             let abono = 0;
             let monto = 0;
             let saldo = 0;
+            let foundNegative = false;
 
             // Extraer números y fechas de las columnas
             for (let i = 0; i < row.length; i++) {
                 const cell = String(row[i] || '').trim();
+                if (!cell) continue;
+
                 if (!fecha && (/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(cell) || /\d{4}-\d{2}-\d{2}/.test(cell))) {
                     fecha = cell;
-                } else if (!documento && /^\d{5,12}$/.test(cell)) {
-                    documento = cell;
-                } else if (!descripcion && cell.length > 3 && isNaN(Number(cell.replace(/[$,]/g, '')))) {
+                } else if (!documento && /^\d{4,12}$/.test(cell.replace(/^#/, ''))) {
+                    documento = cell.replace(/^#/, '');
+                } else if (!descripcion && cell.length > 2 && isNaN(Number(cell.replace(/[$,]/g, '')))) {
                     descripcion = cell;
                 } else {
                     const numVal = parseFloat(cell.replace(/[$,]/g, ''));
                     if (!isNaN(numVal) && Math.abs(numVal) > 0) {
                         if (numVal < 0) {
                             cargo = Math.abs(numVal);
+                            foundNegative = true;
                         } else if (monto === 0) {
                             monto = numVal;
                         } else if (saldo === 0) {
@@ -427,6 +485,44 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
             }
 
             if (!fecha && !descripcion && monto === 0) continue;
+
+            const descUpper = (descripcion || '').toUpperCase();
+            
+            // Determinar si es Cargo o Abono
+            let tipo = 'ABONO';
+            if (foundNegative || cargo > 0) {
+                tipo = 'CARGO';
+            } else if (
+                descUpper.includes('CHEQUE') || 
+                descUpper.includes('PAGO') || 
+                descUpper.includes('DEBITO') || 
+                descUpper.includes('CARGO') || 
+                descUpper.includes('COMISION') ||
+                descUpper.includes('COBRADO') ||
+                descUpper.includes('INTERES')
+            ) {
+                tipo = 'CARGO';
+            } else if (
+                descUpper.includes('REMESA') || 
+                descUpper.includes('ABONO') || 
+                descUpper.includes('DEPOSITO') || 
+                descUpper.includes('ENTRANTE') || 
+                descUpper.includes('LIQUIDACION')
+            ) {
+                tipo = 'ABONO';
+            }
+
+            // Determinar código de remesa sugerido (NC, RM, NA, CH)
+            let tipoRemesaCodigo = tipo === 'CARGO' ? 'NC' : 'RM';
+            if (descUpper.includes('CHEQUE') || descUpper.includes('CHQ') || descUpper.includes('CAMARA')) {
+                tipoRemesaCodigo = 'CH';
+            } else if (tipo === 'CARGO') {
+                tipoRemesaCodigo = 'NC';
+            } else if (descUpper.includes('REMESA')) {
+                tipoRemesaCodigo = 'RM';
+            } else {
+                tipoRemesaCodigo = 'NA';
+            }
 
             // Intentar cruce automático con los pendientes
             let match = null;
@@ -455,7 +551,7 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
 
             // Detectar concepto sugerido
             const conceptoSugerido = conceptosSugeridos.find(cs => 
-                descripcion.toUpperCase().includes(cs) || 
+                descUpper.includes(cs) || 
                 (match && match.concepto && match.concepto.toUpperCase().includes(cs))
             ) || '';
 
@@ -465,8 +561,10 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
                 descripcion: (descripcion || (match ? match.concepto : '')).toUpperCase(),
                 conceptoSugerido,
                 monto: monto,
-                cargo: cargo,
-                abono: abono,
+                cargo: tipo === 'CARGO' ? monto : 0,
+                abono: tipo === 'ABONO' ? monto : 0,
+                tipo: tipo,
+                tipo_remesa_codigo: tipoRemesaCodigo,
                 saldo: saldo,
                 match: match ? {
                     id: match.id,
@@ -490,6 +588,177 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error al procesar extracto bancario:', error);
         res.status(500).json({ message: 'Error al parsear extracto bancario', error: error.message });
+    }
+});
+
+// ── 5.1. Crear Movimiento y Conciliar Directamente ─────────────────────────
+router.post('/crear-y-aplicar', authenticateToken, async (req, res) => {
+    const {
+        cuenta_bancaria_id,
+        fecha,
+        fecha_aplicado,
+        documento,
+        concepto,
+        monto,
+        tipo, // 'CARGO' o 'ABONO'
+        tipo_remesa_codigo, // 'RM', 'NC', 'NA', 'CH'
+        tipo_remesa_id,
+        num_partida,
+        cod_cta,
+        aplicar_inmediatamente
+    } = req.body;
+
+    if (!cuenta_bancaria_id) {
+        return res.status(400).json({ message: 'Cuenta bancaria requerida.' });
+    }
+    const montoNum = Math.abs(parseFloat(monto) || 0);
+    if (montoNum <= 0) {
+        return res.status(400).json({ message: 'El monto debe ser mayor a 0.' });
+    }
+
+    try {
+        const db = getDb();
+        const [[cuenta]] = await withRetry(() => db.query(
+            'SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ?',
+            [cuenta_bancaria_id]
+        ));
+        if (!cuenta) {
+            return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+        }
+
+        const empresaId = cuenta.empresa_id;
+        const esCargo = (tipo || '').toUpperCase() === 'CARGO' || tipo_remesa_codigo === 'NC' || tipo_remesa_codigo === 'CH';
+        const cargo = esCargo ? montoNum : 0;
+        const abono = !esCargo ? montoNum : 0;
+
+        let remesaId = tipo_remesa_id || null;
+        if (!remesaId && tipo_remesa_codigo) {
+            const [remRows] = await withRetry(() => db.query(
+                'SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ?',
+                [empresaId, tipo_remesa_codigo]
+            ));
+            if (remRows.length > 0) {
+                remesaId = remRows[0].id;
+            } else {
+                const [anyRem] = await withRetry(() => db.query(
+                    'SELECT id FROM tipos_remesas WHERE codigo = ? LIMIT 1',
+                    [tipo_remesa_codigo]
+                ));
+                if (anyRem.length > 0) remesaId = anyRem[0].id;
+            }
+        }
+
+        const dbFecha = fecha ? toDBDate(fecha) : toDBDate(new Date());
+        const dbFechaAplicado = (aplicar_inmediatamente !== false)
+            ? toDBDate(fecha_aplicado || dbFecha)
+            : null;
+
+        const [result] = await withRetry(() => db.query(
+            'INSERT INTO movimientos_bancarios (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                empresaId,
+                cuenta_bancaria_id,
+                dbFecha,
+                dbFechaAplicado,
+                documento || '',
+                (concepto || '').toUpperCase(),
+                montoNum,
+                cargo,
+                abono,
+                remesaId,
+                cod_cta || null,
+                num_partida || null
+            ]
+        ));
+
+        if (req.io) {
+            req.io.emit('conciliacion_updated', { id: result.insertId, accion: 'CREAR' });
+        }
+
+        res.status(201).json({
+            message: dbFechaAplicado 
+                ? 'Movimiento registrado y conciliado exitosamente' 
+                : 'Movimiento registrado como pendiente',
+            id: result.insertId,
+            fecha_aplicado: dbFechaAplicado
+        });
+    } catch (error) {
+        console.error('Error al crear y aplicar movimiento:', error);
+        res.status(500).json({ message: 'Error al registrar movimiento', error: error.message });
+    }
+});
+
+// ── 5.2. Crear y Aplicar Movimientos Masivamente ───────────────────────────
+router.post('/crear-masivo-y-aplicar', authenticateToken, async (req, res) => {
+    const { cuenta_bancaria_id, items, fecha_aplicado_general, aplicar_inmediatamente } = req.body;
+    if (!cuenta_bancaria_id || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ message: 'Debe especificar la cuenta bancaria y al menos un movimiento.' });
+    }
+
+    try {
+        const db = getDb();
+        const [[cuenta]] = await withRetry(() => db.query(
+            'SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ?',
+            [cuenta_bancaria_id]
+        ));
+        if (!cuenta) {
+            return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+        }
+
+        const empresaId = cuenta.empresa_id;
+        const [tiposRemesas] = await withRetry(() => db.query(
+            'SELECT id, codigo FROM tipos_remesas WHERE empresa_id = ?',
+            [empresaId]
+        ));
+        const remesaMap = new Map();
+        tiposRemesas.forEach(tr => remesaMap.set(tr.codigo, tr.id));
+
+        let creadosCount = 0;
+        for (const item of items) {
+            const montoNum = Math.abs(parseFloat(item.monto) || 0);
+            if (montoNum <= 0) continue;
+
+            const esCargo = (item.tipo || '').toUpperCase() === 'CARGO' || item.tipo_remesa_codigo === 'NC' || item.tipo_remesa_codigo === 'CH';
+            const cargo = esCargo ? montoNum : 0;
+            const abono = !esCargo ? montoNum : 0;
+            const tipoCodigo = item.tipo_remesa_codigo || (esCargo ? 'NC' : 'RM');
+            const remesaId = remesaMap.get(tipoCodigo) || null;
+
+            const dbFecha = item.fecha ? toDBDate(item.fecha) : toDBDate(new Date());
+            const itemFechaAplicado = item.fecha_aplicado || fecha_aplicado_general || dbFecha;
+            const dbFechaAplicado = (aplicar_inmediatamente !== false) ? toDBDate(itemFechaAplicado) : null;
+
+            await withRetry(() => db.query(
+                'INSERT INTO movimientos_bancarios (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [
+                    empresaId,
+                    cuenta_bancaria_id,
+                    dbFecha,
+                    dbFechaAplicado,
+                    item.documento || '',
+                    (item.descripcion || item.concepto || '').toUpperCase(),
+                    montoNum,
+                    cargo,
+                    abono,
+                    remesaId,
+                    null,
+                    null
+                ]
+            ));
+            creadosCount++;
+        }
+
+        if (req.io) {
+            req.io.emit('conciliacion_updated', { count: creadosCount, accion: 'CREAR_MASIVO' });
+        }
+
+        res.json({
+            message: `Se crearon y ${aplicar_inmediatamente !== false ? 'conciliaron' : 'registraron'} ${creadosCount} movimientos con éxito.`,
+            creados: creadosCount
+        });
+    } catch (error) {
+        console.error('Error en crear-masivo-y-aplicar:', error);
+        res.status(500).json({ message: 'Error al procesar movimientos en lote', error: error.message });
     }
 });
 

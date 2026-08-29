@@ -3,7 +3,7 @@ import {
     Scale, Search, CheckSquare, Square, RefreshCw, UploadCloud, 
     FileSpreadsheet, FileText, Eye, Edit2, CheckCircle2, 
     AlertCircle, ArrowRightLeft, Sparkles, Filter, X, ShieldAlert,
-    Calendar, Building2, Landmark, DollarSign, Check, Clock
+    Calendar, Building2, Landmark, DollarSign, Check, Clock, Plus, Link2, Layers
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -24,6 +24,7 @@ export default function ConciliacionBancaria() {
     // Catálogos y Filtros
     const [empresas, setEmpresas] = useState([]);
     const [cuentas, setCuentas] = useState([]);
+    const [tiposRemesas, setTiposRemesas] = useState([]);
     const [selectedEmpresa, setSelectedEmpresa] = useState('');
     const [selectedCuentaId, setSelectedCuentaId] = useState('');
     
@@ -110,6 +111,7 @@ export default function ConciliacionBancaria() {
     const [showDetailModal, setShowDetailModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showValidationModal, setShowValidationModal] = useState(false);
+    const [showAssignModal, setShowAssignModal] = useState(false);
 
     // Item seleccionado para detalle/edición
     const [selectedItem, setSelectedItem] = useState(null);
@@ -125,6 +127,23 @@ export default function ConciliacionBancaria() {
     const [importRawText, setImportRawText] = useState('');
     const [parsedExtract, setParsedExtract] = useState(null);
     const [isParsing, setIsParsing] = useState(false);
+    const [selectedExtractIndices, setSelectedExtractIndices] = useState(new Set());
+
+    // Estado para Asignación / Creación desde Extracto o Manual
+    const [assignTargetRow, setAssignTargetRow] = useState(null);
+    const [assignTargetIndex, setAssignTargetIndex] = useState(null);
+    const [assignTab, setAssignTab] = useState('CREAR'); // 'CREAR' | 'VINCULAR'
+    const [assignFormData, setAssignFormData] = useState({
+        tipo: 'CARGO',
+        tipo_remesa_codigo: 'NC',
+        fecha: todayStr,
+        fecha_aplicado: todayStr,
+        documento: '',
+        concepto: '',
+        monto: 0,
+        aplicar_inmediatamente: true
+    });
+    const [linkSearchTerm, setLinkSearchTerm] = useState('');
 
     // Cargar catálogos iniciales
     useEffect(() => {
@@ -133,6 +152,7 @@ export default function ConciliacionBancaria() {
                 const res = await api.get('/bancos/conciliacion/catalogos');
                 setEmpresas(res.data.empresas || []);
                 setCuentas(res.data.cuentas || []);
+                setTiposRemesas(res.data.tipos_remesas || []);
                 if (res.data.cuentas?.length > 0) {
                     setSelectedCuentaId(String(res.data.cuentas[0].id));
                     setSelectedEmpresa(String(res.data.cuentas[0].empresa_codigo || ''));
@@ -348,12 +368,33 @@ export default function ConciliacionBancaria() {
                 banco_formato: importBank
             });
             setParsedExtract(res.data);
-            addToast(`Se procesaron ${res.data.total_procesadas} líneas del extracto`, 'success');
+            // Pre-seleccionar todas las filas para comodidad del usuario
+            if (res.data.transacciones && res.data.transacciones.length > 0) {
+                setSelectedExtractIndices(new Set(res.data.transacciones.map((_, i) => i)));
+            }
+            addToast(`Se procesaron ${res.data.total_procesadas} transacciones del extracto`, 'success');
         } catch (err) {
             console.error(err);
             addToast('Error al procesar extracto bancario', 'error');
         } finally {
             setIsParsing(false);
+        }
+    };
+
+    // Selección de filas del extracto
+    const handleToggleSelectExtract = (idx) => {
+        const next = new Set(selectedExtractIndices);
+        if (next.has(idx)) next.delete(idx);
+        else next.add(idx);
+        setSelectedExtractIndices(next);
+    };
+
+    const handleSelectAllExtract = () => {
+        if (!parsedExtract || !parsedExtract.transacciones) return;
+        if (selectedExtractIndices.size === parsedExtract.transacciones.length) {
+            setSelectedExtractIndices(new Set());
+        } else {
+            setSelectedExtractIndices(new Set(parsedExtract.transacciones.map((_, i) => i)));
         }
     };
 
@@ -383,15 +424,15 @@ export default function ConciliacionBancaria() {
         reader.readAsBinaryString(file);
     };
 
-    // Conciliar automáticamente las coincidencias del extracto
+    // Conciliar automáticamente todas las coincidencias del extracto
     const handleConciliarMatchesExtracto = async () => {
         if (!parsedExtract || !parsedExtract.transacciones) return;
         const matches = parsedExtract.transacciones
-            .filter(t => t.match && t.match.id)
+            .filter(t => t.match && t.match.id && !t.procesado)
             .map(t => ({ id: t.match.id, origen_tipo: t.match.origen_tipo }));
 
         if (matches.length === 0) {
-            addToast('No hay coincidencias automáticas para conciliar', 'warning');
+            addToast('No hay coincidencias pendientes para conciliar', 'warning');
             return;
         }
 
@@ -401,19 +442,246 @@ export default function ConciliacionBancaria() {
         try {
             const res = await api.post('/bancos/conciliacion/aplicar', {
                 items: matches,
-                fecha_aplicado: fechaAplicadoInput,
+                fecha_aplicado: fechaAplicadoInput || todayStr,
                 accion: 'CONCILIAR'
             });
             addToast(res.data.message || 'Coincidencias conciliadas exitosamente', 'success');
             setShowImportModal(false);
             setParsedExtract(null);
             setImportRawText('');
+            setSelectedExtractIndices(new Set());
             fetchData();
         } catch (err) {
             console.error(err);
             addToast('Error al conciliar coincidencias', 'error');
         }
     };
+
+    // Conciliar una única coincidencia detectada
+    const handleConciliarSingleMatch = async (t, index) => {
+        if (!t.match) return;
+        try {
+            const res = await api.post('/bancos/conciliacion/aplicar', {
+                items: [{ id: t.match.id, origen_tipo: t.match.origen_tipo }],
+                fecha_aplicado: fechaAplicadoInput || todayStr,
+                accion: 'CONCILIAR'
+            });
+            addToast(res.data.message || 'Coincidencia conciliada exitosamente', 'success');
+            if (parsedExtract) {
+                const updatedTx = [...parsedExtract.transacciones];
+                updatedTx[index] = { ...updatedTx[index], procesado: true };
+                setParsedExtract({ ...parsedExtract, transacciones: updatedTx });
+            }
+            fetchData();
+        } catch (err) {
+            console.error(err);
+            addToast('Error al conciliar coincidencia', 'error');
+        }
+    };
+
+    // Abrir Modal de Asignación / Creación con signo '+'
+    const handleOpenAssignModal = (row, index) => {
+        setAssignTargetRow(row);
+        setAssignTargetIndex(index !== undefined ? index : null);
+        setAssignTab('CREAR');
+        
+        let ymdFecha = todayStr;
+        if (row && row.fecha) {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(row.fecha)) {
+                ymdFecha = row.fecha;
+            } else if (row.fecha.includes('/')) {
+                const parts = row.fecha.split('/');
+                if (parts.length === 3) {
+                    const d = parts[0].padStart(2, '0');
+                    const m = parts[1].padStart(2, '0');
+                    const y = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+                    ymdFecha = `${y}-${m}-${d}`;
+                }
+            }
+        }
+
+        setAssignFormData({
+            tipo: row?.tipo || 'CARGO',
+            tipo_remesa_codigo: row?.tipo_remesa_codigo || (row?.tipo === 'CARGO' ? 'NC' : 'RM'),
+            fecha: ymdFecha,
+            fecha_aplicado: ymdFecha || todayStr,
+            documento: row?.documento || '',
+            concepto: row?.conceptoSugerido || row?.descripcion || '',
+            monto: Number(row?.monto || 0),
+            aplicar_inmediatamente: true
+        });
+        setLinkSearchTerm(row?.documento || '');
+        setShowAssignModal(true);
+    };
+
+    // Abrir Modal para Nuevo Movimiento Manual directo
+    const handleOpenManualCreate = () => {
+        setAssignTargetRow(null);
+        setAssignTargetIndex(null);
+        setAssignTab('CREAR');
+        setAssignFormData({
+            tipo: 'CARGO',
+            tipo_remesa_codigo: 'NC',
+            fecha: todayStr,
+            fecha_aplicado: todayStr,
+            documento: '',
+            concepto: '',
+            monto: '',
+            aplicar_inmediatamente: true
+        });
+        setLinkSearchTerm('');
+        setShowAssignModal(true);
+    };
+
+    // Guardar nuevo movimiento creado desde el modal de asignación (+)
+    const handleSaveAssignCreate = async (e) => {
+        e?.preventDefault();
+        if (!selectedCuentaId) {
+            addToast('Selecciona una cuenta bancaria', 'warning');
+            return;
+        }
+        if (Number(assignFormData.monto) <= 0) {
+            addToast('El monto debe ser mayor a 0', 'warning');
+            return;
+        }
+
+        try {
+            const res = await api.post('/bancos/conciliacion/crear-y-aplicar', {
+                cuenta_bancaria_id: selectedCuentaId,
+                ...assignFormData
+            });
+            addToast(res.data.message || 'Movimiento procesado y guardado', 'success');
+
+            // Actualizar la fila en el extracto si proviene de él
+            if (parsedExtract && assignTargetIndex !== null) {
+                const updatedTx = [...parsedExtract.transacciones];
+                updatedTx[assignTargetIndex] = {
+                    ...updatedTx[assignTargetIndex],
+                    procesado: true,
+                    match: {
+                        id: res.data.id,
+                        origen_tipo: 'MOV',
+                        documento: assignFormData.documento,
+                        concepto: assignFormData.concepto,
+                        monto: assignFormData.monto,
+                        fecha: assignFormData.fecha
+                    }
+                };
+                setParsedExtract({ ...parsedExtract, transacciones: updatedTx });
+            }
+
+            setShowAssignModal(false);
+            fetchData();
+        } catch (err) {
+            console.error(err);
+            addToast(err.response?.data?.message || 'Error al registrar movimiento', 'error');
+        }
+    };
+
+    // Vincular fila del extracto a un documento pendiente existente
+    const handleSaveAssignLink = async (pendingItem) => {
+        if (!pendingItem) {
+            addToast('Selecciona un documento pendiente para vincular', 'warning');
+            return;
+        }
+        try {
+            const res = await api.post('/bancos/conciliacion/aplicar', {
+                items: [{ id: pendingItem.id, origen_tipo: pendingItem.origen_tipo }],
+                fecha_aplicado: assignFormData.fecha_aplicado || assignFormData.fecha || todayStr,
+                accion: 'CONCILIAR'
+            });
+            addToast(res.data.message || 'Documento vinculado y conciliado exitosamente', 'success');
+
+            if (parsedExtract && assignTargetIndex !== null) {
+                const updatedTx = [...parsedExtract.transacciones];
+                updatedTx[assignTargetIndex] = {
+                    ...updatedTx[assignTargetIndex],
+                    procesado: true,
+                    match: {
+                        id: pendingItem.id,
+                        origen_tipo: pendingItem.origen_tipo,
+                        documento: pendingItem.documento,
+                        concepto: pendingItem.concepto,
+                        beneficiario: pendingItem.beneficiario,
+                        monto: pendingItem.monto,
+                        fecha: pendingItem.fecha_display
+                    }
+                };
+                setParsedExtract({ ...parsedExtract, transacciones: updatedTx });
+            }
+
+            setShowAssignModal(false);
+            fetchData();
+        } catch (err) {
+            console.error(err);
+            addToast(err.response?.data?.message || 'Error al vincular documento', 'error');
+        }
+    };
+
+    // Procesar masivamente todos los movimientos seleccionados en el extracto
+    const handleBulkCreateAndApplyExtract = async () => {
+        if (!parsedExtract || !parsedExtract.transacciones) return;
+        const selectedItems = parsedExtract.transacciones
+            .map((t, idx) => ({ ...t, originalIndex: idx }))
+            .filter(t => selectedExtractIndices.has(t.originalIndex) && !t.procesado);
+
+        if (selectedItems.length === 0) {
+            addToast('Selecciona al menos un movimiento del extracto para procesar', 'warning');
+            return;
+        }
+
+        const withMatch = selectedItems.filter(t => t.match);
+        const withoutMatch = selectedItems.filter(t => !t.match);
+
+        const ok = await confirm(
+            `¿Deseas procesar ${selectedItems.length} movimientos seleccionados? ` +
+            `(${withMatch.length} coincidencias existentes y ${withoutMatch.length} nuevos a crear)`
+        );
+        if (!ok) return;
+
+        try {
+            // 1. Conciliar los que tienen coincidencia
+            if (withMatch.length > 0) {
+                await api.post('/bancos/conciliacion/aplicar', {
+                    items: withMatch.map(t => ({ id: t.match.id, origen_tipo: t.match.origen_tipo })),
+                    fecha_aplicado: fechaAplicadoInput || todayStr,
+                    accion: 'CONCILIAR'
+                });
+            }
+
+            // 2. Crear y conciliar los que no tienen coincidencia
+            if (withoutMatch.length > 0) {
+                await api.post('/bancos/conciliacion/crear-masivo-y-aplicar', {
+                    cuenta_bancaria_id: selectedCuentaId,
+                    fecha_aplicado_general: fechaAplicadoInput || todayStr,
+                    aplicar_inmediatamente: true,
+                    items: withoutMatch
+                });
+            }
+
+            addToast(`Se procesaron ${selectedItems.length} movimientos exitosamente`, 'success');
+            setShowImportModal(false);
+            setParsedExtract(null);
+            setImportRawText('');
+            setSelectedExtractIndices(new Set());
+            fetchData();
+        } catch (err) {
+            console.error(err);
+            addToast('Error al procesar movimientos seleccionados', 'error');
+        }
+    };
+
+    // Filtro de pendientes para el modal de vinculación
+    const filteredPendientesForLink = useMemo(() => {
+        if (!linkSearchTerm) return pendientes;
+        const q = linkSearchTerm.toLowerCase();
+        return pendientes.filter(p => 
+            String(p.documento || '').toLowerCase().includes(q) ||
+            String(p.concepto || '').toLowerCase().includes(q) ||
+            String(p.beneficiario || '').toLowerCase().includes(q) ||
+            String(p.monto_display || '').includes(q)
+        );
+    }, [pendientes, linkSearchTerm]);
 
     // Abrir modal de edición
     const handleOpenEdit = (item) => {
@@ -555,6 +823,13 @@ export default function ConciliacionBancaria() {
                 </div>
 
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button 
+                        onClick={handleOpenManualCreate} 
+                        className="btn-secondary" 
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                    >
+                        <Plus size={16} /> Nuevo Movimiento
+                    </button>
                     <button 
                         onClick={() => setShowImportModal(true)} 
                         className="btn-primary" 
@@ -1028,33 +1303,48 @@ export default function ConciliacionBancaria() {
                 </div>
             </div>
 
-            {/* ── MODAL 1: IMPORTADOR DE EXTRACTO BANCARIO ── */}
+            {/* ── MODAL 1: IMPORTADOR DE EXTRACTO BANCARIO MULTIBANCO ── */}
             <Modal
                 open={showImportModal}
                 onClose={() => { setShowImportModal(false); setParsedExtract(null); }}
                 title="Importar Extracto Bancario Multibanco"
                 size="xl"
                 footer={(
-                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
                         <div>
                             {parsedExtract && (
                                 <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                                    Total procesadas: <strong>{parsedExtract.total_procesadas}</strong> | Coincidencias automáticas: <strong>{parsedExtract.transacciones.filter(t => t.match).length}</strong>
+                                    Total: <strong>{parsedExtract.total_procesadas}</strong> | 
+                                    Coincidencias: <strong style={{ color: '#10b981' }}>{parsedExtract.transacciones.filter(t => t.match && !t.procesado).length}</strong> | 
+                                    Seleccionados: <strong>{selectedExtractIndices.size}</strong>
                                 </span>
                             )}
                         </div>
-                        <div style={{ display: 'flex', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                             <button onClick={() => { setShowImportModal(false); setParsedExtract(null); }} className="btn-secondary">
                                 Cerrar
                             </button>
-                            {parsedExtract && (
-                                <button 
-                                    onClick={handleConciliarMatchesExtracto}
-                                    className="btn-primary"
-                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                                >
-                                    <Sparkles size={16} /> Conciliar Coincidencias
-                                </button>
+                            {parsedExtract && parsedExtract.transacciones && (
+                                <>
+                                    {parsedExtract.transacciones.filter((t, i) => selectedExtractIndices.has(i) && !t.match && !t.procesado).length > 0 && (
+                                        <button 
+                                            onClick={handleBulkCreateAndApplyExtract}
+                                            className="btn-primary"
+                                            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' }}
+                                        >
+                                            <Plus size={16} /> Crear y Conciliar Seleccionados ({parsedExtract.transacciones.filter((t, i) => selectedExtractIndices.has(i) && !t.match && !t.procesado).length})
+                                        </button>
+                                    )}
+                                    {parsedExtract.transacciones.filter(t => t.match && !t.procesado).length > 0 && (
+                                        <button 
+                                            onClick={handleConciliarMatchesExtracto}
+                                            className="btn-primary"
+                                            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#10b981' }}
+                                        >
+                                            <Sparkles size={16} /> Conciliar Coincidencias ({parsedExtract.transacciones.filter(t => t.match && !t.procesado).length})
+                                        </button>
+                                    )}
+                                </>
                             )}
                         </div>
                     </div>
@@ -1113,7 +1403,7 @@ export default function ConciliacionBancaria() {
                         </label>
                         <textarea 
                             rows={4}
-                            placeholder="Pega aquí las filas copiadas (Ctrl+V)... Ejemplo: 28/08/2026   10004567   LIQUIDACION PROMERICA   $250.00"
+                            placeholder="Pega aquí las filas copiadas (Ctrl+V)... Ejemplo: 28/08/2026   10004567   REMESA CUENTA CORRIENTE SERSAPROSA   $250.00"
                             value={importRawText}
                             onChange={e => setImportRawText(e.target.value)}
                             style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.8rem', padding: '0.5rem' }}
@@ -1123,43 +1413,142 @@ export default function ConciliacionBancaria() {
                     {/* Resultados del Cruce / Análisis */}
                     {parsedExtract && parsedExtract.transacciones && (
                         <div style={{ marginTop: '0.5rem' }}>
-                            <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <Sparkles size={16} color="var(--primary)" />
-                                Previsualización de Movimientos del Extracto y Cruce con Pendientes:
-                            </h3>
-                            <div className="table-responsive" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                                <table style={{ minWidth: '850px', width: '100%', fontSize: '0.8rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <h3 style={{ fontSize: '0.95rem', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <Sparkles size={16} color="var(--primary)" />
+                                    Previsualización de Movimientos del Extracto:
+                                </h3>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                    Usa el botón <strong style={{ color: 'var(--primary)' }}>+ Asignar</strong> para registrar o vincular individualmente.
+                                </span>
+                            </div>
+                            <div className="table-responsive" style={{ maxHeight: '340px', overflowY: 'auto' }}>
+                                <table style={{ minWidth: '950px', width: '100%', fontSize: '0.8rem' }}>
                                     <thead>
-                                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                            <th style={{ padding: '6px' }}>FECHA</th>
-                                            <th style={{ padding: '6px' }}>DOC</th>
-                                            <th style={{ padding: '6px' }}>DESCRIPCIÓN EXTRACTO</th>
-                                            <th style={{ padding: '6px', textAlign: 'right' }}>MONTO</th>
-                                            <th style={{ padding: '6px' }}>CONCEPTO SUGERIDO</th>
-                                            <th style={{ padding: '6px' }}>ESTADO DE CRUCE</th>
+                                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+                                            <th style={{ width: '36px', textAlign: 'center', padding: '8px 4px' }}>
+                                                <button 
+                                                    type="button"
+                                                    onClick={handleSelectAllExtract} 
+                                                    style={{ background: 'none', color: 'var(--primary)', padding: 0 }}
+                                                    title="Seleccionar / Deseleccionar todos"
+                                                >
+                                                    {selectedExtractIndices.size > 0 && selectedExtractIndices.size === parsedExtract.transacciones.length ? (
+                                                        <CheckSquare size={16} />
+                                                    ) : (
+                                                        <Square size={16} />
+                                                    )}
+                                                </button>
+                                            </th>
+                                            <th style={{ padding: '8px' }}>FECHA</th>
+                                            <th style={{ padding: '8px' }}>DOC</th>
+                                            <th style={{ padding: '8px' }}>DESCRIPCIÓN EXTRACTO</th>
+                                            <th style={{ padding: '8px', textAlign: 'right' }}>MONTO</th>
+                                            <th style={{ padding: '8px', textAlign: 'center' }}>TIPO</th>
+                                            <th style={{ padding: '8px' }}>ESTADO DE CRUCE</th>
+                                            <th style={{ padding: '8px', textAlign: 'center' }}>ACCIÓN</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {parsedExtract.transacciones.map((t, idx) => {
                                             const hasMatch = Boolean(t.match);
+                                            const isSelected = selectedExtractIndices.has(idx);
                                             return (
-                                                <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: hasMatch ? 'rgba(16, 185, 129, 0.08)' : 'transparent' }}>
-                                                    <td style={{ padding: '6px' }}>{t.fecha}</td>
-                                                    <td style={{ padding: '6px', fontFamily: 'monospace' }}>{t.documento || '-'}</td>
-                                                    <td style={{ padding: '6px' }}>{t.descripcion}</td>
-                                                    <td style={{ padding: '6px', textAlign: 'right', fontWeight: 'bold' }}>
+                                                <tr 
+                                                    key={idx} 
+                                                    style={{ 
+                                                        borderBottom: '1px solid rgba(255,255,255,0.05)', 
+                                                        background: t.procesado 
+                                                            ? 'rgba(16, 185, 129, 0.12)' 
+                                                            : hasMatch 
+                                                                ? 'rgba(16, 185, 129, 0.06)' 
+                                                                : isSelected 
+                                                                    ? 'rgba(37, 99, 235, 0.05)' 
+                                                                    : 'transparent',
+                                                        transition: 'background 0.15s'
+                                                    }}
+                                                >
+                                                    <td style={{ textAlign: 'center', padding: '6px 4px' }}>
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => handleToggleSelectExtract(idx)} 
+                                                            style={{ background: 'none', color: isSelected ? 'var(--primary)' : 'var(--text-muted)', padding: 0 }}
+                                                        >
+                                                            {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+                                                        </button>
+                                                    </td>
+                                                    <td style={{ padding: '6px', whiteSpace: 'nowrap' }}>{t.fecha}</td>
+                                                    <td style={{ padding: '6px', fontFamily: 'monospace', fontWeight: '600' }}>{t.documento || '-'}</td>
+                                                    <td style={{ padding: '6px', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={t.descripcion}>
+                                                        <div style={{ fontWeight: '500' }}>{t.descripcion}</div>
+                                                        {t.conceptoSugerido && t.conceptoSugerido !== t.descripcion && (
+                                                            <div style={{ fontSize: '0.75rem', color: 'var(--primary)', opacity: 0.9 }}>
+                                                                ↳ {t.conceptoSugerido}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: '6px', textAlign: 'right', fontWeight: 'bold', color: t.tipo === 'CARGO' ? '#ef4444' : '#10b981', whiteSpace: 'nowrap' }}>
                                                         ${Number(t.monto).toFixed(2)}
                                                     </td>
-                                                    <td style={{ padding: '6px', color: 'var(--primary)' }}>
-                                                        {t.conceptoSugerido || '-'}
+                                                    <td style={{ padding: '6px', textAlign: 'center' }}>
+                                                        {renderTipoBadge(t.tipo_remesa_codigo || (t.tipo === 'CARGO' ? 'NC' : 'RM'))}
                                                     </td>
                                                     <td style={{ padding: '6px' }}>
-                                                        {hasMatch ? (
+                                                        {t.procesado ? (
                                                             <span style={{ color: '#10b981', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                                                                <CheckCircle2 size={14} /> Cruce con {t.match.origen_tipo === 'CK' ? 'Cheque' : 'Movimiento'} #{t.match.documento} (${Number(t.match.monto).toFixed(2)})
+                                                                <CheckCircle2 size={14} /> Conciliado en esta sesión
+                                                            </span>
+                                                        ) : hasMatch ? (
+                                                            <span style={{ color: '#10b981', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                                                                <CheckCircle2 size={14} /> Cruce con {t.match.origen_tipo === 'CK' ? 'Cheque' : 'Mov'} #{t.match.documento} (${Number(t.match.monto).toFixed(2)})
                                                             </span>
                                                         ) : (
                                                             <span style={{ color: 'var(--text-muted)' }}>Sin coincidencia pendiente</span>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: '6px', textAlign: 'center' }}>
+                                                        {t.procesado ? (
+                                                            <span style={{ color: '#10b981', fontWeight: '700', fontSize: '0.8rem' }}>✓ Listo</span>
+                                                        ) : hasMatch ? (
+                                                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                                                <button 
+                                                                    type="button"
+                                                                    onClick={() => handleConciliarSingleMatch(t, idx)} 
+                                                                    className="btn-primary" 
+                                                                    style={{ padding: '3px 8px', fontSize: '0.75rem', background: '#10b981', display: 'flex', alignItems: 'center', gap: '3px' }} 
+                                                                    title="Conciliar coincidencia encontrada"
+                                                                >
+                                                                    <Check size={13} /> Conciliar
+                                                                </button>
+                                                                <button 
+                                                                    type="button"
+                                                                    onClick={() => handleOpenAssignModal(t, idx)} 
+                                                                    className="btn-secondary" 
+                                                                    style={{ padding: '3px 6px', fontSize: '0.75rem' }} 
+                                                                    title="Cambiar asignación o crear nuevo"
+                                                                >
+                                                                    <Edit2 size={13} />
+                                                                </button>
+                                                            </div>
+                                                        ) : (
+                                                            <button 
+                                                                type="button"
+                                                                onClick={() => handleOpenAssignModal(t, idx)} 
+                                                                className="btn-primary" 
+                                                                style={{ 
+                                                                    padding: '4px 10px', 
+                                                                    fontSize: '0.75rem', 
+                                                                    display: 'inline-flex', 
+                                                                    alignItems: 'center', 
+                                                                    gap: '4px', 
+                                                                    background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', 
+                                                                    fontWeight: '600',
+                                                                    borderRadius: '4px'
+                                                                }} 
+                                                                title="Asignar o crear movimiento en conciliación"
+                                                            >
+                                                                <Plus size={14} /> Asignar
+                                                            </button>
                                                         )}
                                                     </td>
                                                 </tr>
@@ -1339,6 +1728,305 @@ export default function ConciliacionBancaria() {
                             <Check size={16} /> Confirmar Validación
                         </button>
                     </div>
+                </div>
+            </Modal>
+
+            {/* ── MODAL 5: ASIGNAR / CREAR MOVIMIENTO EN CONCILIACIÓN (+) ── */}
+            <Modal
+                open={showAssignModal}
+                onClose={() => setShowAssignModal(false)}
+                title={assignTargetRow ? "Asignar / Crear Movimiento en Conciliación" : "Nuevo Movimiento Bancario"}
+                size="lg"
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    
+                    {/* Tarjeta con los datos de la fila del extracto */}
+                    {assignTargetRow && (
+                        <div style={{
+                            background: 'rgba(37, 99, 235, 0.08)',
+                            border: '1px solid rgba(37, 99, 235, 0.25)',
+                            borderRadius: 'var(--border-radius)',
+                            padding: '0.75rem 1rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.4rem',
+                            fontSize: '0.85rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <div>
+                                    <span style={{ color: 'var(--text-muted)' }}>Fecha:</span> <strong>{assignTargetRow.fecha}</strong>
+                                    <span style={{ margin: '0 8px', opacity: 0.4 }}>|</span>
+                                    <span style={{ color: 'var(--text-muted)' }}>Documento:</span> <strong style={{ fontFamily: 'monospace' }}>{assignTargetRow.documento || 'Sin doc'}</strong>
+                                </div>
+                                <div style={{ fontSize: '1.05rem', fontWeight: '800', color: assignTargetRow.tipo === 'CARGO' ? '#ef4444' : '#10b981' }}>
+                                    ${Number(assignTargetRow.monto).toFixed(2)}
+                                </div>
+                            </div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                Descripción Extracto: <span style={{ color: 'var(--text)', fontWeight: '500' }}>{assignTargetRow.descripcion}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Selector de Pestaña: Crear vs Vincular */}
+                    <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
+                        <button 
+                            type="button"
+                            onClick={() => setAssignTab('CREAR')}
+                            className={assignTab === 'CREAR' ? 'btn-primary' : 'btn-secondary'}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 1rem', fontSize: '0.85rem', fontWeight: '600' }}
+                        >
+                            <Plus size={15} /> Crear Nuevo Movimiento
+                        </button>
+                        {assignTargetRow && (
+                            <button 
+                                type="button"
+                                onClick={() => setAssignTab('VINCULAR')}
+                                className={assignTab === 'VINCULAR' ? 'btn-primary' : 'btn-secondary'}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 1rem', fontSize: '0.85rem', fontWeight: '600' }}
+                            >
+                                <Link2 size={15} /> Vincular a Pendiente Existente ({pendientes.length})
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Contenido Pestaña 1: CREAR NUEVO MOVIMIENTO */}
+                    {assignTab === 'CREAR' && (
+                        <form onSubmit={handleSaveAssignCreate} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            
+                            {/* Toggle Cargo vs Abono */}
+                            <div>
+                                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>Tipo de Operación:</label>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button 
+                                        type="button"
+                                        onClick={() => setAssignFormData(prev => ({ 
+                                            ...prev, 
+                                            tipo: 'CARGO',
+                                            tipo_remesa_codigo: prev.tipo_remesa_codigo === 'RM' || prev.tipo_remesa_codigo === 'NA' ? 'NC' : prev.tipo_remesa_codigo
+                                        }))}
+                                        className={assignFormData.tipo === 'CARGO' ? 'btn-primary' : 'btn-secondary'}
+                                        style={{ 
+                                            flex: 1, 
+                                            height: '38px', 
+                                            background: assignFormData.tipo === 'CARGO' ? '#dc2626' : undefined, 
+                                            color: '#fff', 
+                                            fontWeight: '700', 
+                                            fontSize: '0.85rem',
+                                            border: assignFormData.tipo === 'CARGO' ? '2px solid #ef4444' : undefined
+                                        }}
+                                    >
+                                        CARGO / Salida (Débito)
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        onClick={() => setAssignFormData(prev => ({ 
+                                            ...prev, 
+                                            tipo: 'ABONO',
+                                            tipo_remesa_codigo: prev.tipo_remesa_codigo === 'NC' || prev.tipo_remesa_codigo === 'CH' ? 'RM' : prev.tipo_remesa_codigo
+                                        }))}
+                                        className={assignFormData.tipo === 'ABONO' ? 'btn-primary' : 'btn-secondary'}
+                                        style={{ 
+                                            flex: 1, 
+                                            height: '38px', 
+                                            background: assignFormData.tipo === 'ABONO' ? '#10b981' : undefined, 
+                                            color: '#fff', 
+                                            fontWeight: '700', 
+                                            fontSize: '0.85rem',
+                                            border: assignFormData.tipo === 'ABONO' ? '2px solid #34d399' : undefined
+                                        }}
+                                    >
+                                        ABONO / Entrada (Crédito)
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                                <div>
+                                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Tipo Documento / Remesa:</label>
+                                    <select
+                                        value={assignFormData.tipo_remesa_codigo}
+                                        onChange={e => setAssignFormData({ ...assignFormData, tipo_remesa_codigo: e.target.value })}
+                                        style={{ width: '100%', height: '38px', borderRadius: 'var(--border-radius)' }}
+                                    >
+                                        {assignFormData.tipo === 'CARGO' ? (
+                                            <>
+                                                <option value="NC">NC - NOTA DE CARGO</option>
+                                                <option value="CH">CH - CHEQUE COBRADO</option>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <option value="RM">RM - REMESA DIARIA</option>
+                                                <option value="NA">NA - NOTA DE ABONO</option>
+                                            </>
+                                        )}
+                                        {tiposRemesas.filter(tr => tr.codigo !== 'NC' && tr.codigo !== 'CH' && tr.codigo !== 'RM' && tr.codigo !== 'NA').map(tr => (
+                                            <option key={tr.id} value={tr.codigo}>{tr.codigo} - {tr.descripcion}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>No. Documento / Cheque:</label>
+                                    <input 
+                                        type="text" 
+                                        value={assignFormData.documento}
+                                        onChange={e => setAssignFormData({ ...assignFormData, documento: e.target.value.toUpperCase() })}
+                                        placeholder="Ej: 4165523"
+                                        style={{ width: '100%', height: '38px', textTransform: 'uppercase', fontFamily: 'monospace' }}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Fecha Emisión:</label>
+                                    <input 
+                                        type="date" 
+                                        value={assignFormData.fecha}
+                                        onChange={e => setAssignFormData({ ...assignFormData, fecha: e.target.value })}
+                                        style={{ width: '100%', height: '38px' }}
+                                        required
+                                    />
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Fecha Aplicado / Conciliación:</label>
+                                    <input 
+                                        type="date" 
+                                        value={assignFormData.fecha_aplicado}
+                                        onChange={e => setAssignFormData({ ...assignFormData, fecha_aplicado: e.target.value })}
+                                        disabled={!assignFormData.aplicar_inmediatamente}
+                                        style={{ width: '100%', height: '38px', opacity: assignFormData.aplicar_inmediatamente ? 1 : 0.5 }}
+                                        required={assignFormData.aplicar_inmediatamente}
+                                    />
+                                </div>
+
+                                <div className="span-2">
+                                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Monto ($):</label>
+                                    <input 
+                                        type="number" 
+                                        step="0.01" 
+                                        value={assignFormData.monto}
+                                        onChange={e => setAssignFormData({ ...assignFormData, monto: e.target.value })}
+                                        placeholder="0.00"
+                                        style={{ width: '100%', height: '38px', fontWeight: 'bold', fontSize: '1.05rem' }}
+                                        required
+                                    />
+                                </div>
+
+                                <div className="span-2">
+                                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Concepto / Descripción:</label>
+                                    <input 
+                                        type="text" 
+                                        value={assignFormData.concepto}
+                                        onChange={e => setAssignFormData({ ...assignFormData, concepto: e.target.value.toUpperCase() })}
+                                        placeholder="Descripción del movimiento..."
+                                        style={{ width: '100%', height: '38px', textTransform: 'uppercase' }}
+                                        required
+                                    />
+                                </div>
+                            </div>
+
+                            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '0.75rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={assignFormData.aplicar_inmediatamente}
+                                        onChange={e => setAssignFormData({ ...assignFormData, aplicar_inmediatamente: e.target.checked })}
+                                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                    />
+                                    <span style={{ fontWeight: '600' }}>
+                                        Marcar como conciliado inmediatamente (asignar fecha aplicado)
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+                                <button type="button" onClick={() => setShowAssignModal(false)} className="btn-secondary" style={{ flex: 1 }}>
+                                    Cancelar
+                                </button>
+                                <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontWeight: '700' }}>
+                                    <Check size={16} /> Guardar y Conciliar
+                                </button>
+                            </div>
+                        </form>
+                    )}
+
+                    {/* Contenido Pestaña 2: VINCULAR A DOCUMENTO PENDIENTE */}
+                    {assignTab === 'VINCULAR' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            <div style={{ position: 'relative' }}>
+                                <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input 
+                                    type="text"
+                                    placeholder="Filtrar pendientes por documento, concepto o monto..."
+                                    value={linkSearchTerm}
+                                    onChange={e => setLinkSearchTerm(e.target.value)}
+                                    style={{ width: '100%', height: '36px', paddingLeft: '32px', fontSize: '0.85rem' }}
+                                />
+                            </div>
+
+                            <div className="table-responsive" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                                <table style={{ minWidth: '700px', width: '100%', fontSize: '0.8rem' }}>
+                                    <thead>
+                                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+                                            <th style={{ padding: '6px' }}>FECHA</th>
+                                            <th style={{ padding: '6px' }}>TIPO</th>
+                                            <th style={{ padding: '6px' }}>DOC</th>
+                                            <th style={{ padding: '6px' }}>CONCEPTO</th>
+                                            <th style={{ padding: '6px', textAlign: 'right' }}>MONTO</th>
+                                            <th style={{ padding: '6px', textAlign: 'center' }}>ACCIÓN</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {filteredPendientesForLink.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                                    No se encontraron documentos pendientes para vincular.
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            filteredPendientesForLink.map((p, idx) => {
+                                                const matchesMonto = Math.abs(Number(p.monto_display || p.monto) - Number(assignFormData.monto)) < 0.01;
+                                                const matchesDoc = assignFormData.documento && String(p.documento || '').trim() === String(assignFormData.documento || '').trim();
+                                                const isHighlighted = matchesMonto || matchesDoc;
+
+                                                return (
+                                                    <tr 
+                                                        key={p.key || idx} 
+                                                        style={{ 
+                                                            borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                                            background: isHighlighted ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
+                                                        }}
+                                                    >
+                                                        <td style={{ padding: '6px' }}>{p.fecha_display}</td>
+                                                        <td style={{ padding: '6px', textAlign: 'center' }}>{renderTipoBadge(p.tipo)}</td>
+                                                        <td style={{ padding: '6px', fontFamily: 'monospace', fontWeight: 'bold' }}>{p.documento || '-'}</td>
+                                                        <td style={{ padding: '6px', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.concepto}>
+                                                            {p.concepto}
+                                                        </td>
+                                                        <td style={{ padding: '6px', textAlign: 'right', fontWeight: 'bold', color: p.origen_tipo === 'CK' ? '#ef4444' : '#10b981' }}>
+                                                            ${Number(p.monto_display || p.monto).toFixed(2)}
+                                                        </td>
+                                                        <td style={{ padding: '6px', textAlign: 'center' }}>
+                                                            <button 
+                                                                type="button"
+                                                                onClick={() => handleSaveAssignLink(p)}
+                                                                className="btn-primary"
+                                                                style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#10b981' }}
+                                                                title="Vincular este documento pendiente"
+                                                            >
+                                                                <Check size={13} /> Vincular
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </Modal>
 

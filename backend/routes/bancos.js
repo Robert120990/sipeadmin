@@ -217,16 +217,118 @@ router.get('/movimientos', authenticateToken, async (req, res) => {
 
 router.post('/movimientos', authenticateToken, async (req, res) => {
     const {
-        id_empresa, numero_cuenta, fecha, fecha_aplicado, documento, concepto,
-        monto, tipo, cod_remesa, cod_cta, num_partida
+        id_empresa, numero_cuenta, numero_cuenta_debitar, numero_cuenta_acreditar,
+        fecha, fecha_aplicado, documento, concepto,
+        monto, tipo, cod_remesa, cod_cta, num_partida, is_transferencia
     } = req.body;
 
-    const cargo = tipo === 'CARGO' ? monto : 0;
-    const abono = tipo === 'ABONO' ? monto : 0;
+    const db = getDb();
+    const isTransfer = is_transferencia || cod_remesa === 'TR' || cod_remesa === 'TRANSFERENCIA' || (numero_cuenta_debitar && numero_cuenta_acreditar);
 
     try {
-        const db = getDb();
+        const dbFecha = toDBDate(fecha);
+        const dbFechaAplicado = toDBDate(fecha_aplicado);
+        const parsedMonto = parseFloat(monto) || 0;
 
+        if (parsedMonto <= 0) {
+            return res.status(400).json({ message: 'El monto de la transacción debe ser mayor a 0' });
+        }
+
+        // ── CASO A: TRANSFERENCIA ENTRE CUENTAS (DEBITAR Y ACREDITAR) ──
+        if (isTransfer) {
+            const ctaDebitarNum = numero_cuenta_debitar || numero_cuenta;
+            const ctaAcreditarNum = numero_cuenta_acreditar;
+
+            if (!ctaDebitarNum || !ctaAcreditarNum) {
+                return res.status(400).json({ message: 'Debe especificar tanto la Cuenta a Debitar como la Cuenta a Acreditar' });
+            }
+
+            if (ctaDebitarNum === ctaAcreditarNum) {
+                return res.status(400).json({ message: 'La Cuenta a Debitar y la Cuenta a Acreditar no pueden ser la misma' });
+            }
+
+            // Buscar cuentas
+            const [cuentasDebito] = await db.query(
+                'SELECT c.id, c.numero, c.nombre, c.empresa_id, e.codigo as empresa_codigo, b.descripcion as banco_nombre ' +
+                'FROM cuentas_bancarias c ' +
+                'LEFT JOIN empresas e ON c.empresa_id = e.id ' +
+                'LEFT JOIN bancos b ON c.banco_id = b.id ' +
+                'WHERE c.numero = ? AND c.activa = TRUE',
+                [ctaDebitarNum]
+            );
+            if (cuentasDebito.length === 0) {
+                return res.status(400).json({ message: `Cuenta a debitar (${ctaDebitarNum}) no encontrada o inactiva` });
+            }
+            const ctaDeb = cuentasDebito[0];
+
+            const [cuentasCredito] = await db.query(
+                'SELECT c.id, c.numero, c.nombre, c.empresa_id, e.codigo as empresa_codigo, b.descripcion as banco_nombre ' +
+                'FROM cuentas_bancarias c ' +
+                'LEFT JOIN empresas e ON c.empresa_id = e.id ' +
+                'LEFT JOIN bancos b ON c.banco_id = b.id ' +
+                'WHERE c.numero = ? AND c.activa = TRUE',
+                [ctaAcreditarNum]
+            );
+            if (cuentasCredito.length === 0) {
+                return res.status(400).json({ message: `Cuenta a acreditar (${ctaAcreditarNum}) no encontrada o inactiva` });
+            }
+            const ctaCred = cuentasCredito[0];
+
+            // Buscar tipos de remesa para cada empresa
+            const [remDeb] = await db.query(
+                'SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo IN ("TR", "NC") ORDER BY (codigo = "TR") DESC LIMIT 1',
+                [ctaDeb.empresa_id]
+            );
+            const tipoRemDebId = remDeb.length > 0 ? remDeb[0].id : null;
+
+            const [remCred] = await db.query(
+                'SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo IN ("TR", "NA") ORDER BY (codigo = "TR") DESC LIMIT 1',
+                [ctaCred.empresa_id]
+            );
+            const tipoRemCredId = remCred.length > 0 ? remCred[0].id : null;
+
+            // Formatear conceptos
+            const conceptoBase = (concepto || '').trim().toUpperCase();
+            const conceptoDebito = conceptoBase || `TRANSFERENCIA A ${ctaCred.banco_nombre || ''} #${ctaCred.numero} ${ctaCred.nombre || ''}`.trim();
+            const conceptoCredito = conceptoBase || `TRANSFERENCIA DE ${ctaDeb.banco_nombre || ''} #${ctaDeb.numero} ${ctaDeb.nombre || ''}`.trim();
+
+            const connection = await db.getConnection();
+            try {
+                await connection.beginTransaction();
+
+                // 1. Movimiento Débito (CARGO / Salida)
+                const [resDeb] = await connection.query(
+                    'INSERT INTO movimientos_bancarios (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [ctaDeb.empresa_id, ctaDeb.id, dbFecha, dbFechaAplicado, documento || '', conceptoDebito, parsedMonto, parsedMonto, 0, tipoRemDebId, cod_cta || null, num_partida || null]
+                );
+
+                // 2. Movimiento Crédito (ABONO / Entrada)
+                const [resCred] = await connection.query(
+                    'INSERT INTO movimientos_bancarios (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [ctaCred.empresa_id, ctaCred.id, dbFecha, dbFechaAplicado, documento || '', conceptoCredito, parsedMonto, 0, parsedMonto, tipoRemCredId, cod_cta || null, num_partida || null]
+                );
+
+                await connection.commit();
+
+                if (req.io) {
+                    req.io.emit('movimientos_updated', { debit_id: resDeb.insertId, credit_id: resCred.insertId });
+                    req.io.emit('conciliacion_updated', { fecha: dbFecha });
+                }
+
+                return res.status(201).json({
+                    message: 'Transferencia entre cuentas registrada exitosamente',
+                    debit_id: resDeb.insertId,
+                    credit_id: resCred.insertId
+                });
+            } catch (txErr) {
+                await connection.rollback();
+                throw txErr;
+            } finally {
+                connection.release();
+            }
+        }
+
+        // ── CASO B: MOVIMIENTO BANCARIO ESTÁNDAR ──
         const [empRows] = await db.query('SELECT id FROM empresas WHERE codigo = ?', [id_empresa]);
         if (empRows.length === 0) return res.status(400).json({ message: 'Empresa no encontrada' });
         const empresaId = empRows[0].id;
@@ -246,13 +348,19 @@ router.post('/movimientos', authenticateToken, async (req, res) => {
             tipoRemesaId = remRows.length > 0 ? remRows[0].id : null;
         }
 
-        const dbFecha = toDBDate(fecha);
-        const dbFechaAplicado = toDBDate(fecha_aplicado);
+        const cargo = tipo === 'CARGO' ? parsedMonto : 0;
+        const abono = tipo === 'ABONO' ? parsedMonto : 0;
 
         const [result] = await db.query(
             'INSERT INTO movimientos_bancarios (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [empresaId, cuentaBancariaId, dbFecha, dbFechaAplicado, documento || '', (concepto || '').toUpperCase(), monto, cargo, abono, tipoRemesaId, cod_cta || null, num_partida || null]
+            [empresaId, cuentaBancariaId, dbFecha, dbFechaAplicado, documento || '', (concepto || '').toUpperCase(), parsedMonto, cargo, abono, tipoRemesaId, cod_cta || null, num_partida || null]
         );
+
+        if (req.io) {
+            req.io.emit('movimientos_updated', { id: result.insertId });
+            req.io.emit('conciliacion_updated', { fecha: dbFecha });
+        }
+
         res.status(201).json({ message: 'Movimiento registrado exitosamente', id: result.insertId });
     } catch (error) {
         res.status(500).json({ message: 'Error al registrar movimiento', error: error.message });

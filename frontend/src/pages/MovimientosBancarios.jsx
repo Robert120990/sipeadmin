@@ -3,7 +3,7 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
-import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin } from 'lucide-react';
+import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin, CheckCircle } from 'lucide-react';
 import { todayStr } from '../utils/date';
 
 export default function MovimientosBancarios() {
@@ -30,6 +30,8 @@ export default function MovimientosBancarios() {
     const [formData, setFormData] = useState({
         id_empresa: '',
         numero_cuenta: '',
+        numero_cuenta_debitar: '',
+        numero_cuenta_acreditar: '',
         fecha: todayStr(),
         fecha_aplicado: '',
         documento: '',
@@ -46,21 +48,22 @@ export default function MovimientosBancarios() {
     const { addToast } = useToast();
     const { confirm } = useConfirm();
 
+    const isTransferTipo = (cod) => cod === 'TR' || cod === 'TRANSFERENCIA';
+    const isDebitTipo = (cod) => cod === '01' || cod === '03' || cod === 'NC' || cod === 'CH';
+
     useEffect(() => {
         fetchInitialCatalogs();
     }, []);
 
     useEffect(() => {
-        // Fetch movements initially without strict company/account filter if user wants "all info by default"
-        // But keep date range
         fetchMovements();
     }, []);
 
     const fetchInitialCatalogs = async () => {
         try {
             const res = await api.get('/bancos/movimientos/catalogos');
-            setCuentas(res.data.cuentas);
-            setEmpresas(res.data.empresas);
+            setCuentas(res.data.cuentas || []);
+            setEmpresas(res.data.empresas || []);
         } catch (err) {
             addToast('Error al cargar catálogos', 'error');
         }
@@ -69,10 +72,8 @@ export default function MovimientosBancarios() {
     const fetchMovements = async () => {
         setLoading(true);
         try {
-            // If filters are empty, it will get 500 latest across all companies
             const res = await api.get('/bancos/movimientos', { params: filters });
-            console.log('MOVEMENTS DATA:', res.data);
-            setMovements(res.data);
+            setMovements(res.data || []);
         } catch (err) {
             addToast('Error al cargar historial', 'error');
         } finally {
@@ -103,15 +104,89 @@ export default function MovimientosBancarios() {
             ...prev,
             id_empresa,
             numero_cuenta: '',
+            numero_cuenta_debitar: '',
+            numero_cuenta_acreditar: '',
             cod_remesa: ''
         }));
         if (id_empresa) fetchCatalogsForCompany(id_empresa);
     };
 
+    const handleDebitAccountChange = (debitNum) => {
+        const debitAcc = cuentas.find(c => c.numero === debitNum);
+        const creditAcc = cuentas.find(c => c.numero === formData.numero_cuenta_acreditar);
+        let autoConcepto = formData.concepto;
+        
+        if (!autoConcepto || autoConcepto.startsWith('TRANSFERENCIA DE') || autoConcepto.startsWith('TRANSFERENCIA PARA')) {
+            const debName = debitAcc ? (debitAcc.nombre || debitAcc.numero) : '';
+            const credName = creditAcc ? (creditAcc.nombre || creditAcc.numero) : '';
+            if (debName && credName) {
+                autoConcepto = `TRANSFERENCIA DE ${debName} PARA ${credName} / `;
+            } else if (debName) {
+                autoConcepto = `TRANSFERENCIA DE ${debName} / `;
+            }
+        }
+        
+        setFormData(prev => ({
+            ...prev,
+            numero_cuenta_debitar: debitNum,
+            concepto: autoConcepto
+        }));
+    };
+
+    const handleCreditAccountChange = (creditNum) => {
+        const creditAcc = cuentas.find(c => c.numero === creditNum);
+        const debitAcc = cuentas.find(c => c.numero === formData.numero_cuenta_debitar);
+        let autoConcepto = formData.concepto;
+        
+        if (!autoConcepto || autoConcepto.startsWith('TRANSFERENCIA DE') || autoConcepto.startsWith('TRANSFERENCIA PARA')) {
+            const debName = debitAcc ? (debitAcc.nombre || debitAcc.numero) : '';
+            const credName = creditAcc ? (creditAcc.nombre || creditAcc.numero) : '';
+            if (debName && credName) {
+                autoConcepto = `TRANSFERENCIA DE ${debName} PARA ${credName} / `;
+            } else if (credName) {
+                autoConcepto = `TRANSFERENCIA PARA ${credName} / `;
+            }
+        }
+        
+        setFormData(prev => ({
+            ...prev,
+            numero_cuenta_acreditar: creditNum,
+            concepto: autoConcepto
+        }));
+    };
+
+    const handleRemesaChange = (newCodRemesa) => {
+        const isTransfer = isTransferTipo(newCodRemesa);
+        let nextDebitar = formData.numero_cuenta_debitar;
+        let nextAcreditar = formData.numero_cuenta_acreditar;
+        let autoConcepto = formData.concepto;
+        
+        if (isTransfer) {
+            if (!nextDebitar && formData.numero_cuenta) {
+                nextDebitar = formData.numero_cuenta;
+            }
+            if (!autoConcepto) {
+                const debAcc = cuentas.find(c => c.numero === nextDebitar);
+                const credAcc = cuentas.find(c => c.numero === nextAcreditar);
+                const debName = debAcc ? (debAcc.nombre || debAcc.numero) : '';
+                const credName = credAcc ? (credAcc.nombre || credAcc.numero) : '';
+                if (debName && credName) autoConcepto = `TRANSFERENCIA DE ${debName} PARA ${credName} / `;
+                else if (debName) autoConcepto = `TRANSFERENCIA DE ${debName} / `;
+            }
+        }
+        
+        setFormData(prev => ({
+            ...prev,
+            cod_remesa: newCodRemesa,
+            numero_cuenta_debitar: nextDebitar,
+            numero_cuenta_acreditar: nextAcreditar,
+            concepto: autoConcepto
+        }));
+    };
+
     const handleOpenModal = async (movement = null) => {
         if (movement) {
             setEditingMovement(movement);
-            // Format dates
             const formatDateForInput = (str) => {
                 if (!str) return '';
                 const parts = str.split('/');
@@ -122,6 +197,8 @@ export default function MovimientosBancarios() {
             setFormData({
                 id_empresa: movement.id_empresa,
                 numero_cuenta: movement.numero_cuenta,
+                numero_cuenta_debitar: movement.numero_cuenta,
+                numero_cuenta_acreditar: '',
                 fecha: formatDateForInput(movement.fecha),
                 fecha_aplicado: formatDateForInput(movement.fecha_aplicado),
                 documento: movement.documento,
@@ -138,6 +215,8 @@ export default function MovimientosBancarios() {
             setFormData({
                 id_empresa: '',
                 numero_cuenta: '',
+                numero_cuenta_debitar: '',
+                numero_cuenta_acreditar: '',
                 fecha: todayStr(),
                 fecha_aplicado: '',
                 documento: '',
@@ -155,12 +234,33 @@ export default function MovimientosBancarios() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         
+        const isTransfer = isTransferTipo(formData.cod_remesa);
+        if (isTransfer) {
+            if (!formData.numero_cuenta_debitar || !formData.numero_cuenta_acreditar) {
+                addToast('Debe seleccionar tanto la Cuenta a Debitar como la Cuenta a Acreditar', 'warning');
+                return;
+            }
+            if (formData.numero_cuenta_debitar === formData.numero_cuenta_acreditar) {
+                addToast('La Cuenta a Debitar y la Cuenta a Acreditar no pueden ser la misma cuenta', 'warning');
+                return;
+            }
+        } else {
+            if (!formData.numero_cuenta) {
+                addToast('Debe seleccionar una Cuenta Bancaria', 'warning');
+                return;
+            }
+        }
+
         let calculatedTipo = 'ABONO';
-        if (formData.cod_remesa === '01' || formData.cod_remesa === '03') {
+        if (isDebitTipo(formData.cod_remesa)) {
             calculatedTipo = 'CARGO';
         }
 
-        const dataToSubmit = { ...formData, tipo: calculatedTipo };
+        const dataToSubmit = {
+            ...formData,
+            tipo: calculatedTipo,
+            is_transferencia: isTransfer
+        };
 
         try {
             if (editingMovement) {
@@ -168,12 +268,12 @@ export default function MovimientosBancarios() {
                 addToast('Movimiento actualizado con éxito', 'success');
             } else {
                 await api.post('/bancos/movimientos', dataToSubmit);
-                addToast('Movimiento registrado con éxito', 'success');
+                addToast(isTransfer ? 'Transferencia entre cuentas registrada con éxito' : 'Movimiento registrado con éxito', 'success');
             }
             setShowModal(false);
             fetchMovements();
         } catch (err) {
-            addToast(`Error al ${editingMovement ? 'actualizar' : 'registrar'} movimiento`, 'error');
+            addToast(err.response?.data?.message || `Error al ${editingMovement ? 'actualizar' : 'registrar'} movimiento`, 'error');
         }
     };
 
@@ -419,21 +519,66 @@ export default function MovimientosBancarios() {
                             </div>
                         </div>
                     </div>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
-                        <select 
-                            style={{ width: '100%' }}
-                            value={formData.numero_cuenta}
-                            onChange={e => setFormData({...formData, numero_cuenta: e.target.value})}
-                            disabled={!formData.id_empresa}
-                            required
-                        >
-                            <option value="">Seleccione Cuenta...</option>
-                            {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
-                                <option key={c.corr} value={c.numero}>{c.nombre} - {c.numero}</option>
-                            ))}
-                        </select>
-                    </div>
+                    {/* Cuenta Bancaria (Simple o Transferencia Debitar/Acreditar) */}
+                    {isTransferTipo(formData.cod_remesa) ? (
+                        <div className="form-grid form-grid-2" style={{ gap: '1rem' }}>
+                            <div style={{ background: 'rgba(239, 68, 68, 0.05)', padding: '0.75rem', borderRadius: 'var(--border-radius)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', fontWeight: '700', color: '#ef4444' }}>
+                                    <ArrowDownCircle size={16} /> CUENTA A DEBITAR (Origen / Salida)
+                                </label>
+                                <select 
+                                    style={{ width: '100%', border: '1px solid rgba(239, 68, 68, 0.4)' }}
+                                    value={formData.numero_cuenta_debitar}
+                                    onChange={e => handleDebitAccountChange(e.target.value)}
+                                    disabled={!formData.id_empresa}
+                                    required
+                                >
+                                    <option value="">Seleccione Cuenta a Debitar...</option>
+                                    {cuentas.filter(c => !formData.id_empresa || c.id_empresa === formData.id_empresa).map(c => (
+                                        <option key={c.corr} value={c.numero}>
+                                            {c.banco_nombre ? `${c.banco_nombre} - ` : ''}{c.numero} - {c.nombre}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div style={{ background: 'rgba(16, 185, 129, 0.05)', padding: '0.75rem', borderRadius: 'var(--border-radius)', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', fontWeight: '700', color: '#10b981' }}>
+                                    <ArrowUpCircle size={16} /> CUENTA A ACREDITAR (Destino / Entrada)
+                                </label>
+                                <select 
+                                    style={{ width: '100%', border: '1px solid rgba(16, 185, 129, 0.4)' }}
+                                    value={formData.numero_cuenta_acreditar}
+                                    onChange={e => handleCreditAccountChange(e.target.value)}
+                                    disabled={!formData.id_empresa}
+                                    required
+                                >
+                                    <option value="">Seleccione Cuenta a Acreditar...</option>
+                                    {cuentas.filter(c => !formData.id_empresa || c.id_empresa === formData.id_empresa).map(c => (
+                                        <option key={c.corr} value={c.numero}>
+                                            {c.banco_nombre ? `${c.banco_nombre} - ` : ''}{c.numero} - {c.nombre}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    ) : (
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
+                            <select 
+                                style={{ width: '100%' }}
+                                value={formData.numero_cuenta}
+                                onChange={e => setFormData({...formData, numero_cuenta: e.target.value})}
+                                disabled={!formData.id_empresa}
+                                required
+                            >
+                                <option value="">Seleccione Cuenta...</option>
+                                {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
+                                    <option key={c.corr} value={c.numero}>{c.banco_nombre ? `${c.banco_nombre} - ` : ''}{c.numero} - {c.nombre}</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
 
                     {/* Fecha y Documento */}
                     <div className="form-grid form-grid-3">
@@ -467,7 +612,7 @@ export default function MovimientosBancarios() {
                             <select 
                                 style={{ width: '100%' }}
                                 value={formData.cod_remesa}
-                                onChange={e => setFormData({...formData, cod_remesa: e.target.value})}
+                                onChange={e => handleRemesaChange(e.target.value)}
                                 disabled={!formData.id_empresa}
                                 required
                             >
@@ -477,8 +622,26 @@ export default function MovimientosBancarios() {
                                 ))}
                             </select>
                             {formData.cod_remesa && (
-                                <div style={{ fontSize: '0.7rem', marginTop: '0.25rem', color: (formData.cod_remesa === '01' || formData.cod_remesa === '03') ? 'var(--danger)' : 'var(--success)', fontWeight: 'bold' }}>
-                                    Tipo: {(formData.cod_remesa === '01' || formData.cod_remesa === '03') ? 'CARGO (-)' : 'ABONO (+)'}
+                                <div style={{
+                                    fontSize: '0.75rem',
+                                    marginTop: '0.35rem',
+                                    fontWeight: '700',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                    color: isTransferTipo(formData.cod_remesa) 
+                                        ? '#3b82f6' 
+                                        : isDebitTipo(formData.cod_remesa) 
+                                            ? '#ef4444' 
+                                            : '#10b981'
+                                }}>
+                                    {isTransferTipo(formData.cod_remesa) ? (
+                                        <>⇄ Tipo: TRANSFERENCIA ENTRE CUENTAS (Débito y Crédito)</>
+                                    ) : isDebitTipo(formData.cod_remesa) ? (
+                                        <>↓ Tipo: CARGO (-) / Salida de Fondos</>
+                                    ) : (
+                                        <>↑ Tipo: ABONO (+) / Entrada de Fondos</>
+                                    )}
                                 </div>
                             )}
                         </div>

@@ -391,6 +391,20 @@ const initDB = async () => {
             console.error('Migration permissions conciliacion:', e.message);
         }
 
+        // Ensure tipos_remesas has TR (TRANSFERENCIA) for all companies
+        try {
+            const [empresas] = await pool.query('SELECT id FROM empresas');
+            for (const emp of empresas) {
+                await pool.query('INSERT IGNORE INTO tipos_remesas (empresa_id, codigo, descripcion) VALUES (?, "TR", "TRANSFERENCIA")', [emp.id]);
+                await pool.query('INSERT IGNORE INTO tipos_remesas (empresa_id, codigo, descripcion) VALUES (?, "RM", "REMESA DIARIA")', [emp.id]);
+                await pool.query('INSERT IGNORE INTO tipos_remesas (empresa_id, codigo, descripcion) VALUES (?, "NC", "NOTA DE CARGO")', [emp.id]);
+                await pool.query('INSERT IGNORE INTO tipos_remesas (empresa_id, codigo, descripcion) VALUES (?, "NA", "NOTA DE ABONO")', [emp.id]);
+                await pool.query('INSERT IGNORE INTO tipos_remesas (empresa_id, codigo, descripcion) VALUES (?, "CH", "CHEQUE")', [emp.id]);
+            }
+        } catch (e) {
+            console.error('Migration tipos_remesas:', e.message);
+        }
+
         return pool;
     } catch (error) {
         console.error('DATABASE INITIALIZATION ERROR:', error.message);
