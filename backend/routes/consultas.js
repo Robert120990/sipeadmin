@@ -268,6 +268,14 @@ router.post('/consultas/estaciones/precios-competencia/estaciones', authenticate
             return res.status(400).json({ message: 'Esta estación ya se encuentra asignada a esta sucursal.' });
         }
 
+        // Si se marca como propia, desmarcar cualquier otra estación propia previa en la misma sucursal
+        if (isPropiaNum === 1) {
+            await withRetry(() => externalDb.query(
+                'UPDATE web_estaciones_competencia SET es_propia = 0 WHERE id_estacion = ?',
+                [id_estacion]
+            ));
+        }
+
         const [result] = await withRetry(() => externalDb.query(
             'INSERT INTO web_estaciones_competencia (id_estacion, competencia, es_propia) VALUES (?, ?, ?)',
             [id_estacion, compTrimmed, isPropiaNum]
@@ -299,6 +307,14 @@ router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authentic
         const newComp = competencia !== undefined ? competencia.trim() : current[0].competencia;
         const newPropia = es_propia !== undefined ? ((es_propia === 1 || es_propia === true || es_propia === '1') ? 1 : 0) : current[0].es_propia;
         const newIdEstacion = id_estacion !== undefined ? id_estacion : current[0].id_estacion;
+
+        // Si se marca como propia (1), desmarcar cualquier otra estación propia para la misma sucursal
+        if (newPropia === 1) {
+            await withRetry(() => externalDb.query(
+                'UPDATE web_estaciones_competencia SET es_propia = 0 WHERE id_estacion = ? AND ID != ?',
+                [newIdEstacion, id]
+            ));
+        }
 
         await withRetry(() => externalDb.query(
             'UPDATE web_estaciones_competencia SET competencia = ?, es_propia = ?, id_estacion = ? WHERE ID = ?',

@@ -134,8 +134,8 @@ const ConsultasPreciosCompetencia = () => {
                 es_propia: newPropia
             });
             addToast(`Estación actualizada a ${newPropia === 1 ? 'Propia' : 'Competencia'}`, 'success');
-            setEstacionesMonitoreadas(prev => prev.map(m => m.id === item.id ? { ...m, es_propia: newPropia } : m));
-            fetchData();
+            await fetchCatalogo();
+            await fetchData();
         } catch (err) {
             console.error('Error toggling propia:', err);
             addToast(err.response?.data?.message || 'Error al actualizar tipo de estación', 'error');
@@ -284,16 +284,7 @@ const ConsultasPreciosCompetencia = () => {
 
     // Helper to identify if an item represents our own station
     const isOurStation = (item) => {
-        if (item.es_propia === 1 || item.es_propia === true || item.es_propia === '1') return true;
-        const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
-        const t = norm(item.titulo);
-        const e = norm(item.estacion);
-        if (t === e) return true;
-        if (t.includes('COSTA DEL SOL') && e.includes('COSTA DEL SOL')) return true;
-        if (t.includes('DESVIO') && e.includes('DESVIO')) return true;
-        if (t.includes('SAN MARTIN') && e.includes('SAN MARTIN')) return true;
-        if (t.includes('MIRAFLORES') && e.includes('MIRAFLORES')) return true;
-        return false;
+        return Number(item?.es_propia) === 1;
     };
 
     // Precalculate base prices of our own stations grouped by titulo
@@ -920,34 +911,41 @@ const ConsultasPreciosCompetencia = () => {
                                                 </div>
                                             </td>
                                             <td style={{ padding: '0.65rem 1rem', textAlign: 'center' }}>
-                                                {isPropia ? (
-                                                    <span style={{ 
-                                                        backgroundColor: 'rgba(99, 102, 241, 0.2)', 
-                                                        color: 'var(--primary)', 
-                                                        border: '1px solid var(--primary)', 
-                                                        borderRadius: '4px', 
-                                                        padding: '0.15rem 0.5rem', 
-                                                        fontSize: '0.75rem', 
-                                                        fontWeight: 'bold',
-                                                        display: 'inline-flex',
-                                                        alignItems: 'center',
-                                                        gap: '0.25rem'
-                                                    }}>
-                                                        <ShieldCheck size={12} /> PROPIA
-                                                    </span>
-                                                ) : (
-                                                    <span style={{ 
-                                                        backgroundColor: 'rgba(234, 179, 8, 0.15)', 
-                                                        color: '#eab308', 
-                                                        border: '1px solid rgba(234, 179, 8, 0.4)', 
-                                                        borderRadius: '4px', 
-                                                        padding: '0.15rem 0.5rem', 
-                                                        fontSize: '0.75rem', 
-                                                        fontWeight: 'bold'
-                                                    }}>
-                                                        COMPETENCIA
-                                                    </span>
-                                                )}
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => handleTogglePropia(item)}
+                                                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                                    title="Clic para alternar entre Propia y Competencia"
+                                                >
+                                                    {isPropia ? (
+                                                        <span style={{ 
+                                                            backgroundColor: 'rgba(99, 102, 241, 0.2)', 
+                                                            color: 'var(--primary)', 
+                                                            border: '1px solid var(--primary)', 
+                                                            borderRadius: '4px', 
+                                                            padding: '0.15rem 0.5rem', 
+                                                            fontSize: '0.75rem', 
+                                                            fontWeight: 'bold',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem'
+                                                        }}>
+                                                            <ShieldCheck size={12} /> PROPIA
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{ 
+                                                            backgroundColor: 'rgba(234, 179, 8, 0.15)', 
+                                                            color: '#eab308', 
+                                                            border: '1px solid rgba(234, 179, 8, 0.4)', 
+                                                            borderRadius: '4px', 
+                                                            padding: '0.15rem 0.5rem', 
+                                                            fontSize: '0.75rem', 
+                                                            fontWeight: 'bold'
+                                                        }}>
+                                                            COMPETENCIA
+                                                        </span>
+                                                    )}
+                                                </button>
                                             </td>
                                             <td style={{ padding: '0.65rem 1rem', textAlign: 'right' }}>
                                                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
