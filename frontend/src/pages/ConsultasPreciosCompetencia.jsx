@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { FileText, Download, Printer, Search, ArrowLeft, Fuel, Calendar, Clock, MapPin, Upload, X, CheckCircle, Filter, FileSpreadsheet } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Download, Printer, Search, Calendar, Clock, MapPin, Upload, X, CheckCircle, Filter, FileSpreadsheet, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import * as XLSX from 'xlsx';
@@ -12,6 +12,8 @@ const ConsultasPreciosCompetencia = () => {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [onlyCheaper, setOnlyCheaper] = useState(false);
+    const [syncingDGEHM, setSyncingDGEHM] = useState(false);
     const navigate = useNavigate();
     const { addToast } = useToast();
 
@@ -36,6 +38,20 @@ const ConsultasPreciosCompetencia = () => {
             addToast('Error al cargar precios de competencia', 'error');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleSyncDGEHM = async () => {
+        setSyncingDGEHM(true);
+        try {
+            const res = await api.post('/consultas/estaciones/precios-competencia/sync-dgehm');
+            addToast(res.data?.message || 'Precios sincronizados con éxito desde DGEHM', 'success');
+            await fetchData();
+        } catch (err) {
+            console.error('Error al sincronizar con DGEHM:', err);
+            addToast(err.response?.data?.message || 'Error al consultar la página de DGEHM', 'error');
+        } finally {
+            setSyncingDGEHM(false);
         }
     };
 
@@ -159,10 +175,62 @@ const ConsultasPreciosCompetencia = () => {
         }).format(val || 0);
     };
 
-    const filteredData = data.filter(item => 
-        item.titulo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.estacion?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    // Helper to identify if an item represents our own station
+    const isOurStation = (item) => {
+        if (item.es_propia === 1 || item.es_propia === true || item.es_propia === '1') return true;
+        const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+        const t = norm(item.titulo);
+        const e = norm(item.estacion);
+        if (t === e) return true;
+        if (t.includes('COSTA DEL SOL') && e.includes('COSTA DEL SOL')) return true;
+        if (t.includes('DESVIO') && e.includes('DESVIO')) return true;
+        if (t.includes('SAN MARTIN') && e.includes('SAN MARTIN')) return true;
+        if (t.includes('MIRAFLORES') && e.includes('MIRAFLORES')) return true;
+        return false;
+    };
+
+    // Precalculate base prices of our own stations grouped by titulo
+    const basePricesByTitulo = useMemo(() => {
+        const map = {};
+        data.forEach(item => {
+            if (isOurStation(item)) {
+                map[item.titulo] = {
+                    super_c: Number(item.super_c) || 0,
+                    regular_c: Number(item.regular_c) || 0,
+                    ion_c: Number(item.ion_c) || 0,
+                    diesel_c: Number(item.diesel_c) || 0,
+                    super_a: Number(item.super_a) || 0,
+                    regular_a: Number(item.regular_a) || 0,
+                    ion_a: Number(item.ion_a) || 0,
+                    diesel_a: Number(item.diesel_a) || 0,
+                };
+            }
+        });
+        return map;
+    }, [data]);
+
+    // Check if a competitor row has at least one price cheaper than our station
+    const hasAnyCheaperPrice = (item) => {
+        if (isOurStation(item)) return false;
+        const base = basePricesByTitulo[item.titulo];
+        if (!base) return false;
+        const keys = ['super_c', 'regular_c', 'ion_c', 'diesel_c', 'super_a', 'regular_a', 'ion_a', 'diesel_a'];
+        return keys.some(key => {
+            const p = Number(item[key]) || 0;
+            const b = Number(base[key]) || 0;
+            return p > 0 && b > 0 && p < b;
+        });
+    };
+
+    const filteredData = data.filter(item => {
+        const matchesSearch = item.titulo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            item.estacion?.toLowerCase().includes(searchTerm.toLowerCase());
+        if (!matchesSearch) return false;
+        if (onlyCheaper) {
+            return isOurStation(item) || hasAnyCheaperPrice(item);
+        }
+        return true;
+    });
 
     const exportToExcel = () => {
         const wb = XLSX.utils.book_new();
@@ -184,13 +252,60 @@ const ConsultasPreciosCompetencia = () => {
         XLSX.writeFile(wb, 'precios_competencia.xlsx');
     };
 
+    const renderPriceCell = (item, key) => {
+        const val = Number(item[key]) || 0;
+        if (val === 0) {
+            return <span style={{ color: 'var(--text-muted)', opacity: 0.4 }}>-</span>;
+        }
+
+        const isOwn = isOurStation(item);
+        if (isOwn) {
+            return (
+                <span style={{ fontWeight: 'bold', color: 'var(--primary, #6366f1)' }}>
+                    {mc(val)}
+                </span>
+            );
+        }
+
+        const base = basePricesByTitulo[item.titulo];
+        const baseVal = Number(base?.[key]) || 0;
+        const isLower = baseVal > 0 && val < baseVal;
+        const diff = isLower ? (val - baseVal).toFixed(2) : null;
+
+        if (isLower) {
+            return (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end' }} title={`¡Competidor más barato! Precio nuestro: ${mc(baseVal)} (Diferencia: ${diff})`}>
+                    <span style={{ 
+                        backgroundColor: 'rgba(239, 68, 68, 0.2)', 
+                        color: '#ef4444', 
+                        padding: '0.15rem 0.4rem', 
+                        borderRadius: '4px',
+                        fontWeight: 'bold',
+                        border: '1px solid rgba(239, 68, 68, 0.4)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '2px',
+                        fontSize: '0.85rem'
+                    }}>
+                        <span>↓</span> {mc(val)}
+                    </span>
+                    <span style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 'bold', marginTop: '1px' }}>
+                        {diff}
+                    </span>
+                </div>
+            );
+        }
+
+        return <span>{mc(val)}</span>;
+    };
+
     const exportToPDF = () => {
         const doc = jsPDF({ orientation: 'landscape' });
         doc.text('Consulta de Precios de Competencia', 14, 15);
         
         const tableBody = filteredData.map(item => [
             item.titulo,
-            item.estacion,
+            item.estacion + (isOurStation(item) ? ' (NUESTRA)' : ''),
             item.modificacion,
             mc(item.super_c),
             mc(item.regular_c),
@@ -215,31 +330,41 @@ const ConsultasPreciosCompetencia = () => {
     };
 
     return (
-        <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+        <div style={{ animation: 'fadeIn 0.5s ease-out' }}>
             {/* Header section */}
-            <div className="page-header">
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div>
-                        <h1 style={{ color: 'var(--primary)', marginBottom: '0.25rem' }}>Precios de Competencia</h1>
-                        <p style={{ color: 'var(--text-muted)' }}>Comparativa de precios actuales por estación y zona.</p>
+                        <h1 style={{ color: 'var(--primary)', marginBottom: '0.25rem', fontSize: '1.6rem' }}>Precios de Competencia</h1>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Comparativa automática de precios de estaciones frente a la competencia (DGEHM).</p>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '1rem' }}>
-                    <button onClick={() => { setCsvData([]); setCsvFileName(''); setValidado(false); setFiltrado(false); setShowUploadModal(true); }} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <button 
+                        onClick={handleSyncDGEHM} 
+                        disabled={syncingDGEHM} 
+                        className="btn-primary" 
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#059669', borderColor: '#059669' }}
+                        title="Consultar y actualizar automáticamente los precios desde el portal DGEHM"
+                    >
+                        <RefreshCw size={18} style={{ animation: syncingDGEHM ? 'spin 1s linear infinite' : 'none' }} /> 
+                        {syncingDGEHM ? 'Consultando DGEHM...' : 'Consultar DGEHM'}
+                    </button>
+                    <button onClick={() => { setCsvData([]); setCsvFileName(''); setValidado(false); setFiltrado(false); setShowUploadModal(true); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Upload size={18} /> Cargar CSV
                     </button>
                     <button onClick={exportToExcel} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Download size={18} /> Excel
                     </button>
-                    <button onClick={exportToPDF} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button onClick={exportToPDF} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Printer size={18} /> PDF
                     </button>
                 </div>
             </div>
 
             {/* Filters and search */}
-            <div className="card glass" style={{ padding: '1.25rem', marginBottom: '2rem', display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                <div style={{ position: 'relative', flex: 1 }}>
+            <div className="card glass" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
                     <Search style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={18} />
                     <input 
                         type="text" 
@@ -250,15 +375,31 @@ const ConsultasPreciosCompetencia = () => {
                         onChange={(e) => setSearchTerm(e.target.value)}
                     />
                 </div>
-                <button onClick={fetchData} className="btn-icon">
+                <button 
+                    onClick={() => setOnlyCheaper(!onlyCheaper)} 
+                    className={onlyCheaper ? 'btn-primary' : 'btn-secondary'}
+                    style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '0.5rem', 
+                        whiteSpace: 'nowrap',
+                        backgroundColor: onlyCheaper ? '#dc2626' : undefined,
+                        borderColor: onlyCheaper ? '#dc2626' : undefined
+                    }}
+                    title="Filtrar estaciones donde la competencia tiene precios menores a los nuestros"
+                >
+                    <AlertTriangle size={16} />
+                    {onlyCheaper ? 'Mostrando más baratos' : 'Solo más baratos'}
+                </button>
+                <button onClick={fetchData} className="btn-icon" title="Refrescar datos">
                     <Clock size={20} />
                 </button>
             </div>
 
             {/* Table section */}
-            <div className="card glass" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                    <table style={{ width: '100%', minWidth: '1050px', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                         <thead>
                             {/* Grouped Headers */}
                             <tr style={{ backgroundColor: 'rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
@@ -268,9 +409,9 @@ const ConsultasPreciosCompetencia = () => {
                             </tr>
                             {/* Main Headers */}
                             <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)', backgroundColor: 'rgba(0,0,0,0.2)' }}>
-                                <th style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Estación/Zona</th>
-                                <th style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Competencia</th>
-                                <th style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', width: '180px' }}>Modificación</th>
+                                <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Estación/Zona</th>
+                                <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Competencia</th>
+                                <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', width: '170px' }}>Modificación</th>
                                 
                                 {/* Servicio Completo Headers */}
                                 <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>Super</th>
@@ -294,52 +435,94 @@ const ConsultasPreciosCompetencia = () => {
                                     </td>
                                 </tr>
                             ) : filteredData.length > 0 ? (
-                                filteredData.map((item, idx) => (
-                                    <tr key={idx} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                        <td style={{ padding: '1rem' }}>
-                                            <div style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{item.titulo}</div>
-                                        </td>
-                                        <td style={{ padding: '1rem' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                <MapPin size={14} color="var(--text-muted)" />
-                                                {item.estacion}
-                                            </div>
-                                        </td>
-                                        <td style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                <Calendar size={14} /> {item.modificacion}
-                                            </div>
-                                        </td>
-                                        
-                                        {/* SC Values */}
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(34, 197, 94, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>
-                                            {mc(item.super_c)}
-                                        </td>
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
-                                            {mc(item.regular_c)}
-                                        </td>
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
-                                            {mc(item.ion_c)}
-                                        </td>
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
-                                            {mc(item.diesel_c)}
-                                        </td>
+                                filteredData.map((item, idx) => {
+                                    const own = isOurStation(item);
+                                    const hasCheaper = hasAnyCheaperPrice(item);
+                                    return (
+                                        <tr 
+                                            key={idx} 
+                                            className="table-row-hover" 
+                                            style={{ 
+                                                borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                                backgroundColor: own ? 'rgba(99, 102, 241, 0.08)' : undefined
+                                            }}
+                                        >
+                                            <td style={{ padding: '0.85rem 1rem' }}>
+                                                <div style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{item.titulo}</div>
+                                            </td>
+                                            <td style={{ padding: '0.85rem 1rem' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                    <MapPin size={14} color="var(--text-muted)" />
+                                                    <span style={{ fontWeight: own ? 'bold' : 'normal' }}>{item.estacion}</span>
+                                                    {own && (
+                                                        <span style={{ 
+                                                            backgroundColor: 'rgba(99, 102, 241, 0.2)', 
+                                                            color: 'var(--primary)', 
+                                                            border: '1px solid var(--primary)', 
+                                                            borderRadius: '4px', 
+                                                            padding: '0.1rem 0.4rem', 
+                                                            fontSize: '0.68rem', 
+                                                            fontWeight: 'bold',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem'
+                                                        }}>
+                                                            <ShieldCheck size={12} /> NUESTRA ESTACIÓN
+                                                        </span>
+                                                    )}
+                                                    {!own && hasCheaper && (
+                                                        <span style={{ 
+                                                            color: '#ef4444', 
+                                                            fontSize: '0.68rem', 
+                                                            fontWeight: 'bold',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '2px',
+                                                            backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                                                            padding: '0.1rem 0.35rem',
+                                                            borderRadius: '4px'
+                                                        }}>
+                                                            <AlertTriangle size={11} /> Precios menores
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                    <Calendar size={14} /> {item.modificacion}
+                                                </div>
+                                            </td>
+                                            
+                                            {/* SC Values */}
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>
+                                                {renderPriceCell(item, 'super_c')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
+                                                {renderPriceCell(item, 'regular_c')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
+                                                {renderPriceCell(item, 'ion_c')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
+                                                {renderPriceCell(item, 'diesel_c')}
+                                            </td>
 
-                                        {/* AS Values */}
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(59, 130, 246, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
-                                            {mc(item.super_a)}
-                                        </td>
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
-                                            {mc(item.regular_a)}
-                                        </td>
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
-                                            {mc(item.ion_a)}
-                                        </td>
-                                        <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 'bold', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
-                                            {mc(item.diesel_a)}
-                                        </td>
-                                    </tr>
-                                ))
+                                            {/* AS Values */}
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
+                                                {renderPriceCell(item, 'super_a')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
+                                                {renderPriceCell(item, 'regular_a')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
+                                                {renderPriceCell(item, 'ion_a')}
+                                            </td>
+                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
+                                                {renderPriceCell(item, 'diesel_a')}
+                                            </td>
+                                        </tr>
+                                    );
+                                })
                             ) : (
                                 <tr>
                                     <td colSpan={11} style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
