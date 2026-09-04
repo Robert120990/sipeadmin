@@ -35,7 +35,7 @@ const ConsultasPreciosCompetencia = () => {
             setData(res.data || []);
         } catch (error) {
             console.error('Error fetching prices:', error);
-            addToast('Error al cargar precios de competencia', 'error');
+            addToast(error.response?.data?.message || 'Error al cargar precios de competencia', 'error');
         } finally {
             setLoading(false);
         }
@@ -49,7 +49,9 @@ const ConsultasPreciosCompetencia = () => {
             await fetchData();
         } catch (err) {
             console.error('Error al sincronizar con DGEHM:', err);
-            addToast(err.response?.data?.message || 'Error al consultar la página de DGEHM', 'error');
+            const msg = err.response?.data?.message || 'Error al consultar la página de DGEHM';
+            addToast(msg, 'warning');
+            setShowUploadModal(true);
         } finally {
             setSyncingDGEHM(false);
         }
@@ -538,13 +540,24 @@ const ConsultasPreciosCompetencia = () => {
 
             <Modal open={showUploadModal} onClose={() => setShowUploadModal(false)} title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><FileSpreadsheet size={20} color="var(--primary)" />Cargar Precios de Competencia</span>} size="xl">
                 {csvData.length === 0 ? (
-                    <div style={{ border: '2px dashed var(--border)', borderRadius: '8px', padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                        <Upload size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
-                        <p style={{ marginBottom: '1rem' }}>Seleccione un archivo .csv con los precios de competencia</p>
-                        <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 2rem' }}>
-                            <FileSpreadsheet size={18} /> Seleccionar Archivo
-                            <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
-                        </label>
+                    <div style={{ border: '2px dashed var(--border)', borderRadius: '8px', padding: '2.5rem 1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <Upload size={44} style={{ opacity: 0.3, marginBottom: '0.75rem' }} />
+                        <p style={{ marginBottom: '1.25rem', fontSize: '0.95rem' }}>Seleccione el archivo .csv descargado del portal oficial DGEHM</p>
+                        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 1.5rem' }}>
+                                <FileSpreadsheet size={18} /> Seleccionar Archivo
+                                <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+                            </label>
+                            <a 
+                                href="https://sinapp.dgehm.gob.sv/DRHM/estadisticas.aspx?uid=2" 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="btn-secondary"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1.5rem', textDecoration: 'none' }}
+                            >
+                                Abrir Portal DGEHM Oficial ↗
+                            </a>
+                        </div>
                     </div>
                 ) : (
                     <>

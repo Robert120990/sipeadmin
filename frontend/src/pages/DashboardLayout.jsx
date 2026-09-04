@@ -15,6 +15,7 @@ import VentasEstaciones from './VentasEstaciones';
 import Lubricantes from './Lubricantes';
 import ResumenPista from './ResumenPista';
 import DiferenciasCombustible from './DiferenciasCombustible';
+import PreciosEstacion from './PreciosEstacion';
 import ConsultasPreciosCompetencia from './ConsultasPreciosCompetencia';
 import PedidosCombustible from './PedidosCombustible';
 import ControlRecordatorios from './ControlRecordatorios';
@@ -77,7 +78,7 @@ export default function DashboardLayout() {
         '/dashboard/consultas/estaciones/lubricantes': <Lubricantes />,
         '/dashboard/consultas/estaciones/resumen-cierre': <ResumenPista />,
         '/dashboard/consultas/estaciones/diferencias-combustible': <DiferenciasCombustible />,
-        '/dashboard/consultas/estaciones/precios': <Consultas type="estaciones/precios" title="Precios Estación" description="Consulta de precios actuales en estaciones." />,
+        '/dashboard/consultas/estaciones/precios': <PreciosEstacion />,
         '/dashboard/consultas/estaciones/precios-competencia': <ConsultasPreciosCompetencia />,
         '/dashboard/operaciones/pedidos': <PedidosCombustible />,
         '/dashboard/operaciones/recordatorios': <ControlRecordatorios />,

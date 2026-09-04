@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getExternalDb, getAccountingDb } = require('../db');
+const { getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
 // --- Ventas ---
@@ -200,7 +200,7 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, async
     try {
         const externalDb = await getExternalDb();
         const query = `SELECT c.titulo, a.estacion, a.modificacion, a.super_c, a.regular_c, a.ion_c, a.diesel_c, a.super_a, a.regular_a, a.ion_a, a.diesel_a, IFNULL(b.es_propia, 0) as es_propia FROM web_precios_competencia a INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION' ORDER BY c.titulo, b.es_propia DESC, a.estacion`;
-        const [rows] = await externalDb.query(query);
+        const [rows] = await withRetry(() => externalDb.query(query));
         res.json(rows);
     } catch (error) { 
         console.error('Error fetching competencia:', error);
@@ -211,11 +211,25 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, async
 router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, async (req, res) => {
     try {
         const externalDb = await getExternalDb();
-        const [rows] = await externalDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia');
+        const [rows] = await withRetry(() => externalDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia'));
         res.json(rows);
     } catch (error) { 
         console.error('Error fetching estaciones competencia:', error);
         res.status(500).json({ message: 'Error fetching estaciones competencia', error: error.message }); 
+    }
+});
+
+router.get('/consultas/estaciones/precios', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const date = new Date().toISOString().split('T')[0];
+        const parts = date.split('-'); const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+        const sql = `select a.id_empresa,a.titulo, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'A',c.precio,0.0),0.0)) as diesel_a,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'A',c.precio,0.0),0.0)) as regular_a,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'A',c.precio,0.0),0.0)) as super_a, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'F',c.precio,0.0),0.0)) as diesel_c,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'F',c.precio,0.0),0.0)) as regular_c,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'F',c.precio,0.0),0.0)) as super_c, sum(ifnull(if(b.clasificacion = 'I',c.precio,0.0),0.0)) as ion_diesel,sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'M',c.precio,0.0),0.0)) as master from web_consolidado a left join cfg_combustibles b on a.id_empresa = b.id_empresa left join ( SELECT a.id_empresa,a.id_producto, a.codigo_producto,a.nom_producto,precio FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa WHERE b.fecha_turno = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) GROUP BY codigo_producto,a.id_empresa order by id_empresa,codigo_producto) c on b.id_empresa = c.id_empresa and b.codigo = c.codigo_producto where a.grupo = 'ESTACION' group by id_empresa order by orden`;
+        const [rows] = await withRetry(() => externalDb.query(sql, [sysDate]));
+        res.json(rows.map(r => ({ empresa: r.titulo, diesel_a: Number(r.diesel_a), regular_a: Number(r.regular_a), super_a: Number(r.super_a), diesel_c: Number(r.diesel_c), regular_c: Number(r.regular_c), super_c: Number(r.super_c), ion_diesel: Number(r.ion_diesel), master: Number(r.master) })));
+    } catch (error) { 
+        console.error('Error fetching precios estacion:', error);
+        res.status(500).json({ message: 'Error fetching precios', error: error.message }); 
     }
 });
 
@@ -226,11 +240,19 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
         const agent = new https.Agent({ rejectUnauthorized: false });
 
         const url = 'https://sinapp.dgehm.gob.sv/DRHM/estadisticas.aspx?uid=2';
-        const res1 = await axios.get(url, {
-            httpsAgent: agent,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            timeout: 25000
-        });
+        let res1;
+        try {
+            res1 = await axios.get(url, {
+                httpsAgent: agent,
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                timeout: 8000
+            });
+        } catch (fetchErr) {
+            console.error('Error connecting to DGEHM from cloud:', fetchErr.message);
+            return res.status(504).json({ 
+                message: 'El portal gubernamental DGEHM no responde a conexiones desde la nube (cortafuegos de seguridad gubernamental). Por favor descarga el archivo CSV desde el portal y súbelo con el botón "Cargar Archivo".' 
+            });
+        }
 
         const rawCookies = res1.headers['set-cookie'];
         const cookies = rawCookies ? rawCookies.map(c => c.split(';')[0]).join('; ') : '';

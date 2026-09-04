@@ -413,6 +413,19 @@ const initDB = async () => {
     }
 };
 
+const withRetry = async (fn, retries = 2) => {
+    try {
+        return await fn();
+    } catch (err) {
+        if ((err.code === 'ECONNRESET' || err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ETIMEDOUT') && retries > 0) {
+            console.warn(`[DB] Retrying DB query due to ${err.code}...`);
+            await new Promise(r => setTimeout(r, 200));
+            return await withRetry(fn, retries - 1);
+        }
+        throw err;
+    }
+};
+
 const getDb = () => {
     if (!pool) {
         pool = mysql.createPool(dbConfig);
@@ -424,19 +437,9 @@ const getExternalDb = async () => {
     let configs = [];
     try {
         const mainPool = getDb();
-        [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+        [configs] = await withRetry(() => mainPool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1"));
     } catch (err) {
-        if (err.code === 'ECONNRESET') {
-            console.log('RETRYING getExternalDb config query due to ECONNRESET...');
-            try {
-                const mainPool = getDb();
-                [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
-            } catch (retryErr) {
-                console.warn('Retry failed getting external_configs main:', retryErr.message);
-            }
-        } else {
-            console.warn('Warning getting external_configs main:', err.message);
-        }
+        console.warn('Warning getting external_configs main:', err.message);
     }
     
     const config = (configs && configs.length > 0) ? configs[0] : {
@@ -458,7 +461,13 @@ const getExternalDb = async () => {
             password: config.password,
             database: dbName,
             port: config.port || 3306,
+            connectTimeout: 10000,
+            waitForConnections: true,
             connectionLimit: 10,
+            maxIdle: 5,
+            idleTimeout: 30000,
+            enableKeepAlive: true,
+            keepAliveInitialDelay: 10000,
             timezone: 'Z'
         });
         externalPools[poolKey] = externalDb;
@@ -470,19 +479,9 @@ const getAccountingDb = async () => {
     let configs = [];
     try {
         const mainPool = getDb();
-        [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+        [configs] = await withRetry(() => mainPool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1"));
     } catch (err) {
-        if (err.code === 'ECONNRESET') {
-            console.log('RETRYING getAccountingDb config query due to ECONNRESET...');
-            try {
-                const mainPool = getDb();
-                [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
-            } catch (retryErr) {
-                console.warn('Retry failed getting external_configs accounting:', retryErr.message);
-            }
-        } else {
-            console.warn('Warning getting external_configs accounting:', err.message);
-        }
+        console.warn('Warning getting external_configs accounting:', err.message);
     }
     
     const config = (configs && configs.length > 0) ? configs[0] : {
@@ -504,7 +503,13 @@ const getAccountingDb = async () => {
             password: config.password,
             database: dbName,
             port: config.port || 3306,
+            connectTimeout: 10000,
+            waitForConnections: true,
             connectionLimit: 10,
+            maxIdle: 5,
+            idleTimeout: 30000,
+            enableKeepAlive: true,
+            keepAliveInitialDelay: 10000,
             timezone: 'Z'
         });
         externalPools[poolKey] = externalDb;
@@ -512,4 +517,4 @@ const getAccountingDb = async () => {
     return externalDb;
 };
 
-module.exports = { initDB, getDb, getExternalDb, getAccountingDb };
+module.exports = { initDB, getDb, getExternalDb, getAccountingDb, withRetry };

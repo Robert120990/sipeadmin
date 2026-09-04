@@ -72,7 +72,7 @@ function App() {
                         <Route path="consultas/estaciones/lubricantes" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/lubricantes"><Lubricantes /></PermissionRoute>} />
                         <Route path="consultas/estaciones/resumen-cierre" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/resumen-cierre"><ResumenPista /></PermissionRoute>} />
                         <Route path="consultas/estaciones/diferencias-combustible" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/diferencias-combustible"><DiferenciasCombustible /></PermissionRoute>} />
-                        <Route path="consultas/estaciones/precios" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios"><Consultas type="estaciones/precios" title="Precios Estación" description="Consulta de precios actuales en estaciones." /></PermissionRoute>} />
+                        <Route path="consultas/estaciones/precios" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios"><PreciosEstacion /></PermissionRoute>} />
                         <Route path="consultas/estaciones/precios-competencia" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios-competencia"><ConsultasPreciosCompetencia /></PermissionRoute>} />
                         <Route path="operaciones/pedidos" element={<ProtectedRoute><PedidosCombustible /></ProtectedRoute>} />
                         <Route path="operaciones/recordatorios" element={<ProtectedRoute><ControlRecordatorios /></ProtectedRoute>} />
