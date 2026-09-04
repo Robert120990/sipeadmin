@@ -413,25 +413,42 @@ const initDB = async () => {
     }
 };
 
-const getDb = () => pool;
+const getDb = () => {
+    if (!pool) {
+        pool = mysql.createPool(dbConfig);
+    }
+    return pool;
+};
 
 const getExternalDb = async () => {
-    let configs;
+    let configs = [];
     try {
-        [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+        const mainPool = getDb();
+        [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
     } catch (err) {
         if (err.code === 'ECONNRESET') {
             console.log('RETRYING getExternalDb config query due to ECONNRESET...');
-            [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+            try {
+                const mainPool = getDb();
+                [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+            } catch (retryErr) {
+                console.warn('Retry failed getting external_configs main:', retryErr.message);
+            }
         } else {
-            throw err;
+            console.warn('Warning getting external_configs main:', err.message);
         }
     }
     
-    if (configs.length === 0) throw new Error('No hay configuración de base de datos externa (Principal). Configúrala primero.');
-    
-    const config = configs[0];
-    const poolKey = `main:${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+    const config = (configs && configs.length > 0) ? configs[0] : {
+        host: process.env.DB_HOST || '207.244.251.167',
+        user: process.env.DB_USER || 'sysadmin',
+        password: process.env.DB_PASSWORD || 'QwErTy123',
+        database_name: 'db_system_rrs',
+        database: 'db_system_rrs',
+        port: 3306
+    };
+    const dbName = config.database_name || config.database || 'db_system_rrs';
+    const poolKey = `main:${config.host}:${config.port || 3306}:${dbName}:${config.user}`;
     
     let externalDb = externalPools[poolKey];
     if (!externalDb) {
@@ -439,7 +456,7 @@ const getExternalDb = async () => {
             host: config.host,
             user: config.user,
             password: config.password,
-            database: config.database_name,
+            database: dbName,
             port: config.port || 3306,
             connectionLimit: 10,
             timezone: 'Z'
@@ -450,22 +467,34 @@ const getExternalDb = async () => {
 };
 
 const getAccountingDb = async () => {
-    let configs;
+    let configs = [];
     try {
-        [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+        const mainPool = getDb();
+        [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
     } catch (err) {
         if (err.code === 'ECONNRESET') {
             console.log('RETRYING getAccountingDb config query due to ECONNRESET...');
-            [configs] = await pool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+            try {
+                const mainPool = getDb();
+                [configs] = await mainPool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+            } catch (retryErr) {
+                console.warn('Retry failed getting external_configs accounting:', retryErr.message);
+            }
         } else {
-            throw err;
+            console.warn('Warning getting external_configs accounting:', err.message);
         }
     }
     
-    if (configs.length === 0) throw new Error('No hay configuración de base de datos de contabilidad. Configúrala primero.');
-    
-    const config = configs[0];
-    const poolKey = `accounting:${config.host}:${config.port || 3306}:${config.database_name}:${config.user}`;
+    const config = (configs && configs.length > 0) ? configs[0] : {
+        host: process.env.DB_HOST || '207.244.251.167',
+        user: process.env.DB_USER || 'sysadmin',
+        password: process.env.DB_PASSWORD || 'QwErTy123',
+        database_name: 'db_sytem_rrs_conta',
+        database: 'db_sytem_rrs_conta',
+        port: 3306
+    };
+    const dbName = config.database_name || config.database || 'db_sytem_rrs_conta';
+    const poolKey = `accounting:${config.host}:${config.port || 3306}:${dbName}:${config.user}`;
     
     let externalDb = externalPools[poolKey];
     if (!externalDb) {
@@ -473,7 +502,7 @@ const getAccountingDb = async () => {
             host: config.host,
             user: config.user,
             password: config.password,
-            database: config.database_name,
+            database: dbName,
             port: config.port || 3306,
             connectionLimit: 10,
             timezone: 'Z'

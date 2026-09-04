@@ -202,7 +202,10 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, async
         const query = `SELECT c.titulo, a.estacion, a.modificacion, a.super_c, a.regular_c, a.ion_c, a.diesel_c, a.super_a, a.regular_a, a.ion_a, a.diesel_a, IFNULL(b.es_propia, 0) as es_propia FROM web_precios_competencia a INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION' ORDER BY c.titulo, b.es_propia DESC, a.estacion`;
         const [rows] = await externalDb.query(query);
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching competencia' }); }
+    } catch (error) { 
+        console.error('Error fetching competencia:', error);
+        res.status(500).json({ message: 'Error fetching competencia', error: error.message }); 
+    }
 });
 
 router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, async (req, res) => {
@@ -210,7 +213,10 @@ router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateT
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia');
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching estaciones competencia' }); }
+    } catch (error) { 
+        console.error('Error fetching estaciones competencia:', error);
+        res.status(500).json({ message: 'Error fetching estaciones competencia', error: error.message }); 
+    }
 });
 
 router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticateToken, async (req, res) => {
