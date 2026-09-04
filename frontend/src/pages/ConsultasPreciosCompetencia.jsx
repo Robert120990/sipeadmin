@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Download, Printer, Search, Calendar, Clock, MapPin, Upload, X, CheckCircle, Filter, FileSpreadsheet, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { 
+    Download, Printer, Search, Calendar, Clock, MapPin, Upload, X, CheckCircle, 
+    Filter, FileSpreadsheet, RefreshCw, AlertTriangle, ShieldCheck, Building2, 
+    Plus, Trash2, ToggleLeft, ToggleRight
+} from 'lucide-react';
 import api from '../services/api';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import dgehmEstacionesList from '../data/dgehm_estaciones.json';
 
 const ConsultasPreciosCompetencia = () => {
     const [data, setData] = useState([]);
@@ -14,8 +19,8 @@ const ConsultasPreciosCompetencia = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [onlyCheaper, setOnlyCheaper] = useState(false);
     const [syncingDGEHM, setSyncingDGEHM] = useState(false);
-    const navigate = useNavigate();
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
 
     const [showUploadModal, setShowUploadModal] = useState(false);
     const [csvData, setCsvData] = useState([]);
@@ -23,6 +28,20 @@ const ConsultasPreciosCompetencia = () => {
     const [validado, setValidado] = useState(false);
     const [filtrado, setFiltrado] = useState(false);
     const [uploading, setUploading] = useState(false);
+
+    // Manage monitored stations modal state
+    const [showManageModal, setShowManageModal] = useState(false);
+    const [loadingCatalogo, setLoadingCatalogo] = useState(false);
+    const [estacionesSistema, setEstacionesSistema] = useState([]);
+    const [estacionesMonitoreadas, setEstacionesMonitoreadas] = useState([]);
+    const [selectedBranchFilter, setSelectedBranchFilter] = useState('ALL');
+    const [searchMonitored, setSearchMonitored] = useState('');
+    const [newStationForm, setNewStationForm] = useState({
+        id_estacion: '',
+        competencia: '',
+        es_propia: false
+    });
+    const [savingStation, setSavingStation] = useState(false);
 
     useEffect(() => {
         fetchData();
@@ -54,6 +73,92 @@ const ConsultasPreciosCompetencia = () => {
             setShowUploadModal(true);
         } finally {
             setSyncingDGEHM(false);
+        }
+    };
+
+    const fetchCatalogo = async () => {
+        try {
+            setLoadingCatalogo(true);
+            const res = await api.get('/consultas/estaciones/precios-competencia/catalogo');
+            const catData = res.data || {};
+            setEstacionesSistema(catData.estaciones_sistema || []);
+            setEstacionesMonitoreadas(catData.estaciones_monitoreadas || []);
+            if (!newStationForm.id_estacion && catData.estaciones_sistema?.length > 0) {
+                setNewStationForm(prev => ({ ...prev, id_estacion: catData.estaciones_sistema[0].id_empresa }));
+            }
+        } catch (err) {
+            console.error('Error fetching catalogo:', err);
+            addToast('Error al cargar catálogo de estaciones', 'error');
+        } finally {
+            setLoadingCatalogo(false);
+        }
+    };
+
+    const handleOpenManageModal = () => {
+        setShowManageModal(true);
+        fetchCatalogo();
+    };
+
+    const handleAddStation = async (e) => {
+        if (e) e.preventDefault();
+        if (!newStationForm.id_estacion) {
+            return addToast('Seleccione la estación propia del sistema', 'warning');
+        }
+        if (!newStationForm.competencia || !newStationForm.competencia.trim()) {
+            return addToast('Ingrese o seleccione el nombre de la estación (DGEHM)', 'warning');
+        }
+
+        setSavingStation(true);
+        try {
+            await api.post('/consultas/estaciones/precios-competencia/estaciones', {
+                id_estacion: newStationForm.id_estacion,
+                competencia: newStationForm.competencia.trim(),
+                es_propia: newStationForm.es_propia ? 1 : 0
+            });
+            addToast('Estación vinculada correctamente', 'success');
+            setNewStationForm(prev => ({ ...prev, competencia: '', es_propia: false }));
+            await fetchCatalogo();
+            fetchData();
+        } catch (err) {
+            console.error('Error adding station:', err);
+            addToast(err.response?.data?.message || 'Error al adicionar estación', 'error');
+        } finally {
+            setSavingStation(false);
+        }
+    };
+
+    const handleTogglePropia = async (item) => {
+        const newPropia = item.es_propia === 1 ? 0 : 1;
+        try {
+            await api.put(`/consultas/estaciones/precios-competencia/estaciones/${item.id}`, {
+                es_propia: newPropia
+            });
+            addToast(`Estación actualizada a ${newPropia === 1 ? 'Propia' : 'Competencia'}`, 'success');
+            setEstacionesMonitoreadas(prev => prev.map(m => m.id === item.id ? { ...m, es_propia: newPropia } : m));
+            fetchData();
+        } catch (err) {
+            console.error('Error toggling propia:', err);
+            addToast(err.response?.data?.message || 'Error al actualizar tipo de estación', 'error');
+        }
+    };
+
+    const handleDeleteStation = async (item) => {
+        const ok = await confirm(`¿Está seguro de quitar la estación "${item.competencia}" asignada a ${item.estacion_sistema}?`, {
+            title: 'Quitar Estación Monitoreada',
+            variant: 'danger',
+            confirmText: 'Sí, quitar',
+            cancelText: 'Cancelar'
+        });
+        if (!ok) return;
+
+        try {
+            await api.delete(`/consultas/estaciones/precios-competencia/estaciones/${item.id}`);
+            addToast(`Estación "${item.competencia}" quitada con éxito`, 'success');
+            setEstacionesMonitoreadas(prev => prev.filter(m => m.id !== item.id));
+            fetchData();
+        } catch (err) {
+            console.error('Error deleting station:', err);
+            addToast(err.response?.data?.message || 'Error al quitar estación', 'error');
         }
     };
 
@@ -234,6 +339,21 @@ const ConsultasPreciosCompetencia = () => {
         return true;
     });
 
+    const filteredMonitoredStations = useMemo(() => {
+        return estacionesMonitoreadas.filter(item => {
+            if (selectedBranchFilter !== 'ALL' && String(item.id_estacion) !== String(selectedBranchFilter)) {
+                return false;
+            }
+            if (searchMonitored.trim()) {
+                const query = searchMonitored.toLowerCase();
+                const matchComp = item.competencia?.toLowerCase().includes(query);
+                const matchSys = item.estacion_sistema?.toLowerCase().includes(query);
+                return matchComp || matchSys;
+            }
+            return true;
+        });
+    }, [estacionesMonitoreadas, selectedBranchFilter, searchMonitored]);
+
     const exportToExcel = () => {
         const wb = XLSX.utils.book_new();
         const exportData = filteredData.map(item => ({
@@ -351,6 +471,14 @@ const ConsultasPreciosCompetencia = () => {
                     >
                         <RefreshCw size={18} style={{ animation: syncingDGEHM ? 'spin 1s linear infinite' : 'none' }} /> 
                         {syncingDGEHM ? 'Consultando DGEHM...' : 'Consultar DGEHM'}
+                    </button>
+                    <button 
+                        onClick={handleOpenManageModal} 
+                        className="btn-secondary" 
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                        title="Adicionar o quitar estaciones propias y de competencia"
+                    >
+                        <Building2 size={18} /> Gestionar Estaciones
                     </button>
                     <button onClick={() => { setCsvData([]); setCsvFileName(''); setValidado(false); setFiltrado(false); setShowUploadModal(true); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Upload size={18} /> Cargar CSV
@@ -623,6 +751,238 @@ const ConsultasPreciosCompetencia = () => {
                         </div>
                     </>
                 )}
+            </Modal>
+
+            {/* Modal para Adicionar o Quitar Estaciones (Propias y Competencia) */}
+            <Modal 
+                open={showManageModal} 
+                onClose={() => setShowManageModal(false)} 
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><Building2 size={22} color="var(--primary)" />Gestión de Estaciones Monitoreadas</span>} 
+                size="xl"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+                        <button className="btn-secondary" onClick={() => setShowManageModal(false)}>
+                            Cerrar
+                        </button>
+                    </div>
+                }
+            >
+                <div style={{ marginBottom: '1.25rem', padding: '0.85rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Configure qué estaciones oficiales de la DGEHM se monitorean para cada sucursal del sistema. Puede marcar cuáles representan nuestro propio precio de referencia (<strong>Propia</strong>) y cuáles corresponden a la <strong>Competencia</strong>.
+                </div>
+
+                {/* Formulario para Adicionar Estación */}
+                <div className="card glass" style={{ padding: '1.25rem', marginBottom: '1.5rem', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--primary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Plus size={16} /> Adicionar Estación a Monitorear
+                    </h3>
+                    <form onSubmit={handleAddStation}>
+                        <div className="form-grid form-grid-3">
+                            <div>
+                                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, marginBottom: '0.35rem', color: 'var(--text-muted)' }}>
+                                    Nuestra Estación (Sistema) *
+                                </label>
+                                <select 
+                                    className="input-field" 
+                                    style={{ width: '100%' }}
+                                    value={newStationForm.id_estacion}
+                                    onChange={(e) => setNewStationForm(prev => ({ ...prev, id_estacion: e.target.value }))}
+                                    required
+                                >
+                                    <option value="">-- Seleccione Sucursal --</option>
+                                    {estacionesSistema.map(s => (
+                                        <option key={s.id_empresa} value={s.id_empresa}>
+                                            {s.titulo}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, marginBottom: '0.35rem', color: 'var(--text-muted)' }}>
+                                    Estación Oficial DGEHM *
+                                </label>
+                                <input 
+                                    type="text" 
+                                    list="dgehm-catalog-list"
+                                    className="input-field"
+                                    style={{ width: '100%' }}
+                                    placeholder="Escriba o seleccione de la lista..."
+                                    value={newStationForm.competencia}
+                                    onChange={(e) => setNewStationForm(prev => ({ ...prev, competencia: e.target.value }))}
+                                    required
+                                />
+                                <datalist id="dgehm-catalog-list">
+                                    {dgehmEstacionesList.map((est, idx) => (
+                                        <option key={idx} value={est} />
+                                    ))}
+                                </datalist>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, marginBottom: '0.35rem', color: 'var(--text-muted)' }}>
+                                    Tipo de Estación
+                                </label>
+                                <div style={{ display: 'flex', alignItems: 'center', height: '42px' }}>
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={newStationForm.es_propia} 
+                                            onChange={(e) => setNewStationForm(prev => ({ ...prev, es_propia: e.target.checked }))}
+                                            style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--primary)' }}
+                                        />
+                                        <span>{newStationForm.es_propia ? '🛡️ Estación Propia (Referencia)' : '🏪 Competencia'}</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="span-3" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                                <button 
+                                    type="submit" 
+                                    className="btn-primary" 
+                                    disabled={savingStation}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1.5rem' }}
+                                >
+                                    <Plus size={16} /> {savingStation ? 'Guardando...' : 'Adicionar a Monitoreo'}
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+
+                {/* Filtros de la Lista */}
+                <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: 1, minWidth: '260px' }}>
+                        <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
+                            <Search size={16} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                            <input 
+                                type="text" 
+                                placeholder="Buscar estación..." 
+                                className="input-search"
+                                style={{ paddingLeft: '2.5rem', width: '100%', fontSize: '0.85rem' }}
+                                value={searchMonitored}
+                                onChange={(e) => setSearchMonitored(e.target.value)}
+                            />
+                        </div>
+                        <select 
+                            className="input-field" 
+                            style={{ fontSize: '0.85rem', minWidth: '180px' }}
+                            value={selectedBranchFilter}
+                            onChange={(e) => setSelectedBranchFilter(e.target.value)}
+                        >
+                            <option value="ALL">Todas las sucursales ({estacionesMonitoreadas.length})</option>
+                            {estacionesSistema.map(s => {
+                                const count = estacionesMonitoreadas.filter(m => String(m.id_estacion) === String(s.id_empresa)).length;
+                                return (
+                                    <option key={s.id_empresa} value={s.id_empresa}>
+                                        {s.titulo} ({count})
+                                    </option>
+                                );
+                            })}
+                        </select>
+                    </div>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Mostrando {filteredMonitoredStations.length} de {estacionesMonitoreadas.length} asignaciones
+                    </span>
+                </div>
+
+                {/* Tabla de Estaciones Monitoreadas */}
+                <div className="card glass table-responsive" style={{ padding: 0, maxHeight: '380px', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', minWidth: '650px', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                        <thead>
+                            <tr style={{ backgroundColor: 'rgba(0, 0, 0, 0.25)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', textAlign: 'left', position: 'sticky', top: 0, zIndex: 2 }}>
+                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Nuestra Estación (Sistema)</th>
+                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Estación DGEHM</th>
+                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', textAlign: 'center' }}>Tipo</th>
+                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', textAlign: 'right' }}>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {loadingCatalogo ? (
+                                <tr>
+                                    <td colSpan={4} style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                        <div className="spinner" style={{ margin: '0 auto 0.5rem auto' }}></div>
+                                        Cargando catálogo...
+                                    </td>
+                                </tr>
+                            ) : filteredMonitoredStations.length > 0 ? (
+                                filteredMonitoredStations.map((item) => {
+                                    const isPropia = item.es_propia === 1;
+                                    return (
+                                        <tr key={item.id} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', backgroundColor: isPropia ? 'rgba(99, 102, 241, 0.05)' : undefined }}>
+                                            <td style={{ padding: '0.65rem 1rem', fontWeight: 600, color: 'var(--primary)' }}>
+                                                {item.estacion_sistema}
+                                            </td>
+                                            <td style={{ padding: '0.65rem 1rem' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                    <MapPin size={14} color="var(--text-muted)" />
+                                                    <span>{item.competencia}</span>
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '0.65rem 1rem', textAlign: 'center' }}>
+                                                {isPropia ? (
+                                                    <span style={{ 
+                                                        backgroundColor: 'rgba(99, 102, 241, 0.2)', 
+                                                        color: 'var(--primary)', 
+                                                        border: '1px solid var(--primary)', 
+                                                        borderRadius: '4px', 
+                                                        padding: '0.15rem 0.5rem', 
+                                                        fontSize: '0.75rem', 
+                                                        fontWeight: 'bold',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.25rem'
+                                                    }}>
+                                                        <ShieldCheck size={12} /> PROPIA
+                                                    </span>
+                                                ) : (
+                                                    <span style={{ 
+                                                        backgroundColor: 'rgba(234, 179, 8, 0.15)', 
+                                                        color: '#eab308', 
+                                                        border: '1px solid rgba(234, 179, 8, 0.4)', 
+                                                        borderRadius: '4px', 
+                                                        padding: '0.15rem 0.5rem', 
+                                                        fontSize: '0.75rem', 
+                                                        fontWeight: 'bold'
+                                                    }}>
+                                                        COMPETENCIA
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td style={{ padding: '0.65rem 1rem', textAlign: 'right' }}>
+                                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                    <button 
+                                                        onClick={() => handleTogglePropia(item)}
+                                                        className="btn-secondary"
+                                                        style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                                        title={isPropia ? 'Cambiar a Competencia' : 'Cambiar a Propia'}
+                                                    >
+                                                        {isPropia ? <ToggleRight size={14} color="var(--primary)" /> : <ToggleLeft size={14} />}
+                                                        {isPropia ? 'Hacer Competencia' : 'Hacer Propia'}
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => handleDeleteStation(item)}
+                                                        className="btn-icon"
+                                                        style={{ color: '#ef4444', padding: '0.35rem' }}
+                                                        title="Quitar estación"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            ) : (
+                                <tr>
+                                    <td colSpan={4} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                        No se encontraron estaciones monitoreadas con los filtros actuales.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </Modal>
         </div>
     );

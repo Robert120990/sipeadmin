@@ -219,6 +219,124 @@ router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateT
     }
 });
 
+router.get('/consultas/estaciones/precios-competencia/catalogo', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const [estacionesSistema] = await withRetry(() => externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden, titulo"));
+        const [estacionesMonitoreadas] = await withRetry(() => externalDb.query(`
+            SELECT a.ID as id, a.id_estacion, b.titulo as estacion_sistema, a.competencia, IFNULL(a.es_propia, 0) as es_propia 
+            FROM web_estaciones_competencia a 
+            LEFT JOIN web_consolidado b ON a.id_estacion = b.id_empresa AND b.grupo = 'ESTACION'
+            ORDER BY b.titulo, a.es_propia DESC, a.competencia
+        `));
+        
+        let catalogoDgehm = [];
+        try {
+            catalogoDgehm = require('../data/dgehm_estaciones.json');
+        } catch (e) {
+            catalogoDgehm = [];
+        }
+
+        res.json({
+            estaciones_sistema: estacionesSistema,
+            estaciones_monitoreadas: estacionesMonitoreadas,
+            catalogo_dgehm: catalogoDgehm
+        });
+    } catch (error) {
+        console.error('Error fetching catalogo estaciones competencia:', error);
+        res.status(500).json({ message: 'Error fetching catalogo estaciones competencia', error: error.message });
+    }
+});
+
+router.post('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, async (req, res) => {
+    try {
+        const { id_estacion, competencia, es_propia } = req.body;
+        if (!id_estacion || !competencia || !competencia.trim()) {
+            return res.status(400).json({ message: 'La estación del sistema y el nombre de la estación son requeridos.' });
+        }
+
+        const externalDb = await getExternalDb();
+        const compTrimmed = competencia.trim();
+        const isPropiaNum = (es_propia === 1 || es_propia === true || es_propia === '1') ? 1 : 0;
+
+        // Validar que no exista ya para la misma estación del sistema
+        const [existing] = await withRetry(() => externalDb.query(
+            'SELECT ID FROM web_estaciones_competencia WHERE id_estacion = ? AND UPPER(competencia) = UPPER(?)',
+            [id_estacion, compTrimmed]
+        ));
+        if (existing.length > 0) {
+            return res.status(400).json({ message: 'Esta estación ya se encuentra asignada a esta sucursal.' });
+        }
+
+        const [result] = await withRetry(() => externalDb.query(
+            'INSERT INTO web_estaciones_competencia (id_estacion, competencia, es_propia) VALUES (?, ?, ?)',
+            [id_estacion, compTrimmed, isPropiaNum]
+        ));
+
+        res.json({
+            message: 'Estación asignada correctamente',
+            id: result.insertId,
+            id_estacion,
+            competencia: compTrimmed,
+            es_propia: isPropiaNum
+        });
+    } catch (error) {
+        console.error('Error adding estacion competencia:', error);
+        res.status(500).json({ message: 'Error al agregar estación: ' + error.message });
+    }
+});
+
+router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { competencia, es_propia, id_estacion } = req.body;
+    try {
+        const externalDb = await getExternalDb();
+        const [current] = await withRetry(() => externalDb.query('SELECT * FROM web_estaciones_competencia WHERE ID = ?', [id]));
+        if (current.length === 0) {
+            return res.status(404).json({ message: 'Estación no encontrada' });
+        }
+
+        const newComp = competencia !== undefined ? competencia.trim() : current[0].competencia;
+        const newPropia = es_propia !== undefined ? ((es_propia === 1 || es_propia === true || es_propia === '1') ? 1 : 0) : current[0].es_propia;
+        const newIdEstacion = id_estacion !== undefined ? id_estacion : current[0].id_estacion;
+
+        await withRetry(() => externalDb.query(
+            'UPDATE web_estaciones_competencia SET competencia = ?, es_propia = ?, id_estacion = ? WHERE ID = ?',
+            [newComp, newPropia, newIdEstacion, id]
+        ));
+
+        res.json({ message: 'Estación actualizada con éxito', id, competencia: newComp, es_propia: newPropia, id_estacion: newIdEstacion });
+    } catch (error) {
+        console.error('Error updating estacion competencia:', error);
+        res.status(500).json({ message: 'Error al actualizar estación: ' + error.message });
+    }
+});
+
+router.delete('/consultas/estaciones/precios-competencia/estaciones/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const externalDb = await getExternalDb();
+        const [rows] = await withRetry(() => externalDb.query('SELECT * FROM web_estaciones_competencia WHERE ID = ?', [id]));
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Estación no encontrada' });
+        }
+        const stationName = rows[0].competencia;
+
+        await withRetry(() => externalDb.query('DELETE FROM web_estaciones_competencia WHERE ID = ?', [id]));
+
+        // Si la estación ya no figura en ninguna sucursal, limpiar de web_precios_competencia
+        const [stillExists] = await withRetry(() => externalDb.query('SELECT ID FROM web_estaciones_competencia WHERE competencia = ?', [stationName]));
+        if (stillExists.length === 0) {
+            await withRetry(() => externalDb.query('DELETE FROM web_precios_competencia WHERE estacion = ?', [stationName]));
+        }
+
+        res.json({ message: `Estación "${stationName}" quitada correctamente` });
+    } catch (error) {
+        console.error('Error deleting estacion competencia:', error);
+        res.status(500).json({ message: 'Error al quitar estación: ' + error.message });
+    }
+});
+
 router.get('/consultas/estaciones/precios', authenticateToken, async (req, res) => {
     try {
         const externalDb = await getExternalDb();
