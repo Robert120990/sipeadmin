@@ -100,31 +100,31 @@ export default function FinanzasCalculadora() {
             setBancos(data.bancos || []);
             setSaveForm(prev => ({
                 ...prev,
-                empresa_id: data.empresas[0]?.id || '',
-                banco_id: data.bancos[0]?.id || '',
-                numero_prestamo: `PREST-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`
+                empresa_id: data.empresas?.[0]?.id ? String(data.empresas[0].id) : '',
+                banco_id: data.bancos?.[0]?.id ? String(data.bancos[0].id) : '',
+                numero_prestamo: `PREST-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`
             }));
             setShowSaveModal(true);
         } catch (error) {
-            addToast('Error al cargar catálogos para registrar préstamo', 'error');
+            addToast('Error al cargar catálogos para registrar préstamo: ' + (error.response?.data?.message || error.message), 'error');
         }
     };
 
     const handleSaveLoan = async (e) => {
         e.preventDefault();
         if (!saveForm.empresa_id || !saveForm.numero_prestamo || !saveForm.descripcion) {
-            return addToast('Complete los campos requeridos', 'warning');
+            return addToast('Complete los campos requeridos (*)', 'warning');
         }
         setSavingLoan(true);
         try {
             await api.post('/finanzas/prestamos', {
-                empresa_id: saveForm.empresa_id,
-                banco_id: saveForm.banco_id || null,
-                numero_prestamo: saveForm.numero_prestamo,
-                descripcion: saveForm.descripcion,
-                monto_original: effectivePrincipal,
-                tasa_interes_anual: annualRate,
-                plazo_meses: termMonths,
+                empresa_id: parseInt(saveForm.empresa_id, 10),
+                banco_id: saveForm.banco_id ? parseInt(saveForm.banco_id, 10) : null,
+                numero_prestamo: saveForm.numero_prestamo.trim().toUpperCase(),
+                descripcion: saveForm.descripcion.trim().toUpperCase(),
+                monto_original: parseFloat(effectivePrincipal),
+                tasa_interes_anual: parseFloat(annualRate),
+                plazo_meses: parseInt(termMonths, 10),
                 frecuencia_pago: frequency,
                 fecha_inicio: startDate,
                 fecha_primer_pago: startDate,
@@ -141,7 +141,8 @@ export default function FinanzasCalculadora() {
             addToast('¡Préstamo registrado exitosamente en el sistema!', 'success');
             setShowSaveModal(false);
         } catch (error) {
-            addToast(error.response?.data?.message || 'Error al guardar préstamo', 'error');
+            const errorMsg = error.response?.data?.error || error.response?.data?.message || error.message || 'Error al guardar préstamo';
+            addToast(errorMsg, 'error');
         } finally {
             setSavingLoan(false);
         }
@@ -228,6 +229,82 @@ export default function FinanzasCalculadora() {
     const maxBalance = effectivePrincipal > 0 ? effectivePrincipal : 1;
     const schedulePoints = result.schedule;
     const origPoints = result.originalSchedule;
+    const [chartHover, setChartHover] = useState(null);
+
+    const formatChartCurrency = (val) => {
+        if (val <= 0) return '$0';
+        if (val >= 1000000) {
+            const m = val / 1000000;
+            return `$${m % 1 === 0 ? m.toFixed(0) : m.toFixed(1)}M`;
+        }
+        if (val >= 10000) {
+            const k = val / 1000;
+            return `$${k % 1 === 0 ? k.toFixed(0) : k.toFixed(0)}k`;
+        }
+        return `$${Math.round(val)}`;
+    };
+
+    const xMilestones = useMemo(() => {
+        if (!origPoints || origPoints.length < 2) return [];
+        const totalPeriods = origPoints.length - 1;
+        const count = 5;
+        const list = [];
+        const periodsPerYear = frequency === 'quincenal' ? 24 : frequency === 'semanal' ? 52 : 12;
+
+        for (let i = 0; i <= count; i++) {
+            const idx = Math.min(totalPeriods, Math.round((i / count) * totalPeriods));
+            const row = origPoints[idx];
+            const x = 90 + (idx / totalPeriods) * 760;
+            const yearsElapsed = (idx / periodsPerYear).toFixed(1);
+            const cleanYear = yearsElapsed.endsWith('.0') ? parseInt(yearsElapsed, 10) : yearsElapsed;
+            const calYear = row?.date ? row.date.split('-')[0] : '';
+
+            list.push({
+                idx,
+                x,
+                yearLabel: `Año ${cleanYear}`,
+                subLabel: calYear ? `(${calYear})` : `Cuota ${idx}`,
+                date: row?.date
+            });
+        }
+        return list;
+    }, [origPoints, frequency]);
+
+    const yLevels = useMemo(() => {
+        return [
+            { pct: 1.0, val: maxBalance },
+            { pct: 0.75, val: maxBalance * 0.75 },
+            { pct: 0.50, val: maxBalance * 0.50 },
+            { pct: 0.25, val: maxBalance * 0.25 },
+            { pct: 0.0, val: 0 }
+        ];
+    }, [maxBalance]);
+
+    // Handle hover on SVG
+    const handleChartMouseMove = (e) => {
+        if (!origPoints || origPoints.length < 2) return;
+        const svg = e.currentTarget;
+        const rect = svg.getBoundingClientRect();
+        const clientX = e.clientX - rect.left;
+        const svgX = (clientX / rect.width) * 880;
+
+        if (svgX < 90 || svgX > 850) {
+            setChartHover(null);
+            return;
+        }
+
+        const ratio = (svgX - 90) / 760;
+        const targetIdx = Math.max(0, Math.min(origPoints.length - 1, Math.round(ratio * (origPoints.length - 1))));
+        const origPt = origPoints[targetIdx];
+        const schedPt = schedulePoints[targetIdx] || null;
+
+        setChartHover({
+            index: targetIdx,
+            x: 90 + (targetIdx / (origPoints.length - 1)) * 760,
+            orig: origPt,
+            sched: schedPt
+        });
+    };
 
     return (
         <div>
@@ -677,48 +754,129 @@ export default function FinanzasCalculadora() {
 
             {/* Visual SVG Chart: Reduction of Balance */}
             <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Percent size={18} color="var(--primary)" /> Curva de Amortización del Saldo Deudor
-                    </h3>
-                    <div style={{ display: 'flex', gap: '1rem', fontSize: '0.85rem' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#94a3b8', borderRadius: '2px' }}></span> Plan Regular
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div>
+                        <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <Percent size={18} color="var(--primary)" /> Curva de Amortización del Saldo Deudor
+                        </h3>
+                        <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            Evolución proyectada del saldo deudor a lo largo del tiempo (Años y Cantidad $)
+                        </p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ display: 'inline-block', width: '16px', height: '3px', background: '#94a3b8', borderRadius: '2px', borderTop: '2px dashed #94a3b8' }}></span> Plan Regular
                         </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#10b981', borderRadius: '2px' }}></span> Con Abonos Extra
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ display: 'inline-block', width: '16px', height: '3px', background: '#10b981', borderRadius: '2px' }}></span> Con Abonos Extra
                         </span>
                     </div>
                 </div>
 
-                <div style={{ width: '100%', height: '180px', position: 'relative' }}>
-                    <svg viewBox="0 0 800 160" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
-                        {/* Grid lines */}
-                        <line x1="0" y1="150" x2="800" y2="150" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
-                        <line x1="0" y1="75" x2="800" y2="75" stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="4 4" />
-                        <line x1="0" y1="10" x2="800" y2="10" stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="4 4" />
+                {/* SVG Container with horizontal scroll for small screens */}
+                <div 
+                    style={{ width: '100%', position: 'relative', overflowX: 'auto', paddingBottom: '0.5rem' }}
+                    onMouseLeave={() => setChartHover(null)}
+                >
+                    <svg 
+                        viewBox="0 0 880 255" 
+                        style={{ width: '100%', minWidth: '650px', height: 'auto', display: 'block' }}
+                        onMouseMove={handleChartMouseMove}
+                        onMouseLeave={() => setChartHover(null)}
+                    >
+                        <defs>
+                            <linearGradient id="chartGreenGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
+                                <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                            </linearGradient>
+                            <linearGradient id="chartSlateGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#94a3b8" stopOpacity="0.12" />
+                                <stop offset="100%" stopColor="#94a3b8" stopOpacity="0.0" />
+                            </linearGradient>
+                        </defs>
 
-                        {/* Original line */}
+                        {/* Y-Axis Header */}
+                        <text x="85" y="16" textAnchor="end" fill="var(--text-muted)" fontSize="10" fontWeight="700">
+                            CANTIDAD ($)
+                        </text>
+
+                        {/* Horizontal Gridlines & Y-Axis Amount Labels */}
+                        {yLevels.map((lvl, idx) => {
+                            const y = 25 + (1 - lvl.pct) * 175;
+                            const isBaseline = lvl.pct === 0;
+                            return (
+                                <g key={idx}>
+                                    <line
+                                        x1="90"
+                                        y1={y}
+                                        x2="850"
+                                        y2={y}
+                                        stroke={isBaseline ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.06)'}
+                                        strokeWidth={isBaseline ? 1.5 : 1}
+                                        strokeDasharray={isBaseline ? 'none' : '4 4'}
+                                    />
+                                    <text
+                                        x="82"
+                                        y={y + 4}
+                                        textAnchor="end"
+                                        fill={isBaseline ? 'var(--text-color, #e2e8f0)' : 'var(--text-muted, #94a3b8)'}
+                                        fontSize="11"
+                                        fontWeight="600"
+                                    >
+                                        {formatChartCurrency(lvl.val)}
+                                    </text>
+                                </g>
+                            );
+                        })}
+
+                        {/* Y-Axis Line */}
+                        <line x1="90" y1="25" x2="90" y2="200" stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
+
+                        {/* Area under regular curve */}
+                        {origPoints.length > 1 && (
+                            <path
+                                d={`M 90 200 ${origPoints.reduce((acc, pt, idx) => {
+                                    const x = 90 + (idx / (origPoints.length - 1)) * 760;
+                                    const y = 200 - ((pt.balance / maxBalance) * 175);
+                                    return `${acc} L ${x.toFixed(1)} ${y.toFixed(1)}`;
+                                }, '')} L 850 200 Z`}
+                                fill="url(#chartSlateGrad)"
+                            />
+                        )}
+
+                        {/* Regular Plan Line (Dashed Slate) */}
                         {origPoints.length > 1 && (
                             <path
                                 d={origPoints.reduce((acc, pt, idx) => {
-                                    const x = (idx / (origPoints.length - 1)) * 800;
-                                    const y = 150 - ((pt.balance / maxBalance) * 140);
+                                    const x = 90 + (idx / (origPoints.length - 1)) * 760;
+                                    const y = 200 - ((pt.balance / maxBalance) * 175);
                                     return `${acc} ${idx === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
                                 }, '')}
                                 fill="none"
                                 stroke="#94a3b8"
                                 strokeWidth="2"
-                                strokeDasharray="3 3"
+                                strokeDasharray="4 4"
                             />
                         )}
 
-                        {/* Accelerated line */}
+                        {/* Area under accelerated curve */}
+                        {schedulePoints.length > 1 && (
+                            <path
+                                d={`M 90 200 ${schedulePoints.reduce((acc, pt, idx) => {
+                                    const x = 90 + (idx / (origPoints.length - 1)) * 760;
+                                    const y = 200 - ((pt.balance / maxBalance) * 175);
+                                    return `${acc} L ${x.toFixed(1)} ${y.toFixed(1)}`;
+                                }, '')} L ${(90 + ((schedulePoints.length - 1) / (origPoints.length - 1)) * 760).toFixed(1)} 200 Z`}
+                                fill="url(#chartGreenGrad)"
+                            />
+                        )}
+
+                        {/* Accelerated Plan Line (Solid Green) */}
                         {schedulePoints.length > 1 && (
                             <path
                                 d={schedulePoints.reduce((acc, pt, idx) => {
-                                    const x = (idx / (origPoints.length - 1)) * 800;
-                                    const y = 150 - ((pt.balance / maxBalance) * 140);
+                                    const x = 90 + (idx / (origPoints.length - 1)) * 760;
+                                    const y = 200 - ((pt.balance / maxBalance) * 175);
                                     return `${acc} ${idx === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
                                 }, '')}
                                 fill="none"
@@ -726,8 +884,128 @@ export default function FinanzasCalculadora() {
                                 strokeWidth="3"
                             />
                         )}
+
+                        {/* Early payoff marker dot if accelerated payoff finishes early */}
+                        {schedulePoints.length > 1 && schedulePoints.length < origPoints.length && (
+                            <g>
+                                {(() => {
+                                    const lastIdx = schedulePoints.length - 1;
+                                    const lx = 90 + (lastIdx / (origPoints.length - 1)) * 760;
+                                    return (
+                                        <g>
+                                            <circle cx={lx} cy="200" r="6" fill="#10b981" stroke="#ffffff" strokeWidth="2" />
+                                            <circle cx={lx} cy="200" r="10" fill="none" stroke="#10b981" strokeWidth="1" strokeOpacity="0.6" />
+                                            <text x={lx} y="190" textAnchor="middle" fill="#10b981" fontSize="10" fontWeight="700">
+                                                Liquidado (Cuota #{schedulePoints[lastIdx].number})
+                                            </text>
+                                        </g>
+                                    );
+                                })()}
+                            </g>
+                        )}
+
+                        {/* X-Axis Milestones: Years and Calendar Years */}
+                        {xMilestones.map((m, idx) => (
+                            <g key={idx}>
+                                <line x1={m.x} y1="200" x2={m.x} y2="206" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" />
+                                <text
+                                    x={m.x}
+                                    y="222"
+                                    textAnchor="middle"
+                                    fill="var(--text-color, #e2e8f0)"
+                                    fontSize="11"
+                                    fontWeight="700"
+                                >
+                                    {m.yearLabel}
+                                </text>
+                                <text
+                                    x={m.x}
+                                    y="237"
+                                    textAnchor="middle"
+                                    fill="var(--text-muted, #94a3b8)"
+                                    fontSize="9.5"
+                                    fontWeight="500"
+                                >
+                                    {m.subLabel}
+                                </text>
+                            </g>
+                        ))}
+
+                        {/* X-Axis Title */}
+                        <text x="850" y="248" textAnchor="end" fill="var(--text-muted)" fontSize="10" fontWeight="700">
+                            TIEMPO / PLAZO &rarr;
+                        </text>
+
+                        {/* Interactive Hover Guide */}
+                        {chartHover && (
+                            <g>
+                                <line
+                                    x1={chartHover.x}
+                                    y1="25"
+                                    x2={chartHover.x}
+                                    y2="200"
+                                    stroke="rgba(255,255,255,0.4)"
+                                    strokeWidth="1"
+                                    strokeDasharray="2 2"
+                                />
+                                {chartHover.orig && (
+                                    <circle
+                                        cx={chartHover.x}
+                                        cy={200 - ((chartHover.orig.balance / maxBalance) * 175)}
+                                        r="4"
+                                        fill="#94a3b8"
+                                        stroke="#ffffff"
+                                        strokeWidth="1.5"
+                                    />
+                                )}
+                                {chartHover.sched && (
+                                    <circle
+                                        cx={chartHover.x}
+                                        cy={200 - ((chartHover.sched.balance / maxBalance) * 175)}
+                                        r="5"
+                                        fill="#10b981"
+                                        stroke="#ffffff"
+                                        strokeWidth="1.5"
+                                    />
+                                )}
+                            </g>
+                        )}
                     </svg>
                 </div>
+
+                {/* Floating summary badge when hovering over chart */}
+                {chartHover && (
+                    <div style={{
+                        marginTop: '0.75rem',
+                        padding: '0.6rem 1rem',
+                        background: 'rgba(15, 23, 42, 0.75)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--border-radius)',
+                        display: 'flex',
+                        gap: '1.5rem',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        fontSize: '0.85rem'
+                    }}>
+                        <div>
+                            <span style={{ color: 'var(--text-muted)' }}>Cuota / Fecha: </span>
+                            <strong>#{chartHover.orig.number} &mdash; {chartHover.orig.date}</strong>
+                        </div>
+                        <div>
+                            <span style={{ color: '#94a3b8' }}>Saldo Plan Regular: </span>
+                            <strong>{formatCurrency(chartHover.orig.balance)}</strong>
+                        </div>
+                        <div>
+                            <span style={{ color: '#10b981' }}>Saldo Con Abonos: </span>
+                            <strong>{chartHover.sched ? formatCurrency(chartHover.sched.balance) : '$0.00 (Liquidado)'}</strong>
+                        </div>
+                        {chartHover.sched && chartHover.orig.balance > chartHover.sched.balance && (
+                            <div style={{ color: 'var(--accent, #10b981)' }}>
+                                Capital Acelerado: <strong>+{formatCurrency(chartHover.orig.balance - chartHover.sched.balance)}</strong>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Schedule Table */}

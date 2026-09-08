@@ -215,7 +215,8 @@ export default function FinanzasPrestamos() {
             setShowFormModal(false);
             fetchData();
         } catch (error) {
-            addToast(error.response?.data?.message || 'Error al guardar préstamo', 'error');
+            const errorMsg = error.response?.data?.error || error.response?.data?.message || error.message || 'Error al guardar préstamo';
+            addToast(errorMsg, 'error');
         }
     };
 

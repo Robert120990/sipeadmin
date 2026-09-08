@@ -4,6 +4,97 @@ const { getDb } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
 // --- Helper Functions ---
+let tablesEnsured = false;
+const ensureFinanzasTables = async (db) => {
+    if (tablesEnsured) return;
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS prestamos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                banco_id INT NULL,
+                cuenta_bancaria_id INT NULL,
+                numero_prestamo VARCHAR(50) NOT NULL UNIQUE,
+                descripcion VARCHAR(255) NOT NULL,
+                monto_original DECIMAL(14,2) NOT NULL,
+                tasa_interes_anual DECIMAL(6,3) NOT NULL,
+                plazo_meses INT NOT NULL,
+                frecuencia_pago VARCHAR(20) DEFAULT 'mensual',
+                fecha_inicio DATE NOT NULL,
+                fecha_primer_pago DATE NOT NULL,
+                cuota_calculada DECIMAL(14,2) NOT NULL,
+                seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                seguro_valor DECIMAL(10,4) DEFAULT 0,
+                seguro_cuota DECIMAL(10,2) DEFAULT 0,
+                ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                ahorro_valor DECIMAL(10,4) DEFAULT 0,
+                ahorro_cuota DECIMAL(10,2) DEFAULT 0,
+                cuota_total DECIMAL(14,2) DEFAULT 0,
+                dias_gracia INT DEFAULT 0,
+                estado VARCHAR(20) DEFAULT 'activo',
+                notas TEXT,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_empresa_estado (empresa_id, estado)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS prestamos_pagos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                prestamo_id INT NOT NULL,
+                numero_cuota INT NULL,
+                fecha_pago DATE NOT NULL,
+                tipo_pago ENUM('regular', 'capital_extra', 'cancelacion_total') DEFAULT 'regular',
+                monto_total DECIMAL(14,2) NOT NULL,
+                monto_capital DECIMAL(14,2) NOT NULL,
+                monto_interes DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                monto_seguro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                monto_ahorro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                monto_otros DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                saldo_restante DECIMAL(14,2) NOT NULL,
+                numero_comprobante VARCHAR(50) NULL,
+                cuenta_origen_id INT NULL,
+                notas TEXT,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_prestamo_fecha (prestamo_id, fecha_pago)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        try {
+            const [cols] = await db.query("SHOW COLUMNS FROM prestamos LIKE 'seguro_tipo'");
+            if (cols.length === 0) {
+                await db.query(`
+                    ALTER TABLE prestamos
+                    ADD COLUMN seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                    ADD COLUMN seguro_valor DECIMAL(10,4) DEFAULT 0,
+                    ADD COLUMN seguro_cuota DECIMAL(10,2) DEFAULT 0,
+                    ADD COLUMN ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                    ADD COLUMN ahorro_valor DECIMAL(10,4) DEFAULT 0,
+                    ADD COLUMN ahorro_cuota DECIMAL(10,2) DEFAULT 0,
+                    ADD COLUMN cuota_total DECIMAL(14,2) DEFAULT 0
+                `);
+            }
+            const [pCols] = await db.query("SHOW COLUMNS FROM prestamos_pagos LIKE 'monto_seguro'");
+            if (pCols.length === 0) {
+                await db.query(`
+                    ALTER TABLE prestamos_pagos
+                    ADD COLUMN monto_seguro DECIMAL(14,2) DEFAULT 0.00 AFTER monto_interes,
+                    ADD COLUMN monto_ahorro DECIMAL(14,2) DEFAULT 0.00 AFTER monto_seguro
+                `);
+            }
+        } catch (colErr) {
+            console.warn('Migration columns check in finanzas:', colErr.message);
+        }
+
+        tablesEnsured = true;
+    } catch (err) {
+        console.error('ensureFinanzasTables error:', err);
+    }
+};
+
 const calculatePMT = (principal, annualRate, termMonths, frequency = 'mensual') => {
     const P = parseFloat(principal);
     const rate = parseFloat(annualRate);
@@ -29,6 +120,7 @@ const calculatePMT = (principal, annualRate, termMonths, frequency = 'mensual') 
 router.get('/catalogos', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
+        await ensureFinanzasTables(db);
         const [empresas] = await db.query('SELECT id, codigo, nombre FROM empresas ORDER BY nombre ASC');
         const [bancos] = await db.query('SELECT id, empresa_id, codigo, descripcion FROM bancos ORDER BY descripcion ASC');
         const [cuentas] = await db.query(`
@@ -51,6 +143,7 @@ router.get('/prestamos', authenticateToken, async (req, res) => {
     const { empresa_id, estado, search } = req.query;
     try {
         const db = getDb();
+        await ensureFinanzasTables(db);
         let query = `
             SELECT 
                 p.*,
@@ -131,6 +224,7 @@ router.get('/prestamos/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
+        await ensureFinanzasTables(db);
         const [rows] = await db.query(`
             SELECT 
                 p.*,
@@ -240,6 +334,7 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
 
     try {
         const db = getDb();
+        await ensureFinanzasTables(db);
         const cuota = parseFloat(cuota_calculada) || calculatePMT(monto_original, tasa_interes_anual, plazo_meses, frecuencia_pago);
         const segCuota = parseFloat(seguro_cuota) || 0;
         const ahorrCuota = parseFloat(ahorro_cuota) || 0;
@@ -282,7 +377,10 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
         res.status(201).json({ message: 'Préstamo registrado exitosamente', id: result.insertId, cuota_calculada: cuota, cuota_total: totalCuota });
     } catch (error) {
         console.error('Error creating prestamo:', error);
-        res.status(500).json({ message: 'Error al registrar préstamo', error: error.message });
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(400).json({ message: `El número de préstamo "${numero_prestamo}" ya se encuentra registrado`, error: error.message });
+        }
+        res.status(500).json({ message: 'Error al registrar préstamo: ' + error.message, error: error.message });
     }
 });
 
@@ -316,6 +414,7 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
 
     try {
         const db = getDb();
+        await ensureFinanzasTables(db);
         const cuota = parseFloat(cuota_calculada) || calculatePMT(monto_original, tasa_interes_anual, plazo_meses, frecuencia_pago);
         const segCuota = parseFloat(seguro_cuota) || 0;
         const ahorrCuota = parseFloat(ahorro_cuota) || 0;
@@ -375,7 +474,7 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
         res.json({ message: 'Préstamo actualizado exitosamente' });
     } catch (error) {
         console.error('Error updating prestamo:', error);
-        res.status(500).json({ message: 'Error al actualizar préstamo', error: error.message });
+        res.status(500).json({ message: 'Error al actualizar préstamo: ' + error.message, error: error.message });
     }
 });
 
@@ -384,6 +483,7 @@ router.delete('/prestamos/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
+        await ensureFinanzasTables(db);
         // Check if has payments
         const [pagos] = await db.query('SELECT id FROM prestamos_pagos WHERE prestamo_id = ?', [id]);
         if (pagos.length > 0) {
@@ -396,7 +496,7 @@ router.delete('/prestamos/:id', authenticateToken, async (req, res) => {
         res.json({ message: 'Préstamo eliminado exitosamente' });
     } catch (error) {
         console.error('Error deleting prestamo:', error);
-        res.status(500).json({ message: 'Error al eliminar préstamo', error: error.message });
+        res.status(500).json({ message: 'Error al eliminar préstamo: ' + error.message, error: error.message });
     }
 });
 
@@ -424,6 +524,7 @@ router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
 
     try {
         const db = getDb();
+        await ensureFinanzasTables(db);
         const [pRows] = await db.query('SELECT * FROM prestamos WHERE id = ?', [id]);
         if (pRows.length === 0) return res.status(404).json({ message: 'Préstamo no encontrado' });
         const prestamo = pRows[0];
