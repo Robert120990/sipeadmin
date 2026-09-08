@@ -627,7 +627,7 @@ router.post('/crear-y-aplicar', authenticateToken, async (req, res) => {
         }
 
         const empresaId = cuenta.empresa_id;
-        const esCargo = (tipo || '').toUpperCase() === 'CARGO' || tipo_remesa_codigo === 'NC' || tipo_remesa_codigo === 'CH';
+        const esCargo = (tipo || '').toUpperCase() === 'CARGO' || tipo_remesa_codigo === 'NC' || tipo_remesa_codigo === 'CH' || tipo_remesa_codigo === '02';
         const cargo = esCargo ? montoNum : 0;
         const abono = !esCargo ? montoNum : 0;
 

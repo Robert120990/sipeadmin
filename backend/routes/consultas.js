@@ -196,6 +196,8 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
     } catch (error) { res.status(500).json({ message: 'Error fetching diferencias' }); }
 });
 
+const { syncDgehmWithDatabase } = require('../services/dgehmService');
+
 router.get('/consultas/estaciones/precios-competencia', authenticateToken, async (req, res) => {
     try {
         const externalDb = await getExternalDb();
@@ -518,6 +520,20 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
     }
 });
 
+router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const result = await syncDgehmWithDatabase(externalDb);
+        res.json({
+            message: `Sincronización completada: ${result.count} estaciones actualizadas de ${result.totalConfigured} configuradas (${result.totalDgehm} registros analizados en DGEHM).`,
+            ...result
+        });
+    } catch (error) {
+        console.error('Error syncing DGEHM:', error);
+        res.status(500).json({ message: error.message || 'Error al sincronizar con DGEHM' });
+    }
+});
+
 router.post('/consultas/estaciones/precios-competencia/upload', authenticateToken, async (req, res) => {
     try {
         const { data } = req.body;
@@ -536,6 +552,7 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
                 const n = Number(cleaned);
                 return isNaN(n) ? 0 : n;
             };
+            const today = new Date().toISOString().split('T')[0];
             const values = data.map(row => [
                 row.estacion, row.modificacion, cleanNum(row.super_c), cleanNum(row.regular_c),
                 cleanNum(row.ion_c), cleanNum(row.diesel_c), cleanNum(row.super_a),
@@ -543,8 +560,32 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
             ]);
             console.log('UPLOAD precios competencia - count:', data.length, 'first row:', JSON.stringify(data[0]), 'first values:', JSON.stringify(values[0]));
             await conn.query(insertSql, [values]);
+
+            // Save to history
+            for (const row of data) {
+                await conn.query(`
+                    INSERT INTO web_precios_competencia_historial 
+                    (estacion, modificacion, fecha_registro, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        modificacion = VALUES(modificacion),
+                        super_c = VALUES(super_c),
+                        regular_c = VALUES(regular_c),
+                        ion_c = VALUES(ion_c),
+                        diesel_c = VALUES(diesel_c),
+                        super_a = VALUES(super_a),
+                        regular_a = VALUES(regular_a),
+                        ion_a = VALUES(ion_a),
+                        diesel_a = VALUES(diesel_a)
+                `, [
+                    row.estacion, row.modificacion, today,
+                    cleanNum(row.super_c), cleanNum(row.regular_c), cleanNum(row.ion_c), cleanNum(row.diesel_c),
+                    cleanNum(row.super_a), cleanNum(row.regular_a), cleanNum(row.ion_a), cleanNum(row.diesel_a)
+                ]);
+            }
+
             await conn.commit();
-            res.json({ message: 'Precios actualizados', count: data.length });
+            res.json({ message: 'Precios actualizados exitosamente', count: data.length });
         } catch (err) {
             await conn.rollback();
             throw err;
@@ -552,6 +593,207 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
             conn.release();
         }
     } catch (error) { res.status(500).json({ message: 'Error updating precios competencia' }); }
+});
+
+router.get('/consultas/estaciones/precios-competencia/historial', authenticateToken, async (req, res) => {
+    try {
+        const { desde, hasta, estacion } = req.query;
+        const externalDb = await getExternalDb();
+        
+        let query = `
+            SELECT h.id, h.estacion, h.modificacion, DATE_FORMAT(h.fecha_registro, '%Y-%m-%d') as fecha_registro,
+                   h.super_c, h.regular_c, h.ion_c, h.diesel_c,
+                   h.super_a, h.regular_a, h.ion_a, h.diesel_a,
+                   c.titulo as estacion_propia
+            FROM web_precios_competencia_historial h
+            LEFT JOIN web_estaciones_competencia b ON h.estacion = b.competencia
+            LEFT JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION'
+            WHERE 1=1
+        `;
+        const params = [];
+        if (desde) {
+            query += ' AND h.fecha_registro >= ?';
+            params.push(desde);
+        }
+        if (hasta) {
+            query += ' AND h.fecha_registro <= ?';
+            params.push(hasta);
+        }
+        if (estacion) {
+            query += ' AND (h.estacion LIKE ? OR c.titulo LIKE ?)';
+            params.push(`%${estacion}%`, `%${estacion}%`);
+        }
+        query += ' ORDER BY h.fecha_registro DESC, h.estacion ASC LIMIT 500';
+
+        const [rows] = await externalDb.query(query, params);
+        res.json(rows);
+    } catch (error) {
+        console.error('Error fetching historial:', error);
+        res.status(500).json({ message: 'Error al consultar historial de precios' });
+    }
+});
+
+router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticateToken, async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        
+        // 1. Current data with station details
+        const queryCurrent = `
+            SELECT c.titulo as estacion_propia, a.estacion, a.modificacion,
+                   a.super_c, a.regular_c, a.ion_c, a.diesel_c,
+                   a.super_a, a.regular_a, a.ion_a, a.diesel_a
+            FROM web_precios_competencia a
+            INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia
+            INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION'
+        `;
+        const [currentRows] = await externalDb.query(queryCurrent);
+
+        // Helper to extract brand
+        const extractBrand = (name) => {
+            const upper = (name || '').toUpperCase();
+            if (upper.includes('TEXACO')) return 'Texaco';
+            if (upper.includes('PUMA')) return 'Puma';
+            if (upper.includes('UNO')) return 'Uno';
+            if (upper.includes('SHELL')) return 'Shell';
+            if (upper.includes('DLC')) return 'DLC';
+            return 'Otros / Indep.';
+        };
+
+        // 2. Market Averages (ignoring 0 values)
+        const calcAvg = (arr, key) => {
+            const valid = arr.map(item => Number(item[key] || 0)).filter(v => v > 0);
+            if (valid.length === 0) return 0;
+            return Number((valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(2));
+        };
+
+        const calcMinMax = (arr, key) => {
+            const valid = arr.filter(item => Number(item[key] || 0) > 0);
+            if (valid.length === 0) return { min: { val: 0, station: '-' }, max: { val: 0, station: '-' } };
+            valid.sort((a, b) => Number(a[key]) - Number(b[key]));
+            return {
+                min: { val: Number(valid[0][key]), station: valid[0].estacion, propia: valid[0].estacion_propia },
+                max: { val: Number(valid[valid.length - 1][key]), station: valid[valid.length - 1].estacion, propia: valid[valid.length - 1].estacion_propia }
+            };
+        };
+
+        const promediosMercado = {
+            super_a: calcAvg(currentRows, 'super_a'),
+            regular_a: calcAvg(currentRows, 'regular_a'),
+            diesel_a: calcAvg(currentRows, 'diesel_a'),
+            super_c: calcAvg(currentRows, 'super_c'),
+            regular_c: calcAvg(currentRows, 'regular_c'),
+            diesel_c: calcAvg(currentRows, 'diesel_c')
+        };
+
+        const rankingExtremos = {
+            super_a: calcMinMax(currentRows, 'super_a'),
+            regular_a: calcMinMax(currentRows, 'regular_a'),
+            diesel_a: calcMinMax(currentRows, 'diesel_a')
+        };
+
+        // 3. Average by Brand
+        const byBrand = {};
+        for (const row of currentRows) {
+            const brand = extractBrand(row.estacion);
+            if (!byBrand[brand]) byBrand[brand] = [];
+            byBrand[brand].push(row);
+        }
+
+        const marcas = Object.keys(byBrand).map(brand => {
+            const list = byBrand[brand];
+            return {
+                brand,
+                count: list.length,
+                super_a: calcAvg(list, 'super_a'),
+                regular_a: calcAvg(list, 'regular_a'),
+                diesel_a: calcAvg(list, 'diesel_a'),
+                super_c: calcAvg(list, 'super_c'),
+                regular_c: calcAvg(list, 'regular_c'),
+                diesel_c: calcAvg(list, 'diesel_c')
+            };
+        }).sort((a, b) => b.count - a.count);
+
+        // 4. Historical Trends
+        const queryTrend = `
+            SELECT DATE_FORMAT(fecha_registro, '%Y-%m-%d') as fecha,
+                   AVG(NULLIF(super_a, 0)) as super_a,
+                   AVG(NULLIF(regular_a, 0)) as regular_a,
+                   AVG(NULLIF(diesel_a, 0)) as diesel_a,
+                   AVG(NULLIF(super_c, 0)) as super_c,
+                   AVG(NULLIF(regular_c, 0)) as regular_c,
+                   AVG(NULLIF(diesel_c, 0)) as diesel_c,
+                   COUNT(DISTINCT estacion) as total_estaciones
+            FROM web_precios_competencia_historial
+            GROUP BY fecha_registro
+            ORDER BY fecha_registro ASC
+            LIMIT 30
+        `;
+        const [trendRows] = await externalDb.query(queryTrend);
+
+        const tendenciaHistorica = trendRows.map(r => ({
+            fecha: r.fecha,
+            super_a: Number(Number(r.super_a || 0).toFixed(2)),
+            regular_a: Number(Number(r.regular_a || 0).toFixed(2)),
+            diesel_a: Number(Number(r.diesel_a || 0).toFixed(2)),
+            super_c: Number(Number(r.super_c || 0).toFixed(2)),
+            regular_c: Number(Number(r.regular_c || 0).toFixed(2)),
+            diesel_c: Number(Number(r.diesel_c || 0).toFixed(2)),
+            total_estaciones: r.total_estaciones
+        }));
+
+        // 5. Total History Count & Last Update
+        const [histCount] = await externalDb.query('SELECT COUNT(*) as total, MAX(fecha_registro) as ultima_fecha FROM web_precios_competencia_historial');
+
+        // 6. Generate Dynamic Business Insights
+        const insights = [];
+        if (marcas.length > 1) {
+            const sortedBySuper = [...marcas].filter(m => m.super_a > 0).sort((a, b) => a.super_a - b.super_a);
+            if (sortedBySuper.length > 1) {
+                const cheapest = sortedBySuper[0];
+                const mostExpensive = sortedBySuper[sortedBySuper.length - 1];
+                const diff = (mostExpensive.super_a - cheapest.super_a).toFixed(2);
+                insights.push({
+                    type: 'competitive_gap',
+                    title: 'Brecha de Marca en Gasolina Superior',
+                    description: `La marca **${cheapest.brand}** lidera con el precio promedio más bajo ($${cheapest.super_a}), $${diff} por debajo de **${mostExpensive.brand}** ($${mostExpensive.super_a}).`
+                });
+            }
+        }
+
+        if (rankingExtremos.diesel_a.min.val > 0 && rankingExtremos.diesel_a.max.val > 0) {
+            const spreadDiesel = (rankingExtremos.diesel_a.max.val - rankingExtremos.diesel_a.min.val).toFixed(2);
+            insights.push({
+                type: 'price_spread',
+                title: 'Dispersión de Precios en Diésel',
+                description: `El Diésel más económico se encuentra en **${rankingExtremos.diesel_a.min.station}** ($${rankingExtremos.diesel_a.min.val}) con una diferencia de $${spreadDiesel} respecto a la estación más alta ($${rankingExtremos.diesel_a.max.val}).`
+            });
+        }
+
+        if (tendenciaHistorica.length > 1) {
+            const first = tendenciaHistorica[0];
+            const last = tendenciaHistorica[tendenciaHistorica.length - 1];
+            const delta = (last.super_a - first.super_a).toFixed(2);
+            insights.push({
+                type: 'trend',
+                title: 'Tendencia Reciente del Mercado',
+                description: `En el periodo analizado, el promedio de Superior pasó de $${first.super_a} a $${last.super_a} (${delta >= 0 ? '+' : ''}$${delta}).`
+            });
+        }
+
+        res.json({
+            totalEstaciones: currentRows.length,
+            promediosMercado,
+            rankingExtremos,
+            marcas,
+            tendenciaHistorica,
+            totalHistorialRegistros: histCount[0]?.total || 0,
+            ultimaFechaHistorial: histCount[0]?.ultima_fecha || null,
+            insights
+        });
+    } catch (error) {
+        console.error('Error fetching BI analytics:', error);
+        res.status(500).json({ message: 'Error al generar análisis de BI' });
+    }
 });
 
 router.get('/consultas/:type', authenticateToken, async (req, res) => {

@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Download, Printer, Search, Calendar, Clock, MapPin, Upload, X, CheckCircle, 
-    Filter, FileSpreadsheet, RefreshCw, AlertTriangle, ShieldCheck, Building2, 
-    Plus, Trash2, ToggleLeft, ToggleRight
+    Download, Printer, Search, Calendar, Clock, MapPin, 
+    Upload, X, CheckCircle, FileSpreadsheet, RefreshCw, 
+    TrendingUp, TrendingDown, Minus, BarChart3, Activity, 
+    Sparkles, Fuel, Layers, AlertCircle, ArrowUpRight, ArrowDownRight,
+    AlertTriangle, ShieldCheck, Building2, Plus, Trash2, ToggleLeft, ToggleRight
 } from 'lucide-react';
 import api from '../services/api';
 import * as XLSX from 'xlsx';
@@ -14,19 +16,41 @@ import Modal from '../components/Modal';
 import dgehmEstacionesList from '../data/dgehm_estaciones.json';
 
 const ConsultasPreciosCompetencia = () => {
+    const [activeTab, setActiveTab] = useState('actuales'); // 'actuales' | 'historial' | 'bi'
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [selectedBrand, setSelectedBrand] = useState('ALL');
+    const [serviceFilter, setServiceFilter] = useState('ALL'); // 'ALL' | 'AS' | 'SC'
     const [onlyCheaper, setOnlyCheaper] = useState(false);
-    const [syncingDGEHM, setSyncingDGEHM] = useState(false);
     const { addToast } = useToast();
     const { confirm } = useConfirm();
 
+    // Sync State
+    const [syncing, setSyncing] = useState(false);
+    const [lastSyncInfo, setLastSyncInfo] = useState(null);
+
+    // Historial State
+    const [historialData, setHistorialData] = useState([]);
+    const [historialLoading, setHistorialLoading] = useState(false);
+    const [historialSearch, setHistorialSearch] = useState('');
+    const [historialDesde, setHistorialDesde] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() - 30);
+        return d.toISOString().split('T')[0];
+    });
+    const [historialHasta, setHistorialHasta] = useState(() => new Date().toISOString().split('T')[0]);
+
+    // BI Analytics State
+    const [biData, setBiData] = useState(null);
+    const [biLoading, setBiLoading] = useState(false);
+    const [biFuelType, setBiFuelType] = useState('super_a'); // 'super_a' | 'regular_a' | 'diesel_a'
+
+    // Upload Modal State
     const [showUploadModal, setShowUploadModal] = useState(false);
-    const [csvData, setCsvData] = useState([]);
+    const [csvFile, setCsvFile] = useState(null);
     const [csvFileName, setCsvFileName] = useState('');
-    const [validado, setValidado] = useState(false);
-    const [filtrado, setFiltrado] = useState(false);
+    const [parsedUploadRows, setParsedUploadRows] = useState([]);
     const [uploading, setUploading] = useState(false);
 
     // Manage monitored stations modal state
@@ -44,50 +68,95 @@ const ConsultasPreciosCompetencia = () => {
     const [savingStation, setSavingStation] = useState(false);
 
     useEffect(() => {
-        fetchData();
+        fetchCurrentData();
     }, []);
 
-    const fetchData = async () => {
+    useEffect(() => {
+        if (activeTab === 'historial') {
+            fetchHistorial();
+        } else if (activeTab === 'bi') {
+            fetchBiAnalytics();
+        }
+    }, [activeTab]);
+
+    const fetchCurrentData = async () => {
         try {
             setLoading(true);
             const res = await api.get('/consultas/estaciones/precios-competencia');
             setData(res.data || []);
         } catch (error) {
             console.error('Error fetching prices:', error);
-            addToast(error.response?.data?.message || 'Error al cargar precios de competencia', 'error');
+            addToast('Error al cargar precios de competencia', 'error');
         } finally {
             setLoading(false);
         }
     };
 
-    const handleSyncDGEHM = async () => {
-        setSyncingDGEHM(true);
+    const fetchHistorial = async () => {
         try {
-            const res = await api.post('/consultas/estaciones/precios-competencia/sync-dgehm');
-            addToast(res.data?.message || 'Precios sincronizados con éxito desde DGEHM', 'success');
-            await fetchData();
-        } catch (err) {
-            console.error('Error al sincronizar con DGEHM:', err);
-            const msg = err.response?.data?.message || 'Error al consultar la página de DGEHM';
-            addToast(msg, 'warning');
-            setShowUploadModal(true);
+            setHistorialLoading(true);
+            const params = {};
+            if (historialDesde) params.desde = historialDesde;
+            if (historialHasta) params.hasta = historialHasta;
+            const res = await api.get('/consultas/estaciones/precios-competencia/historial', { params });
+            setHistorialData(res.data || []);
+        } catch (error) {
+            console.error('Error fetching history:', error);
+            addToast('Error al cargar historial de precios', 'error');
         } finally {
-            setSyncingDGEHM(false);
+            setHistorialLoading(false);
         }
     };
 
+    const fetchBiAnalytics = async () => {
+        try {
+            setBiLoading(true);
+            const res = await api.get('/consultas/estaciones/precios-competencia/bi-analytics');
+            setBiData(res.data || null);
+        } catch (error) {
+            console.error('Error fetching BI analytics:', error);
+            addToast('Error al cargar análisis de BI', 'error');
+        } finally {
+            setBiLoading(false);
+        }
+    };
+
+    // --- Automatic DGEHM Sync ---
+    const handleSyncDgehm = async () => {
+        try {
+            setSyncing(true);
+            const res = await api.post('/consultas/estaciones/precios-competencia/sync-dgehm');
+            const { message, count, totalConfigured, totalDgehm } = res.data;
+            addToast(message || `Sincronización exitosa: ${count} de ${totalConfigured} estaciones actualizadas.`, 'success');
+            setLastSyncInfo({
+                date: new Date().toLocaleString(),
+                count,
+                totalConfigured,
+                totalDgehm
+            });
+            await fetchCurrentData();
+            if (activeTab === 'historial') fetchHistorial();
+            if (activeTab === 'bi') fetchBiAnalytics();
+        } catch (error) {
+            console.error('Error syncing with DGEHM:', error);
+            addToast(error.response?.data?.message || error.message || 'Error al sincronizar con DGEHM', 'error');
+        } finally {
+            setSyncing(false);
+        }
+    };
+
+    // --- Manage Monitored Stations ---
     const fetchCatalogo = async () => {
         try {
             setLoadingCatalogo(true);
             const res = await api.get('/consultas/estaciones/precios-competencia/catalogo');
-            const catData = res.data || {};
-            setEstacionesSistema(catData.estaciones_sistema || []);
-            setEstacionesMonitoreadas(catData.estaciones_monitoreadas || []);
-            if (!newStationForm.id_estacion && catData.estaciones_sistema?.length > 0) {
-                setNewStationForm(prev => ({ ...prev, id_estacion: catData.estaciones_sistema[0].id_empresa }));
+            setEstacionesSistema(res.data?.estaciones_sistema || []);
+            setEstacionesMonitoreadas(res.data?.estaciones_monitoreadas || []);
+            if (!newStationForm.id_estacion && (res.data?.estaciones_sistema || []).length > 0) {
+                setNewStationForm(prev => ({ ...prev, id_estacion: res.data.estaciones_sistema[0].id_empresa }));
             }
-        } catch (err) {
-            console.error('Error fetching catalogo:', err);
+        } catch (e) {
+            console.error(e);
             addToast('Error al cargar catálogo de estaciones', 'error');
         } finally {
             setLoadingCatalogo(false);
@@ -100,641 +169,1306 @@ const ConsultasPreciosCompetencia = () => {
     };
 
     const handleAddStation = async (e) => {
-        if (e) e.preventDefault();
-        if (!newStationForm.id_estacion) {
-            return addToast('Seleccione la estación propia del sistema', 'warning');
-        }
-        if (!newStationForm.competencia || !newStationForm.competencia.trim()) {
-            return addToast('Ingrese o seleccione el nombre de la estación (DGEHM)', 'warning');
+        e.preventDefault();
+        if (!newStationForm.id_estacion || !newStationForm.competencia.trim()) {
+            return addToast('Seleccione una sucursal y escriba el nombre de la estación', 'warning');
         }
 
         setSavingStation(true);
         try {
-            await api.post('/consultas/estaciones/precios-competencia/estaciones', {
-                id_estacion: newStationForm.id_estacion,
-                competencia: newStationForm.competencia.trim(),
-                es_propia: newStationForm.es_propia ? 1 : 0
-            });
+            await api.post('/consultas/estaciones/precios-competencia/estaciones', newStationForm);
             addToast('Estación vinculada correctamente', 'success');
             setNewStationForm(prev => ({ ...prev, competencia: '', es_propia: false }));
             await fetchCatalogo();
-            fetchData();
+            await fetchCurrentData();
         } catch (err) {
-            console.error('Error adding station:', err);
-            addToast(err.response?.data?.message || 'Error al adicionar estación', 'error');
+            console.error(err);
+            addToast(err.response?.data?.message || 'Error al vincular estación', 'error');
         } finally {
             setSavingStation(false);
         }
     };
 
-    const handleTogglePropia = async (item) => {
-        const newPropia = item.es_propia === 1 ? 0 : 1;
+    const handleTogglePropia = async (station) => {
         try {
-            await api.put(`/consultas/estaciones/precios-competencia/estaciones/${item.id}`, {
-                es_propia: newPropia
+            const nextVal = station.es_propia ? 0 : 1;
+            await api.put(`/consultas/estaciones/precios-competencia/estaciones/${station.id}`, {
+                es_propia: nextVal,
+                competencia: station.competencia,
+                id_estacion: station.id_estacion
             });
-            addToast(`Estación actualizada a ${newPropia === 1 ? 'Propia' : 'Competencia'}`, 'success');
+            addToast(nextVal ? 'Marcada como estación propia' : 'Marcada como competencia', 'success');
             await fetchCatalogo();
-            await fetchData();
+            await fetchCurrentData();
         } catch (err) {
-            console.error('Error toggling propia:', err);
-            addToast(err.response?.data?.message || 'Error al actualizar tipo de estación', 'error');
+            console.error(err);
+            addToast('Error al actualizar tipo de estación', 'error');
         }
     };
 
-    const handleDeleteStation = async (item) => {
-        const ok = await confirm(`¿Está seguro de quitar la estación "${item.competencia}" asignada a ${item.estacion_sistema}?`, {
-            title: 'Quitar Estación Monitoreada',
-            variant: 'danger',
-            confirmText: 'Sí, quitar',
-            cancelText: 'Cancelar'
-        });
-        if (!ok) return;
+    const handleDeleteStation = async (station) => {
+        if (!await confirm(`¿Estás seguro de quitar "${station.competencia}" del monitoreo de ${station.estacion_sistema}?`, { variant: 'danger' })) {
+            return;
+        }
 
         try {
-            await api.delete(`/consultas/estaciones/precios-competencia/estaciones/${item.id}`);
-            addToast(`Estación "${item.competencia}" quitada con éxito`, 'success');
-            setEstacionesMonitoreadas(prev => prev.filter(m => m.id !== item.id));
-            fetchData();
+            await api.delete(`/consultas/estaciones/precios-competencia/estaciones/${station.id}`);
+            addToast('Estación eliminada del monitoreo', 'success');
+            await fetchCatalogo();
+            await fetchCurrentData();
         } catch (err) {
-            console.error('Error deleting station:', err);
-            addToast(err.response?.data?.message || 'Error al quitar estación', 'error');
+            console.error(err);
+            addToast('Error al eliminar estación', 'error');
         }
     };
 
-    const parseCSV = (text) => {
-        const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
-        return lines.map(line => {
-            const cols = [];
-            let current = '';
-            let inQuotes = false;
-            for (let i = 0; i < line.length; i++) {
-                const ch = line[i];
-                if (ch === '"') {
-                    inQuotes = !inQuotes;
-                } else if (ch === ',' && !inQuotes) {
-                    cols.push(current.trim());
-                    current = '';
-                } else {
-                    current += ch;
-                }
-            }
-            cols.push(current.trim());
-            return cols;
-        });
-    };
-
-    const handleFileSelect = (e) => {
+    // --- Manual CSV Upload ---
+    const handleFileSelect = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        setCsvFile(file);
         setCsvFileName(file.name);
+
         const reader = new FileReader();
-        reader.onload = (evt) => {
+        reader.onload = async (evt) => {
             const text = evt.target.result;
-            const rows = parseCSV(text);
-            setCsvData(rows);
-            setValidado(false);
-            setFiltrado(false);
+            const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+            if (lines.length <= 1) {
+                return addToast('El archivo CSV está vacío', 'error');
+            }
+
+            try {
+                const resEst = await api.get('/consultas/estaciones/precios-competencia/estaciones');
+                const catalog = resEst.data || [];
+                const normalize = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+                
+                const catalogMap = new Map();
+                for (const item of catalog) {
+                    catalogMap.set(normalize(item.competencia), item.competencia);
+                }
+
+                const parsed = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const row = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+                    if (row.length >= 10) {
+                        let stationRaw = row[2] || row[0];
+                        let modif = row[3] || row[1];
+                        let scSuper = row[4] || row[2];
+                        let scReg = row[5] || row[3];
+                        let scIon = row[7] || row[4];
+                        let scDies = row[8] || row[5];
+                        let asSuper = row[9] || row[6];
+                        let asReg = row[10] || row[7];
+                        let asIon = row[12] || row[8];
+                        let asDies = row[13] || row[9];
+
+                        const norm = normalize(stationRaw);
+                        if (catalogMap.has(norm)) {
+                            parsed.push({
+                                estacion: catalogMap.get(norm),
+                                modificacion: modif || '',
+                                super_c: scSuper || '0',
+                                regular_c: scReg || '0',
+                                ion_c: scIon || '0',
+                                diesel_c: scDies || '0',
+                                super_a: asSuper || '0',
+                                regular_a: asReg || '0',
+                                ion_a: asIon || '0',
+                                diesel_a: asDies || '0'
+                            });
+                        }
+                    }
+                }
+
+                setParsedUploadRows(parsed);
+                if (parsed.length > 0) {
+                    addToast(`Se reconocieron ${parsed.length} estaciones de competencia en el archivo`, 'success');
+                } else {
+                    addToast('No se encontraron coincidencias con el catálogo de estaciones.', 'warning');
+                }
+            } catch (err) {
+                console.error(err);
+                addToast('Error al procesar el archivo CSV', 'error');
+            }
         };
         reader.readAsText(file);
     };
 
-    const handleValidar = () => {
-        if (csvData.length === 0) return addToast('No hay datos para validar', 'error');
-        let rows = [...csvData];
-        rows = rows.filter((row, idx) => {
-            if (idx === 0) return false;
-            if (!row[3] || row[3].trim() === '') return false;
-            return true;
-        });
-        rows = rows.map(row => {
-            const filtered = [];
-            for (let i = 0; i < row.length; i++) {
-                if (i === 0 || i === 1 || i === 6 || i === 11) continue;
-                filtered.push(row[i]);
-            }
-            return filtered;
-        });
-        setCsvData(rows);
-        setValidado(true);
-        setFiltrado(false);
-    };
-
-    const handleFiltrar = async () => {
-        try {
-            const res = await api.get('/consultas/estaciones/precios-competencia/estaciones');
-            const estaciones = res.data || [];
-            const competenciaSet = new Set(estaciones.map(e => (e.competencia || '').toLowerCase().trim()));
-            let rows = [...csvData];
-            rows = rows.filter(row => {
-                const estacion = ((row[0] || '') + '').replace(/'/g, '').toLowerCase().trim();
-                return competenciaSet.has(estacion);
-            });
-            rows = rows.map(row => row.map((val, idx) => {
-                if (idx === 0 || idx === 1) return val || '';
-                const v = (val != null ? String(val) : '');
-                if (v.trim() === '') return '0';
-                return v;
-            }));
-            setCsvData(rows);
-            setFiltrado(true);
-        } catch (e) {
-            console.error(e);
-            addToast('Error al filtrar: ' + (e.response?.data?.message || e.message), 'error');
-        }
-    };
-
-    const handleActualizar = async () => {
-        if (csvData.length === 0) return addToast('No hay datos para actualizar', 'error');
+    const handleActualizarBD = async () => {
+        if (parsedUploadRows.length === 0) return addToast('No hay datos para actualizar', 'error');
         setUploading(true);
         try {
-            const payload = csvData.map(row => ({
-                estacion: row[0] || '',
-                modificacion: row[1] || '',
-                super_c: row[2] || '0',
-                regular_c: row[3] || '0',
-                ion_c: row[4] || '0',
-                diesel_c: row[5] || '0',
-                super_a: row[6] || '0',
-                regular_a: row[7] || '0',
-                ion_a: row[8] || '0',
-                diesel_a: row[9] || '0'
-            }));
-            await api.post('/consultas/estaciones/precios-competencia/upload', { data: payload });
-            addToast('Precios actualizados exitosamente', 'success');
+            await api.post('/consultas/estaciones/precios-competencia/upload', { data: parsedUploadRows });
+            addToast(`Precios actualizados: ${parsedUploadRows.length} estaciones guardadas exitosamente`, 'success');
             setShowUploadModal(false);
-            setCsvData([]);
+            setCsvFile(null);
             setCsvFileName('');
-            setValidado(false);
-            setFiltrado(false);
-            fetchData();
+            setParsedUploadRows([]);
+            fetchCurrentData();
+            if (activeTab === 'historial') fetchHistorial();
+            if (activeTab === 'bi') fetchBiAnalytics();
         } catch (e) {
-            addToast('Error al actualizar precios', 'error');
+            addToast('Error al actualizar precios en base de datos', 'error');
         } finally {
             setUploading(false);
         }
     };
 
     const mc = (val) => {
+        const num = Number(val || 0);
+        if (num <= 0) return '-';
         return new Intl.NumberFormat('en-US', {
             style: 'currency',
             currency: 'USD',
-        }).format(val || 0);
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(num);
     };
 
-    // Helper to identify if an item represents our own station
-    const isOurStation = (item) => {
-        return Number(item?.es_propia) === 1;
+    const extractBrand = (name) => {
+        const upper = (name || '').toUpperCase();
+        if (upper.includes('TEXACO')) return 'Texaco';
+        if (upper.includes('PUMA')) return 'Puma';
+        if (upper.includes('UNO')) return 'Uno';
+        if (upper.includes('SHELL')) return 'Shell';
+        if (upper.includes('DLC')) return 'DLC';
+        return 'Otros';
     };
 
-    // Precalculate base prices of our own stations grouped by titulo
-    const basePricesByTitulo = useMemo(() => {
-        const map = {};
+    // Pre-calculate own stations map for price comparisons
+    const ownStationsMap = useMemo(() => {
+        const map = new Map();
         data.forEach(item => {
-            if (isOurStation(item)) {
-                map[item.titulo] = {
-                    super_c: Number(item.super_c) || 0,
-                    regular_c: Number(item.regular_c) || 0,
-                    ion_c: Number(item.ion_c) || 0,
-                    diesel_c: Number(item.diesel_c) || 0,
-                    super_a: Number(item.super_a) || 0,
-                    regular_a: Number(item.regular_a) || 0,
-                    ion_a: Number(item.ion_a) || 0,
-                    diesel_a: Number(item.diesel_a) || 0,
-                };
+            if (item.es_propia === 1 || item.es_propia === true || item.es_propia === '1') {
+                map.set(item.titulo, item);
             }
         });
         return map;
     }, [data]);
 
-    // Check if a competitor row has at least one price cheaper than our station
-    const hasAnyCheaperPrice = (item) => {
-        if (isOurStation(item)) return false;
-        const base = basePricesByTitulo[item.titulo];
-        if (!base) return false;
-        const keys = ['super_c', 'regular_c', 'ion_c', 'diesel_c', 'super_a', 'regular_a', 'ion_a', 'diesel_a'];
-        return keys.some(key => {
-            const p = Number(item[key]) || 0;
-            const b = Number(base[key]) || 0;
-            return p > 0 && b > 0 && p < b;
-        });
-    };
+    // Filter current data
+    const filteredCurrentData = useMemo(() => {
+        return data.filter(item => {
+            const matchesSearch = 
+                item.titulo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                item.estacion?.toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesBrand = selectedBrand === 'ALL' || extractBrand(item.estacion) === selectedBrand;
+            
+            if (!matchesSearch || !matchesBrand) return false;
 
-    const filteredData = data.filter(item => {
-        const matchesSearch = item.titulo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            item.estacion?.toLowerCase().includes(searchTerm.toLowerCase());
-        if (!matchesSearch) return false;
-        if (onlyCheaper) {
-            return isOurStation(item) || hasAnyCheaperPrice(item);
-        }
-        return true;
-    });
+            if (onlyCheaper) {
+                const isPropia = item.es_propia === 1 || item.es_propia === true || item.es_propia === '1';
+                if (isPropia) return true;
+                const own = ownStationsMap.get(item.titulo);
+                if (!own) return true;
+                const pSC = (val) => Number(val || 0);
+                const isCheaper = (pSC(item.super_c) > 0 && pSC(item.super_c) < pSC(own.super_c)) ||
+                                  (pSC(item.regular_c) > 0 && pSC(item.regular_c) < pSC(own.regular_c)) ||
+                                  (pSC(item.diesel_c) > 0 && pSC(item.diesel_c) < pSC(own.diesel_c)) ||
+                                  (pSC(item.super_a) > 0 && pSC(item.super_a) < pSC(own.super_a)) ||
+                                  (pSC(item.regular_a) > 0 && pSC(item.regular_a) < pSC(own.regular_a)) ||
+                                  (pSC(item.diesel_a) > 0 && pSC(item.diesel_a) < pSC(own.diesel_a));
+                return isCheaper;
+            }
 
-    const filteredMonitoredStations = useMemo(() => {
-        return estacionesMonitoreadas.filter(item => {
-            if (selectedBranchFilter !== 'ALL' && String(item.id_estacion) !== String(selectedBranchFilter)) {
-                return false;
-            }
-            if (searchMonitored.trim()) {
-                const query = searchMonitored.toLowerCase();
-                const matchComp = item.competencia?.toLowerCase().includes(query);
-                const matchSys = item.estacion_sistema?.toLowerCase().includes(query);
-                return matchComp || matchSys;
-            }
             return true;
+        });
+    }, [data, searchTerm, selectedBrand, onlyCheaper, ownStationsMap]);
+
+    // Filter history data
+    const filteredHistorialData = useMemo(() => {
+        return historialData.filter(item => {
+            return (
+                item.estacion?.toLowerCase().includes(historialSearch.toLowerCase()) ||
+                item.estacion_propia?.toLowerCase().includes(historialSearch.toLowerCase())
+            );
+        });
+    }, [historialData, historialSearch]);
+
+    // Filter monitored stations in manage modal
+    const filteredMonitoredList = useMemo(() => {
+        return estacionesMonitoreadas.filter(item => {
+            const matchBranch = selectedBranchFilter === 'ALL' || String(item.id_estacion) === String(selectedBranchFilter);
+            const matchSearch = !searchMonitored || 
+                item.competencia.toLowerCase().includes(searchMonitored.toLowerCase()) ||
+                (item.estacion_sistema || '').toLowerCase().includes(searchMonitored.toLowerCase());
+            return matchBranch && matchSearch;
         });
     }, [estacionesMonitoreadas, selectedBranchFilter, searchMonitored]);
 
-    const exportToExcel = () => {
-        const wb = XLSX.utils.book_new();
-        const exportData = filteredData.map(item => ({
-            'Estación': item.titulo,
-            'Competencia': item.estacion,
-            'Modificación': item.modificacion,
-            'Super (C)': item.super_c,
-            'Regular (C)': item.regular_c,
-            'Ion (C)': item.ion_c,
-            'Diesel (C)': item.diesel_c,
-            'Super (A)': item.super_a,
-            'Regular (A)': item.regular_a,
-            'Ion (A)': item.ion_a,
-            'Diesel (A)': item.diesel_a
-        }));
-        const ws = XLSX.utils.json_to_sheet(exportData);
-        XLSX.utils.book_append_sheet(wb, ws, 'Precios Competencia');
-        XLSX.writeFile(wb, 'precios_competencia.xlsx');
+    const setQuickRange = (days) => {
+        const today = new Date();
+        const past = new Date();
+        past.setDate(today.getDate() - days);
+        setHistorialDesde(past.toISOString().split('T')[0]);
+        setHistorialHasta(today.toISOString().split('T')[0]);
     };
 
-    const renderPriceCell = (item, key) => {
-        const val = Number(item[key]) || 0;
-        if (val === 0) {
-            return <span style={{ color: 'var(--text-muted)', opacity: 0.4 }}>-</span>;
+    const exportToExcel = () => {
+        const wb = XLSX.utils.book_new();
+        if (activeTab === 'actuales') {
+            const exportData = filteredCurrentData.map(item => ({
+                'Estación Propia': item.titulo,
+                'Competencia': item.estacion,
+                'Tipo': item.es_propia ? 'Estación Propia' : 'Competidor',
+                'Última Modificación': item.modificacion,
+                'Super (SC)': item.super_c,
+                'Regular (SC)': item.regular_c,
+                'Ion Dies (SC)': item.ion_c,
+                'Diesel (SC)': item.diesel_c,
+                'Super (AS)': item.super_a,
+                'Regular (AS)': item.regular_a,
+                'Ion Dies (AS)': item.ion_a,
+                'Diesel (AS)': item.diesel_a
+            }));
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            XLSX.utils.book_append_sheet(wb, ws, 'Precios Actuales');
+            XLSX.writeFile(wb, `precios_competencia_${new Date().toISOString().split('T')[0]}.xlsx`);
+        } else if (activeTab === 'historial') {
+            const exportData = filteredHistorialData.map(item => ({
+                'Fecha Registro': item.fecha_registro,
+                'Estación Propia': item.estacion_propia,
+                'Competencia': item.estacion,
+                'Última Modificación': item.modificacion,
+                'Super (SC)': item.super_c,
+                'Regular (SC)': item.regular_c,
+                'Diesel (SC)': item.diesel_c,
+                'Super (AS)': item.super_a,
+                'Regular (AS)': item.regular_a,
+                'Diesel (AS)': item.diesel_a
+            }));
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            XLSX.utils.book_append_sheet(wb, ws, 'Historial');
+            XLSX.writeFile(wb, `historial_competencia_${historialDesde}_al_${historialHasta}.xlsx`);
         }
-
-        const isOwn = isOurStation(item);
-        if (isOwn) {
-            return (
-                <span style={{ fontWeight: 'bold', color: 'var(--primary, #6366f1)' }}>
-                    {mc(val)}
-                </span>
-            );
-        }
-
-        const base = basePricesByTitulo[item.titulo];
-        const baseVal = Number(base?.[key]) || 0;
-        const isLower = baseVal > 0 && val < baseVal;
-        const diff = isLower ? (val - baseVal).toFixed(2) : null;
-
-        if (isLower) {
-            return (
-                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end' }} title={`¡Competidor más barato! Precio nuestro: ${mc(baseVal)} (Diferencia: ${diff})`}>
-                    <span style={{ 
-                        backgroundColor: 'rgba(239, 68, 68, 0.2)', 
-                        color: '#ef4444', 
-                        padding: '0.15rem 0.4rem', 
-                        borderRadius: '4px',
-                        fontWeight: 'bold',
-                        border: '1px solid rgba(239, 68, 68, 0.4)',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '2px',
-                        fontSize: '0.85rem'
-                    }}>
-                        <span>↓</span> {mc(val)}
-                    </span>
-                    <span style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 'bold', marginTop: '1px' }}>
-                        {diff}
-                    </span>
-                </div>
-            );
-        }
-
-        return <span>{mc(val)}</span>;
     };
 
     const exportToPDF = () => {
         const doc = jsPDF({ orientation: 'landscape' });
-        doc.text('Consulta de Precios de Competencia', 14, 15);
-        
-        const tableBody = filteredData.map(item => [
-            item.titulo,
-            item.estacion + (isOurStation(item) ? ' (NUESTRA)' : ''),
-            item.modificacion,
-            mc(item.super_c),
-            mc(item.regular_c),
-            mc(item.ion_c),
-            mc(item.diesel_c),
-            mc(item.super_a),
-            mc(item.regular_a),
-            mc(item.ion_a),
-            mc(item.diesel_a)
-        ]);
-
-        doc.autoTable({
-            startY: 20,
-            head: [['Estación', 'Competencia', 'Modificación', 'Super C', 'Reg C', 'Ion C', 'Dies C', 'Super A', 'Reg A', 'Ion A', 'Dies A']],
-            body: tableBody,
-            theme: 'grid',
-            styles: { fontSize: 8 },
-            headStyles: { fillColor: [79, 70, 229] }
-        });
-
-        doc.save('precios_competencia.pdf');
+        if (activeTab === 'actuales') {
+            doc.text('Consulta de Precios de Competencia - Snapshot Actual', 14, 15);
+            const tableBody = filteredCurrentData.map(item => [
+                item.titulo, item.estacion, item.modificacion,
+                mc(item.super_c), mc(item.regular_c), mc(item.diesel_c),
+                mc(item.super_a), mc(item.regular_a), mc(item.diesel_a)
+            ]);
+            doc.autoTable({
+                startY: 20,
+                head: [['Estación', 'Competencia', 'Modificación', 'Super (SC)', 'Reg (SC)', 'Dies (SC)', 'Super (AS)', 'Reg (AS)', 'Dies (AS)']],
+                body: tableBody,
+                theme: 'grid',
+                styles: { fontSize: 8 },
+                headStyles: { fillColor: [79, 70, 229] }
+            });
+            doc.save(`precios_competencia_${new Date().toISOString().split('T')[0]}.pdf`);
+        } else if (activeTab === 'historial') {
+            doc.text(`Historial de Precios de Competencia (${historialDesde} al ${historialHasta})`, 14, 15);
+            const tableBody = filteredHistorialData.map(item => [
+                item.fecha_registro, item.estacion_propia || '-', item.estacion,
+                mc(item.super_c), mc(item.regular_c), mc(item.diesel_c),
+                mc(item.super_a), mc(item.regular_a), mc(item.diesel_a)
+            ]);
+            doc.autoTable({
+                startY: 20,
+                head: [['Fecha', 'Estación', 'Competencia', 'Super (SC)', 'Reg (SC)', 'Dies (SC)', 'Super (AS)', 'Reg (AS)', 'Dies (AS)']],
+                body: tableBody,
+                theme: 'grid',
+                styles: { fontSize: 8 },
+                headStyles: { fillColor: [79, 70, 229] }
+            });
+            doc.save(`historial_competencia_${historialDesde}_al_${historialHasta}.pdf`);
+        }
     };
 
     return (
-        <div style={{ animation: 'fadeIn 0.5s ease-out' }}>
-            {/* Header section */}
-            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div>
-                        <h1 style={{ color: 'var(--primary)', marginBottom: '0.25rem', fontSize: '1.6rem' }}>Precios de Competencia</h1>
-                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Comparativa automática de precios de estaciones frente a la competencia (DGEHM).</p>
+        <div style={{ animation: 'fadeIn 0.4s ease-out' }}>
+            {/* Page Header */}
+            <div className="page-header" style={{ marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+                <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <h1 style={{ color: 'var(--primary)', margin: 0, fontSize: '1.75rem' }}>Precios de Competencia</h1>
+                        {lastSyncInfo && (
+                            <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', borderRadius: '12px', backgroundColor: 'rgba(34, 197, 94, 0.15)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.3)' }}>
+                                Sincronizado DGEHM: {lastSyncInfo.date} ({lastSyncInfo.count} estaciones)
+                            </span>
+                        )}
                     </div>
+                    <p style={{ color: 'var(--text-muted)', marginTop: '0.25rem', marginBottom: 0 }}>
+                        Monitoreo de precios oficiales DGEHM, gestión de estaciones vinculadas, historial y análisis de mercado.
+                    </p>
                 </div>
-                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                     <button 
-                        onClick={handleSyncDGEHM} 
-                        disabled={syncingDGEHM} 
+                        onClick={handleSyncDgehm} 
+                        disabled={syncing}
                         className="btn-primary" 
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#059669', borderColor: '#059669' }}
-                        title="Consultar y actualizar automáticamente los precios desde el portal DGEHM"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#10b981', borderColor: '#10b981' }}
                     >
-                        <RefreshCw size={18} style={{ animation: syncingDGEHM ? 'spin 1s linear infinite' : 'none' }} /> 
-                        {syncingDGEHM ? 'Consultando DGEHM...' : 'Consultar DGEHM'}
+                        <RefreshCw size={17} className={syncing ? 'animate-spin' : ''} />
+                        {syncing ? 'Consultando DGEHM...' : 'Sincronizar DGEHM'}
                     </button>
+
                     <button 
                         onClick={handleOpenManageModal} 
                         className="btn-secondary" 
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                        title="Adicionar o quitar estaciones propias y de competencia"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
                     >
-                        <Building2 size={18} /> Gestionar Estaciones
+                        <Building2 size={17} color="var(--primary)" /> Gestionar Estaciones
                     </button>
-                    <button onClick={() => { setCsvData([]); setCsvFileName(''); setValidado(false); setFiltrado(false); setShowUploadModal(true); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Upload size={18} /> Cargar CSV
+
+                    <button 
+                        onClick={() => { setCsvFile(null); setCsvFileName(''); setParsedUploadRows([]); setShowUploadModal(true); }} 
+                        className="btn-secondary" 
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                    >
+                        <Upload size={17} /> Cargar CSV
                     </button>
-                    <button onClick={exportToExcel} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Download size={18} /> Excel
-                    </button>
-                    <button onClick={exportToPDF} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Printer size={18} /> PDF
-                    </button>
+
+                    {activeTab !== 'bi' && (
+                        <>
+                            <button onClick={exportToExcel} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <Download size={17} /> Excel
+                            </button>
+                            <button onClick={exportToPDF} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <Printer size={17} /> PDF
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
 
-            {/* Filters and search */}
-            <div className="card glass" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
-                    <Search style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={18} />
-                    <input 
-                        type="text" 
-                        placeholder="Buscar por estación o competencia..." 
-                        className="input-search"
-                        style={{ paddingLeft: '3rem', width: '100%' }}
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                    />
-                </div>
-                <button 
-                    onClick={() => setOnlyCheaper(!onlyCheaper)} 
-                    className={onlyCheaper ? 'btn-primary' : 'btn-secondary'}
-                    style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: '0.5rem', 
-                        whiteSpace: 'nowrap',
-                        backgroundColor: onlyCheaper ? '#dc2626' : undefined,
-                        borderColor: onlyCheaper ? '#dc2626' : undefined
+            {/* Tabs Navigation */}
+            <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem', overflowX: 'auto' }}>
+                <button
+                    onClick={() => setActiveTab('actuales')}
+                    style={{
+                        padding: '0.75rem 1.25rem',
+                        border: 'none',
+                        background: 'transparent',
+                        color: activeTab === 'actuales' ? 'var(--primary)' : 'var(--text-muted)',
+                        fontWeight: activeTab === 'actuales' ? 'bold' : 'normal',
+                        borderBottom: activeTab === 'actuales' ? '3px solid var(--primary)' : '3px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        whiteSpace: 'nowrap'
                     }}
-                    title="Filtrar estaciones donde la competencia tiene precios menores a los nuestros"
                 >
-                    <AlertTriangle size={16} />
-                    {onlyCheaper ? 'Mostrando más baratos' : 'Solo más baratos'}
+                    <Layers size={18} /> Precios Actuales ({data.length})
                 </button>
-                <button onClick={fetchData} className="btn-icon" title="Refrescar datos">
-                    <Clock size={20} />
+
+                <button
+                    onClick={() => setActiveTab('historial')}
+                    style={{
+                        padding: '0.75rem 1.25rem',
+                        border: 'none',
+                        background: 'transparent',
+                        color: activeTab === 'historial' ? 'var(--primary)' : 'var(--text-muted)',
+                        fontWeight: activeTab === 'historial' ? 'bold' : 'normal',
+                        borderBottom: activeTab === 'historial' ? '3px solid var(--primary)' : '3px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        whiteSpace: 'nowrap'
+                    }}
+                >
+                    <Clock size={18} /> Historial de Variaciones
+                </button>
+
+                <button
+                    onClick={() => setActiveTab('bi')}
+                    style={{
+                        padding: '0.75rem 1.25rem',
+                        border: 'none',
+                        background: 'transparent',
+                        color: activeTab === 'bi' ? 'var(--primary)' : 'var(--text-muted)',
+                        fontWeight: activeTab === 'bi' ? 'bold' : 'normal',
+                        borderBottom: activeTab === 'bi' ? '3px solid var(--primary)' : '3px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        whiteSpace: 'nowrap'
+                    }}
+                >
+                    <Sparkles size={18} /> Inteligencia & BI
                 </button>
             </div>
 
-            {/* Table section */}
-            <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', minWidth: '1050px', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-                        <thead>
-                            {/* Grouped Headers */}
-                            <tr style={{ backgroundColor: 'rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                                <th colSpan={3} style={{ padding: '1rem', textAlign: 'left', color: 'var(--primary)', fontWeight: 'bold', fontSize: '1rem' }}>DETALLE GENERAL</th>
-                                <th colSpan={4} style={{ padding: '0.5rem', textAlign: 'center', backgroundColor: 'rgba(34, 197, 94, 0.1)', borderLeft: '1px solid rgba(255,255,255,0.1)', color: '#22c55e', fontWeight: 'bold' }}>SERVICIO COMPLETO</th>
-                                <th colSpan={4} style={{ padding: '0.5rem', textAlign: 'center', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderLeft: '1px solid rgba(255,255,255,0.1)', color: '#3b82f6', fontWeight: 'bold' }}>AUTO SERVICIO</th>
-                            </tr>
-                            {/* Main Headers */}
-                            <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)', backgroundColor: 'rgba(0,0,0,0.2)' }}>
-                                <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Estación/Zona</th>
-                                <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Competencia</th>
-                                <th style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', width: '170px' }}>Modificación</th>
-                                
-                                {/* Servicio Completo Headers */}
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>Super</th>
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Regular</th>
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Ion Dies</th>
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Diesel</th>
+            {/* TAB 1: PRECIOS ACTUALES */}
+            {activeTab === 'actuales' && (
+                <>
+                    {/* Filters bar */}
+                    <div className="card glass" style={{ padding: '1rem', marginBottom: '1.5rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ position: 'relative', flex: '1 1 240px' }}>
+                            <Search style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={18} />
+                            <input 
+                                type="text" 
+                                placeholder="Buscar por estación o competencia..." 
+                                className="input-search"
+                                style={{ paddingLeft: '2.8rem', width: '100%' }}
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
 
-                                {/* Auto Servicio Headers */}
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>Super</th>
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Regular</th>
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Ion Dies</th>
-                                <th style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', textAlign: 'right' }}>Diesel</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {loading ? (
-                                <tr>
-                                    <td colSpan={11} style={{ padding: '4rem', textAlign: 'center' }}>
-                                        <div className="spinner" style={{ margin: '0 auto' }}></div>
-                                        <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>Cargando inteligencia de competencia...</p>
-                                    </td>
+                        {/* Brand pills */}
+                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                            {['ALL', 'Texaco', 'Puma', 'Uno', 'Shell', 'DLC', 'Otros'].map(brand => (
+                                <button
+                                    key={brand}
+                                    onClick={() => setSelectedBrand(brand)}
+                                    style={{
+                                        padding: '0.35rem 0.75rem',
+                                        fontSize: '0.8rem',
+                                        borderRadius: '20px',
+                                        border: '1px solid ' + (selectedBrand === brand ? 'var(--primary)' : 'var(--border)'),
+                                        backgroundColor: selectedBrand === brand ? 'var(--primary)' : 'transparent',
+                                        color: selectedBrand === brand ? '#fff' : 'var(--text-muted)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    {brand === 'ALL' ? 'Todas' : brand}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Only cheaper toggle */}
+                        <button
+                            onClick={() => setOnlyCheaper(!onlyCheaper)}
+                            style={{
+                                padding: '0.4rem 0.85rem',
+                                fontSize: '0.82rem',
+                                borderRadius: '20px',
+                                border: onlyCheaper ? '1px solid #ef4444' : '1px solid var(--border)',
+                                backgroundColor: onlyCheaper ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                                color: onlyCheaper ? '#ef4444' : 'var(--text-muted)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                                cursor: 'pointer',
+                                fontWeight: onlyCheaper ? 'bold' : 'normal'
+                            }}
+                        >
+                            <AlertTriangle size={15} /> Solo Más Baratas
+                        </button>
+
+                        {/* Service filter */}
+                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                            <button
+                                onClick={() => setServiceFilter('ALL')}
+                                style={{
+                                    padding: '0.35rem 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: '6px',
+                                    border: '1px solid var(--border)',
+                                    backgroundColor: serviceFilter === 'ALL' ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                    color: serviceFilter === 'ALL' ? 'var(--text-main)' : 'var(--text-muted)',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Ambos Servicios
+                            </button>
+                            <button
+                                onClick={() => setServiceFilter('AS')}
+                                style={{
+                                    padding: '0.35rem 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: '6px',
+                                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                                    backgroundColor: serviceFilter === 'AS' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                    color: '#3b82f6',
+                                    cursor: 'pointer',
+                                    fontWeight: serviceFilter === 'AS' ? 'bold' : 'normal'
+                                }}
+                            >
+                                Auto Servicio
+                            </button>
+                            <button
+                                onClick={() => setServiceFilter('SC')}
+                                style={{
+                                    padding: '0.35rem 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: '6px',
+                                    border: '1px solid rgba(34, 197, 94, 0.3)',
+                                    backgroundColor: serviceFilter === 'SC' ? 'rgba(34, 197, 94, 0.15)' : 'transparent',
+                                    color: '#22c55e',
+                                    cursor: 'pointer',
+                                    fontWeight: serviceFilter === 'SC' ? 'bold' : 'normal'
+                                }}
+                            >
+                                Servicio Completo
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Table */}
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', minWidth: '950px' }}>
+                            <thead>
+                                <tr style={{ backgroundColor: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                                    <th colSpan={3} style={{ padding: '0.85rem 1rem', textAlign: 'left', color: 'var(--primary)', fontWeight: 'bold' }}>DETALLE GENERAL</th>
+                                    {(serviceFilter === 'ALL' || serviceFilter === 'SC') && (
+                                        <th colSpan={4} style={{ padding: '0.5rem', textAlign: 'center', backgroundColor: 'rgba(34, 197, 94, 0.08)', borderLeft: '1px solid rgba(255,255,255,0.1)', color: '#22c55e', fontWeight: 'bold' }}>SERVICIO COMPLETO</th>
+                                    )}
+                                    {(serviceFilter === 'ALL' || serviceFilter === 'AS') && (
+                                        <th colSpan={4} style={{ padding: '0.5rem', textAlign: 'center', backgroundColor: 'rgba(59, 130, 246, 0.08)', borderLeft: '1px solid rgba(255,255,255,0.1)', color: '#3b82f6', fontWeight: 'bold' }}>AUTO SERVICIO</th>
+                                    )}
                                 </tr>
-                            ) : filteredData.length > 0 ? (
-                                filteredData.map((item, idx) => {
-                                    const own = isOurStation(item);
-                                    const hasCheaper = hasAnyCheaperPrice(item);
-                                    return (
-                                        <tr 
-                                            key={idx} 
-                                            className="table-row-hover" 
-                                            style={{ 
-                                                borderBottom: '1px solid rgba(255,255,255,0.05)',
-                                                backgroundColor: own ? 'rgba(99, 102, 241, 0.08)' : undefined
-                                            }}
-                                        >
-                                            <td style={{ padding: '0.85rem 1rem' }}>
-                                                <div style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{item.titulo}</div>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 1rem' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                                    <MapPin size={14} color="var(--text-muted)" />
-                                                    <span style={{ fontWeight: own ? 'bold' : 'normal' }}>{item.estacion}</span>
-                                                    {own && (
-                                                        <span style={{ 
-                                                            backgroundColor: 'rgba(99, 102, 241, 0.2)', 
-                                                            color: 'var(--primary)', 
-                                                            border: '1px solid var(--primary)', 
-                                                            borderRadius: '4px', 
-                                                            padding: '0.1rem 0.4rem', 
-                                                            fontSize: '0.68rem', 
-                                                            fontWeight: 'bold',
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '0.25rem'
-                                                        }}>
-                                                            <ShieldCheck size={12} /> NUESTRA ESTACIÓN
-                                                        </span>
-                                                    )}
-                                                    {!own && hasCheaper && (
-                                                        <span style={{ 
-                                                            color: '#ef4444', 
-                                                            fontSize: '0.68rem', 
-                                                            fontWeight: 'bold',
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '2px',
-                                                            backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                                                            padding: '0.1rem 0.35rem',
-                                                            borderRadius: '4px'
-                                                        }}>
-                                                            <AlertTriangle size={11} /> Precios menores
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                    <Calendar size={14} /> {item.modificacion}
-                                                </div>
-                                            </td>
-                                            
-                                            {/* SC Values */}
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>
-                                                {renderPriceCell(item, 'super_c')}
-                                            </td>
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
-                                                {renderPriceCell(item, 'regular_c')}
-                                            </td>
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
-                                                {renderPriceCell(item, 'ion_c')}
-                                            </td>
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
-                                                {renderPriceCell(item, 'diesel_c')}
-                                            </td>
+                                <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                                    <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Estación Propia</th>
+                                    <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Competencia / Registro</th>
+                                    <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', width: '170px' }}>Modificación</th>
+                                    
+                                    {(serviceFilter === 'ALL' || serviceFilter === 'SC') && (
+                                        <>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>Super</th>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right' }}>Regular</th>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right' }}>Ion Dies</th>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right' }}>Diesel</th>
+                                        </>
+                                    )}
 
-                                            {/* AS Values */}
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
-                                                {renderPriceCell(item, 'super_a')}
+                                    {(serviceFilter === 'ALL' || serviceFilter === 'AS') && (
+                                        <>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>Super</th>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right' }}>Regular</th>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right' }}>Ion Dies</th>
+                                            <th style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'right' }}>Diesel</th>
+                                        </>
+                                    )}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loading ? (
+                                    <tr>
+                                        <td colSpan={11} style={{ padding: '4rem', textAlign: 'center' }}>
+                                            <div className="spinner" style={{ margin: '0 auto' }}></div>
+                                            <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>Cargando inteligencia de precios...</p>
+                                        </td>
+                                    </tr>
+                                ) : filteredCurrentData.length > 0 ? (
+                                    filteredCurrentData.map((item, idx) => {
+                                        const isPropia = item.es_propia === 1 || item.es_propia === true || item.es_propia === '1';
+                                        const own = ownStationsMap.get(item.titulo);
+
+                                        const renderCell = (compVal, ownVal, isAS = false) => {
+                                            const c = Number(compVal || 0);
+                                            const o = Number(ownVal || 0);
+                                            if (c <= 0) return <span style={{ color: 'var(--text-muted)' }}>-</span>;
+
+                                            let isCheaper = !isPropia && o > 0 && c < o;
+                                            let isMoreExp = !isPropia && o > 0 && c > o;
+
+                                            return (
+                                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', justifyContent: 'flex-end' }}>
+                                                    <span style={{ 
+                                                        fontWeight: 'bold', 
+                                                        color: isPropia ? 'var(--primary)' : isCheaper ? '#ef4444' : isMoreExp ? '#22c55e' : 'inherit'
+                                                    }}>
+                                                        {mc(compVal)}
+                                                    </span>
+                                                    {isCheaper && (
+                                                        <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', borderRadius: '4px', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', fontWeight: 'bold' }} title={`Competencia $${(o - c).toFixed(2)} más barata que nuestra estación`}>
+                                                            -${(o - c).toFixed(2)}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            );
+                                        };
+
+                                        return (
+                                            <tr 
+                                                key={idx} 
+                                                className="table-row-hover" 
+                                                style={{ 
+                                                    borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                                    backgroundColor: isPropia ? 'rgba(99, 102, 241, 0.05)' : 'transparent'
+                                                }}
+                                            >
+                                                <td style={{ padding: '0.85rem 1rem' }}>
+                                                    <div style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{item.titulo}</div>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 1rem' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                        <MapPin size={14} color="var(--text-muted)" />
+                                                        <span style={{ fontWeight: isPropia ? 'bold' : 'normal' }}>{item.estacion}</span>
+                                                        {isPropia ? (
+                                                            <span style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem', borderRadius: '10px', backgroundColor: 'rgba(99, 102, 241, 0.18)', color: '#818cf8', fontWeight: 'bold', border: '1px solid rgba(99, 102, 241, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+                                                                <ShieldCheck size={11} /> PROPIA
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem', borderRadius: '10px', backgroundColor: 'rgba(255, 255, 255, 0.05)', color: 'var(--text-muted)' }}>
+                                                                {extractBrand(item.estacion)}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                        <Calendar size={13} /> {item.modificacion || '-'}
+                                                    </div>
+                                                </td>
+
+                                                {/* SC Values */}
+                                                {(serviceFilter === 'ALL' || serviceFilter === 'SC') && (
+                                                    <>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>
+                                                            {renderCell(item.super_c, own?.super_c)}
+                                                        </td>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
+                                                            {renderCell(item.regular_c, own?.regular_c)}
+                                                        </td>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
+                                                            {renderCell(item.ion_c, own?.ion_c)}
+                                                        </td>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(34, 197, 94, 0.02)' }}>
+                                                            {renderCell(item.diesel_c, own?.diesel_c)}
+                                                        </td>
+                                                    </>
+                                                )}
+
+                                                {/* AS Values */}
+                                                {(serviceFilter === 'ALL' || serviceFilter === 'AS') && (
+                                                    <>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
+                                                            {renderCell(item.super_a, own?.super_a, true)}
+                                                        </td>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
+                                                            {renderCell(item.regular_a, own?.regular_a, true)}
+                                                        </td>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
+                                                            {renderCell(item.ion_a, own?.ion_a, true)}
+                                                        </td>
+                                                        <td style={{ padding: '0.85rem 0.75rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
+                                                            {renderCell(item.diesel_a, own?.diesel_a, true)}
+                                                        </td>
+                                                    </>
+                                                )}
+                                            </tr>
+                                        );
+                                    })
+                                ) : (
+                                    <tr>
+                                        <td colSpan={11} style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <Search size={44} style={{ opacity: 0.2, marginBottom: '1rem' }} />
+                                            <p>No se encontraron registros de competencia.</p>
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
+
+            {/* TAB 2: HISTORIAL DE VARIACIONES */}
+            {activeTab === 'historial' && (
+                <>
+                    {/* Historial Filters */}
+                    <div className="card glass" style={{ padding: '1rem', marginBottom: '1.5rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ position: 'relative', flex: '1 1 240px' }}>
+                            <Search style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={18} />
+                            <input 
+                                type="text" 
+                                placeholder="Filtrar historial por estación..." 
+                                className="input-search"
+                                style={{ paddingLeft: '2.8rem', width: '100%' }}
+                                value={historialSearch}
+                                onChange={(e) => setHistorialSearch(e.target.value)}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Desde:</span>
+                            <input 
+                                type="date" 
+                                className="input-search" 
+                                style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }} 
+                                value={historialDesde} 
+                                onChange={(e) => setHistorialDesde(e.target.value)} 
+                            />
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Hasta:</span>
+                            <input 
+                                type="date" 
+                                className="input-search" 
+                                style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }} 
+                                value={historialHasta} 
+                                onChange={(e) => setHistorialHasta(e.target.value)} 
+                            />
+                            <button onClick={fetchHistorial} className="btn-primary" style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem' }}>
+                                Filtrar
+                            </button>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                            <button onClick={() => setQuickRange(7)} className="btn-secondary" style={{ padding: '0.35rem 0.65rem', fontSize: '0.78rem' }}>7 Días</button>
+                            <button onClick={() => setQuickRange(15)} className="btn-secondary" style={{ padding: '0.35rem 0.65rem', fontSize: '0.78rem' }}>15 Días</button>
+                            <button onClick={() => setQuickRange(30)} className="btn-secondary" style={{ padding: '0.35rem 0.65rem', fontSize: '0.78rem' }}>30 Días</button>
+                        </div>
+                    </div>
+
+                    {/* Historial Table */}
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem', minWidth: '900px' }}>
+                            <thead>
+                                <tr style={{ backgroundColor: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                                    <th style={{ padding: '0.85rem 1rem', textAlign: 'left', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Fecha Registro</th>
+                                    <th style={{ padding: '0.85rem 1rem', textAlign: 'left', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Estación Propia</th>
+                                    <th style={{ padding: '0.85rem 1rem', textAlign: 'left', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Competencia</th>
+                                    <th style={{ padding: '0.85rem 1rem', textAlign: 'left', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', width: '160px' }}>Modificación</th>
+                                    <th style={{ padding: '0.85rem 0.75rem', textAlign: 'right', color: '#3b82f6', fontSize: '0.75rem', textTransform: 'uppercase' }}>Super (AS)</th>
+                                    <th style={{ padding: '0.85rem 0.75rem', textAlign: 'right', color: '#3b82f6', fontSize: '0.75rem', textTransform: 'uppercase' }}>Regular (AS)</th>
+                                    <th style={{ padding: '0.85rem 0.75rem', textAlign: 'right', color: '#3b82f6', fontSize: '0.75rem', textTransform: 'uppercase' }}>Diesel (AS)</th>
+                                    <th style={{ padding: '0.85rem 0.75rem', textAlign: 'right', color: '#22c55e', fontSize: '0.75rem', textTransform: 'uppercase' }}>Super (SC)</th>
+                                    <th style={{ padding: '0.85rem 0.75rem', textAlign: 'right', color: '#22c55e', fontSize: '0.75rem', textTransform: 'uppercase' }}>Regular (SC)</th>
+                                    <th style={{ padding: '0.85rem 0.75rem', textAlign: 'right', color: '#22c55e', fontSize: '0.75rem', textTransform: 'uppercase' }}>Diesel (SC)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {historialLoading ? (
+                                    <tr>
+                                        <td colSpan={10} style={{ padding: '4rem', textAlign: 'center' }}>
+                                            <div className="spinner" style={{ margin: '0 auto' }}></div>
+                                            <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>Cargando registros históricos...</p>
+                                        </td>
+                                    </tr>
+                                ) : filteredHistorialData.length > 0 ? (
+                                    filteredHistorialData.map((item, idx) => (
+                                        <tr key={idx} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <td style={{ padding: '0.8rem 1rem', fontWeight: 'bold' }}>
+                                                {item.fecha_registro}
                                             </td>
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
-                                                {renderPriceCell(item, 'regular_a')}
+                                            <td style={{ padding: '0.8rem 1rem', color: 'var(--primary)' }}>
+                                                {item.estacion_propia || '-'}
                                             </td>
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
-                                                {renderPriceCell(item, 'ion_a')}
+                                            <td style={{ padding: '0.8rem 1rem' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                    <MapPin size={13} color="var(--text-muted)" />
+                                                    {item.estacion}
+                                                </div>
                                             </td>
-                                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right', backgroundColor: 'rgba(59, 130, 246, 0.02)' }}>
-                                                {renderPriceCell(item, 'diesel_a')}
+                                            <td style={{ padding: '0.8rem 1rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                                {item.modificacion || '-'}
+                                            </td>
+                                            <td style={{ padding: '0.8rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#3b82f6' }}>
+                                                {mc(item.super_a)}
+                                            </td>
+                                            <td style={{ padding: '0.8rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#3b82f6' }}>
+                                                {mc(item.regular_a)}
+                                            </td>
+                                            <td style={{ padding: '0.8rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#3b82f6' }}>
+                                                {mc(item.diesel_a)}
+                                            </td>
+                                            <td style={{ padding: '0.8rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#22c55e' }}>
+                                                {mc(item.super_c)}
+                                            </td>
+                                            <td style={{ padding: '0.8rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#22c55e' }}>
+                                                {mc(item.regular_c)}
+                                            </td>
+                                            <td style={{ padding: '0.8rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#22c55e' }}>
+                                                {mc(item.diesel_c)}
                                             </td>
                                         </tr>
-                                    );
-                                })
-                            ) : (
-                                <tr>
-                                    <td colSpan={11} style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                        <Search size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-                                        <p>No se encontraron registros de competencia.</p>
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+                                    ))
+                                ) : (
+                                    <tr>
+                                        <td colSpan={10} style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <Clock size={44} style={{ opacity: 0.2, marginBottom: '1rem' }} />
+                                            <p>No se encontraron registros en el rango de fechas seleccionado.</p>
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
 
-            <Modal open={showUploadModal} onClose={() => setShowUploadModal(false)} title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><FileSpreadsheet size={20} color="var(--primary)" />Cargar Precios de Competencia</span>} size="xl">
-                {csvData.length === 0 ? (
-                    <div style={{ border: '2px dashed var(--border)', borderRadius: '8px', padding: '2.5rem 1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                        <Upload size={44} style={{ opacity: 0.3, marginBottom: '0.75rem' }} />
-                        <p style={{ marginBottom: '1.25rem', fontSize: '0.95rem' }}>Seleccione el archivo .csv descargado del portal oficial DGEHM</p>
-                        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap', alignItems: 'center' }}>
-                            <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 1.5rem' }}>
-                                <FileSpreadsheet size={18} /> Seleccionar Archivo
-                                <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
-                            </label>
-                            <a 
-                                href="https://sinapp.dgehm.gob.sv/DRHM/estadisticas.aspx?uid=2" 
-                                target="_blank" 
-                                rel="noopener noreferrer" 
-                                className="btn-secondary"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1.5rem', textDecoration: 'none' }}
-                            >
-                                Abrir Portal DGEHM Oficial ↗
-                            </a>
+            {/* TAB 3: INTELIGENCIA & BI */}
+            {activeTab === 'bi' && (
+                <>
+                    {biLoading ? (
+                        <div style={{ padding: '5rem', textAlign: 'center' }}>
+                            <div className="spinner" style={{ margin: '0 auto' }}></div>
+                            <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>Calculando inteligencia de precios y análisis de patrones...</p>
                         </div>
+                    ) : biData ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                            
+                            {/* KPI Metrics */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+                                <div className="card glass" style={{ padding: '1.25rem', borderLeft: '4px solid #ef4444' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                        <div>
+                                            <p style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, fontWeight: 'bold' }}>SUPERIOR (AS)</p>
+                                            <h2 style={{ fontSize: '1.8rem', margin: '0.4rem 0 0 0', color: '#ef4444' }}>{mc(biData.promediosMercado.super_a)}</h2>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Promedio Mercado</span>
+                                        </div>
+                                        <div style={{ padding: '0.5rem', borderRadius: '8px', backgroundColor: 'rgba(239, 68, 68, 0.1)' }}>
+                                            <Fuel size={20} color="#ef4444" />
+                                        </div>
+                                    </div>
+                                    <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                        Mín: <strong>{mc(biData.rankingExtremos.super_a.min.val)}</strong> | Máx: <strong>{mc(biData.rankingExtremos.super_a.max.val)}</strong>
+                                    </div>
+                                </div>
+
+                                <div className="card glass" style={{ padding: '1.25rem', borderLeft: '4px solid #f59e0b' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                        <div>
+                                            <p style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, fontWeight: 'bold' }}>REGULAR (AS)</p>
+                                            <h2 style={{ fontSize: '1.8rem', margin: '0.4rem 0 0 0', color: '#f59e0b' }}>{mc(biData.promediosMercado.regular_a)}</h2>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Promedio Mercado</span>
+                                        </div>
+                                        <div style={{ padding: '0.5rem', borderRadius: '8px', backgroundColor: 'rgba(245, 158, 11, 0.1)' }}>
+                                            <Fuel size={20} color="#f59e0b" />
+                                        </div>
+                                    </div>
+                                    <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                        Mín: <strong>{mc(biData.rankingExtremos.regular_a.min.val)}</strong> | Máx: <strong>{mc(biData.rankingExtremos.regular_a.max.val)}</strong>
+                                    </div>
+                                </div>
+
+                                <div className="card glass" style={{ padding: '1.25rem', borderLeft: '4px solid #3b82f6' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                        <div>
+                                            <p style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, fontWeight: 'bold' }}>DIÉSEL (AS)</p>
+                                            <h2 style={{ fontSize: '1.8rem', margin: '0.4rem 0 0 0', color: '#3b82f6' }}>{mc(biData.promediosMercado.diesel_a)}</h2>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Promedio Mercado</span>
+                                        </div>
+                                        <div style={{ padding: '0.5rem', borderRadius: '8px', backgroundColor: 'rgba(59, 130, 246, 0.1)' }}>
+                                            <Fuel size={20} color="#3b82f6" />
+                                        </div>
+                                    </div>
+                                    <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                        Mín: <strong>{mc(biData.rankingExtremos.diesel_a.min.val)}</strong> | Máx: <strong>{mc(biData.rankingExtremos.diesel_a.max.val)}</strong>
+                                    </div>
+                                </div>
+
+                                <div className="card glass" style={{ padding: '1.25rem', borderLeft: '4px solid #10b981' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                        <div>
+                                            <p style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, fontWeight: 'bold' }}>ESTACIONES</p>
+                                            <h2 style={{ fontSize: '1.8rem', margin: '0.4rem 0 0 0', color: '#10b981' }}>{biData.totalEstaciones}</h2>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Monitoreadas en Vivo</span>
+                                        </div>
+                                        <div style={{ padding: '0.5rem', borderRadius: '8px', backgroundColor: 'rgba(16, 185, 129, 0.1)' }}>
+                                            <Activity size={20} color="#10b981" />
+                                        </div>
+                                    </div>
+                                    <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                        Registros en Historial: <strong>{biData.totalHistorialRegistros}</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Dynamic Pattern Insights */}
+                            {biData.insights && biData.insights.length > 0 && (
+                                <div className="card glass" style={{ padding: '1.25rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+                                        <Sparkles size={18} color="var(--primary)" />
+                                        <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--primary)' }}>Patrones de Mercado & Insights Detectados</h3>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+                                        {biData.insights.map((ins, idx) => (
+                                            <div key={idx} style={{ padding: '0.85rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                                <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.25rem', color: 'var(--primary)' }}>
+                                                    {ins.title}
+                                                </div>
+                                                <p style={{ fontSize: '0.82rem', margin: 0, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                                                    {ins.description.replace(/\*\*(.*?)\*\*/g, '$1')}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Brand Comparison Charts & Breakdown */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.5rem' }}>
+                                {/* Brand Comparison Bar Chart */}
+                                <div className="card glass" style={{ padding: '1.25rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <BarChart3 size={18} color="var(--primary)" />
+                                            <h3 style={{ margin: 0, fontSize: '1rem' }}>Comparativa por Bandera / Marca</h3>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                            <button 
+                                                onClick={() => setBiFuelType('super_a')}
+                                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', borderRadius: '4px', border: '1px solid var(--border)', backgroundColor: biFuelType === 'super_a' ? '#ef4444' : 'transparent', color: biFuelType === 'super_a' ? '#fff' : 'var(--text-muted)', cursor: 'pointer' }}
+                                            >
+                                                Super
+                                            </button>
+                                            <button 
+                                                onClick={() => setBiFuelType('regular_a')}
+                                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', borderRadius: '4px', border: '1px solid var(--border)', backgroundColor: biFuelType === 'regular_a' ? '#f59e0b' : 'transparent', color: biFuelType === 'regular_a' ? '#fff' : 'var(--text-muted)', cursor: 'pointer' }}
+                                            >
+                                                Regular
+                                            </button>
+                                            <button 
+                                                onClick={() => setBiFuelType('diesel_a')}
+                                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', borderRadius: '4px', border: '1px solid var(--border)', backgroundColor: biFuelType === 'diesel_a' ? '#3b82f6' : 'transparent', color: biFuelType === 'diesel_a' ? '#fff' : 'var(--text-muted)', cursor: 'pointer' }}
+                                            >
+                                                Diésel
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                                        {biData.marcas.map((m, idx) => {
+                                            const val = m[biFuelType] || 0;
+                                            const maxVal = Math.max(...biData.marcas.map(x => x[biFuelType] || 0), 5.5);
+                                            const widthPct = val > 0 ? Math.min(100, Math.max(15, (val / maxVal) * 100)) : 0;
+                                            const brandColor = m.brand === 'Texaco' ? '#ef4444' : m.brand === 'Puma' ? '#10b981' : m.brand === 'Uno' ? '#f59e0b' : m.brand === 'Shell' ? '#eab308' : '#6366f1';
+
+                                            return (
+                                                <div key={idx}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', marginBottom: '0.25rem' }}>
+                                                        <span style={{ fontWeight: 'bold' }}>{m.brand} ({m.count} est.)</span>
+                                                        <span style={{ fontWeight: 'bold', color: brandColor }}>{mc(val)}</span>
+                                                    </div>
+                                                    <div style={{ height: '8px', width: '100%', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
+                                                        <div style={{ height: '100%', width: `${widthPct}%`, backgroundColor: brandColor, borderRadius: '4px', transition: 'width 0.5s ease-out' }}></div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* Extreme Prices Ranking */}
+                                <div className="card glass" style={{ padding: '1.25rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+                                        <TrendingDown size={18} color="#22c55e" />
+                                        <h3 style={{ margin: 0, fontSize: '1rem' }}>Estaciones Más Económicas vs Más Altas</h3>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                        {/* Super */}
+                                        <div style={{ padding: '0.75rem', borderRadius: '6px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#ef4444', textTransform: 'uppercase', marginBottom: '0.35rem' }}>Gasolina Superior (AS)</div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                                                <div>
+                                                    <span style={{ color: '#22c55e', fontWeight: 'bold' }}>↓ Más barata: </span>
+                                                    <span>{biData.rankingExtremos.super_a.min.station || '-'}</span>
+                                                </div>
+                                                <span style={{ fontWeight: 'bold', color: '#22c55e' }}>{mc(biData.rankingExtremos.super_a.min.val)}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                                                <div>
+                                                    <span style={{ color: '#ef4444', fontWeight: 'bold' }}>↑ Más alta: </span>
+                                                    <span>{biData.rankingExtremos.super_a.max.station || '-'}</span>
+                                                </div>
+                                                <span style={{ fontWeight: 'bold', color: '#ef4444' }}>{mc(biData.rankingExtremos.super_a.max.val)}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Regular */}
+                                        <div style={{ padding: '0.75rem', borderRadius: '6px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#f59e0b', textTransform: 'uppercase', marginBottom: '0.35rem' }}>Gasolina Regular (AS)</div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                                                <div>
+                                                    <span style={{ color: '#22c55e', fontWeight: 'bold' }}>↓ Más barata: </span>
+                                                    <span>{biData.rankingExtremos.regular_a.min.station || '-'}</span>
+                                                </div>
+                                                <span style={{ fontWeight: 'bold', color: '#22c55e' }}>{mc(biData.rankingExtremos.regular_a.min.val)}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                                                <div>
+                                                    <span style={{ color: '#ef4444', fontWeight: 'bold' }}>↑ Más alta: </span>
+                                                    <span>{biData.rankingExtremos.regular_a.max.station || '-'}</span>
+                                                </div>
+                                                <span style={{ fontWeight: 'bold', color: '#ef4444' }}>{mc(biData.rankingExtremos.regular_a.max.val)}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Diesel */}
+                                        <div style={{ padding: '0.75rem', borderRadius: '6px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#3b82f6', textTransform: 'uppercase', marginBottom: '0.35rem' }}>Diésel (AS)</div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                                                <div>
+                                                    <span style={{ color: '#22c55e', fontWeight: 'bold' }}>↓ Más barato: </span>
+                                                    <span>{biData.rankingExtremos.diesel_a.min.station || '-'}</span>
+                                                </div>
+                                                <span style={{ fontWeight: 'bold', color: '#22c55e' }}>{mc(biData.rankingExtremos.diesel_a.min.val)}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                                                <div>
+                                                    <span style={{ color: '#ef4444', fontWeight: 'bold' }}>↑ Más alto: </span>
+                                                    <span>{biData.rankingExtremos.diesel_a.max.station || '-'}</span>
+                                                </div>
+                                                <span style={{ fontWeight: 'bold', color: '#ef4444' }}>{mc(biData.rankingExtremos.diesel_a.max.val)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    ) : (
+                        <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            <AlertCircle size={44} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                            <p>No se pudo generar el análisis de BI. Intenta sincronizar precios primero.</p>
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* MODAL: GESTIONAR ESTACIONES MONITOREADAS */}
+            <Modal 
+                open={showManageModal} 
+                onClose={() => setShowManageModal(false)} 
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><Building2 size={20} color="var(--primary)" />Gestionar Estaciones Propias y de Competencia</span>} 
+                size="xl"
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    {/* Add Station Form */}
+                    <form onSubmit={handleAddStation} className="card glass" style={{ padding: '1.25rem', backgroundColor: 'rgba(255,255,255,0.02)' }}>
+                        <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.95rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <Plus size={16} /> Vincular Nueva Estación a una Sucursal
+                        </h4>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', alignItems: 'flex-end' }}>
+                            <div>
+                                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                                    Sucursal / Estación Propia:
+                                </label>
+                                <select 
+                                    className="input-search" 
+                                    style={{ width: '100%', padding: '0.5rem' }}
+                                    value={newStationForm.id_estacion}
+                                    onChange={e => setNewStationForm(prev => ({ ...prev, id_estacion: e.target.value }))}
+                                    required
+                                >
+                                    <option value="">-- Seleccionar Sucursal --</option>
+                                    {estacionesSistema.map(e => (
+                                        <option key={e.id_empresa} value={e.id_empresa}>{e.titulo}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                                    Nombre Oficial en DGEHM:
+                                </label>
+                                <input 
+                                    type="text"
+                                    list="dgehmList"
+                                    placeholder="Ej. PUMA AEROPUERTO..."
+                                    className="input-search"
+                                    style={{ width: '100%', padding: '0.5rem' }}
+                                    value={newStationForm.competencia}
+                                    onChange={e => setNewStationForm(prev => ({ ...prev, competencia: e.target.value }))}
+                                    required
+                                />
+                                <datalist id="dgehmList">
+                                    {dgehmEstacionesList.map((st, idx) => (
+                                        <option key={idx} value={st} />
+                                    ))}
+                                </datalist>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', paddingBottom: '0.4rem' }}>
+                                <input 
+                                    type="checkbox" 
+                                    id="chkPropia" 
+                                    checked={newStationForm.es_propia} 
+                                    onChange={e => setNewStationForm(prev => ({ ...prev, es_propia: e.target.checked }))} 
+                                    style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                />
+                                <label htmlFor="chkPropia" style={{ fontSize: '0.82rem', cursor: 'pointer', userSelect: 'none' }}>
+                                    Es la estación propia de la sucursal
+                                </label>
+                            </div>
+
+                            <div>
+                                <button 
+                                    type="submit" 
+                                    disabled={savingStation} 
+                                    className="btn-primary" 
+                                    style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.55rem' }}
+                                >
+                                    <Plus size={16} /> {savingStation ? 'Guardando...' : 'Vincular Estación'}
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
+                    {/* Filter Monitored List */}
+                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ position: 'relative', flex: '1 1 200px' }}>
+                            <Search style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={16} />
+                            <input 
+                                type="text"
+                                placeholder="Buscar en estaciones vinculadas..."
+                                className="input-search"
+                                style={{ paddingLeft: '2.5rem', width: '100%', fontSize: '0.85rem' }}
+                                value={searchMonitored}
+                                onChange={e => setSearchMonitored(e.target.value)}
+                            />
+                        </div>
+
+                        <select 
+                            className="input-search" 
+                            style={{ padding: '0.45rem', fontSize: '0.85rem', flex: '1 1 180px' }}
+                            value={selectedBranchFilter}
+                            onChange={e => setSelectedBranchFilter(e.target.value)}
+                        >
+                            <option value="ALL">Todas las Sucursales ({estacionesMonitoreadas.length})</option>
+                            {estacionesSistema.map(s => (
+                                <option key={s.id_empresa} value={s.id_empresa}>{s.titulo}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* Monitored Stations List Table */}
+                    <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'auto', maxHeight: '45vh' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                            <thead>
+                                <tr style={{ backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--border)' }}>
+                                    <th style={{ padding: '0.6rem 0.85rem', textAlign: 'left' }}>Sucursal del Sistema</th>
+                                    <th style={{ padding: '0.6rem 0.85rem', textAlign: 'left' }}>Estación Vinculada (DGEHM)</th>
+                                    <th style={{ padding: '0.6rem 0.85rem', textAlign: 'center', width: '150px' }}>Tipo</th>
+                                    <th style={{ padding: '0.6rem 0.85rem', textAlign: 'center', width: '90px' }}>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loadingCatalogo ? (
+                                    <tr>
+                                        <td colSpan={4} style={{ padding: '2rem', textAlign: 'center' }}>
+                                            <div className="spinner" style={{ margin: '0 auto' }}></div>
+                                        </td>
+                                    </tr>
+                                ) : filteredMonitoredList.length > 0 ? (
+                                    filteredMonitoredList.map((item, idx) => (
+                                        <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <td style={{ padding: '0.55rem 0.85rem', fontWeight: 'bold', color: 'var(--primary)' }}>
+                                                {item.estacion_sistema}
+                                            </td>
+                                            <td style={{ padding: '0.55rem 0.85rem' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                    <MapPin size={13} color="var(--text-muted)" />
+                                                    <span>{item.competencia}</span>
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '0.55rem 0.85rem', textAlign: 'center' }}>
+                                                <button
+                                                    onClick={() => handleTogglePropia(item)}
+                                                    style={{
+                                                        border: 'none',
+                                                        background: 'transparent',
+                                                        cursor: 'pointer',
+                                                        padding: '0.2rem 0.5rem',
+                                                        borderRadius: '12px',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.3rem',
+                                                        fontSize: '0.75rem',
+                                                        fontWeight: 'bold',
+                                                        backgroundColor: item.es_propia ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                                                        color: item.es_propia ? '#818cf8' : 'var(--text-muted)'
+                                                    }}
+                                                    title="Clic para cambiar entre Propia y Competencia"
+                                                >
+                                                    {item.es_propia ? <ToggleRight size={16} color="#818cf8" /> : <ToggleLeft size={16} color="var(--text-muted)" />}
+                                                    {item.es_propia ? 'Estación Propia' : 'Competencia'}
+                                                </button>
+                                            </td>
+                                            <td style={{ padding: '0.55rem 0.85rem', textAlign: 'center' }}>
+                                                <button
+                                                    onClick={() => handleDeleteStation(item)}
+                                                    style={{ border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer', padding: '0.2rem 0.4rem', borderRadius: '4px' }}
+                                                    title="Quitar estación"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                ) : (
+                                    <tr>
+                                        <td colSpan={4} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            No se encontraron estaciones vinculadas con los filtros seleccionados.
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* MODAL: CARGAR CSV (SIMPLIFICADO) */}
+            <Modal 
+                open={showUploadModal} 
+                onClose={() => setShowUploadModal(false)} 
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><FileSpreadsheet size={20} color="var(--primary)" />Cargar Precios de Competencia (CSV)</span>} 
+                size="xl"
+            >
+                {parsedUploadRows.length === 0 ? (
+                    <div style={{ border: '2px dashed var(--border)', borderRadius: '8px', padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <Upload size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                        <p style={{ marginBottom: '0.5rem', fontWeight: 'bold' }}>Seleccione el archivo .csv descargado de la DGEHM</p>
+                        <p style={{ marginBottom: '1.5rem', fontSize: '0.85rem' }}>El sistema reconocerá y cruzará automáticamente las estaciones de su catálogo.</p>
+                        <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 2rem' }}>
+                            <FileSpreadsheet size={18} /> Seleccionar Archivo CSV
+                            <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+                        </label>
                     </div>
                 ) : (
                     <>
                         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
                             <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                                 <FileSpreadsheet size={14} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} />
-                                {csvFileName} ({csvData.length} filas)
+                                <strong>{csvFileName}</strong> ({parsedUploadRows.length} estaciones listas para actualizar)
                             </span>
                             <div style={{ flex: 1 }} />
-                            {!validado && (
-                                <button onClick={handleValidar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <CheckCircle size={16} /> Validar
-                                </button>
-                            )}
-                            {validado && !filtrado && (
-                                <button onClick={handleFiltrar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <Filter size={16} /> Filtrar
-                                </button>
-                            )}
-                            {filtrado && (
-                                <button onClick={handleActualizar} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} disabled={uploading}>
-                                    <Upload size={16} /> {uploading ? 'Actualizando...' : 'Actualizar BD'}
-                                </button>
-                            )}
-                            <button onClick={() => { setCsvData([]); setCsvFileName(''); setValidado(false); setFiltrado(false); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <X size={16} /> Limpiar
+                            <button 
+                                onClick={handleActualizarBD} 
+                                className="btn-primary" 
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} 
+                                disabled={uploading}
+                            >
+                                <CheckCircle size={16} /> {uploading ? 'Actualizando BD...' : 'Guardar Precios en BD'}
+                            </button>
+                            <button 
+                                onClick={() => { setCsvFile(null); setCsvFileName(''); setParsedUploadRows([]); }} 
+                                className="btn-secondary" 
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                            >
+                                <X size={16} /> Cancelar
                             </button>
                         </div>
 
-                        <div style={{ border: '1px solid var(--border)', borderRadius: '4px', overflow: 'auto', maxHeight: '65vh' }}>
-                            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.75rem' }}>
+                        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'auto', maxHeight: '55vh' }}>
+                            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.78rem' }}>
                                 <thead>
                                     <tr>
-                                        <th style={{ padding: '0.5rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Estación</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)', width: '100px' }}>Modificación</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super C</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular C</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Ion C</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel C</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super A</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular A</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Ion A</th>
-                                        <th style={{ padding: '0.5rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel A</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Estación</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Modificación</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super (AS)</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular (AS)</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel (AS)</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Super (SC)</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Regular (SC)</th>
+                                        <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Diesel (SC)</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {csvData.map((row, idx) => (
+                                    {parsedUploadRows.map((row, idx) => (
                                         <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                            <td style={{ padding: '0.4rem 0.5rem' }}>{row[0]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem' }}>{row[1]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[2]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[3]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[4]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[5]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[6]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[7]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[8]}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{row[9]}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', fontWeight: 'bold' }}>{row.estacion}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', color: 'var(--text-muted)' }}>{row.modificacion}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', color: '#3b82f6', fontWeight: 'bold' }}>{mc(row.super_a)}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', color: '#3b82f6', fontWeight: 'bold' }}>{mc(row.regular_a)}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', color: '#3b82f6', fontWeight: 'bold' }}>{mc(row.diesel_a)}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', color: '#22c55e', fontWeight: 'bold' }}>{mc(row.super_c)}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', color: '#22c55e', fontWeight: 'bold' }}>{mc(row.regular_c)}</td>
+                                            <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', color: '#22c55e', fontWeight: 'bold' }}>{mc(row.diesel_c)}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -742,245 +1476,6 @@ const ConsultasPreciosCompetencia = () => {
                         </div>
                     </>
                 )}
-            </Modal>
-
-            {/* Modal para Adicionar o Quitar Estaciones (Propias y Competencia) */}
-            <Modal 
-                open={showManageModal} 
-                onClose={() => setShowManageModal(false)} 
-                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><Building2 size={22} color="var(--primary)" />Gestión de Estaciones Monitoreadas</span>} 
-                size="xl"
-                footer={
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
-                        <button className="btn-secondary" onClick={() => setShowManageModal(false)}>
-                            Cerrar
-                        </button>
-                    </div>
-                }
-            >
-                <div style={{ marginBottom: '1.25rem', padding: '0.85rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Configure qué estaciones oficiales de la DGEHM se monitorean para cada sucursal del sistema. Puede marcar cuáles representan nuestro propio precio de referencia (<strong>Propia</strong>) y cuáles corresponden a la <strong>Competencia</strong>.
-                </div>
-
-                {/* Formulario para Adicionar Estación */}
-                <div className="card glass" style={{ padding: '1.25rem', marginBottom: '1.5rem', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                    <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--primary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Plus size={16} /> Adicionar Estación a Monitorear
-                    </h3>
-                    <form onSubmit={handleAddStation}>
-                        <div className="form-grid form-grid-3">
-                            <div>
-                                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, marginBottom: '0.35rem', color: 'var(--text-muted)' }}>
-                                    Nuestra Estación (Sistema) *
-                                </label>
-                                <select 
-                                    className="input-field" 
-                                    style={{ width: '100%' }}
-                                    value={newStationForm.id_estacion}
-                                    onChange={(e) => setNewStationForm(prev => ({ ...prev, id_estacion: e.target.value }))}
-                                    required
-                                >
-                                    <option value="">-- Seleccione Sucursal --</option>
-                                    {estacionesSistema.map(s => (
-                                        <option key={s.id_empresa} value={s.id_empresa}>
-                                            {s.titulo}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, marginBottom: '0.35rem', color: 'var(--text-muted)' }}>
-                                    Estación Oficial DGEHM *
-                                </label>
-                                <input 
-                                    type="text" 
-                                    list="dgehm-catalog-list"
-                                    className="input-field"
-                                    style={{ width: '100%' }}
-                                    placeholder="Escriba o seleccione de la lista..."
-                                    value={newStationForm.competencia}
-                                    onChange={(e) => setNewStationForm(prev => ({ ...prev, competencia: e.target.value }))}
-                                    required
-                                />
-                                <datalist id="dgehm-catalog-list">
-                                    {dgehmEstacionesList.map((est, idx) => (
-                                        <option key={idx} value={est} />
-                                    ))}
-                                </datalist>
-                            </div>
-
-                            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, marginBottom: '0.35rem', color: 'var(--text-muted)' }}>
-                                    Tipo de Estación
-                                </label>
-                                <div style={{ display: 'flex', alignItems: 'center', height: '42px' }}>
-                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={newStationForm.es_propia} 
-                                            onChange={(e) => setNewStationForm(prev => ({ ...prev, es_propia: e.target.checked }))}
-                                            style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--primary)' }}
-                                        />
-                                        <span>{newStationForm.es_propia ? '🛡️ Estación Propia (Referencia)' : '🏪 Competencia'}</span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div className="span-3" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                                <button 
-                                    type="submit" 
-                                    className="btn-primary" 
-                                    disabled={savingStation}
-                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1.5rem' }}
-                                >
-                                    <Plus size={16} /> {savingStation ? 'Guardando...' : 'Adicionar a Monitoreo'}
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-
-                {/* Filtros de la Lista */}
-                <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: 1, minWidth: '260px' }}>
-                        <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
-                            <Search size={16} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                            <input 
-                                type="text" 
-                                placeholder="Buscar estación..." 
-                                className="input-search"
-                                style={{ paddingLeft: '2.5rem', width: '100%', fontSize: '0.85rem' }}
-                                value={searchMonitored}
-                                onChange={(e) => setSearchMonitored(e.target.value)}
-                            />
-                        </div>
-                        <select 
-                            className="input-field" 
-                            style={{ fontSize: '0.85rem', minWidth: '180px' }}
-                            value={selectedBranchFilter}
-                            onChange={(e) => setSelectedBranchFilter(e.target.value)}
-                        >
-                            <option value="ALL">Todas las sucursales ({estacionesMonitoreadas.length})</option>
-                            {estacionesSistema.map(s => {
-                                const count = estacionesMonitoreadas.filter(m => String(m.id_estacion) === String(s.id_empresa)).length;
-                                return (
-                                    <option key={s.id_empresa} value={s.id_empresa}>
-                                        {s.titulo} ({count})
-                                    </option>
-                                );
-                            })}
-                        </select>
-                    </div>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        Mostrando {filteredMonitoredStations.length} de {estacionesMonitoreadas.length} asignaciones
-                    </span>
-                </div>
-
-                {/* Tabla de Estaciones Monitoreadas */}
-                <div className="card glass table-responsive" style={{ padding: 0, maxHeight: '380px', overflowY: 'auto' }}>
-                    <table style={{ width: '100%', minWidth: '650px', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                        <thead>
-                            <tr style={{ backgroundColor: 'rgba(0, 0, 0, 0.25)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', textAlign: 'left', position: 'sticky', top: 0, zIndex: 2 }}>
-                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Nuestra Estación (Sistema)</th>
-                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Estación DGEHM</th>
-                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', textAlign: 'center' }}>Tipo</th>
-                                <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', textAlign: 'right' }}>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {loadingCatalogo ? (
-                                <tr>
-                                    <td colSpan={4} style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                        <div className="spinner" style={{ margin: '0 auto 0.5rem auto' }}></div>
-                                        Cargando catálogo...
-                                    </td>
-                                </tr>
-                            ) : filteredMonitoredStations.length > 0 ? (
-                                filteredMonitoredStations.map((item) => {
-                                    const isPropia = item.es_propia === 1;
-                                    return (
-                                        <tr key={item.id} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', backgroundColor: isPropia ? 'rgba(99, 102, 241, 0.05)' : undefined }}>
-                                            <td style={{ padding: '0.65rem 1rem', fontWeight: 600, color: 'var(--primary)' }}>
-                                                {item.estacion_sistema}
-                                            </td>
-                                            <td style={{ padding: '0.65rem 1rem' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                                    <MapPin size={14} color="var(--text-muted)" />
-                                                    <span>{item.competencia}</span>
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '0.65rem 1rem', textAlign: 'center' }}>
-                                                <button 
-                                                    type="button"
-                                                    onClick={() => handleTogglePropia(item)}
-                                                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                                                    title="Clic para alternar entre Propia y Competencia"
-                                                >
-                                                    {isPropia ? (
-                                                        <span style={{ 
-                                                            backgroundColor: 'rgba(99, 102, 241, 0.2)', 
-                                                            color: 'var(--primary)', 
-                                                            border: '1px solid var(--primary)', 
-                                                            borderRadius: '4px', 
-                                                            padding: '0.15rem 0.5rem', 
-                                                            fontSize: '0.75rem', 
-                                                            fontWeight: 'bold',
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '0.25rem'
-                                                        }}>
-                                                            <ShieldCheck size={12} /> PROPIA
-                                                        </span>
-                                                    ) : (
-                                                        <span style={{ 
-                                                            backgroundColor: 'rgba(234, 179, 8, 0.15)', 
-                                                            color: '#eab308', 
-                                                            border: '1px solid rgba(234, 179, 8, 0.4)', 
-                                                            borderRadius: '4px', 
-                                                            padding: '0.15rem 0.5rem', 
-                                                            fontSize: '0.75rem', 
-                                                            fontWeight: 'bold'
-                                                        }}>
-                                                            COMPETENCIA
-                                                        </span>
-                                                    )}
-                                                </button>
-                                            </td>
-                                            <td style={{ padding: '0.65rem 1rem', textAlign: 'right' }}>
-                                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                    <button 
-                                                        onClick={() => handleTogglePropia(item)}
-                                                        className="btn-secondary"
-                                                        style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
-                                                        title={isPropia ? 'Cambiar a Competencia' : 'Cambiar a Propia'}
-                                                    >
-                                                        {isPropia ? <ToggleRight size={14} color="var(--primary)" /> : <ToggleLeft size={14} />}
-                                                        {isPropia ? 'Hacer Competencia' : 'Hacer Propia'}
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => handleDeleteStation(item)}
-                                                        className="btn-icon"
-                                                        style={{ color: '#ef4444', padding: '0.35rem' }}
-                                                        title="Quitar estación"
-                                                    >
-                                                        <Trash2 size={16} />
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })
-                            ) : (
-                                <tr>
-                                    <td colSpan={4} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                        No se encontraron estaciones monitoreadas con los filtros actuales.
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
             </Modal>
         </div>
     );

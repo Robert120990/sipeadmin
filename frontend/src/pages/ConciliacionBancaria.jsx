@@ -171,6 +171,89 @@ export default function ConciliacionBancaria() {
         return cuentas.filter(c => String(c.empresa_codigo) === String(selectedEmpresa));
     }, [cuentas, selectedEmpresa]);
 
+    // Cuenta seleccionada actualmente
+    const currentCuenta = useMemo(() => {
+        return cuentas.find(c => String(c.id) === String(selectedCuentaId));
+    }, [cuentas, selectedCuentaId]);
+
+    // Filtrar y deduplicar tipos de remesa para la empresa de la cuenta seleccionada
+    const tiposRemesasCuenta = useMemo(() => {
+        const empresaId = currentCuenta?.empresa_id;
+        let pool = tiposRemesas;
+
+        if (empresaId && tiposRemesas.some(tr => String(tr.empresa_id) === String(empresaId))) {
+            pool = tiposRemesas.filter(tr => String(tr.empresa_id) === String(empresaId));
+        }
+
+        const seen = new Set();
+        const deduplicated = [];
+        for (const tr of pool) {
+            const cod = String(tr.codigo || tr.id || '').trim();
+            if (!cod || seen.has(cod.toUpperCase())) continue;
+            seen.add(cod.toUpperCase());
+            deduplicated.push({
+                ...tr,
+                codigo: tr.codigo || tr.id
+            });
+        }
+        return deduplicated;
+    }, [tiposRemesas, currentCuenta]);
+
+    // Opciones clasificadas por Débito (CARGO) vs Crédito (ABONO) para el modal
+    const opcionesTipoRemesa = useMemo(() => {
+        const isCargo = assignFormData.tipo === 'CARGO';
+
+        const isDebit = (tr) => {
+            const cod = String(tr.codigo || tr.id || '').toUpperCase().trim();
+            const desc = String(tr.descripcion || '').toUpperCase();
+            if (cod === 'NC' || cod === 'CH' || cod === '02') return true;
+            if (desc.includes('CARGO') || desc.includes('CHEQUE') || desc.includes('DEBITO') || desc.includes('RETIRO') || desc.includes('SALIDA') || desc.includes('PAGO') || desc.includes('GASTO')) return true;
+            if (cod === 'TR' || cod === '04' || desc.includes('TRANSFER') || desc.includes('TRASLADO')) return true;
+            return false;
+        };
+
+        const isCredit = (tr) => {
+            const cod = String(tr.codigo || tr.id || '').toUpperCase().trim();
+            const desc = String(tr.descripcion || '').toUpperCase();
+            if (cod === 'RM' || cod === 'NA' || cod === '01' || cod === '03') return true;
+            if (desc.includes('ABONO') || desc.includes('REMESA') || desc.includes('CREDITO') || desc.includes('DEPOSITO') || desc.includes('ENTRADA') || desc.includes('INGRESO')) return true;
+            if (cod === 'TR' || cod === '04' || desc.includes('TRANSFER') || desc.includes('TRASLADO')) return true;
+            return false;
+        };
+
+        let result = tiposRemesasCuenta.filter(tr => isCargo ? isDebit(tr) : isCredit(tr));
+
+        if (result.length === 0) {
+            result = tiposRemesasCuenta;
+        }
+
+        if (result.length === 0) {
+            return isCargo ? [
+                { codigo: 'NC', descripcion: 'NOTA DE CARGO' },
+                { codigo: 'CH', descripcion: 'CHEQUE COBRADO' }
+            ] : [
+                { codigo: 'RM', descripcion: 'REMESA DIARIA' },
+                { codigo: 'NA', descripcion: 'NOTA DE ABONO' }
+            ];
+        }
+
+        return result;
+    }, [tiposRemesasCuenta, assignFormData.tipo]);
+
+    // Sincronizar tipo_remesa_codigo para que siempre sea una opción válida del listado filtrado
+    useEffect(() => {
+        if (showAssignModal && opcionesTipoRemesa.length > 0) {
+            const exists = opcionesTipoRemesa.some(o => String(o.codigo || o.id) === String(assignFormData.tipo_remesa_codigo));
+            if (!exists) {
+                setAssignFormData(prev => ({
+                    ...prev,
+                    tipo_remesa_codigo: opcionesTipoRemesa[0].codigo || opcionesTipoRemesa[0].id
+                }));
+            }
+        }
+    }, [showAssignModal, opcionesTipoRemesa, assignFormData.tipo_remesa_codigo]);
+
+
     // Sincronizar cuenta seleccionada cuando cambia el filtro de empresa
     useEffect(() => {
         if (cuentasFiltradas.length > 0) {
@@ -500,9 +583,23 @@ export default function ConciliacionBancaria() {
             }
         }
 
+        const isCargo = row?.tipo === 'CARGO';
+        const matchingOptions = tiposRemesasCuenta.filter(tr => {
+            const cod = String(tr.codigo || tr.id || '').toUpperCase().trim();
+            const desc = String(tr.descripcion || '').toUpperCase();
+            if (isCargo) {
+                return cod === 'NC' || cod === 'CH' || cod === '02' || desc.includes('CARGO') || desc.includes('CHEQUE') || desc.includes('DEBITO') || desc.includes('TRANSFER') || desc.includes('TRASLADO') || cod === 'TR' || cod === '04';
+            } else {
+                return cod === 'RM' || cod === 'NA' || cod === '01' || cod === '03' || desc.includes('ABONO') || desc.includes('REMESA') || desc.includes('CREDITO') || desc.includes('TRANSFER') || desc.includes('TRASLADO') || cod === 'TR' || cod === '04';
+            }
+        });
+        const fallbackCod = isCargo 
+            ? (matchingOptions.some(o => (o.codigo || o.id) === 'NC') ? 'NC' : (matchingOptions[0]?.codigo || matchingOptions[0]?.id || 'NC'))
+            : (matchingOptions.some(o => (o.codigo || o.id) === 'RM') ? 'RM' : (matchingOptions[0]?.codigo || matchingOptions[0]?.id || 'RM'));
+
         setAssignFormData({
             tipo: row?.tipo || 'CARGO',
-            tipo_remesa_codigo: row?.tipo_remesa_codigo || (row?.tipo === 'CARGO' ? 'NC' : 'RM'),
+            tipo_remesa_codigo: row?.tipo_remesa_codigo || fallbackCod,
             fecha: ymdFecha,
             fecha_aplicado: ymdFecha || todayStr,
             documento: row?.documento || '',
@@ -519,9 +616,19 @@ export default function ConciliacionBancaria() {
         setAssignTargetRow(null);
         setAssignTargetIndex(null);
         setAssignTab('CREAR');
+
+        const cargoOptions = tiposRemesasCuenta.filter(tr => {
+            const cod = String(tr.codigo || tr.id || '').toUpperCase().trim();
+            const desc = String(tr.descripcion || '').toUpperCase();
+            return cod === 'NC' || cod === 'CH' || cod === '02' || desc.includes('CARGO') || desc.includes('CHEQUE') || desc.includes('DEBITO') || desc.includes('TRANSFER') || desc.includes('TRASLADO') || cod === 'TR' || cod === '04';
+        });
+        const initialCod = cargoOptions.some(o => (o.codigo || o.id) === 'NC')
+            ? 'NC'
+            : (cargoOptions[0]?.codigo || cargoOptions[0]?.id || 'NC');
+
         setAssignFormData({
             tipo: 'CARGO',
-            tipo_remesa_codigo: 'NC',
+            tipo_remesa_codigo: initialCod,
             fecha: todayStr,
             fecha_aplicado: todayStr,
             documento: '',
@@ -1802,8 +1909,7 @@ export default function ConciliacionBancaria() {
                                         type="button"
                                         onClick={() => setAssignFormData(prev => ({ 
                                             ...prev, 
-                                            tipo: 'CARGO',
-                                            tipo_remesa_codigo: prev.tipo_remesa_codigo === 'RM' || prev.tipo_remesa_codigo === 'NA' ? 'NC' : prev.tipo_remesa_codigo
+                                            tipo: 'CARGO'
                                         }))}
                                         className={assignFormData.tipo === 'CARGO' ? 'btn-primary' : 'btn-secondary'}
                                         style={{ 
@@ -1822,8 +1928,7 @@ export default function ConciliacionBancaria() {
                                         type="button"
                                         onClick={() => setAssignFormData(prev => ({ 
                                             ...prev, 
-                                            tipo: 'ABONO',
-                                            tipo_remesa_codigo: prev.tipo_remesa_codigo === 'NC' || prev.tipo_remesa_codigo === 'CH' ? 'RM' : prev.tipo_remesa_codigo
+                                            tipo: 'ABONO'
                                         }))}
                                         className={assignFormData.tipo === 'ABONO' ? 'btn-primary' : 'btn-secondary'}
                                         style={{ 
@@ -1849,19 +1954,10 @@ export default function ConciliacionBancaria() {
                                         onChange={e => setAssignFormData({ ...assignFormData, tipo_remesa_codigo: e.target.value })}
                                         style={{ width: '100%', height: '38px', borderRadius: 'var(--border-radius)' }}
                                     >
-                                        {assignFormData.tipo === 'CARGO' ? (
-                                            <>
-                                                <option value="NC">NC - NOTA DE CARGO</option>
-                                                <option value="CH">CH - CHEQUE COBRADO</option>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <option value="RM">RM - REMESA DIARIA</option>
-                                                <option value="NA">NA - NOTA DE ABONO</option>
-                                            </>
-                                        )}
-                                        {tiposRemesas.filter(tr => tr.codigo !== 'NC' && tr.codigo !== 'CH' && tr.codigo !== 'RM' && tr.codigo !== 'NA').map(tr => (
-                                            <option key={tr.id} value={tr.codigo}>{tr.codigo} - {tr.descripcion}</option>
+                                        {opcionesTipoRemesa.map(tr => (
+                                            <option key={tr.codigo || tr.id} value={tr.codigo || tr.id}>
+                                                {tr.codigo || tr.id} - {tr.descripcion}
+                                            </option>
                                         ))}
                                     </select>
                                 </div>
