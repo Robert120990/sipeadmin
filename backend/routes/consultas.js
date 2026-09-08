@@ -196,14 +196,17 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
     } catch (error) { res.status(500).json({ message: 'Error fetching diferencias' }); }
 });
 
-const { syncDgehmWithDatabase } = require('../services/dgehmService');
-
 router.get('/consultas/estaciones/precios-competencia', authenticateToken, async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const query = `SELECT c.titulo, a.estacion, a.modificacion, a.super_c, a.regular_c, a.ion_c, a.diesel_c, a.super_a, a.regular_a, a.ion_a, a.diesel_a, IFNULL(b.es_propia, 0) as es_propia FROM web_precios_competencia a INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION' ORDER BY c.titulo, b.es_propia DESC, a.estacion`;
         const [rows] = await withRetry(() => externalDb.query(query));
-        res.json(rows);
+        const [meta] = await withRetry(() => externalDb.query('SELECT MAX(created_at) as ultima_validacion FROM web_precios_competencia_historial'));
+        res.json({
+            data: rows,
+            ultimaValidacion: meta[0]?.ultima_validacion || null,
+            total: rows.length
+        });
     } catch (error) { 
         console.error('Error fetching competencia:', error);
         res.status(500).json({ message: 'Error fetching competencia', error: error.message }); 
@@ -381,11 +384,12 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
             res1 = await axios.get(url, {
                 httpsAgent: agent,
                 headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                timeout: 8000
+                timeout: 10000
             });
         } catch (fetchErr) {
             console.error('Error connecting to DGEHM from cloud:', fetchErr.message);
             return res.status(504).json({ 
+                isCloudBlocked: true,
                 message: 'El portal gubernamental DGEHM no responde a conexiones desde la nube (cortafuegos de seguridad gubernamental). Por favor descarga el archivo CSV desde el portal y súbelo con el botón "Cargar Archivo".' 
             });
         }
@@ -491,9 +495,11 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
             return isNaN(n) ? 0 : n;
         };
 
+        const today = new Date().toISOString().split('T')[0];
         const conn = await externalDb.getConnection();
         await conn.beginTransaction();
         try {
+            // 1. Update snapshot
             await conn.query('DELETE FROM web_precios_competencia');
             const insertSql = 'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?';
             const values = matchedRows.map(r => [
@@ -502,10 +508,35 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
                 cleanNum(r.super_a), cleanNum(r.regular_a), cleanNum(r.ion_a), cleanNum(r.diesel_a)
             ]);
             await conn.query(insertSql, [values]);
+
+            // 2. Update historical table
+            for (const r of matchedRows) {
+                await conn.query(`
+                    INSERT INTO web_precios_competencia_historial 
+                    (estacion, modificacion, fecha_registro, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        modificacion = VALUES(modificacion),
+                        super_c = VALUES(super_c),
+                        regular_c = VALUES(regular_c),
+                        ion_c = VALUES(ion_c),
+                        diesel_c = VALUES(diesel_c),
+                        super_a = VALUES(super_a),
+                        regular_a = VALUES(regular_a),
+                        ion_a = VALUES(ion_a),
+                        diesel_a = VALUES(diesel_a)
+                `, [
+                    r.estacion, r.modificacion, today,
+                    cleanNum(r.super_c), cleanNum(r.regular_c), cleanNum(r.ion_c), cleanNum(r.diesel_c),
+                    cleanNum(r.super_a), cleanNum(r.regular_a), cleanNum(r.ion_a), cleanNum(r.diesel_a)
+                ]);
+            }
+
             await conn.commit();
             res.json({
                 message: `Precios sincronizados exitosamente desde DGEHM (${matchedRows.length} estaciones actualizadas)`,
                 count: matchedRows.length,
+                totalConfigured: mappedStations.length,
                 totalDGEHM: parsedRows.length
             });
         } catch (dbErr) {
@@ -517,20 +548,6 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
     } catch (error) {
         console.error('Error sincronizando precios con DGEHM:', error);
         res.status(500).json({ message: 'Error sincronizando con DGEHM: ' + (error.message || 'Error de conexión') });
-    }
-});
-
-router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticateToken, async (req, res) => {
-    try {
-        const externalDb = await getExternalDb();
-        const result = await syncDgehmWithDatabase(externalDb);
-        res.json({
-            message: `Sincronización completada: ${result.count} estaciones actualizadas de ${result.totalConfigured} configuradas (${result.totalDgehm} registros analizados en DGEHM).`,
-            ...result
-        });
-    } catch (error) {
-        console.error('Error syncing DGEHM:', error);
-        res.status(500).json({ message: error.message || 'Error al sincronizar con DGEHM' });
     }
 });
 

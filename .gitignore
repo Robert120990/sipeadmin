@@ -4,3 +4,5 @@ node_modules/
 .gemini/
 TMP/
 dist/
+*.log
+backend/logs/

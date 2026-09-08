@@ -83,7 +83,20 @@ const ConsultasPreciosCompetencia = () => {
         try {
             setLoading(true);
             const res = await api.get('/consultas/estaciones/precios-competencia');
-            setData(res.data || []);
+            const rows = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+            setData(rows);
+            if (res.data && res.data.ultimaValidacion) {
+                const dateObj = new Date(res.data.ultimaValidacion);
+                setLastSyncInfo({
+                    date: dateObj.toLocaleString('es-SV', { dateStyle: 'short', timeStyle: 'short' }),
+                    count: rows.length
+                });
+            } else if (rows.length > 0 && rows[0].modificacion) {
+                setLastSyncInfo({
+                    date: rows[0].modificacion,
+                    count: rows.length
+                });
+            }
         } catch (error) {
             console.error('Error fetching prices:', error);
             addToast('Error al cargar precios de competencia', 'error');
@@ -139,7 +152,17 @@ const ConsultasPreciosCompetencia = () => {
             if (activeTab === 'bi') fetchBiAnalytics();
         } catch (error) {
             console.error('Error syncing with DGEHM:', error);
-            addToast(error.response?.data?.message || error.message || 'Error al sincronizar con DGEHM', 'error');
+            const errMsg = error.response?.data?.message || error.message || 'Error al sincronizar con DGEHM';
+            // Si está bloqueado por firewall en la nube, abrir automáticamente el asistente guiado
+            if (error.response?.data?.isCloudBlocked || error.response?.status === 504) {
+                addToast('Portal DGEHM protegido por cortafuegos gubernamental. Abriendo Asistente de Carga Rápida...', 'warning');
+                setCsvFile(null);
+                setCsvFileName('');
+                setParsedUploadRows([]);
+                setShowUploadModal(true);
+            } else {
+                addToast(errMsg, 'error');
+            }
         } finally {
             setSyncing(false);
         }
@@ -222,9 +245,8 @@ const ConsultasPreciosCompetencia = () => {
         }
     };
 
-    // --- Manual CSV Upload ---
-    const handleFileSelect = async (e) => {
-        const file = e.target.files[0];
+    // --- Manual CSV Upload & Drag and Drop ---
+    const processCsvFile = (file) => {
         if (!file) return;
         setCsvFile(file);
         setCsvFileName(file.name);
@@ -292,6 +314,11 @@ const ConsultasPreciosCompetencia = () => {
             }
         };
         reader.readAsText(file);
+    };
+
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        processCsvFile(file);
     };
 
     const handleActualizarBD = async () => {
@@ -487,9 +514,34 @@ const ConsultasPreciosCompetencia = () => {
                 <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                         <h1 style={{ color: 'var(--primary)', margin: 0, fontSize: '1.75rem' }}>Precios de Competencia</h1>
-                        {lastSyncInfo && (
-                            <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', borderRadius: '12px', backgroundColor: 'rgba(34, 197, 94, 0.15)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.3)' }}>
-                                Sincronizado DGEHM: {lastSyncInfo.date} ({lastSyncInfo.count} estaciones)
+                        {lastSyncInfo ? (
+                            <span style={{ 
+                                fontSize: '0.8rem', 
+                                padding: '0.25rem 0.75rem', 
+                                borderRadius: '16px', 
+                                backgroundColor: 'rgba(34, 197, 94, 0.15)', 
+                                color: '#22c55e', 
+                                border: '1px solid rgba(34, 197, 94, 0.35)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                                fontWeight: '600'
+                            }}>
+                                <CheckCircle size={14} /> Última validación DGEHM: {lastSyncInfo.date} ({lastSyncInfo.count} estaciones)
+                            </span>
+                        ) : (
+                            <span style={{ 
+                                fontSize: '0.8rem', 
+                                padding: '0.25rem 0.75rem', 
+                                borderRadius: '16px', 
+                                backgroundColor: 'rgba(255, 255, 255, 0.05)', 
+                                color: 'var(--text-muted)', 
+                                border: '1px solid var(--border)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.4rem'
+                            }}>
+                                <Clock size={14} /> Consultando última validación...
                             </span>
                         )}
                     </div>
@@ -1402,22 +1454,68 @@ const ConsultasPreciosCompetencia = () => {
                 </div>
             </Modal>
 
-            {/* MODAL: CARGAR CSV (SIMPLIFICADO) */}
+            {/* MODAL: ASISTENTE DE CARGA DGEHM (CSV) */}
             <Modal 
                 open={showUploadModal} 
                 onClose={() => setShowUploadModal(false)} 
-                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><FileSpreadsheet size={20} color="var(--primary)" />Cargar Precios de Competencia (CSV)</span>} 
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><FileSpreadsheet size={20} color="var(--primary)" />Asistente de Sincronización Precios DGEHM</span>} 
                 size="xl"
             >
                 {parsedUploadRows.length === 0 ? (
-                    <div style={{ border: '2px dashed var(--border)', borderRadius: '8px', padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                        <Upload size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
-                        <p style={{ marginBottom: '0.5rem', fontWeight: 'bold' }}>Seleccione el archivo .csv descargado de la DGEHM</p>
-                        <p style={{ marginBottom: '1.5rem', fontSize: '0.85rem' }}>El sistema reconocerá y cruzará automáticamente las estaciones de su catálogo.</p>
-                        <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 2rem' }}>
-                            <FileSpreadsheet size={18} /> Seleccionar Archivo CSV
-                            <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
-                        </label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                        {/* Paso 1: Abrir Portal */}
+                        <div style={{ padding: '1rem 1.25rem', borderRadius: '8px', backgroundColor: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+                            <div>
+                                <h4 style={{ margin: 0, color: '#3b82f6', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <span style={{ backgroundColor: '#3b82f6', color: '#fff', width: '22px', height: '22px', borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>1</span>
+                                    Abrir el Portal Oficial de DGEHM
+                                </h4>
+                                <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                                    Abre la página oficial de estadísticas de precios y descarga el archivo <strong>CSV</strong> (icono de exportar en la esquina superior del reporte).
+                                </p>
+                            </div>
+                            <a 
+                                href="http://sinapp.dgehm.gob.sv/drhm/estadisticas.aspx?uid=2" 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="btn-primary"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', textDecoration: 'none', backgroundColor: '#3b82f6', borderColor: '#3b82f6', whiteSpace: 'nowrap' }}
+                            >
+                                <ArrowUpRight size={17} /> Abrir Portal DGEHM
+                            </a>
+                        </div>
+
+                        {/* Paso 2: Subir archivo */}
+                        <div 
+                            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                                    processCsvFile(e.dataTransfer.files[0]);
+                                }
+                            }}
+                            style={{ 
+                                border: '2px dashed var(--primary)', 
+                                borderRadius: '8px', 
+                                padding: '2.5rem 1.5rem', 
+                                textAlign: 'center', 
+                                backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                                transition: 'all 0.2s ease'
+                            }}
+                        >
+                            <Upload size={44} style={{ color: 'var(--primary)', opacity: 0.8, marginBottom: '0.75rem' }} />
+                            <h4 style={{ margin: 0, color: 'var(--text-main)', fontSize: '1rem' }}>
+                                Paso 2: Arrastra o selecciona el archivo CSV descargado
+                            </h4>
+                            <p style={{ margin: '0.4rem 0 1.25rem 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                                El sistema cruzará automáticamente las estaciones configuradas con sus precios de Súper, Regular y Diésel.
+                            </p>
+                            <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.6rem 2rem' }}>
+                                <FileSpreadsheet size={18} /> Seleccionar Archivo CSV
+                                <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+                            </label>
+                        </div>
                     </div>
                 ) : (
                     <>
@@ -1430,7 +1528,7 @@ const ConsultasPreciosCompetencia = () => {
                             <button 
                                 onClick={handleActualizarBD} 
                                 className="btn-primary" 
-                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} 
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#10b981', borderColor: '#10b981' }} 
                                 disabled={uploading}
                             >
                                 <CheckCircle size={16} /> {uploading ? 'Actualizando BD...' : 'Guardar Precios en BD'}
