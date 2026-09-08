@@ -23,6 +23,28 @@ export const SAVINGS_TYPES = {
     percent_payment: { label: '% sobre la Cuota Regular', isPercent: true, placeholder: 'Ej. 5.00%' }
 };
 
+export const COMMISSION_TYPES = {
+    none: { label: 'Sin Comisión', isPercent: false },
+    percent: { label: '% sobre Monto del Préstamo', isPercent: true, placeholder: 'Ej. 2.00%' },
+    fixed: { label: 'Monto Fijo ($)', isPercent: false, placeholder: 'Ej. 500.00' }
+};
+
+/**
+ * Calculate disbursement commission fee ($)
+ */
+export const calculateDisbursementCommission = (type, value, principal) => {
+    const val = Math.max(0, parseFloat(value) || 0);
+    const P = Math.max(0, parseFloat(principal) || 0);
+    if (!type || type === 'none' || val <= 0 || P <= 0) return 0;
+    if (type === 'percent') {
+        return Math.round((P * (val / 100)) * 100) / 100;
+    }
+    if (type === 'fixed') {
+        return Math.round(val * 100) / 100;
+    }
+    return 0;
+};
+
 /**
  * Calculate periodic installment (PMT)
  */
@@ -144,12 +166,17 @@ export const generateAmortizationSchedule = ({
     insuranceType = 'none',
     insuranceValue = 0,
     savingsType = 'none',
-    savingsValue = 0
+    savingsValue = 0,
+    commissionType = 'none',
+    commissionValue = 0
 }) => {
     const P = parseFloat(principal) || 0;
     const rate = parseFloat(annualRate) || 0;
     const nMonths = parseFloat(termMonths) || 0;
     const extraPerPeriod = Math.max(0, parseFloat(extraPaymentMonthly) || 0);
+
+    const disbursementCommission = calculateDisbursementCommission(commissionType, commissionValue, P);
+    const netDisbursedAmount = Math.max(0, Math.round((P - disbursementCommission) * 100) / 100);
 
     if (P <= 0 || rate <= 0 || nMonths <= 0) {
         return {
@@ -163,6 +190,9 @@ export const generateAmortizationSchedule = ({
                 totalInsurance: 0,
                 totalSavings: 0,
                 totalPaidWithCharges: 0,
+                disbursementCommission: 0,
+                netDisbursedAmount: 0,
+                totalCostOfLoan: 0,
                 monthsSaved: 0,
                 periodsSaved: 0,
                 interestSaved: 0,
@@ -292,6 +322,8 @@ export const generateAmortizationSchedule = ({
     const firstPeriodInsurance = schedule.length > 0 ? schedule[0].insurance : 0;
     const firstPeriodSavings = schedule.length > 0 ? schedule[0].savings : 0;
     const firstPeriodTotalPayment = Math.round((regularPMT + firstPeriodInsurance + firstPeriodSavings) * 100) / 100;
+    const totalPaidWithCharges = Math.round((totalPaid + totalInsurance + totalSavings) * 100) / 100;
+    const totalCostOfLoan = Math.round((totalPaidWithCharges + disbursementCommission) * 100) / 100;
 
     return {
         schedule,
@@ -304,7 +336,10 @@ export const generateAmortizationSchedule = ({
             totalExtra: Math.round(totalExtra * 100) / 100,
             totalInsurance: Math.round(totalInsurance * 100) / 100,
             totalSavings: Math.round(totalSavings * 100) / 100,
-            totalPaidWithCharges: Math.round((totalPaid + totalInsurance + totalSavings) * 100) / 100,
+            totalPaidWithCharges,
+            disbursementCommission,
+            netDisbursedAmount,
+            totalCostOfLoan,
             periodsSaved,
             monthsSaved,
             interestSaved,

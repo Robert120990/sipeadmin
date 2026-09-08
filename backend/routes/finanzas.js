@@ -31,6 +31,10 @@ const ensureFinanzasTables = async (db) => {
                 ahorro_valor DECIMAL(10,4) DEFAULT 0,
                 ahorro_cuota DECIMAL(10,2) DEFAULT 0,
                 cuota_total DECIMAL(14,2) DEFAULT 0,
+                comision_tipo VARCHAR(30) DEFAULT 'none',
+                comision_valor DECIMAL(10,4) DEFAULT 0,
+                comision_monto DECIMAL(14,2) DEFAULT 0,
+                monto_neto_desembolsado DECIMAL(14,2) DEFAULT 0,
                 dias_gracia INT DEFAULT 0,
                 estado VARCHAR(20) DEFAULT 'activo',
                 notas TEXT,
@@ -40,6 +44,11 @@ const ensureFinanzasTables = async (db) => {
                 INDEX idx_empresa_estado (empresa_id, estado)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
+
+        try { await db.query("ALTER TABLE prestamos ADD COLUMN comision_tipo VARCHAR(30) DEFAULT 'none'"); } catch(e) { /* column exists */ }
+        try { await db.query("ALTER TABLE prestamos ADD COLUMN comision_valor DECIMAL(10,4) DEFAULT 0"); } catch(e) { /* column exists */ }
+        try { await db.query("ALTER TABLE prestamos ADD COLUMN comision_monto DECIMAL(14,2) DEFAULT 0"); } catch(e) { /* column exists */ }
+        try { await db.query("ALTER TABLE prestamos ADD COLUMN monto_neto_desembolsado DECIMAL(14,2) DEFAULT 0"); } catch(e) { /* column exists */ }
 
         await db.query(`
             CREATE TABLE IF NOT EXISTS prestamos_pagos (
@@ -374,6 +383,10 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
         ahorro_valor = 0,
         ahorro_cuota = 0,
         cuota_total = 0,
+        comision_tipo = 'none',
+        comision_valor = 0,
+        comision_monto = 0,
+        monto_neto_desembolsado = 0,
         dias_gracia = 0,
         notas
     } = req.body;
@@ -389,6 +402,15 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
         const segCuota = parseFloat(seguro_cuota) || 0;
         const ahorrCuota = parseFloat(ahorro_cuota) || 0;
         const totalCuota = parseFloat(cuota_total) || Math.round((cuota + segCuota + ahorrCuota) * 100) / 100;
+        const P = parseFloat(monto_original);
+        const comVal = parseFloat(comision_valor || 0);
+        let comMonto = parseFloat(comision_monto || 0);
+        if (comMonto === 0 && comision_tipo === 'percent' && comVal > 0) {
+            comMonto = Math.round((P * (comVal / 100)) * 100) / 100;
+        } else if (comMonto === 0 && comision_tipo === 'fixed' && comVal > 0) {
+            comMonto = Math.round(comVal * 100) / 100;
+        }
+        const neto = parseFloat(monto_neto_desembolsado) || Math.max(0, P - comMonto);
 
         const [result] = await db.query(`
             INSERT INTO prestamos (
@@ -397,15 +419,16 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
                 fecha_inicio, fecha_primer_pago, cuota_calculada,
                 seguro_tipo, seguro_valor, seguro_cuota,
                 ahorro_tipo, ahorro_valor, ahorro_cuota, cuota_total,
+                comision_tipo, comision_valor, comision_monto, monto_neto_desembolsado,
                 dias_gracia, estado, notas, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'activo', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'activo', ?, ?)
         `, [
             empresa_id,
             banco_id || null,
             cuenta_bancaria_id || null,
             numero_prestamo.trim().toUpperCase(),
             descripcion.trim().toUpperCase(),
-            parseFloat(monto_original),
+            P,
             parseFloat(tasa_interes_anual),
             parseInt(plazo_meses, 10),
             frecuencia_pago,
@@ -419,6 +442,10 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
             parseFloat(ahorro_valor || 0),
             ahorrCuota,
             totalCuota,
+            comision_tipo,
+            comVal,
+            comMonto,
+            neto,
             parseInt(dias_gracia || 0, 10),
             notas || null,
             req.user?.id || null
@@ -457,6 +484,10 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
         ahorro_valor,
         ahorro_cuota,
         cuota_total,
+        comision_tipo,
+        comision_valor,
+        comision_monto,
+        monto_neto_desembolsado,
         dias_gracia,
         estado,
         notas
@@ -469,6 +500,15 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
         const segCuota = parseFloat(seguro_cuota) || 0;
         const ahorrCuota = parseFloat(ahorro_cuota) || 0;
         const totalCuota = parseFloat(cuota_total) || Math.round((cuota + segCuota + ahorrCuota) * 100) / 100;
+        const P = parseFloat(monto_original);
+        const comVal = parseFloat(comision_valor || 0);
+        let comMonto = parseFloat(comision_monto || 0);
+        if (comMonto === 0 && comision_tipo === 'percent' && comVal > 0) {
+            comMonto = Math.round((P * (comVal / 100)) * 100) / 100;
+        } else if (comMonto === 0 && comision_tipo === 'fixed' && comVal > 0) {
+            comMonto = Math.round(comVal * 100) / 100;
+        }
+        const neto = parseFloat(monto_neto_desembolsado) || Math.max(0, P - comMonto);
 
         await db.query(`
             UPDATE prestamos SET
@@ -491,6 +531,10 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
                 ahorro_valor = ?,
                 ahorro_cuota = ?,
                 cuota_total = ?,
+                comision_tipo = ?,
+                comision_valor = ?,
+                comision_monto = ?,
+                monto_neto_desembolsado = ?,
                 dias_gracia = ?,
                 estado = ?,
                 notas = ?
@@ -515,6 +559,10 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
             parseFloat(ahorro_valor || 0),
             ahorrCuota,
             totalCuota,
+            comision_tipo || 'none',
+            comVal,
+            comMonto,
+            neto,
             parseInt(dias_gracia || 0, 10),
             estado || 'activo',
             notas || null,

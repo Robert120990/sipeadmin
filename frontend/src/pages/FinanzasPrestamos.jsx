@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Landmark, Plus, Search, Edit2, Trash2, Eye, DollarSign, Calendar, TrendingDown, CheckCircle2, Clock, FileSpreadsheet, FileText, ArrowUpRight, Percent, RefreshCw, ShieldCheck, PiggyBank } from 'lucide-react';
+import { Landmark, Plus, Search, Edit2, Trash2, Eye, DollarSign, Calendar, TrendingDown, CheckCircle2, Clock, FileSpreadsheet, FileText, ArrowUpRight, Percent, RefreshCw, ShieldCheck, PiggyBank, Coins } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -7,7 +7,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import api from '../services/api';
-import { calculatePMT, formatCurrency, generateAmortizationSchedule, calculateRemainingPayoffFromBalance, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, calculatePeriodInsurance, calculatePeriodSavings } from '../utils/loanCalculations';
+import { calculatePMT, formatCurrency, generateAmortizationSchedule, calculateRemainingPayoffFromBalance, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, COMMISSION_TYPES, calculatePeriodInsurance, calculatePeriodSavings, calculateDisbursementCommission } from '../utils/loanCalculations';
 
 export default function FinanzasPrestamos() {
     const { addToast } = useToast();
@@ -44,6 +44,8 @@ export default function FinanzasPrestamos() {
         seguro_valor: 0,
         ahorro_tipo: 'none',
         ahorro_valor: 0,
+        comision_tipo: 'none',
+        comision_valor: 0,
         dias_gracia: 0,
         notas: ''
     });
@@ -135,6 +137,15 @@ export default function FinanzasPrestamos() {
         return calculatePeriodSavings(formData.ahorro_tipo, formData.ahorro_valor, baseCuota);
     }, [formData.ahorro_tipo, formData.ahorro_valor, formData.cuota_calculada, autoCuota]);
 
+    const estComision = useMemo(() => {
+        return calculateDisbursementCommission(formData.comision_tipo, formData.comision_valor, formData.monto_original);
+    }, [formData.comision_tipo, formData.comision_valor, formData.monto_original]);
+
+    const estNetoDesembolsado = useMemo(() => {
+        const p = parseFloat(formData.monto_original) || 0;
+        return Math.max(0, Math.round((p - estComision) * 100) / 100);
+    }, [formData.monto_original, estComision]);
+
     const estCuotaTotal = useMemo(() => {
         const baseCuota = parseFloat(formData.cuota_calculada) || autoCuota;
         return Math.round((baseCuota + estSeguro + estAhorro) * 100) / 100;
@@ -159,6 +170,8 @@ export default function FinanzasPrestamos() {
             seguro_valor: 0,
             ahorro_tipo: 'none',
             ahorro_valor: 0,
+            comision_tipo: 'none',
+            comision_valor: 0,
             dias_gracia: 0,
             notas: ''
         });
@@ -184,6 +197,8 @@ export default function FinanzasPrestamos() {
             seguro_valor: p.seguro_valor || 0,
             ahorro_tipo: p.ahorro_tipo || 'none',
             ahorro_valor: p.ahorro_valor || 0,
+            comision_tipo: p.comision_tipo || 'none',
+            comision_valor: p.comision_valor || 0,
             dias_gracia: p.dias_gracia || 0,
             notas: p.notas || ''
         });
@@ -202,7 +217,11 @@ export default function FinanzasPrestamos() {
             ahorro_tipo: formData.ahorro_tipo,
             ahorro_valor: parseFloat(formData.ahorro_valor) || 0,
             ahorro_cuota: estAhorro,
-            cuota_total: estCuotaTotal
+            cuota_total: estCuotaTotal,
+            comision_tipo: formData.comision_tipo,
+            comision_valor: parseFloat(formData.comision_valor) || 0,
+            comision_monto: estComision,
+            monto_neto_desembolsado: estNetoDesembolsado
         };
         try {
             if (editingLoan) {
@@ -326,7 +345,9 @@ export default function FinanzasPrestamos() {
             insuranceType: selectedLoan.seguro_tipo,
             insuranceValue: selectedLoan.seguro_valor,
             savingsType: selectedLoan.ahorro_tipo,
-            savingsValue: selectedLoan.ahorro_valor
+            savingsValue: selectedLoan.ahorro_valor,
+            commissionType: selectedLoan.comision_tipo,
+            commissionValue: selectedLoan.comision_valor
         });
     }, [selectedLoan]);
 
@@ -761,7 +782,7 @@ export default function FinanzasPrestamos() {
                             />
                         </div>
 
-                        {/* Additional Charges: Seguro & Ahorro Obligatorio */}
+                        {/* Additional Charges: Comisión por Desembolso, Seguro & Ahorro Obligatorio */}
                         <div style={{
                             gridColumn: '1 / -1',
                             borderTop: '1px solid var(--border)',
@@ -770,16 +791,64 @@ export default function FinanzasPrestamos() {
                         }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                                 <span style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                    <ShieldCheck size={18} color="var(--primary)" /> Seguro y Ahorro Obligatorio (Opcional)
+                                    <ShieldCheck size={18} color="var(--primary)" /> Comisión por Desembolso, Seguros y Aportación (Opcional)
                                 </span>
-                                {(formData.seguro_tipo !== 'none' || formData.ahorro_tipo !== 'none') && (
+                                {(formData.seguro_tipo !== 'none' || formData.ahorro_tipo !== 'none' || (formData.comision_tipo !== 'none' && formData.comision_valor > 0)) && (
                                     <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', borderRadius: '12px', background: 'rgba(37, 99, 235, 0.15)', color: 'var(--primary)', fontWeight: 600 }}>
-                                        Cuota Total Estimada: {formatCurrency(estCuotaTotal)}
+                                        Cuota Total: {formatCurrency(estCuotaTotal)}
+                                        {estComision > 0 && ` • Comisión: -${formatCurrency(estComision)}`}
                                     </span>
                                 )}
                             </div>
 
-                            <div className="form-grid form-grid-2">
+                            <div className="form-grid form-grid-3">
+                                {/* Comisión por Desembolso */}
+                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.85rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                    <label style={{ fontSize: '0.825rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.4rem' }}>
+                                        <Coins size={16} color="#f59e0b" /> Comisión por Desembolso
+                                    </label>
+                                    <select
+                                        value={formData.comision_tipo}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setFormData(prev => ({
+                                                ...prev,
+                                                comision_tipo: val,
+                                                comision_valor: val === 'none' ? 0 : (prev.comision_valor || (val === 'percent' ? 2.0 : 500))
+                                            }));
+                                        }}
+                                        style={{ width: '100%', height: '38px', marginBottom: formData.comision_tipo !== 'none' ? '0.5rem' : 0, fontSize: '0.85rem' }}
+                                    >
+                                        {Object.entries(COMMISSION_TYPES).map(([k, opt]) => (
+                                            <option key={k} value={k}>{opt.label}</option>
+                                        ))}
+                                    </select>
+
+                                    {formData.comision_tipo !== 'none' && (
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                <span>{COMMISSION_TYPES[formData.comision_tipo]?.isPercent ? 'Porcentaje (%)' : 'Monto Fijo ($)'}</span>
+                                                <span style={{ color: '#f59e0b', fontWeight: 600 }}>
+                                                    {formatCurrency(estComision)}
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                step={COMMISSION_TYPES[formData.comision_tipo]?.isPercent ? "0.25" : "50"}
+                                                min="0"
+                                                value={formData.comision_valor}
+                                                onChange={e => setFormData({ ...formData, comision_valor: Math.max(0, parseFloat(e.target.value) || 0) })}
+                                                placeholder={COMMISSION_TYPES[formData.comision_tipo]?.placeholder}
+                                                style={{ width: '100%', height: '38px', fontSize: '0.85rem', marginBottom: '0.35rem' }}
+                                            />
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed rgba(255,255,255,0.08)', paddingTop: '0.3rem' }}>
+                                                <span>Líquido a recibir:</span>
+                                                <strong style={{ color: '#10b981' }}>{formatCurrency(estNetoDesembolsado)}</strong>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
                                 {/* Seguro */}
                                 <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.85rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
                                     <label style={{ fontSize: '0.825rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.4rem' }}>
@@ -909,6 +978,13 @@ export default function FinanzasPrestamos() {
                                 <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{formatCurrency(selectedLoan.monto_original)}</div>
                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{selectedLoan.tasa_interes_anual}% a {selectedLoan.plazo_meses}m</div>
                             </div>
+                            {selectedLoan.comision_monto > 0 && (
+                                <div>
+                                    <span style={{ fontSize: '0.75rem', color: '#f59e0b', textTransform: 'uppercase' }}>Desembolso Líquido</span>
+                                    <div style={{ fontWeight: 700, fontSize: '1.1rem', color: '#10b981' }}>{formatCurrency(selectedLoan.monto_neto_desembolsado || (selectedLoan.monto_original - selectedLoan.comision_monto))}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Comisión: <span style={{ color: '#f59e0b' }}>-{formatCurrency(selectedLoan.comision_monto)}</span></div>
+                                </div>
+                            )}
                             <div>
                                 <span style={{ fontSize: '0.75rem', color: 'var(--accent, #10b981)', textTransform: 'uppercase' }}>Capital Amortizado</span>
                                 <div style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--accent, #10b981)' }}>{formatCurrency(selectedLoan.total_capital_pagado)}</div>
