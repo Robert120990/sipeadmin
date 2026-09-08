@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal } from 'lucide-react';
+import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
-import { catalogItems, bancosMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
+import { catalogItems, bancosMenu, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering
 import Dashboard from './Dashboard';
@@ -32,6 +32,9 @@ import ChequesContado from './ChequesContado';
 import CheckDesigner from './CheckDesigner';
 import BackupDBCheck from './BackupDBCheck';
 import Bitacora from './Bitacora';
+import FinanzasPrestamos from './FinanzasPrestamos';
+import FinanzasCalculadora from './FinanzasCalculadora';
+import FinanzasResumen from './FinanzasResumen';
 import pkg from '../../package.json';
 
 export default function DashboardLayout() {
@@ -51,6 +54,7 @@ export default function DashboardLayout() {
         security: false,
         operaciones: false,
         bancos: false,
+        finanzas: false,
         configuracion: false
     });
 
@@ -97,6 +101,9 @@ export default function DashboardLayout() {
         '/dashboard/settings/email': <ConfiguracionEmail />,
         '/dashboard/permissions': <Permissions />,
         '/dashboard/bitacora': <Bitacora />,
+        '/dashboard/finanzas/prestamos': <FinanzasPrestamos />,
+        '/dashboard/finanzas/calculadora': <FinanzasCalculadora />,
+        '/dashboard/finanzas/resumen': <FinanzasResumen />,
     };
 
     // Sync with URL location
@@ -106,6 +113,7 @@ export default function DashboardLayout() {
             ...catalogItems, 
             ...operacionesMenu, 
             ...bancosMenu, 
+            ...finanzasMenu,
             ...consultasItemsRoot, 
             ...consultasEstaciones, 
             ...consultasBancos, 
@@ -209,6 +217,7 @@ export default function DashboardLayout() {
     const filteredCatalogs = getFiltered(catalogItems);
     const filteredOperaciones = getFiltered(operacionesMenu);
     const filteredBancosMenu = getFiltered(bancosMenu);
+    const filteredFinanzasMenu = getFiltered(finanzasMenu);
     const filteredEstaciones = getFiltered(consultasEstaciones);
     const filteredBancos = getFiltered(consultasBancos);
     const filteredOtras = getFiltered(consultasOtras);
@@ -284,6 +293,19 @@ export default function DashboardLayout() {
                             {!isCollapsed && (openMenus.bancos ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
                         </button>
                         {openMenus.bancos && !isCollapsed && filteredBancosMenu.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
+
+                {filteredFinanzasMenu.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('finanzas')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <DollarSign size={20} />
+                                {!isCollapsed && <span>Finanzas</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.finanzas ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.finanzas && !isCollapsed && filteredFinanzasMenu.map(item => renderNavItem(item, true))}
                     </div>
                 )}
 

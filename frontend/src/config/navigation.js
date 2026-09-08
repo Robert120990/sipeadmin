@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -51,6 +51,12 @@ export const consultasOtras = [
     { name: 'Backup DB Check', path: '/dashboard/consultas/otras/backup-db-check', icon: HardDrive },
 ];
 
+export const finanzasMenu = [
+    { name: 'Préstamos y Créditos', path: '/dashboard/finanzas/prestamos', icon: Landmark },
+    { name: 'Calculadora de Préstamos', path: '/dashboard/finanzas/calculadora', icon: Calculator },
+    { name: 'Resumen y Vencimientos', path: '/dashboard/finanzas/resumen', icon: BarChart3 },
+];
+
 export const securityItems = [
     { name: 'Usuarios', path: '/dashboard/users', icon: Users },
     { name: 'Permisos', path: '/dashboard/permissions', icon: Shield },
@@ -71,6 +77,7 @@ export const allNavCategories = [
     { title: 'Principal', items: mainNavItems },
     { title: 'Catálogos', items: catalogItems },
     { title: 'Bancos', items: bancosMenu },
+    { title: 'Finanzas', items: finanzasMenu },
     { title: 'Operaciones', items: operacionesMenu },
     { title: 'Consultas - Estaciones', items: consultasEstaciones },
     { title: 'Consultas - Bancos', items: consultasBancos },

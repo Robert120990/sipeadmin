@@ -52,11 +52,13 @@ const aiRoutes = require('./routes/ai');
 const bitacoraRoutes = require('./routes/bitacora');
 const checkDesignerRoutes = require('./routes/checkDesigner');
 const conciliacionRoutes = require('./routes/conciliacion');
+const finanzasRoutes = require('./routes/finanzas');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
 app.use('/api/bancos/conciliacion', conciliacionRoutes);
 app.use('/api/bancos', bancosRoutes);
+app.use('/api/finanzas', finanzasRoutes);
 app.use('/api', catalogosRoutes); // Carriers, Tankers
 app.use('/api', operacionesRoutes); // Dashboard, Operaciones
 app.use('/api', consultasRoutes); // Ventas, Consultas

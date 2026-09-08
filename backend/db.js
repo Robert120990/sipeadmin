@@ -367,6 +367,57 @@ const initDB = async () => {
             );
         `);
 
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS prestamos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                banco_id INT NULL,
+                cuenta_bancaria_id INT NULL,
+                numero_prestamo VARCHAR(50) NOT NULL,
+                descripcion VARCHAR(255) NOT NULL,
+                monto_original DECIMAL(14,2) NOT NULL,
+                tasa_interes_anual DECIMAL(6,3) NOT NULL,
+                plazo_meses INT NOT NULL,
+                frecuencia_pago VARCHAR(20) DEFAULT 'mensual',
+                fecha_inicio DATE NOT NULL,
+                fecha_primer_pago DATE NOT NULL,
+                cuota_calculada DECIMAL(14,2) NOT NULL,
+                dias_gracia INT DEFAULT 0,
+                estado VARCHAR(20) DEFAULT 'activo',
+                notas TEXT,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
+                FOREIGN KEY (banco_id) REFERENCES bancos(id) ON DELETE SET NULL,
+                FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE SET NULL,
+                INDEX idx_empresa_estado (empresa_id, estado)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS prestamos_pagos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                prestamo_id INT NOT NULL,
+                numero_cuota INT NULL,
+                fecha_pago DATE NOT NULL,
+                tipo_pago VARCHAR(30) DEFAULT 'cuota_regular',
+                monto_total DECIMAL(14,2) NOT NULL,
+                monto_capital DECIMAL(14,2) NOT NULL,
+                monto_interes DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                monto_otros DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                saldo_restante DECIMAL(14,2) NOT NULL,
+                numero_comprobante VARCHAR(50) NULL,
+                cuenta_origen_id INT NULL,
+                notas TEXT NULL,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (prestamo_id) REFERENCES prestamos(id) ON DELETE CASCADE,
+                FOREIGN KEY (cuenta_origen_id) REFERENCES cuentas_bancarias(id) ON DELETE SET NULL,
+                INDEX idx_prestamo_fecha (prestamo_id, fecha_pago)
+            );
+        `);
+
         // Ensure bank reconciliation permissions exist for Administrator role
         try {
             const [adminRole] = await pool.query('SELECT id FROM roles WHERE name = "Administrator"');
@@ -377,7 +428,12 @@ const initDB = async () => {
                     ['/dashboard/bancos/conciliacion', 'Acceso a Conciliación Bancaria'],
                     ['view_conciliacion_bancaria', 'Permite consultar conciliaciones bancarias'],
                     ['manage_conciliacion_bancaria', 'Permite conciliar y desconciliar movimientos'],
-                    ['edit_monto_conciliacion', 'Permite modificar montos en conciliación']
+                    ['edit_monto_conciliacion', 'Permite modificar montos en conciliación'],
+                    ['/dashboard/finanzas/prestamos', 'Acceso a Préstamos y Créditos'],
+                    ['/dashboard/finanzas/calculadora', 'Acceso a Calculadora de Amortización'],
+                    ['/dashboard/finanzas/resumen', 'Acceso a Resumen Financiero y Vencimientos'],
+                    ['manage_finanzas_prestamos', 'Permite crear, editar y eliminar préstamos'],
+                    ['manage_finanzas_pagos', 'Permite registrar y anular pagos de préstamos']
                 ];
                 for (const [pName, pDesc] of newPerms) {
                     await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);
@@ -388,7 +444,7 @@ const initDB = async () => {
                 }
             }
         } catch (e) {
-            console.error('Migration permissions conciliacion:', e.message);
+            console.error('Migration permissions conciliacion/finanzas:', e.message);
         }
 
         // Ensure tipos_remesas has TR (TRANSFERENCIA) for all companies

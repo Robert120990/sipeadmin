@@ -28,6 +28,9 @@ import ChequesContado from './pages/ChequesContado';
 import CheckDesigner from './pages/CheckDesigner';
 import BackupDBCheck from './pages/BackupDBCheck';
 import Bitacora from './pages/Bitacora';
+import FinanzasPrestamos from './pages/FinanzasPrestamos';
+import FinanzasCalculadora from './pages/FinanzasCalculadora';
+import FinanzasResumen from './pages/FinanzasResumen';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
 import { ThemeProvider } from './components/ThemeProvider';
@@ -85,8 +88,11 @@ function App() {
                         <Route path="bancos/conciliacion" element={<PermissionRoute pathKey="/dashboard/bancos/conciliacion"><ConciliacionBancaria /></PermissionRoute>} />
                         <Route path="bancos/cheques" element={<PermissionRoute pathKey="/dashboard/bancos/cheques"><Cheques /></PermissionRoute>} />
                         <Route path="bancos/cheques-contado" element={<PermissionRoute pathKey="/dashboard/bancos/cheques-contado"><ChequesContado /></PermissionRoute>} />
-<Route path="bancos/check-designer" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
-<Route path="bancos/check-designer/edit/:formatId" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
+                        <Route path="bancos/check-designer" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
+                        <Route path="bancos/check-designer/edit/:formatId" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
+                        <Route path="finanzas/prestamos" element={<PermissionRoute pathKey="/dashboard/finanzas/prestamos"><FinanzasPrestamos /></PermissionRoute>} />
+                        <Route path="finanzas/calculadora" element={<PermissionRoute pathKey="/dashboard/finanzas/calculadora"><FinanzasCalculadora /></PermissionRoute>} />
+                        <Route path="finanzas/resumen" element={<PermissionRoute pathKey="/dashboard/finanzas/resumen"><FinanzasResumen /></PermissionRoute>} />
                         <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
                         <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />
                         <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />
