@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Landmark, Plus, Search, Edit2, Trash2, Eye, DollarSign, Calendar, TrendingDown, CheckCircle2, Clock, FileSpreadsheet, FileText, ArrowUpRight, Percent, RefreshCw } from 'lucide-react';
+import { Landmark, Plus, Search, Edit2, Trash2, Eye, DollarSign, Calendar, TrendingDown, CheckCircle2, Clock, FileSpreadsheet, FileText, ArrowUpRight, Percent, RefreshCw, ShieldCheck, PiggyBank } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -7,7 +7,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import api from '../services/api';
-import { calculatePMT, formatCurrency, generateAmortizationSchedule, calculateRemainingPayoffFromBalance, FREQUENCIES } from '../utils/loanCalculations';
+import { calculatePMT, formatCurrency, generateAmortizationSchedule, calculateRemainingPayoffFromBalance, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, calculatePeriodInsurance, calculatePeriodSavings } from '../utils/loanCalculations';
 
 export default function FinanzasPrestamos() {
     const { addToast } = useToast();
@@ -40,6 +40,10 @@ export default function FinanzasPrestamos() {
         fecha_inicio: new Date().toISOString().split('T')[0],
         fecha_primer_pago: new Date().toISOString().split('T')[0],
         cuota_calculada: '',
+        seguro_tipo: 'none',
+        seguro_valor: 0,
+        ahorro_tipo: 'none',
+        ahorro_valor: 0,
         dias_gracia: 0,
         notas: ''
     });
@@ -58,6 +62,8 @@ export default function FinanzasPrestamos() {
         monto_total: '',
         monto_capital: '',
         monto_interes: '',
+        monto_seguro: 0,
+        monto_ahorro: 0,
         monto_otros: 0,
         numero_comprobante: '',
         cuenta_origen_id: '',
@@ -119,6 +125,21 @@ export default function FinanzasPrestamos() {
         return calculatePMT(formData.monto_original, formData.tasa_interes_anual, formData.plazo_meses, formData.frecuencia_pago);
     }, [formData.monto_original, formData.tasa_interes_anual, formData.plazo_meses, formData.frecuencia_pago]);
 
+    const estSeguro = useMemo(() => {
+        const periodsPerYear = FREQUENCIES[formData.frecuencia_pago]?.periodsPerYear || 12;
+        return calculatePeriodInsurance(formData.seguro_tipo, formData.seguro_valor, formData.monto_original, formData.monto_original, periodsPerYear);
+    }, [formData.seguro_tipo, formData.seguro_valor, formData.monto_original, formData.frecuencia_pago]);
+
+    const estAhorro = useMemo(() => {
+        const baseCuota = parseFloat(formData.cuota_calculada) || autoCuota;
+        return calculatePeriodSavings(formData.ahorro_tipo, formData.ahorro_valor, baseCuota);
+    }, [formData.ahorro_tipo, formData.ahorro_valor, formData.cuota_calculada, autoCuota]);
+
+    const estCuotaTotal = useMemo(() => {
+        const baseCuota = parseFloat(formData.cuota_calculada) || autoCuota;
+        return Math.round((baseCuota + estSeguro + estAhorro) * 100) / 100;
+    }, [formData.cuota_calculada, autoCuota, estSeguro, estAhorro]);
+
     const handleOpenCreate = () => {
         setEditingLoan(null);
         setFormData({
@@ -134,6 +155,10 @@ export default function FinanzasPrestamos() {
             fecha_inicio: new Date().toISOString().split('T')[0],
             fecha_primer_pago: new Date().toISOString().split('T')[0],
             cuota_calculada: '',
+            seguro_tipo: 'none',
+            seguro_valor: 0,
+            ahorro_tipo: 'none',
+            ahorro_valor: 0,
             dias_gracia: 0,
             notas: ''
         });
@@ -155,6 +180,10 @@ export default function FinanzasPrestamos() {
             fecha_inicio: (p.fecha_inicio || '').split('T')[0],
             fecha_primer_pago: (p.fecha_primer_pago || '').split('T')[0],
             cuota_calculada: p.cuota_calculada || '',
+            seguro_tipo: p.seguro_tipo || 'none',
+            seguro_valor: p.seguro_valor || 0,
+            ahorro_tipo: p.ahorro_tipo || 'none',
+            ahorro_valor: p.ahorro_valor || 0,
             dias_gracia: p.dias_gracia || 0,
             notas: p.notas || ''
         });
@@ -164,18 +193,23 @@ export default function FinanzasPrestamos() {
     const handleSaveLoan = async (e) => {
         e.preventDefault();
         const cuota = parseFloat(formData.cuota_calculada) || autoCuota;
+        const payload = {
+            ...formData,
+            cuota_calculada: cuota,
+            seguro_tipo: formData.seguro_tipo,
+            seguro_valor: parseFloat(formData.seguro_valor) || 0,
+            seguro_cuota: estSeguro,
+            ahorro_tipo: formData.ahorro_tipo,
+            ahorro_valor: parseFloat(formData.ahorro_valor) || 0,
+            ahorro_cuota: estAhorro,
+            cuota_total: estCuotaTotal
+        };
         try {
             if (editingLoan) {
-                await api.put(`/finanzas/prestamos/${editingLoan.id}`, {
-                    ...formData,
-                    cuota_calculada: cuota
-                });
+                await api.put(`/finanzas/prestamos/${editingLoan.id}`, payload);
                 addToast('Préstamo actualizado exitosamente', 'success');
             } else {
-                await api.post('/finanzas/prestamos', {
-                    ...formData,
-                    cuota_calculada: cuota
-                });
+                await api.post('/finanzas/prestamos', payload);
                 addToast('Préstamo registrado exitosamente', 'success');
             }
             setShowFormModal(false);
@@ -220,12 +254,29 @@ export default function FinanzasPrestamos() {
         const estInterest = Math.round(selectedLoan.saldo_actual * periodRate * 100) / 100;
         const estCapital = Math.max(0, Math.round((regularCuota - estInterest) * 100) / 100);
 
+        // Insurance and savings per period
+        const estSeguroPago = calculatePeriodInsurance(
+            selectedLoan.seguro_tipo,
+            selectedLoan.seguro_valor,
+            selectedLoan.saldo_actual,
+            selectedLoan.monto_original,
+            periodsPerYear
+        );
+        const estAhorroPago = calculatePeriodSavings(
+            selectedLoan.ahorro_tipo,
+            selectedLoan.ahorro_valor,
+            regularCuota
+        );
+        const totalConCargos = Math.round((regularCuota + estSeguroPago + estAhorroPago) * 100) / 100;
+
         setPaymentForm({
             fecha_pago: new Date().toISOString().split('T')[0],
             tipo_pago: 'cuota_regular',
-            monto_total: regularCuota,
+            monto_total: totalConCargos,
             monto_capital: estCapital,
             monto_interes: estInterest,
+            monto_seguro: estSeguroPago,
+            monto_ahorro: estAhorroPago,
             monto_otros: 0,
             numero_comprobante: '',
             cuenta_origen_id: selectedLoan.cuenta_bancaria_id || '',
@@ -270,7 +321,11 @@ export default function FinanzasPrestamos() {
             annualRate: selectedLoan.tasa_interes_anual,
             termMonths: selectedLoan.plazo_meses,
             frequency: selectedLoan.frecuencia_pago,
-            startDate: (selectedLoan.fecha_primer_pago || '').split('T')[0]
+            startDate: (selectedLoan.fecha_primer_pago || '').split('T')[0],
+            insuranceType: selectedLoan.seguro_tipo,
+            insuranceValue: selectedLoan.seguro_valor,
+            savingsType: selectedLoan.ahorro_tipo,
+            savingsValue: selectedLoan.ahorro_valor
         });
     }, [selectedLoan]);
 
@@ -490,7 +545,16 @@ export default function FinanzasPrestamos() {
                                     </td>
                                     <td style={{ padding: '0.6rem', fontWeight: 600 }}>{formatCurrency(p.monto_original)}</td>
                                     <td style={{ padding: '0.6rem' }}>{p.tasa_interes_anual}%</td>
-                                    <td style={{ padding: '0.6rem', fontWeight: 600 }}>{formatCurrency(p.cuota_calculada)}</td>
+                                    <td style={{ padding: '0.6rem' }}>
+                                        {p.cuota_total && p.cuota_total > p.cuota_calculada ? (
+                                            <div>
+                                                <div style={{ fontWeight: 700, color: 'var(--primary)' }}>{formatCurrency(p.cuota_total)}</div>
+                                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Base: {formatCurrency(p.cuota_calculada)}</div>
+                                            </div>
+                                        ) : (
+                                            <span style={{ fontWeight: 600 }}>{formatCurrency(p.cuota_calculada)}</span>
+                                        )}
+                                    </td>
                                     <td style={{ padding: '0.6rem', fontWeight: 700, color: p.saldo_actual > 0 ? '#f87171' : 'var(--accent, #10b981)' }}>
                                         {formatCurrency(p.saldo_actual)}
                                     </td>
@@ -696,6 +760,113 @@ export default function FinanzasPrestamos() {
                             />
                         </div>
 
+                        {/* Additional Charges: Seguro & Ahorro Obligatorio */}
+                        <div style={{
+                            gridColumn: '1 / -1',
+                            borderTop: '1px solid var(--border)',
+                            paddingTop: '1rem',
+                            marginTop: '0.25rem'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    <ShieldCheck size={18} color="var(--primary)" /> Seguro y Ahorro Obligatorio (Opcional)
+                                </span>
+                                {(formData.seguro_tipo !== 'none' || formData.ahorro_tipo !== 'none') && (
+                                    <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', borderRadius: '12px', background: 'rgba(37, 99, 235, 0.15)', color: 'var(--primary)', fontWeight: 600 }}>
+                                        Cuota Total Estimada: {formatCurrency(estCuotaTotal)}
+                                    </span>
+                                )}
+                            </div>
+
+                            <div className="form-grid form-grid-2">
+                                {/* Seguro */}
+                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.85rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                    <label style={{ fontSize: '0.825rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.4rem' }}>
+                                        <ShieldCheck size={16} color="#3b82f6" /> Seguro de Deuda / Vida
+                                    </label>
+                                    <select
+                                        value={formData.seguro_tipo}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setFormData(prev => ({
+                                                ...prev,
+                                                seguro_tipo: val,
+                                                seguro_valor: val === 'none' ? 0 : (prev.seguro_valor || (val === 'fixed' ? 15 : 0.60))
+                                            }));
+                                        }}
+                                        style={{ width: '100%', height: '38px', marginBottom: formData.seguro_tipo !== 'none' ? '0.5rem' : 0, fontSize: '0.85rem' }}
+                                    >
+                                        {Object.entries(INSURANCE_TYPES).map(([k, opt]) => (
+                                            <option key={k} value={k}>{opt.label}</option>
+                                        ))}
+                                    </select>
+
+                                    {formData.seguro_tipo !== 'none' && (
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                <span>{INSURANCE_TYPES[formData.seguro_tipo]?.isPercent ? 'Tasa Porcentual Anual (%)' : 'Monto Fijo por Cuota ($)'}</span>
+                                                <span style={{ color: 'var(--primary)', fontWeight: 600 }}>
+                                                    ~{formatCurrency(estSeguro)}/cuota
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                step={INSURANCE_TYPES[formData.seguro_tipo]?.isPercent ? "0.05" : "1"}
+                                                min="0"
+                                                value={formData.seguro_valor}
+                                                onChange={e => setFormData({ ...formData, seguro_valor: Math.max(0, parseFloat(e.target.value) || 0) })}
+                                                placeholder={INSURANCE_TYPES[formData.seguro_tipo]?.placeholder}
+                                                style={{ width: '100%', height: '38px', fontSize: '0.85rem' }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Ahorro Obligatorio */}
+                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.85rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                    <label style={{ fontSize: '0.825rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.4rem' }}>
+                                        <PiggyBank size={16} color="#10b981" /> Ahorro Obligatorio / Aportación
+                                    </label>
+                                    <select
+                                        value={formData.ahorro_tipo}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setFormData(prev => ({
+                                                ...prev,
+                                                ahorro_tipo: val,
+                                                ahorro_valor: val === 'none' ? 0 : (prev.ahorro_valor || (val === 'fixed' ? 20 : 5))
+                                            }));
+                                        }}
+                                        style={{ width: '100%', height: '38px', marginBottom: formData.ahorro_tipo !== 'none' ? '0.5rem' : 0, fontSize: '0.85rem' }}
+                                    >
+                                        {Object.entries(SAVINGS_TYPES).map(([k, opt]) => (
+                                            <option key={k} value={k}>{opt.label}</option>
+                                        ))}
+                                    </select>
+
+                                    {formData.ahorro_tipo !== 'none' && (
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                <span>{SAVINGS_TYPES[formData.ahorro_tipo]?.isPercent ? 'Porcentaje de Cuota (%)' : 'Monto Fijo por Cuota ($)'}</span>
+                                                <span style={{ color: '#10b981', fontWeight: 600 }}>
+                                                    ~{formatCurrency(estAhorro)}/cuota
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                step={SAVINGS_TYPES[formData.ahorro_tipo]?.isPercent ? "0.5" : "1"}
+                                                min="0"
+                                                value={formData.ahorro_valor}
+                                                onChange={e => setFormData({ ...formData, ahorro_valor: Math.max(0, parseFloat(e.target.value) || 0) })}
+                                                placeholder={SAVINGS_TYPES[formData.ahorro_tipo]?.placeholder}
+                                                style={{ width: '100%', height: '38px', fontSize: '0.85rem' }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
                         <div className="span-2">
                             <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Notas / Garantías</label>
                             <textarea
@@ -745,7 +916,13 @@ export default function FinanzasPrestamos() {
                             <div>
                                 <span style={{ fontSize: '0.75rem', color: '#f87171', textTransform: 'uppercase' }}>Saldo Pendiente</span>
                                 <div style={{ fontWeight: 700, fontSize: '1.15rem', color: '#f87171' }}>{formatCurrency(selectedLoan.saldo_actual)}</div>
-                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuota: {formatCurrency(selectedLoan.cuota_calculada)}</div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                    {selectedLoan.cuota_total && selectedLoan.cuota_total > selectedLoan.cuota_calculada ? (
+                                        <span>Cuota Total: <strong>{formatCurrency(selectedLoan.cuota_total)}</strong> (Base: {formatCurrency(selectedLoan.cuota_calculada)})</span>
+                                    ) : (
+                                        <span>Cuota: {formatCurrency(selectedLoan.cuota_calculada)}</span>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
@@ -790,7 +967,7 @@ export default function FinanzasPrestamos() {
                                 </div>
 
                                 <div className="table-responsive" style={{ maxHeight: '350px', overflowY: 'auto' }}>
-                                    <table style={{ minWidth: '850px', width: '100%', fontSize: '0.825rem', borderCollapse: 'collapse' }}>
+                                    <table style={{ minWidth: '950px', width: '100%', fontSize: '0.825rem', borderCollapse: 'collapse' }}>
                                         <thead>
                                             <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text-muted)' }}>
                                                 <th style={{ padding: '0.5rem' }}>Fecha</th>
@@ -798,6 +975,8 @@ export default function FinanzasPrestamos() {
                                                 <th style={{ padding: '0.5rem' }}>Comprobante</th>
                                                 <th style={{ padding: '0.5rem' }}>Capital</th>
                                                 <th style={{ padding: '0.5rem' }}>Interés</th>
+                                                <th style={{ padding: '0.5rem', color: '#60a5fa' }}>Seguro</th>
+                                                <th style={{ padding: '0.5rem', color: '#34d399' }}>Ahorro</th>
                                                 <th style={{ padding: '0.5rem' }}>Total Pagado</th>
                                                 <th style={{ padding: '0.5rem' }}>Saldo Restante</th>
                                                 <th style={{ padding: '0.5rem' }}>Usuario</th>
@@ -807,7 +986,7 @@ export default function FinanzasPrestamos() {
                                         <tbody>
                                             {(!selectedLoan.pagos || selectedLoan.pagos.length === 0) ? (
                                                 <tr>
-                                                    <td colSpan="9" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                    <td colSpan="11" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                                                         No se han registrado pagos para este préstamo aún.
                                                     </td>
                                                 </tr>
@@ -830,6 +1009,8 @@ export default function FinanzasPrestamos() {
                                                         <td style={{ padding: '0.5rem', fontWeight: 600 }}>{pago.numero_comprobante || '-'}</td>
                                                         <td style={{ padding: '0.5rem', fontWeight: 600, color: 'var(--accent, #10b981)' }}>{formatCurrency(pago.monto_capital)}</td>
                                                         <td style={{ padding: '0.5rem', color: '#f87171' }}>{formatCurrency(pago.monto_interes)}</td>
+                                                        <td style={{ padding: '0.5rem', color: '#60a5fa' }}>{pago.monto_seguro > 0 ? formatCurrency(pago.monto_seguro) : '-'}</td>
+                                                        <td style={{ padding: '0.5rem', color: '#34d399' }}>{pago.monto_ahorro > 0 ? formatCurrency(pago.monto_ahorro) : '-'}</td>
                                                         <td style={{ padding: '0.5rem', fontWeight: 700 }}>{formatCurrency(pago.monto_total)}</td>
                                                         <td style={{ padding: '0.5rem', fontWeight: 600 }}>{formatCurrency(pago.saldo_restante)}</td>
                                                         <td style={{ padding: '0.5rem', color: 'var(--text-muted)' }}>{pago.usuario_registro || '-'}</td>
@@ -855,14 +1036,23 @@ export default function FinanzasPrestamos() {
                                 </div>
 
                                 <div className="table-responsive" style={{ maxHeight: '350px', overflowY: 'auto' }}>
-                                    <table style={{ minWidth: '850px', width: '100%', fontSize: '0.825rem', borderCollapse: 'collapse' }}>
+                                    <table style={{ minWidth: '950px', width: '100%', fontSize: '0.825rem', borderCollapse: 'collapse' }}>
                                         <thead>
                                             <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text-muted)' }}>
                                                 <th style={{ padding: '0.5rem' }}>#</th>
                                                 <th style={{ padding: '0.5rem' }}>Fecha</th>
-                                                <th style={{ padding: '0.5rem' }}>Cuota Total</th>
+                                                <th style={{ padding: '0.5rem' }}>Cuota Base</th>
                                                 <th style={{ padding: '0.5rem' }}>Capital</th>
                                                 <th style={{ padding: '0.5rem' }}>Interés</th>
+                                                {selectedLoan.seguro_tipo && selectedLoan.seguro_tipo !== 'none' && (
+                                                    <th style={{ padding: '0.5rem', color: '#60a5fa' }}>Seguro</th>
+                                                )}
+                                                {selectedLoan.ahorro_tipo && selectedLoan.ahorro_tipo !== 'none' && (
+                                                    <th style={{ padding: '0.5rem', color: '#34d399' }}>Ahorro</th>
+                                                )}
+                                                {((selectedLoan.seguro_tipo && selectedLoan.seguro_tipo !== 'none') || (selectedLoan.ahorro_tipo && selectedLoan.ahorro_tipo !== 'none')) && (
+                                                    <th style={{ padding: '0.5rem', fontWeight: 700, color: 'var(--primary)' }}>Cuota Total</th>
+                                                )}
                                                 <th style={{ padding: '0.5rem' }}>Saldo Restante</th>
                                             </tr>
                                         </thead>
@@ -874,6 +1064,15 @@ export default function FinanzasPrestamos() {
                                                     <td style={{ padding: '0.5rem', fontWeight: 600 }}>{formatCurrency(row.payment)}</td>
                                                     <td style={{ padding: '0.5rem' }}>{formatCurrency(row.principal)}</td>
                                                     <td style={{ padding: '0.5rem', color: '#f87171' }}>{formatCurrency(row.interest)}</td>
+                                                    {selectedLoan.seguro_tipo && selectedLoan.seguro_tipo !== 'none' && (
+                                                        <td style={{ padding: '0.5rem', color: '#60a5fa' }}>{formatCurrency(row.insurance)}</td>
+                                                    )}
+                                                    {selectedLoan.ahorro_tipo && selectedLoan.ahorro_tipo !== 'none' && (
+                                                        <td style={{ padding: '0.5rem', color: '#34d399' }}>{formatCurrency(row.savings)}</td>
+                                                    )}
+                                                    {((selectedLoan.seguro_tipo && selectedLoan.seguro_tipo !== 'none') || (selectedLoan.ahorro_tipo && selectedLoan.ahorro_tipo !== 'none')) && (
+                                                        <td style={{ padding: '0.5rem', fontWeight: 700, color: 'var(--primary)' }}>{formatCurrency(row.totalWithCharges)}</td>
+                                                    )}
                                                     <td style={{ padding: '0.5rem', fontWeight: 700 }}>{formatCurrency(row.balance)}</td>
                                                 </tr>
                                             ))}
@@ -973,10 +1172,20 @@ export default function FinanzasPrestamos() {
                             <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Tipo de Pago *</label>
                             <select
                                 value={paymentForm.tipo_pago}
-                                onChange={e => setPaymentForm({ ...paymentForm, tipo_pago: e.target.value })}
+                                onChange={e => {
+                                    const tipo = e.target.value;
+                                    setPaymentForm(prev => ({
+                                        ...prev,
+                                        tipo_pago: tipo,
+                                        monto_interes: tipo === 'abono_extraordinario' ? 0 : prev.monto_interes,
+                                        monto_seguro: tipo === 'abono_extraordinario' ? 0 : prev.monto_seguro,
+                                        monto_ahorro: tipo === 'abono_extraordinario' ? 0 : prev.monto_ahorro,
+                                        monto_capital: tipo === 'abono_extraordinario' ? prev.monto_total : prev.monto_capital
+                                    }));
+                                }}
                                 style={{ width: '100%', height: '42px' }}
                             >
-                                <option value="cuota_regular">Cuota Regular (Capital + Interés)</option>
+                                <option value="cuota_regular">Cuota Regular (Capital + Interés + Cargos)</option>
                                 <option value="abono_extraordinario">Abono Extraordinario a Capital Directo</option>
                             </select>
                         </div>
@@ -1020,7 +1229,20 @@ export default function FinanzasPrestamos() {
                                 step="0.01"
                                 min="0.01"
                                 value={paymentForm.monto_capital}
-                                onChange={e => setPaymentForm({ ...paymentForm, monto_capital: e.target.value })}
+                                onChange={e => {
+                                    const val = e.target.value;
+                                    setPaymentForm(prev => {
+                                        const cap = parseFloat(val) || 0;
+                                        const int = parseFloat(prev.monto_interes) || 0;
+                                        const seg = parseFloat(prev.monto_seguro) || 0;
+                                        const aho = parseFloat(prev.monto_ahorro) || 0;
+                                        return {
+                                            ...prev,
+                                            monto_capital: val,
+                                            monto_total: prev.tipo_pago === 'abono_extraordinario' ? val : Math.round((cap + int + seg + aho) * 100) / 100
+                                        };
+                                    });
+                                }}
                                 style={{ width: '100%', height: '42px' }}
                             />
                         </div>
@@ -1032,12 +1254,77 @@ export default function FinanzasPrestamos() {
                                 step="0.01"
                                 min="0"
                                 value={paymentForm.monto_interes}
-                                onChange={e => setPaymentForm({ ...paymentForm, monto_interes: e.target.value })}
+                                onChange={e => {
+                                    const val = e.target.value;
+                                    setPaymentForm(prev => {
+                                        const cap = parseFloat(prev.monto_capital) || 0;
+                                        const int = parseFloat(val) || 0;
+                                        const seg = parseFloat(prev.monto_seguro) || 0;
+                                        const aho = parseFloat(prev.monto_ahorro) || 0;
+                                        return {
+                                            ...prev,
+                                            monto_interes: val,
+                                            monto_total: Math.round((cap + int + seg + aho) * 100) / 100
+                                        };
+                                    });
+                                }}
                                 style={{ width: '100%', height: '42px' }}
                             />
                         </div>
 
-                        <div>
+                        {paymentForm.tipo_pago === 'cuota_regular' && (
+                            <>
+                                <div>
+                                    <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Monto Seguro ($)</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={paymentForm.monto_seguro}
+                                        onChange={e => {
+                                            const val = Math.max(0, parseFloat(e.target.value) || 0);
+                                            setPaymentForm(prev => {
+                                                const cap = parseFloat(prev.monto_capital) || 0;
+                                                const int = parseFloat(prev.monto_interes) || 0;
+                                                const aho = parseFloat(prev.monto_ahorro) || 0;
+                                                return {
+                                                    ...prev,
+                                                    monto_seguro: val,
+                                                    monto_total: Math.round((cap + int + val + aho) * 100) / 100
+                                                };
+                                            });
+                                        }}
+                                        style={{ width: '100%', height: '42px' }}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Monto Ahorro Obligatorio ($)</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={paymentForm.monto_ahorro}
+                                        onChange={e => {
+                                            const val = Math.max(0, parseFloat(e.target.value) || 0);
+                                            setPaymentForm(prev => {
+                                                const cap = parseFloat(prev.monto_capital) || 0;
+                                                const int = parseFloat(prev.monto_interes) || 0;
+                                                const seg = parseFloat(prev.monto_seguro) || 0;
+                                                return {
+                                                    ...prev,
+                                                    monto_ahorro: val,
+                                                    monto_total: Math.round((cap + int + seg + val) * 100) / 100
+                                                };
+                                            });
+                                        }}
+                                        style={{ width: '100%', height: '42px' }}
+                                    />
+                                </div>
+                            </>
+                        )}
+
+                        <div className={paymentForm.tipo_pago === 'abono_extraordinario' ? '' : 'span-2'}>
                             <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>N° Comprobante / Transferencia / Cheque</label>
                             <input
                                 type="text"

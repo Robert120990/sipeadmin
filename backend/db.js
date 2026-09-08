@@ -382,6 +382,13 @@ const initDB = async () => {
                 fecha_inicio DATE NOT NULL,
                 fecha_primer_pago DATE NOT NULL,
                 cuota_calculada DECIMAL(14,2) NOT NULL,
+                seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                seguro_valor DECIMAL(10,4) DEFAULT 0,
+                seguro_cuota DECIMAL(10,2) DEFAULT 0,
+                ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                ahorro_valor DECIMAL(10,4) DEFAULT 0,
+                ahorro_cuota DECIMAL(10,2) DEFAULT 0,
+                cuota_total DECIMAL(14,2) DEFAULT 0,
                 dias_gracia INT DEFAULT 0,
                 estado VARCHAR(20) DEFAULT 'activo',
                 notas TEXT,
@@ -405,6 +412,8 @@ const initDB = async () => {
                 monto_total DECIMAL(14,2) NOT NULL,
                 monto_capital DECIMAL(14,2) NOT NULL,
                 monto_interes DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                monto_seguro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                monto_ahorro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
                 monto_otros DECIMAL(14,2) NOT NULL DEFAULT 0.00,
                 saldo_restante DECIMAL(14,2) NOT NULL,
                 numero_comprobante VARCHAR(50) NULL,
@@ -417,6 +426,33 @@ const initDB = async () => {
                 INDEX idx_prestamo_fecha (prestamo_id, fecha_pago)
             );
         `);
+
+        // Migration for seguro and ahorro columns
+        try {
+            const [cols] = await pool.query("SHOW COLUMNS FROM prestamos LIKE 'seguro_tipo'");
+            if (cols.length === 0) {
+                await pool.query(`
+                    ALTER TABLE prestamos
+                    ADD COLUMN seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                    ADD COLUMN seguro_valor DECIMAL(10,4) DEFAULT 0,
+                    ADD COLUMN seguro_cuota DECIMAL(10,2) DEFAULT 0,
+                    ADD COLUMN ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                    ADD COLUMN ahorro_valor DECIMAL(10,4) DEFAULT 0,
+                    ADD COLUMN ahorro_cuota DECIMAL(10,2) DEFAULT 0,
+                    ADD COLUMN cuota_total DECIMAL(14,2) DEFAULT 0
+                `);
+            }
+            const [pCols] = await pool.query("SHOW COLUMNS FROM prestamos_pagos LIKE 'monto_seguro'");
+            if (pCols.length === 0) {
+                await pool.query(`
+                    ALTER TABLE prestamos_pagos
+                    ADD COLUMN monto_seguro DECIMAL(14,2) DEFAULT 0.00 AFTER monto_interes,
+                    ADD COLUMN monto_ahorro DECIMAL(14,2) DEFAULT 0.00 AFTER monto_seguro
+                `);
+            }
+        } catch (e) {
+            console.error('Migration prestamos seguros/ahorros:', e.message);
+        }
 
         // Ensure bank reconciliation permissions exist for Administrator role
         try {

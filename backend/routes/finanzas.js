@@ -102,7 +102,13 @@ router.get('/prestamos', authenticateToken, async (req, res) => {
                 ...r,
                 monto_original: parseFloat(r.monto_original),
                 tasa_interes_anual: parseFloat(r.tasa_interes_anual),
-                cuota_calculada: parseFloat(r.cuota_calculada),
+                seguro_tipo: r.seguro_tipo || 'ninguno',
+                seguro_valor: parseFloat(r.seguro_valor || 0),
+                seguro_cuota: parseFloat(r.seguro_cuota || 0),
+                ahorro_tipo: r.ahorro_tipo || 'ninguno',
+                ahorro_valor: parseFloat(r.ahorro_valor || 0),
+                ahorro_cuota: parseFloat(r.ahorro_cuota || 0),
+                cuota_total: parseFloat(r.cuota_total || r.cuota_calculada),
                 total_capital_pagado: parseFloat(r.total_capital_pagado),
                 total_interes_pagado: parseFloat(r.total_interes_pagado),
                 total_pagado: parseFloat(r.total_pagado),
@@ -171,6 +177,13 @@ router.get('/prestamos/:id', authenticateToken, async (req, res) => {
             monto_original: parseFloat(prestamo.monto_original),
             tasa_interes_anual: parseFloat(prestamo.tasa_interes_anual),
             cuota_calculada: parseFloat(prestamo.cuota_calculada),
+            seguro_tipo: prestamo.seguro_tipo || 'ninguno',
+            seguro_valor: parseFloat(prestamo.seguro_valor || 0),
+            seguro_cuota: parseFloat(prestamo.seguro_cuota || 0),
+            ahorro_tipo: prestamo.ahorro_tipo || 'ninguno',
+            ahorro_valor: parseFloat(prestamo.ahorro_valor || 0),
+            ahorro_cuota: parseFloat(prestamo.ahorro_cuota || 0),
+            cuota_total: parseFloat(prestamo.cuota_total || prestamo.cuota_calculada),
             total_capital_pagado: totalCapitalPagado,
             total_interes_pagado: totalInteresPagado,
             total_pagado: totalPagado,
@@ -183,7 +196,9 @@ router.get('/prestamos/:id', authenticateToken, async (req, res) => {
                 monto_total: parseFloat(p.monto_total),
                 monto_capital: parseFloat(p.monto_capital),
                 monto_interes: parseFloat(p.monto_interes),
-                monto_otros: parseFloat(p.monto_otros),
+                monto_seguro: parseFloat(p.monto_seguro || 0),
+                monto_ahorro: parseFloat(p.monto_ahorro || 0),
+                monto_otros: parseFloat(p.monto_otros || 0),
                 saldo_restante: parseFloat(p.saldo_restante)
             }))
         });
@@ -208,6 +223,13 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
         fecha_inicio,
         fecha_primer_pago,
         cuota_calculada,
+        seguro_tipo = 'ninguno',
+        seguro_valor = 0,
+        seguro_cuota = 0,
+        ahorro_tipo = 'ninguno',
+        ahorro_valor = 0,
+        ahorro_cuota = 0,
+        cuota_total = 0,
         dias_gracia = 0,
         notas
     } = req.body;
@@ -219,14 +241,19 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const cuota = parseFloat(cuota_calculada) || calculatePMT(monto_original, tasa_interes_anual, plazo_meses, frecuencia_pago);
+        const segCuota = parseFloat(seguro_cuota) || 0;
+        const ahorrCuota = parseFloat(ahorro_cuota) || 0;
+        const totalCuota = parseFloat(cuota_total) || Math.round((cuota + segCuota + ahorrCuota) * 100) / 100;
 
         const [result] = await db.query(`
             INSERT INTO prestamos (
                 empresa_id, banco_id, cuenta_bancaria_id, numero_prestamo, descripcion,
                 monto_original, tasa_interes_anual, plazo_meses, frecuencia_pago,
-                fecha_inicio, fecha_primer_pago, cuota_calculada, dias_gracia,
-                estado, notas, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'activo', ?, ?)
+                fecha_inicio, fecha_primer_pago, cuota_calculada,
+                seguro_tipo, seguro_valor, seguro_cuota,
+                ahorro_tipo, ahorro_valor, ahorro_cuota, cuota_total,
+                dias_gracia, estado, notas, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'activo', ?, ?)
         `, [
             empresa_id,
             banco_id || null,
@@ -240,12 +267,19 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
             fecha_inicio,
             fecha_primer_pago,
             cuota,
+            seguro_tipo,
+            parseFloat(seguro_valor || 0),
+            segCuota,
+            ahorro_tipo,
+            parseFloat(ahorro_valor || 0),
+            ahorrCuota,
+            totalCuota,
             parseInt(dias_gracia || 0, 10),
             notas || null,
             req.user?.id || null
         ]);
 
-        res.status(201).json({ message: 'Préstamo registrado exitosamente', id: result.insertId, cuota_calculada: cuota });
+        res.status(201).json({ message: 'Préstamo registrado exitosamente', id: result.insertId, cuota_calculada: cuota, cuota_total: totalCuota });
     } catch (error) {
         console.error('Error creating prestamo:', error);
         res.status(500).json({ message: 'Error al registrar préstamo', error: error.message });
@@ -268,6 +302,13 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
         fecha_inicio,
         fecha_primer_pago,
         cuota_calculada,
+        seguro_tipo,
+        seguro_valor,
+        seguro_cuota,
+        ahorro_tipo,
+        ahorro_valor,
+        ahorro_cuota,
+        cuota_total,
         dias_gracia,
         estado,
         notas
@@ -276,6 +317,9 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const cuota = parseFloat(cuota_calculada) || calculatePMT(monto_original, tasa_interes_anual, plazo_meses, frecuencia_pago);
+        const segCuota = parseFloat(seguro_cuota) || 0;
+        const ahorrCuota = parseFloat(ahorro_cuota) || 0;
+        const totalCuota = parseFloat(cuota_total) || Math.round((cuota + segCuota + ahorrCuota) * 100) / 100;
 
         await db.query(`
             UPDATE prestamos SET
@@ -291,6 +335,13 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
                 fecha_inicio = ?,
                 fecha_primer_pago = ?,
                 cuota_calculada = ?,
+                seguro_tipo = ?,
+                seguro_valor = ?,
+                seguro_cuota = ?,
+                ahorro_tipo = ?,
+                ahorro_valor = ?,
+                ahorro_cuota = ?,
+                cuota_total = ?,
                 dias_gracia = ?,
                 estado = ?,
                 notas = ?
@@ -308,6 +359,13 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
             fecha_inicio,
             fecha_primer_pago,
             cuota,
+            seguro_tipo || 'ninguno',
+            parseFloat(seguro_valor || 0),
+            segCuota,
+            ahorro_tipo || 'ninguno',
+            parseFloat(ahorro_valor || 0),
+            ahorrCuota,
+            totalCuota,
             parseInt(dias_gracia || 0, 10),
             estado || 'activo',
             notas || null,
@@ -352,6 +410,8 @@ router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
         monto_total,
         monto_capital,
         monto_interes = 0,
+        monto_seguro = 0,
+        monto_ahorro = 0,
         monto_otros = 0,
         numero_comprobante,
         cuenta_origen_id,
@@ -379,10 +439,10 @@ router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
         const [result] = await db.query(`
             INSERT INTO prestamos_pagos (
                 prestamo_id, numero_cuota, fecha_pago, tipo_pago,
-                monto_total, monto_capital, monto_interes, monto_otros,
+                monto_total, monto_capital, monto_interes, monto_seguro, monto_ahorro, monto_otros,
                 saldo_restante, numero_comprobante, cuenta_origen_id,
                 notas, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
             id,
             numero_cuota || null,
@@ -391,6 +451,8 @@ router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
             parseFloat(monto_total),
             capitalAbonado,
             parseFloat(monto_interes || 0),
+            parseFloat(monto_seguro || 0),
+            parseFloat(monto_ahorro || 0),
             parseFloat(monto_otros || 0),
             nuevoSaldo,
             numero_comprobante ? numero_comprobante.trim().toUpperCase() : null,

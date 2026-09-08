@@ -1,12 +1,26 @@
 /**
  * Financial Calculation Utilities for SIPEOFI Loans and Amortization
  * Modeled after Dinkytown Simple Loan Amortization Calculator
+ * Extended with Insurance (Seguro) & Obligatory Savings (Ahorro Obligatorio)
  */
 
 export const FREQUENCIES = {
     mensual: { label: 'Mensual', periodsPerYear: 12, factor: 1 },
     quincenal: { label: 'Quincenal (Bi-semanal)', periodsPerYear: 24, factor: 2 },
     semanal: { label: 'Semanal', periodsPerYear: 52, factor: 4.3333 }
+};
+
+export const INSURANCE_TYPES = {
+    none: { label: 'Sin Seguro', isPercent: false },
+    fixed: { label: 'Cuota Fija ($ por cuota)', isPercent: false, placeholder: 'Ej. 15.00' },
+    percent_balance: { label: '% Anual sobre Saldo', isPercent: true, placeholder: 'Ej. 0.60%' },
+    percent_original: { label: '% Anual sobre Monto Inicial', isPercent: true, placeholder: 'Ej. 0.50%' }
+};
+
+export const SAVINGS_TYPES = {
+    none: { label: 'Sin Ahorro Obligatorio', isPercent: false },
+    fixed: { label: 'Cuota Fija ($ por cuota)', isPercent: false, placeholder: 'Ej. 20.00' },
+    percent_payment: { label: '% sobre la Cuota Regular', isPercent: true, placeholder: 'Ej. 5.00%' }
 };
 
 /**
@@ -82,7 +96,42 @@ export const addPeriodToDate = (baseDate, periodIndex, frequency = 'mensual') =>
 };
 
 /**
- * Generate full amortization schedule with extra payment support
+ * Calculate insurance fee for a period
+ */
+export const calculatePeriodInsurance = (type, value, balance, principal, periodsPerYear) => {
+    const val = Math.max(0, parseFloat(value) || 0);
+    if (!type || type === 'none' || val <= 0) return 0;
+
+    if (type === 'fixed') {
+        return Math.round(val * 100) / 100;
+    }
+    if (type === 'percent_balance') {
+        return Math.round(((balance * (val / 100)) / periodsPerYear) * 100) / 100;
+    }
+    if (type === 'percent_original') {
+        return Math.round(((principal * (val / 100)) / periodsPerYear) * 100) / 100;
+    }
+    return 0;
+};
+
+/**
+ * Calculate savings fee for a period
+ */
+export const calculatePeriodSavings = (type, value, regularPMT) => {
+    const val = Math.max(0, parseFloat(value) || 0);
+    if (!type || type === 'none' || val <= 0) return 0;
+
+    if (type === 'fixed') {
+        return Math.round(val * 100) / 100;
+    }
+    if (type === 'percent_payment') {
+        return Math.round((regularPMT * (val / 100)) * 100) / 100;
+    }
+    return 0;
+};
+
+/**
+ * Generate full amortization schedule with extra payment, insurance & savings support
  */
 export const generateAmortizationSchedule = ({
     principal,
@@ -91,7 +140,11 @@ export const generateAmortizationSchedule = ({
     frequency = 'mensual',
     startDate = new Date().toISOString().split('T')[0],
     extraPaymentMonthly = 0,
-    extraPaymentsCustom = [] // array of { periodNumber, amount }
+    extraPaymentsCustom = [], // array of { periodNumber, amount }
+    insuranceType = 'none',
+    insuranceValue = 0,
+    savingsType = 'none',
+    savingsValue = 0
 }) => {
     const P = parseFloat(principal) || 0;
     const rate = parseFloat(annualRate) || 0;
@@ -107,13 +160,19 @@ export const generateAmortizationSchedule = ({
                 totalInterest: 0,
                 totalPrincipal: 0,
                 totalExtra: 0,
+                totalInsurance: 0,
+                totalSavings: 0,
+                totalPaidWithCharges: 0,
                 monthsSaved: 0,
                 periodsSaved: 0,
                 interestSaved: 0,
                 originalTotalInterest: 0,
                 payoffDate: null,
                 originalPayoffDate: null,
-                regularPayment: 0
+                regularPayment: 0,
+                firstPeriodInsurance: 0,
+                firstPeriodSavings: 0,
+                firstPeriodTotalPayment: 0
             }
         };
     }
@@ -160,11 +219,13 @@ export const generateAmortizationSchedule = ({
         if (origBalance <= 0) break;
     }
 
-    // 2. Calculate Accelerated Schedule (With extra payments)
+    // 2. Calculate Accelerated Schedule (With extra payments, insurance and savings)
     let balance = P;
     let totalInterest = 0;
     let totalPaid = 0;
     let totalExtra = 0;
+    let totalInsurance = 0;
+    let totalSavings = 0;
     const schedule = [];
     const customExtraMap = {};
     (extraPaymentsCustom || []).forEach(ep => {
@@ -176,6 +237,7 @@ export const generateAmortizationSchedule = ({
     for (let i = 1; i <= totalPeriodsOriginal; i++) {
         if (balance <= 0.005) break;
 
+        const currentBalanceBeforePayment = balance;
         const interest = Math.round(balance * r * 100) / 100;
         let regularCapital = regularPMT - interest;
         let extra = extraPerPeriod + (customExtraMap[i] || 0);
@@ -192,9 +254,15 @@ export const generateAmortizationSchedule = ({
             balance = Math.max(0, balance - totalCapForPeriod);
         }
 
+        const insuranceFee = calculatePeriodInsurance(insuranceType, insuranceValue, currentBalanceBeforePayment, P, periodsPerYear);
+        const savingsFee = calculatePeriodSavings(savingsType, savingsValue, regularPMT);
+        const totalWithCharges = Math.round((actualPayment + insuranceFee + savingsFee) * 100) / 100;
+
         totalInterest += interest;
         totalPaid += actualPayment;
         totalExtra += extra;
+        totalInsurance += insuranceFee;
+        totalSavings += savingsFee;
 
         schedule.push({
             number: i,
@@ -204,6 +272,9 @@ export const generateAmortizationSchedule = ({
             interest: Math.round(interest * 100) / 100,
             extraPrincipal: Math.round(extra * 100) / 100,
             totalPrincipal: Math.round(totalCapForPeriod * 100) / 100,
+            insurance: insuranceFee,
+            savings: savingsFee,
+            totalWithCharges: totalWithCharges,
             balance: Math.round(balance * 100) / 100,
             accumulatedInterest: Math.round(totalInterest * 100) / 100
         });
@@ -218,6 +289,10 @@ export const generateAmortizationSchedule = ({
     const payoffDate = schedule.length > 0 ? schedule[schedule.length - 1].date : null;
     const originalPayoffDate = originalSchedule.length > 0 ? originalSchedule[originalSchedule.length - 1].date : null;
 
+    const firstPeriodInsurance = schedule.length > 0 ? schedule[0].insurance : 0;
+    const firstPeriodSavings = schedule.length > 0 ? schedule[0].savings : 0;
+    const firstPeriodTotalPayment = Math.round((regularPMT + firstPeriodInsurance + firstPeriodSavings) * 100) / 100;
+
     return {
         schedule,
         originalSchedule,
@@ -227,12 +302,18 @@ export const generateAmortizationSchedule = ({
             totalInterest: Math.round(totalInterest * 100) / 100,
             totalPrincipal: P,
             totalExtra: Math.round(totalExtra * 100) / 100,
+            totalInsurance: Math.round(totalInsurance * 100) / 100,
+            totalSavings: Math.round(totalSavings * 100) / 100,
+            totalPaidWithCharges: Math.round((totalPaid + totalInsurance + totalSavings) * 100) / 100,
             periodsSaved,
             monthsSaved,
             interestSaved,
             originalTotalInterest: Math.round(origTotalInterest * 100) / 100,
             payoffDate,
-            originalPayoffDate
+            originalPayoffDate,
+            firstPeriodInsurance,
+            firstPeriodSavings,
+            firstPeriodTotalPayment
         }
     };
 };
@@ -262,7 +343,6 @@ export const calculateRemainingPayoffFromBalance = (currentBalance, regularPayme
         const interest = Math.round(balance * r * 100) / 100;
         let cap = pmt - interest;
         if (cap <= 0) {
-            // Installment doesn't cover interest
             return { remainingPeriods: Infinity, remainingMonths: Infinity, totalInterestRemaining: Infinity };
         }
         if (balance <= cap) {

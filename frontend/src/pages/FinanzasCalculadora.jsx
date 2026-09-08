@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { Calculator, DollarSign, Calendar, Percent, TrendingDown, ArrowRight, FileSpreadsheet, FileText, Plus, Trash2, CheckCircle2, Landmark, RefreshCw } from 'lucide-react';
+import { Calculator, DollarSign, Calendar, Percent, TrendingDown, ArrowRight, FileSpreadsheet, FileText, Plus, Trash2, CheckCircle2, Landmark, RefreshCw, ShieldCheck, PiggyBank } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
 import api from '../services/api';
-import { calculatePMT, calculatePV, generateAmortizationSchedule, formatCurrency, FREQUENCIES } from '../utils/loanCalculations';
+import { calculatePMT, calculatePV, generateAmortizationSchedule, formatCurrency, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES } from '../utils/loanCalculations';
 
 export default function FinanzasCalculadora() {
     const { addToast } = useToast();
@@ -21,6 +21,12 @@ export default function FinanzasCalculadora() {
     const [termMonths, setTermMonths] = useState(60);
     const [frequency, setFrequency] = useState('mensual');
     const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+
+    // Additional Charges: Seguro & Ahorro Obligatorio
+    const [insuranceType, setInsuranceType] = useState('none');
+    const [insuranceValue, setInsuranceValue] = useState(0);
+    const [savingsType, setSavingsType] = useState('none');
+    const [savingsValue, setSavingsValue] = useState(0);
 
     // Extra payments
     const [extraMonthly, setExtraMonthly] = useState(100);
@@ -49,6 +55,10 @@ export default function FinanzasCalculadora() {
         return loanAmount;
     }, [calcMode, targetPayment, loanAmount, annualRate, termMonths, frequency]);
 
+    const hasInsurance = insuranceType !== 'none' && parseFloat(insuranceValue) > 0;
+    const hasSavings = savingsType !== 'none' && parseFloat(savingsValue) > 0;
+    const hasCharges = hasInsurance || hasSavings;
+
     const result = useMemo(() => {
         return generateAmortizationSchedule({
             principal: effectivePrincipal,
@@ -57,9 +67,13 @@ export default function FinanzasCalculadora() {
             frequency,
             startDate,
             extraPaymentMonthly: extraMonthly,
-            extraPaymentsCustom: customExtras
+            extraPaymentsCustom: customExtras,
+            insuranceType,
+            insuranceValue,
+            savingsType,
+            savingsValue
         });
-    }, [effectivePrincipal, annualRate, termMonths, frequency, startDate, extraMonthly, customExtras]);
+    }, [effectivePrincipal, annualRate, termMonths, frequency, startDate, extraMonthly, customExtras, insuranceType, insuranceValue, savingsType, savingsValue]);
 
     const handleAddCustomExtra = () => {
         const period = parseInt(newExtraPeriod, 10);
@@ -115,6 +129,13 @@ export default function FinanzasCalculadora() {
                 fecha_inicio: startDate,
                 fecha_primer_pago: startDate,
                 cuota_calculada: result.summary.regularPayment,
+                seguro_tipo: insuranceType,
+                seguro_valor: parseFloat(insuranceValue) || 0,
+                seguro_cuota: result.summary.firstPeriodInsurance,
+                ahorro_tipo: savingsType,
+                ahorro_valor: parseFloat(savingsValue) || 0,
+                ahorro_cuota: result.summary.firstPeriodSavings,
+                cuota_total: result.summary.firstPeriodTotalPayment,
                 notas: saveForm.notas
             });
             addToast('¡Préstamo registrado exitosamente en el sistema!', 'success');
@@ -129,16 +150,22 @@ export default function FinanzasCalculadora() {
     // Export to Excel according to ui_standards.md
     const exportToExcel = () => {
         if (result.schedule.length === 0) return;
-        const exportData = result.schedule.map(row => ({
-            'Cuota #': row.number,
-            'Fecha Estimada': row.date,
-            'Pago Total': row.payment,
-            'Capital': row.principal,
-            'Interés': row.interest,
-            'Abono Extra': row.extraPrincipal,
-            'Saldo Restante': row.balance,
-            'Interés Acumulado': row.accumulatedInterest
-        }));
+        const exportData = result.schedule.map(row => {
+            const item = {
+                'Cuota #': row.number,
+                'Fecha Estimada': row.date,
+                'Cuota Base': row.payment,
+                'Capital': row.principal,
+                'Interés': row.interest,
+                'Abono Extra': row.extraPrincipal
+            };
+            if (hasInsurance) item['Seguro'] = row.insurance;
+            if (hasSavings) item['Ahorro Obligatorio'] = row.savings;
+            if (hasCharges) item['Cuota Total con Cargos'] = row.totalWithCharges;
+            item['Saldo Restante'] = row.balance;
+            item['Interés Acumulado'] = row.accumulatedInterest;
+            return item;
+        });
         const worksheet = XLSX.utils.json_to_sheet(exportData);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "Amortizacion");
@@ -155,18 +182,33 @@ export default function FinanzasCalculadora() {
         doc.setFontSize(15);
         doc.text(title, 14, 15);
         doc.setFontSize(9);
-        doc.text(`Monto: ${formatCurrency(effectivePrincipal)} | Tasa: ${annualRate}% | Plazo: ${termMonths} meses | Frecuencia: ${FREQUENCIES[frequency]?.label || frequency}`, 14, 22);
+        let subtitle = `Monto: ${formatCurrency(effectivePrincipal)} | Tasa: ${annualRate}% | Plazo: ${termMonths} meses | Frecuencia: ${FREQUENCIES[frequency]?.label || frequency}`;
+        if (hasCharges) {
+            subtitle += ` | Cuota Total: ${formatCurrency(result.summary.firstPeriodTotalPayment)}`;
+        }
+        doc.text(subtitle, 14, 22);
 
-        const tableColumn = ['Cuota #', 'Fecha', 'Pago Total', 'Capital', 'Interés', 'Abono Extra', 'Saldo Restante'];
-        const tableRows = result.schedule.map(row => [
-            row.number,
-            row.date,
-            formatCurrency(row.payment),
-            formatCurrency(row.principal),
-            formatCurrency(row.interest),
-            formatCurrency(row.extraPrincipal),
-            formatCurrency(row.balance)
-        ]);
+        const tableColumn = ['Cuota #', 'Fecha', 'Cuota Base', 'Capital', 'Interés', 'Abono Extra'];
+        if (hasInsurance) tableColumn.push('Seguro');
+        if (hasSavings) tableColumn.push('Ahorro');
+        if (hasCharges) tableColumn.push('Cuota Total');
+        tableColumn.push('Saldo Restante');
+
+        const tableRows = result.schedule.map(row => {
+            const r = [
+                row.number,
+                row.date,
+                formatCurrency(row.payment),
+                formatCurrency(row.principal),
+                formatCurrency(row.interest),
+                formatCurrency(row.extraPrincipal)
+            ];
+            if (hasInsurance) r.push(formatCurrency(row.insurance));
+            if (hasSavings) r.push(formatCurrency(row.savings));
+            if (hasCharges) r.push(formatCurrency(row.totalWithCharges));
+            r.push(formatCurrency(row.balance));
+            return r;
+        });
 
         autoTable(doc, {
             head: [tableColumn],
@@ -360,6 +402,111 @@ export default function FinanzasCalculadora() {
                                 style={{ width: '100%', height: '42px' }}
                             />
                         </div>
+
+                        {/* Additional Charges: Seguro & Ahorro Obligatorio */}
+                        <div style={{
+                            gridColumn: '1 / -1',
+                            borderTop: '1px solid var(--border)',
+                            paddingTop: '1.25rem',
+                            marginTop: '0.5rem'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.925rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    <ShieldCheck size={18} color="var(--primary)" /> Seguro y Ahorro Obligatorio (Opcional)
+                                </span>
+                                {hasCharges && (
+                                    <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', borderRadius: '12px', background: 'rgba(37, 99, 235, 0.15)', color: 'var(--primary)', fontWeight: 600 }}>
+                                        + Cargos Activos
+                                    </span>
+                                )}
+                            </div>
+
+                            <div className="form-grid form-grid-2">
+                                {/* Seguro */}
+                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.85rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                    <label style={{ fontSize: '0.825rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.4rem' }}>
+                                        <ShieldCheck size={16} color="#3b82f6" /> Seguro de Deuda / Vida
+                                    </label>
+                                    <select
+                                        value={insuranceType}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setInsuranceType(val);
+                                            if (val === 'none') setInsuranceValue(0);
+                                            else if (val === 'fixed' && insuranceValue === 0) setInsuranceValue(15);
+                                            else if ((val === 'percent_balance' || val === 'percent_original') && insuranceValue === 0) setInsuranceValue(0.60);
+                                        }}
+                                        style={{ width: '100%', height: '38px', marginBottom: insuranceType !== 'none' ? '0.5rem' : 0, fontSize: '0.85rem' }}
+                                    >
+                                        {Object.entries(INSURANCE_TYPES).map(([key, opt]) => (
+                                            <option key={key} value={key}>{opt.label}</option>
+                                        ))}
+                                    </select>
+
+                                    {insuranceType !== 'none' && (
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                <span>{INSURANCE_TYPES[insuranceType]?.isPercent ? 'Tasa Porcentual Anual (%)' : 'Monto Fijo por Cuota ($)'}</span>
+                                                <span style={{ color: 'var(--primary)', fontWeight: 600 }}>
+                                                    1ª cuota: ~{formatCurrency(result.summary.firstPeriodInsurance)}
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                step={INSURANCE_TYPES[insuranceType]?.isPercent ? "0.05" : "1"}
+                                                min="0"
+                                                value={insuranceValue}
+                                                onChange={e => setInsuranceValue(Math.max(0, parseFloat(e.target.value) || 0))}
+                                                placeholder={INSURANCE_TYPES[insuranceType]?.placeholder}
+                                                style={{ width: '100%', height: '38px', fontSize: '0.85rem' }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Ahorro Obligatorio */}
+                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '0.85rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
+                                    <label style={{ fontSize: '0.825rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.4rem' }}>
+                                        <PiggyBank size={16} color="#10b981" /> Ahorro Obligatorio / Aportación
+                                    </label>
+                                    <select
+                                        value={savingsType}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setSavingsType(val);
+                                            if (val === 'none') setSavingsValue(0);
+                                            else if (val === 'fixed' && savingsValue === 0) setSavingsValue(20);
+                                            else if (val === 'percent_payment' && savingsValue === 0) setSavingsValue(5);
+                                        }}
+                                        style={{ width: '100%', height: '38px', marginBottom: savingsType !== 'none' ? '0.5rem' : 0, fontSize: '0.85rem' }}
+                                    >
+                                        {Object.entries(SAVINGS_TYPES).map(([key, opt]) => (
+                                            <option key={key} value={key}>{opt.label}</option>
+                                        ))}
+                                    </select>
+
+                                    {savingsType !== 'none' && (
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                <span>{SAVINGS_TYPES[savingsType]?.isPercent ? 'Porcentaje de la Cuota (%)' : 'Monto Fijo por Cuota ($)'}</span>
+                                                <span style={{ color: '#10b981', fontWeight: 600 }}>
+                                                    1ª cuota: ~{formatCurrency(result.summary.firstPeriodSavings)}
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                step={SAVINGS_TYPES[savingsType]?.isPercent ? "0.5" : "1"}
+                                                min="0"
+                                                value={savingsValue}
+                                                onChange={e => setSavingsValue(Math.max(0, parseFloat(e.target.value) || 0))}
+                                                placeholder={SAVINGS_TYPES[savingsType]?.placeholder}
+                                                style={{ width: '100%', height: '38px', fontSize: '0.85rem' }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -450,13 +597,22 @@ export default function FinanzasCalculadora() {
             {/* KPI Summary Cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
                 <div className="card glass" style={{ padding: '1.25rem' }}>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Cuota Regular / Total</div>
-                    <div style={{ fontSize: '1.35rem', fontWeight: 700, color: 'var(--primary)' }}>
-                        {formatCurrency(result.summary.regularPayment)}
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                        {hasCharges ? 'Cuota Total a Pagar' : 'Cuota Regular / Total'}
                     </div>
+                    <div style={{ fontSize: '1.35rem', fontWeight: 700, color: 'var(--primary)' }}>
+                        {formatCurrency(hasCharges ? result.summary.firstPeriodTotalPayment : result.summary.regularPayment)}
+                    </div>
+                    {hasCharges && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                            <span>Base: <strong>{formatCurrency(result.summary.regularPayment)}</strong></span>
+                            {hasInsurance && <span style={{ color: '#60a5fa' }}>+ Seg: {formatCurrency(result.summary.firstPeriodInsurance)}</span>}
+                            {hasSavings && <span style={{ color: '#34d399' }}>+ Ahorro: {formatCurrency(result.summary.firstPeriodSavings)}</span>}
+                        </div>
+                    )}
                     {extraMonthly > 0 && (
                         <div style={{ fontSize: '0.8rem', color: 'var(--accent, #10b981)', marginTop: '0.25rem' }}>
-                            Con abono: <strong>{formatCurrency(result.summary.regularPayment + extraMonthly)}</strong>
+                            Con abono: <strong>{formatCurrency((hasCharges ? result.summary.firstPeriodTotalPayment : result.summary.regularPayment) + extraMonthly)}</strong>
                         </div>
                     )}
                 </div>
@@ -472,6 +628,19 @@ export default function FinanzasCalculadora() {
                         </div>
                     )}
                 </div>
+
+                {hasCharges && (
+                    <div className="card glass" style={{ padding: '1.25rem' }}>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Total Seguros y Ahorros</div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#60a5fa' }}>
+                            {formatCurrency(result.summary.totalInsurance + result.summary.totalSavings)}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                            {hasInsurance && <div>Seguros: {formatCurrency(result.summary.totalInsurance)}</div>}
+                            {hasSavings && <div>Ahorro acumulado: {formatCurrency(result.summary.totalSavings)}</div>}
+                        </div>
+                    </div>
+                )}
 
                 <div className="card glass" style={{ padding: '1.25rem', border: result.summary.interestSaved > 0 ? '1px solid rgba(16, 185, 129, 0.4)' : undefined }}>
                     <div style={{ fontSize: '0.8rem', color: 'var(--accent, #10b981)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.25rem' }}>Ahorro en Intereses</div>
@@ -569,15 +738,18 @@ export default function FinanzasCalculadora() {
                     </h3>
                 </div>
 
-                <table style={{ minWidth: '950px', width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+                <table style={{ minWidth: hasCharges ? '1100px' : '950px', width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text-muted)' }}>
                             <th style={{ padding: '0.6rem' }}>#</th>
                             <th style={{ padding: '0.6rem' }}>Fecha</th>
-                            <th style={{ padding: '0.6rem' }}>Pago Total</th>
+                            <th style={{ padding: '0.6rem' }}>Cuota Base</th>
                             <th style={{ padding: '0.6rem' }}>Capital Regular</th>
                             <th style={{ padding: '0.6rem' }}>Interés</th>
                             <th style={{ padding: '0.6rem', color: 'var(--accent, #10b981)' }}>Abono Extra</th>
+                            {hasInsurance && <th style={{ padding: '0.6rem', color: '#60a5fa' }}>Seguro</th>}
+                            {hasSavings && <th style={{ padding: '0.6rem', color: '#34d399' }}>Ahorro</th>}
+                            {hasCharges && <th style={{ padding: '0.6rem', fontWeight: 700, color: 'var(--primary)' }}>Cuota Total</th>}
                             <th style={{ padding: '0.6rem' }}>Capital Total</th>
                             <th style={{ padding: '0.6rem' }}>Saldo Restante</th>
                         </tr>
@@ -593,6 +765,9 @@ export default function FinanzasCalculadora() {
                                 <td style={{ padding: '0.55rem', color: 'var(--accent, #10b981)', fontWeight: row.extraPrincipal > 0 ? 600 : 400 }}>
                                     {row.extraPrincipal > 0 ? `+${formatCurrency(row.extraPrincipal)}` : '-'}
                                 </td>
+                                {hasInsurance && <td style={{ padding: '0.55rem', color: '#60a5fa' }}>{formatCurrency(row.insurance)}</td>}
+                                {hasSavings && <td style={{ padding: '0.55rem', color: '#34d399' }}>{formatCurrency(row.savings)}</td>}
+                                {hasCharges && <td style={{ padding: '0.55rem', fontWeight: 700, color: 'var(--primary)' }}>{formatCurrency(row.totalWithCharges)}</td>}
                                 <td style={{ padding: '0.55rem' }}>{formatCurrency(row.totalPrincipal)}</td>
                                 <td style={{ padding: '0.55rem', fontWeight: 700 }}>{formatCurrency(row.balance)}</td>
                             </tr>
@@ -610,7 +785,12 @@ export default function FinanzasCalculadora() {
             >
                 <form onSubmit={handleSaveLoan} style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
                     <div style={{ background: 'rgba(37, 99, 235, 0.1)', padding: '0.85rem', borderRadius: 'var(--border-radius)', fontSize: '0.875rem' }}>
-                        Se registrará un préstamo por <strong>{formatCurrency(effectivePrincipal)}</strong> al <strong>{annualRate}% anual</strong> en <strong>{termMonths} meses</strong> con cuota de <strong>{formatCurrency(result.summary.regularPayment)}</strong>.
+                        Se registrará un préstamo por <strong>{formatCurrency(effectivePrincipal)}</strong> al <strong>{annualRate}% anual</strong> en <strong>{termMonths} meses</strong> con cuota base de <strong>{formatCurrency(result.summary.regularPayment)}</strong>.
+                        {hasCharges && (
+                            <div style={{ marginTop: '0.35rem', color: 'var(--primary)', fontWeight: 500 }}>
+                                Incluye {hasInsurance ? `Seguro (${formatCurrency(result.summary.firstPeriodInsurance)})` : ''} {hasInsurance && hasSavings ? ' y ' : ''} {hasSavings ? `Ahorro (${formatCurrency(result.summary.firstPeriodSavings)})` : ''}. Cuota total estimada: <strong>{formatCurrency(result.summary.firstPeriodTotalPayment)}</strong>.
+                            </div>
+                        )}
                     </div>
 
                     <div className="form-grid form-grid-2">
