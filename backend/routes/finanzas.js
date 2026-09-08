@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { GoogleGenAI } = require('@google/genai');
 const { getDb } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
@@ -60,6 +61,55 @@ const ensureFinanzasTables = async (db) => {
                 created_by INT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_prestamo_fecha (prestamo_id, fecha_pago)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS finanzas_proyectos_inversion (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                nombre_proyecto VARCHAR(150) NOT NULL,
+                descripcion TEXT,
+                categoria VARCHAR(50) DEFAULT 'general',
+                inversion_inicial DECIMAL(14,2) NOT NULL,
+                tasa_descuento DECIMAL(6,3) NOT NULL DEFAULT 10.000,
+                plazo_anios INT NOT NULL DEFAULT 5,
+                valor_residual DECIMAL(14,2) DEFAULT 0.00,
+                roi_estimado DECIMAL(8,2) DEFAULT 0.00,
+                vpn_estimado DECIMAL(14,2) DEFAULT 0.00,
+                tir_estimada DECIMAL(8,2) NULL,
+                payback_meses DECIMAL(8,2) DEFAULT 0.00,
+                payback_descontado_meses DECIMAL(8,2) DEFAULT 0.00,
+                relacion_bc DECIMAL(8,2) DEFAULT 0.00,
+                flujos_json JSON NULL,
+                estado VARCHAR(30) DEFAULT 'evaluacion',
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_proyecto_empresa (empresa_id, estado)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS finanzas_planes_mantenimiento (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                nombre_activo VARCHAR(150) NOT NULL,
+                tipo_activo VARCHAR(80) NOT NULL,
+                costo_estimado DECIMAL(14,2) NOT NULL,
+                tipo_gasto VARCHAR(30) DEFAULT 'preventivo',
+                frecuencia VARCHAR(30) DEFAULT 'anual',
+                fecha_programada DATE NOT NULL,
+                fecha_ejecutada DATE NULL,
+                responsable VARCHAR(120) NULL,
+                proveedor VARCHAR(150) NULL,
+                criticidad VARCHAR(20) DEFAULT 'media',
+                estado VARCHAR(30) DEFAULT 'programado',
+                notas TEXT NULL,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_mantenimiento_empresa (empresa_id, estado, fecha_programada)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
 
@@ -726,6 +776,666 @@ router.get('/resumen', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error fetching finanzas resumen:', error);
         res.status(500).json({ message: 'Error al obtener resumen de finanzas', error: error.message });
+    }
+});
+
+// ==========================================
+// --- PROYECTOS DE INVERSIÓN Y RENTABILIDAD ---
+// ==========================================
+
+// GET /proyectos
+router.get('/proyectos', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { empresa_id, estado } = req.query;
+
+        let query = `
+            SELECT p.*, e.nombre AS empresa_nombre
+            FROM finanzas_proyectos_inversion p
+            LEFT JOIN empresas e ON p.empresa_id = e.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (empresa_id) {
+            query += ' AND p.empresa_id = ?';
+            params.push(empresa_id);
+        }
+        if (estado) {
+            query += ' AND p.estado = ?';
+            params.push(estado);
+        }
+
+        query += ' ORDER BY p.created_at DESC';
+
+        const [rows] = await db.query(query, params);
+        res.json(rows.map(r => ({
+            ...r,
+            inversion_inicial: parseFloat(r.inversion_inicial || 0),
+            tasa_descuento: parseFloat(r.tasa_descuento || 0),
+            valor_residual: parseFloat(r.valor_residual || 0),
+            roi_estimado: parseFloat(r.roi_estimado || 0),
+            vpn_estimado: parseFloat(r.vpn_estimado || 0),
+            tir_estimada: r.tir_estimada !== null && r.tir_estimada !== undefined ? parseFloat(r.tir_estimada) : null,
+            payback_meses: parseFloat(r.payback_meses || 0),
+            payback_descontado_meses: parseFloat(r.payback_descontado_meses || 0),
+            relacion_bc: parseFloat(r.relacion_bc || 0),
+            flujos_json: typeof r.flujos_json === 'string' ? JSON.parse(r.flujos_json) : (r.flujos_json || [])
+        })));
+    } catch (error) {
+        console.error('Error fetching proyectos:', error);
+        res.status(500).json({ message: 'Error al obtener proyectos de inversión', error: error.message });
+    }
+});
+
+// GET /proyectos/:id
+router.get('/proyectos/:id', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { id } = req.params;
+
+        const [rows] = await db.query(`
+            SELECT p.*, e.nombre AS empresa_nombre
+            FROM finanzas_proyectos_inversion p
+            LEFT JOIN empresas e ON p.empresa_id = e.id
+            WHERE p.id = ?
+        `, [id]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Proyecto no encontrado' });
+        }
+
+        const r = rows[0];
+        res.json({
+            ...r,
+            inversion_inicial: parseFloat(r.inversion_inicial || 0),
+            tasa_descuento: parseFloat(r.tasa_descuento || 0),
+            valor_residual: parseFloat(r.valor_residual || 0),
+            roi_estimado: parseFloat(r.roi_estimado || 0),
+            vpn_estimado: parseFloat(r.vpn_estimado || 0),
+            tir_estimada: r.tir_estimada !== null && r.tir_estimada !== undefined ? parseFloat(r.tir_estimada) : null,
+            payback_meses: parseFloat(r.payback_meses || 0),
+            payback_descontado_meses: parseFloat(r.payback_descontado_meses || 0),
+            relacion_bc: parseFloat(r.relacion_bc || 0),
+            flujos_json: typeof r.flujos_json === 'string' ? JSON.parse(r.flujos_json) : (r.flujos_json || [])
+        });
+    } catch (error) {
+        console.error('Error fetching proyecto:', error);
+        res.status(500).json({ message: 'Error al obtener detalle del proyecto', error: error.message });
+    }
+});
+
+// POST /proyectos
+router.post('/proyectos', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const {
+            empresa_id,
+            nombre_proyecto,
+            descripcion,
+            categoria,
+            inversion_inicial,
+            tasa_descuento,
+            plazo_anios,
+            valor_residual,
+            roi_estimado,
+            vpn_estimado,
+            tir_estimada,
+            payback_meses,
+            payback_descontado_meses,
+            relacion_bc,
+            flujos_json,
+            estado
+        } = req.body;
+
+        if (!empresa_id || !nombre_proyecto || !inversion_inicial) {
+            return res.status(400).json({ message: 'Empresa, nombre de proyecto e inversión inicial son requeridos' });
+        }
+
+        const flujosStr = typeof flujos_json === 'object' ? JSON.stringify(flujos_json) : (flujos_json || '[]');
+
+        const [result] = await db.query(`
+            INSERT INTO finanzas_proyectos_inversion (
+                empresa_id, nombre_proyecto, descripcion, categoria,
+                inversion_inicial, tasa_descuento, plazo_anios, valor_residual,
+                roi_estimado, vpn_estimado, tir_estimada, payback_meses,
+                payback_descontado_meses, relacion_bc, flujos_json, estado, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+            empresa_id,
+            nombre_proyecto,
+            descripcion || null,
+            categoria || 'general',
+            parseFloat(inversion_inicial),
+            parseFloat(tasa_descuento || 10),
+            parseInt(plazo_anios || 5, 10),
+            parseFloat(valor_residual || 0),
+            parseFloat(roi_estimado || 0),
+            parseFloat(vpn_estimado || 0),
+            tir_estimada !== null && tir_estimada !== undefined && tir_estimada !== '' ? parseFloat(tir_estimada) : null,
+            parseFloat(payback_meses || 0),
+            parseFloat(payback_descontado_meses || 0),
+            parseFloat(relacion_bc || 0),
+            flujosStr,
+            estado || 'evaluacion',
+            req.user?.id || null
+        ]);
+
+        res.status(201).json({ id: result.insertId, message: 'Proyecto registrado exitosamente' });
+    } catch (error) {
+        console.error('Error saving proyecto:', error);
+        res.status(500).json({ message: 'Error al registrar proyecto de inversión', error: error.message });
+    }
+});
+
+// PUT /proyectos/:id
+router.put('/proyectos/:id', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { id } = req.params;
+        const {
+            empresa_id,
+            nombre_proyecto,
+            descripcion,
+            categoria,
+            inversion_inicial,
+            tasa_descuento,
+            plazo_anios,
+            valor_residual,
+            roi_estimado,
+            vpn_estimado,
+            tir_estimada,
+            payback_meses,
+            payback_descontado_meses,
+            relacion_bc,
+            flujos_json,
+            estado
+        } = req.body;
+
+        const flujosStr = typeof flujos_json === 'object' ? JSON.stringify(flujos_json) : (flujos_json || '[]');
+
+        await db.query(`
+            UPDATE finanzas_proyectos_inversion SET
+                empresa_id = ?,
+                nombre_proyecto = ?,
+                descripcion = ?,
+                categoria = ?,
+                inversion_inicial = ?,
+                tasa_descuento = ?,
+                plazo_anios = ?,
+                valor_residual = ?,
+                roi_estimado = ?,
+                vpn_estimado = ?,
+                tir_estimada = ?,
+                payback_meses = ?,
+                payback_descontado_meses = ?,
+                relacion_bc = ?,
+                flujos_json = ?,
+                estado = ?
+            WHERE id = ?
+        `, [
+            empresa_id,
+            nombre_proyecto,
+            descripcion || null,
+            categoria || 'general',
+            parseFloat(inversion_inicial),
+            parseFloat(tasa_descuento || 10),
+            parseInt(plazo_anios || 5, 10),
+            parseFloat(valor_residual || 0),
+            parseFloat(roi_estimado || 0),
+            parseFloat(vpn_estimado || 0),
+            tir_estimada !== null && tir_estimada !== undefined && tir_estimada !== '' ? parseFloat(tir_estimada) : null,
+            parseFloat(payback_meses || 0),
+            parseFloat(payback_descontado_meses || 0),
+            parseFloat(relacion_bc || 0),
+            flujosStr,
+            estado || 'evaluacion',
+            id
+        ]);
+
+        res.json({ message: 'Proyecto actualizado exitosamente' });
+    } catch (error) {
+        console.error('Error updating proyecto:', error);
+        res.status(500).json({ message: 'Error al actualizar proyecto', error: error.message });
+    }
+});
+
+// DELETE /proyectos/:id
+router.delete('/proyectos/:id', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { id } = req.params;
+        await db.query('DELETE FROM finanzas_proyectos_inversion WHERE id = ?', [id]);
+        res.json({ message: 'Proyecto eliminado exitosamente' });
+    } catch (error) {
+        console.error('Error deleting proyecto:', error);
+        res.status(500).json({ message: 'Error al eliminar proyecto', error: error.message });
+    }
+});
+
+// ==========================================
+// --- PLANES DE MANTENIMIENTO (CapEx vs OpEx) ---
+// ==========================================
+
+// GET /mantenimiento
+router.get('/mantenimiento', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { empresa_id, estado, tipo_gasto } = req.query;
+
+        let query = `
+            SELECT m.*, e.nombre AS empresa_nombre
+            FROM finanzas_planes_mantenimiento m
+            LEFT JOIN empresas e ON m.empresa_id = e.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (empresa_id) {
+            query += ' AND m.empresa_id = ?';
+            params.push(empresa_id);
+        }
+        if (estado) {
+            query += ' AND m.estado = ?';
+            params.push(estado);
+        }
+        if (tipo_gasto) {
+            query += ' AND m.tipo_gasto = ?';
+            params.push(tipo_gasto);
+        }
+
+        query += ' ORDER BY m.fecha_programada ASC';
+
+        const [rows] = await db.query(query, params);
+        res.json(rows.map(r => ({
+            ...r,
+            costo_estimado: parseFloat(r.costo_estimado || 0)
+        })));
+    } catch (error) {
+        console.error('Error fetching mantenimiento:', error);
+        res.status(500).json({ message: 'Error al obtener planes de mantenimiento', error: error.message });
+    }
+});
+
+// POST /mantenimiento
+router.post('/mantenimiento', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const {
+            empresa_id,
+            nombre_activo,
+            tipo_activo,
+            costo_estimado,
+            tipo_gasto,
+            frecuencia,
+            fecha_programada,
+            responsable,
+            proveedor,
+            criticidad,
+            estado,
+            notas
+        } = req.body;
+
+        if (!empresa_id || !nombre_activo || !costo_estimado || !fecha_programada) {
+            return res.status(400).json({ message: 'Empresa, activo, costo y fecha programada son requeridos' });
+        }
+
+        const [result] = await db.query(`
+            INSERT INTO finanzas_planes_mantenimiento (
+                empresa_id, nombre_activo, tipo_activo, costo_estimado,
+                tipo_gasto, frecuencia, fecha_programada, responsable,
+                proveedor, criticidad, estado, notas, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+            empresa_id,
+            nombre_activo,
+            tipo_activo || 'General',
+            parseFloat(costo_estimado),
+            tipo_gasto || 'preventivo',
+            frecuencia || 'anual',
+            fecha_programada,
+            responsable || null,
+            proveedor || null,
+            criticidad || 'media',
+            estado || 'programado',
+            notas || null,
+            req.user?.id || null
+        ]);
+
+        res.status(201).json({ id: result.insertId, message: 'Plan de mantenimiento registrado exitosamente' });
+    } catch (error) {
+        console.error('Error saving mantenimiento:', error);
+        res.status(500).json({ message: 'Error al registrar mantenimiento', error: error.message });
+    }
+});
+
+// PUT /mantenimiento/:id
+router.put('/mantenimiento/:id', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { id } = req.params;
+        const {
+            empresa_id,
+            nombre_activo,
+            tipo_activo,
+            costo_estimado,
+            tipo_gasto,
+            frecuencia,
+            fecha_programada,
+            fecha_ejecutada,
+            responsable,
+            proveedor,
+            criticidad,
+            estado,
+            notas
+        } = req.body;
+
+        await db.query(`
+            UPDATE finanzas_planes_mantenimiento SET
+                empresa_id = ?,
+                nombre_activo = ?,
+                tipo_activo = ?,
+                costo_estimado = ?,
+                tipo_gasto = ?,
+                frecuencia = ?,
+                fecha_programada = ?,
+                fecha_ejecutada = ?,
+                responsable = ?,
+                proveedor = ?,
+                criticidad = ?,
+                estado = ?,
+                notas = ?
+            WHERE id = ?
+        `, [
+            empresa_id,
+            nombre_activo,
+            tipo_activo || 'General',
+            parseFloat(costo_estimado),
+            tipo_gasto || 'preventivo',
+            frecuencia || 'anual',
+            fecha_programada,
+            fecha_ejecutada || null,
+            responsable || null,
+            proveedor || null,
+            criticidad || 'media',
+            estado || 'programado',
+            notas || null,
+            id
+        ]);
+
+        res.json({ message: 'Mantenimiento actualizado exitosamente' });
+    } catch (error) {
+        console.error('Error updating mantenimiento:', error);
+        res.status(500).json({ message: 'Error al actualizar mantenimiento', error: error.message });
+    }
+});
+
+// DELETE /mantenimiento/:id
+router.delete('/mantenimiento/:id', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { id } = req.params;
+        await db.query('DELETE FROM finanzas_planes_mantenimiento WHERE id = ?', [id]);
+        res.json({ message: 'Registro de mantenimiento eliminado exitosamente' });
+    } catch (error) {
+        console.error('Error deleting mantenimiento:', error);
+        res.status(500).json({ message: 'Error al eliminar mantenimiento', error: error.message });
+    }
+});
+
+// ==========================================
+// --- CONSEJERO FINANCIERO Y PROYECCIONES IA ---
+// ==========================================
+
+// POST /asesor-ia
+router.post('/asesor-ia', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureFinanzasTables(db);
+        const { prompt, proyecto_id, empresa_id } = req.body;
+
+        // 1. Obtener préstamos activos
+        let loanQuery = `
+            SELECT 
+                p.id, p.empresa_id, e.nombre AS empresa_nombre,
+                p.numero_prestamo, p.descripcion,
+                p.monto_original, p.tasa_interes_anual, p.plazo_meses,
+                p.cuota_calculada, p.cuota_total,
+                (p.monto_original - COALESCE(SUM(pp.monto_capital), 0)) AS saldo_actual,
+                COALESCE(SUM(pp.monto_interes), 0) AS interes_pagado
+            FROM prestamos p
+            LEFT JOIN empresas e ON p.empresa_id = e.id
+            LEFT JOIN prestamos_pagos pp ON p.id = pp.prestamo_id
+            WHERE p.estado = 'activo'
+        `;
+        const loanParams = [];
+        if (empresa_id) {
+            loanQuery += ' AND p.empresa_id = ?';
+            loanParams.push(empresa_id);
+        }
+        loanQuery += ' GROUP BY p.id';
+        const [activeLoans] = await db.query(loanQuery, loanParams);
+
+        // 2. Obtener proyectos de inversión
+        let projectQuery = `
+            SELECT p.*, e.nombre AS empresa_nombre
+            FROM finanzas_proyectos_inversion p
+            LEFT JOIN empresas e ON p.empresa_id = e.id
+            WHERE 1=1
+        `;
+        const projParams = [];
+        if (empresa_id) {
+            projectQuery += ' AND p.empresa_id = ?';
+            projParams.push(empresa_id);
+        }
+        if (proyecto_id) {
+            projectQuery += ' AND p.id = ?';
+            projParams.push(proyecto_id);
+        }
+        projectQuery += ' ORDER BY p.created_at DESC LIMIT 10';
+        const [projects] = await db.query(projectQuery, projParams);
+
+        // 3. Obtener mantenimientos programados próximos
+        let mantQuery = `
+            SELECT m.*, e.nombre AS empresa_nombre
+            FROM finanzas_planes_mantenimiento m
+            LEFT JOIN empresas e ON m.empresa_id = e.id
+            WHERE m.estado IN ('programado', 'en_proceso')
+        `;
+        const mantParams = [];
+        if (empresa_id) {
+            mantQuery += ' AND m.empresa_id = ?';
+            mantParams.push(empresa_id);
+        }
+        mantQuery += ' ORDER BY m.fecha_programada ASC LIMIT 15';
+        const [maintenances] = await db.query(mantQuery, mantParams);
+
+        // Consolidación de métricas de deuda
+        const totalSaldoDeuda = activeLoans.reduce((sum, l) => sum + Math.max(0, parseFloat(l.saldo_actual || 0)), 0);
+        const totalCuotaMensual = activeLoans.reduce((sum, l) => sum + parseFloat(l.cuota_total || l.cuota_calculada || 0), 0);
+        
+        let weightedRateSum = 0;
+        activeLoans.forEach(l => {
+            const saldo = Math.max(0, parseFloat(l.saldo_actual || 0));
+            weightedRateSum += saldo * (parseFloat(l.tasa_interes_anual || 0));
+        });
+        const tasaPromedioPonderadaDeuda = totalSaldoDeuda > 0 ? (weightedRateSum / totalSaldoDeuda) : 0;
+
+        // Presupuesto mantenimiento
+        const totalPresupuestoMant = maintenances.reduce((sum, m) => sum + parseFloat(m.costo_estimado || 0), 0);
+        const proyectosRentables = projects.filter(p => parseFloat(p.vpn_estimado || 0) > 0);
+
+        const financialContext = {
+            total_prestamos_activos: activeLoans.length,
+            saldo_total_deuda: Math.round(totalSaldoDeuda * 100) / 100,
+            cuota_mensual_total: Math.round(totalCuotaMensual * 100) / 100,
+            tasa_ponderada_deuda_anual: +(tasaPromedioPonderadaDeuda).toFixed(2),
+            prestamos: activeLoans.map(l => ({
+                id: l.id,
+                empresa: l.empresa_nombre,
+                codigo: l.numero_prestamo,
+                descripcion: l.descripcion,
+                saldo_actual: Math.round(parseFloat(l.saldo_actual || 0)),
+                tasa_interes: parseFloat(l.tasa_interes_anual),
+                cuota_mensual: parseFloat(l.cuota_total || l.cuota_calculada)
+            })),
+            proyectos: projects.map(p => ({
+                id: p.id,
+                nombre: p.nombre_proyecto,
+                empresa: p.empresa_nombre,
+                inversion: parseFloat(p.inversion_inicial),
+                tasa_descuento: parseFloat(p.tasa_descuento),
+                vpn: parseFloat(p.vpn_estimado),
+                tir: p.tir_estimada !== null && p.tir_estimada !== undefined ? parseFloat(p.tir_estimada) : null,
+                roi: parseFloat(p.roi_estimado),
+                payback_meses: parseFloat(p.payback_meses),
+                estado: p.estado
+            })),
+            mantenimiento_proximo: {
+                total_comprometido: Math.round(totalPresupuestoMant * 100) / 100,
+                cantidad_eventos: maintenances.length,
+                detalles: maintenances.slice(0, 5).map(m => ({
+                    activo: m.nombre_activo,
+                    costo: parseFloat(m.costo_estimado),
+                    fecha: m.fecha_programada,
+                    criticidad: m.criticidad
+                }))
+            }
+        };
+
+        // Si hay API KEY de Gemini disponible
+        if (process.env.GEMINI_API_KEY) {
+            try {
+                const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+                const systemInstruction = `Eres el Director Financiero Corporativo (CFO) y Asesor Estratégico Senior del Grupo Empresarial SIPE (estaciones de servicio de combustible, transporte de hidrocarburos e inversiones).
+Tu misión es emitir diagnósticos de alto rigor financiero, evaluar rentabilidad (VPN, TIR, ROI, Payback), arbitraje de capital (prepagar deuda bancaria vs financiar nuevos proyectos), y planes de mantenimiento.
+Responde de manera estructurada, ejecutiva, con números exactos y recomendaciones prioritarias.
+
+FORMATO DE RESPUESTA JSON ESTRICTO:
+{
+    "diagnostico": "Resumen ejecutivo del estado financiero actual del grupo/empresa.",
+    "salud_financiera": "Optima | Buena | Precaucion | Critica",
+    "arbitraje_deuda_vs_inversion": {
+        "tasa_deuda_referencia": "${tasaPromedioPonderadaDeuda.toFixed(2)}%",
+        "tir_promedio_proyectos": "...",
+        "recomendacion_estrategica": "Recomienda con claridad si conviene prepagar préstamos para ahorrar intereses o ejecutar proyectos con TIR superior."
+    },
+    "alertas_riesgo": ["Alerta 1", "Alerta 2"],
+    "recomendaciones_prioritarias": [
+        { "titulo": "...", "detalle": "...", "impacto": "Alto | Medio | Inmediato" }
+    ],
+    "analisis_proyeccion": "Proyección a 12-36 meses considerando flujo para cuotas bancarias y mantenimiento.",
+    "reply_markdown": "Respuesta detallada y profesional en Markdown con tablas o viñetas para que el usuario la lea con total claridad."
+}`;
+
+                const userPromptText = prompt
+                    ? `CONSULTA ESPECÍFICA DEL USUARIO: ${prompt}\n\nDATOS FINANCIEROS Y OPERATIVOS EN SISTEMA:\n${JSON.stringify(financialContext)}`
+                    : `Realiza un diagnóstico integral de salud financiera, arbitraje de deuda vs proyectos y recomendaciones para la gerencia general.\n\nDATOS FINANCIEROS Y OPERATIVOS EN SISTEMA:\n${JSON.stringify(financialContext)}`;
+
+                const result = await ai.models.generateContent({
+                    model: 'gemini-2.0-flash',
+                    contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
+                    config: {
+                        systemInstruction,
+                        responseMimeType: "application/json"
+                    }
+                });
+
+                let rawText = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+                if (rawText.startsWith('```json')) {
+                    rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+                }
+
+                const parsed = JSON.parse(rawText);
+                return res.json({
+                    success: true,
+                    fuente: 'gemini-2.0-flash',
+                    contexto_base: financialContext,
+                    data: parsed
+                });
+            } catch (aiErr) {
+                console.warn('Gemini Finanzas call failed, falling back to heuristic engine:', aiErr.message);
+            }
+        }
+
+        // --- MOTOR HEURÍSTICO / MATEMÁTICO DE CONTINGENCIA (Fallback Offline) ---
+        const bestProject = projects.reduce((best, p) => (!best || (p.tir_estimada || 0) > (best.tir_estimada || 0)) ? p : best, null);
+        const bestTIR = bestProject?.tir_estimada || 0;
+        const spreadArbitraje = bestTIR - tasaPromedioPonderadaDeuda;
+
+        let recomendacionArbitraje = "";
+        if (spreadArbitraje > 5) {
+            recomendacionArbitraje = `La TIR del mejor proyecto (${bestProject?.nombre_proyecto || 'Nuevo Proyecto'}: ${bestTIR}%) supera por ${spreadArbitraje.toFixed(2)}% el costo de la deuda bancaria (${tasaPromedioPonderadaDeuda.toFixed(2)}%). Conviene priorizar la ejecución del proyecto ya que genera mayor valor que el ahorro por prepagar préstamos.`;
+        } else if (spreadArbitraje > 0) {
+            recomendacionArbitraje = `El rendimiento del proyecto (${bestTIR}%) es moderadamente superior al costo financiero (${tasaPromedioPonderadaDeuda.toFixed(2)}%). Considera una estrategia mixta: amortización parcial de deuda cara y avance por fases en la inversión.`;
+        } else {
+            recomendacionArbitraje = `El costo promedio de la deuda bancaria (${tasaPromedioPonderadaDeuda.toFixed(2)}%) es mayor o igual a los retornos proyectados. Se recomienda amortizar extraordinariamente el capital de los préstamos más caros para blindar la liquidez.`;
+        }
+
+        const fallbackResponse = {
+            diagnostico: `El grupo gestiona una deuda activa total de $${totalSaldoDeuda.toLocaleString('en-US', { minimumFractionDigits: 2 })} distribuida en ${activeLoans.length} préstamo(s), con una carga mensual de $${totalCuotaMensual.toLocaleString('en-US', { minimumFractionDigits: 2 })} y un costo ponderado del ${tasaPromedioPonderadaDeuda.toFixed(2)}% anual. Existen ${projects.length} proyecto(s) evaluados y compromisos de mantenimiento por $${totalPresupuestoMant.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`,
+            salud_financiera: totalSaldoDeuda === 0 ? "Optima" : (totalCuotaMensual > 0 && spreadArbitraje >= 0 ? "Buena" : "Precaucion"),
+            arbitraje_deuda_vs_inversion: {
+                tasa_deuda_referencia: `${tasaPromedioPonderadaDeuda.toFixed(2)}%`,
+                tir_promedio_proyectos: bestProject ? `${bestTIR}% (${bestProject.nombre_proyecto})` : "N/A",
+                recomendacion_estrategica: recomendacionArbitraje
+            },
+            alertas_riesgo: [
+                totalPresupuestoMant > 15000 ? `Compromiso significativo de mantenimiento preventivo ($${totalPresupuestoMant.toLocaleString('en-US')}) programado en el corto plazo.` : null,
+                totalSaldoDeuda > 0 ? `Carga mensual recurrente de servicio de deuda por $${totalCuotaMensual.toLocaleString('en-US')}.` : null,
+                projects.some(p => (p.vpn_estimado || 0) < 0) ? 'Existen proyectos con VPN negativo que deben ser replanteados o descartados.' : null
+            ].filter(Boolean),
+            recomendaciones_prioritarias: [
+                {
+                    titulo: "Optimización de Estructura de Capital",
+                    detalle: recomendacionArbitraje,
+                    impacto: "Alto"
+                },
+                {
+                    titulo: "Programación de Fondos de Mantenimiento",
+                    detalle: `Asegurar provisión anticipada de $${totalPresupuestoMant.toLocaleString('en-US')} para mantenimientos críticos sin afectar el capital de trabajo de combustible.`,
+                    impacto: "Medio"
+                },
+                {
+                    titulo: "Seguimiento a Proyectos Rentables",
+                    detalle: proyectosRentables.length > 0 ? `Monitorear el inicio de ${proyectosRentables.map(p => p.nombre_proyecto).join(', ')} para consolidar flujos positivos.` : "Formular proyectos de expansión o eficiencia energética con VPN positivo.",
+                    impacto: "Inmediato"
+                }
+            ],
+            analisis_proyeccion: `Con la estructura actual, el flujo operativo debe cubrir primeramente los $${(totalCuotaMensual * 12).toLocaleString('en-US')} anuales de cuotas bancarias más $${totalPresupuestoMant.toLocaleString('en-US')} de mantenimiento programado. Los proyectos aprobados tienen un potencial de retorno acumulado que reforzará la rentabilidad sobre activos.`,
+            reply_markdown: `### Diagnóstico Financiero Ejecutivo
+- **Saldo Total de Deuda Activa:** $${totalSaldoDeuda.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+- **Costo Financiero Ponderado (Tasa Anual):** ${tasaPromedioPonderadaDeuda.toFixed(2)}%
+- **Servicio Mensual de Deuda:** $${totalCuotaMensual.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+- **Mantenimiento Comprometido:** $${totalPresupuestoMant.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+
+#### Análisis de Arbitraje Financiero:
+${recomendacionArbitraje}
+
+#### Próximos Pasos Recomendados:
+1. **Prioridad 1:** Gestionar la liquidez operativa mensual asegurando la cobertura de cuotas de deuda.
+2. **Prioridad 2:** ${proyectosRentables.length > 0 ? `Ejecutar proyecto prioritario "${bestProject?.nombre_proyecto || 'En evaluación'}" (TIR: ${bestTIR}%, VPN: $${bestProject?.vpn_estimado?.toLocaleString('en-US') || 0}).` : 'Evaluar alternativas de inversión que superen la tasa de corte corporativa.'}
+3. **Prioridad 3:** Coordinar con operaciones la ventana de ejecución de mantenimientos preventivos para evitar paros no programados.`
+        };
+
+        return res.json({
+            success: true,
+            fuente: 'motor-heuristico-financiero',
+            contexto_base: financialContext,
+            data: fallbackResponse
+        });
+    } catch (error) {
+        console.error('Error in asesor-ia:', error);
+        res.status(500).json({ message: 'Error al procesar asesoría financiera con IA', error: error.message });
     }
 });
 

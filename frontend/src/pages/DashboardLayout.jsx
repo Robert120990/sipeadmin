@@ -34,6 +34,9 @@ import BackupDBCheck from './BackupDBCheck';
 import Bitacora from './Bitacora';
 import FinanzasPrestamos from './FinanzasPrestamos';
 import FinanzasCalculadora from './FinanzasCalculadora';
+import FinanzasInversiones from './FinanzasInversiones';
+import FinanzasPlanesMantenimiento from './FinanzasPlanesMantenimiento';
+import FinanzasAsesor from './FinanzasAsesor';
 import FinanzasResumen from './FinanzasResumen';
 import pkg from '../../package.json';
 
@@ -103,6 +106,9 @@ export default function DashboardLayout() {
         '/dashboard/bitacora': <Bitacora />,
         '/dashboard/finanzas/prestamos': <FinanzasPrestamos />,
         '/dashboard/finanzas/calculadora': <FinanzasCalculadora />,
+        '/dashboard/finanzas/inversiones': <FinanzasInversiones />,
+        '/dashboard/finanzas/planes-mantenimiento': <FinanzasPlanesMantenimiento />,
+        '/dashboard/finanzas/asesor': <FinanzasAsesor />,
         '/dashboard/finanzas/resumen': <FinanzasResumen />,
     };
 

@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -53,7 +53,10 @@ export const consultasOtras = [
 
 export const finanzasMenu = [
     { name: 'Préstamos y Créditos', path: '/dashboard/finanzas/prestamos', icon: Landmark },
-    { name: 'Calculadora de Préstamos', path: '/dashboard/finanzas/calculadora', icon: Calculator },
+    { name: 'Calculadora de Amortización', path: '/dashboard/finanzas/calculadora', icon: Calculator },
+    { name: 'Evaluador de Inversiones y ROI', path: '/dashboard/finanzas/inversiones', icon: TrendingUp },
+    { name: 'Planes y Mantenimiento', path: '/dashboard/finanzas/planes-mantenimiento', icon: Wrench },
+    { name: 'Asesor y Proyecciones IA', path: '/dashboard/finanzas/asesor', icon: Sparkles },
     { name: 'Resumen y Vencimientos', path: '/dashboard/finanzas/resumen', icon: BarChart3 },
 ];
 

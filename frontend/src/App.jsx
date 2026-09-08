@@ -30,6 +30,9 @@ import BackupDBCheck from './pages/BackupDBCheck';
 import Bitacora from './pages/Bitacora';
 import FinanzasPrestamos from './pages/FinanzasPrestamos';
 import FinanzasCalculadora from './pages/FinanzasCalculadora';
+import FinanzasInversiones from './pages/FinanzasInversiones';
+import FinanzasPlanesMantenimiento from './pages/FinanzasPlanesMantenimiento';
+import FinanzasAsesor from './pages/FinanzasAsesor';
 import FinanzasResumen from './pages/FinanzasResumen';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
@@ -92,6 +95,9 @@ function App() {
                         <Route path="bancos/check-designer/edit/:formatId" element={<PermissionRoute pathKey="/dashboard/bancos/check-designer"><CheckDesigner /></PermissionRoute>} />
                         <Route path="finanzas/prestamos" element={<PermissionRoute pathKey="/dashboard/finanzas/prestamos"><FinanzasPrestamos /></PermissionRoute>} />
                         <Route path="finanzas/calculadora" element={<PermissionRoute pathKey="/dashboard/finanzas/calculadora"><FinanzasCalculadora /></PermissionRoute>} />
+                        <Route path="finanzas/inversiones" element={<PermissionRoute pathKey="/dashboard/finanzas/inversiones"><FinanzasInversiones /></PermissionRoute>} />
+                        <Route path="finanzas/planes-mantenimiento" element={<PermissionRoute pathKey="/dashboard/finanzas/planes-mantenimiento"><FinanzasPlanesMantenimiento /></PermissionRoute>} />
+                        <Route path="finanzas/asesor" element={<PermissionRoute pathKey="/dashboard/finanzas/asesor"><FinanzasAsesor /></PermissionRoute>} />
                         <Route path="finanzas/resumen" element={<PermissionRoute pathKey="/dashboard/finanzas/resumen"><FinanzasResumen /></PermissionRoute>} />
                         <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
                         <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />

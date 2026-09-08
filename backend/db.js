@@ -467,9 +467,14 @@ const initDB = async () => {
                     ['edit_monto_conciliacion', 'Permite modificar montos en conciliación'],
                     ['/dashboard/finanzas/prestamos', 'Acceso a Préstamos y Créditos'],
                     ['/dashboard/finanzas/calculadora', 'Acceso a Calculadora de Amortización'],
+                    ['/dashboard/finanzas/inversiones', 'Acceso a Evaluador de Inversiones y ROI'],
+                    ['/dashboard/finanzas/planes-mantenimiento', 'Acceso a Planes de Mantenimiento'],
+                    ['/dashboard/finanzas/asesor', 'Acceso a Asesor Financiero y Proyecciones IA'],
                     ['/dashboard/finanzas/resumen', 'Acceso a Resumen Financiero y Vencimientos'],
                     ['manage_finanzas_prestamos', 'Permite crear, editar y eliminar préstamos'],
-                    ['manage_finanzas_pagos', 'Permite registrar y anular pagos de préstamos']
+                    ['manage_finanzas_pagos', 'Permite registrar y anular pagos de préstamos'],
+                    ['manage_finanzas_inversiones', 'Permite gestionar proyectos de inversión y presupuestos'],
+                    ['manage_finanzas_mantenimiento', 'Permite programar y gestionar mantenimientos']
                 ];
                 for (const [pName, pDesc] of newPerms) {
                     await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);
