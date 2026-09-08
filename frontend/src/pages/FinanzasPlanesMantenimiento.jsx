@@ -415,7 +415,7 @@ export default function FinanzasPlanesMantenimiento() {
                                 </select>
                             </div>
 
-                            <div style={{ display: 'flex', gap: '0.6rem' }}>
+                            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
                                 <button 
                                     className="btn btn-outline" 
                                     onClick={exportToExcel}
@@ -905,7 +905,7 @@ export default function FinanzasPlanesMantenimiento() {
                             </div>
                         </div>
 
-                        <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '0.8rem' }}>
+                        <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '0.8rem', flexWrap: 'wrap' }}>
                             <button 
                                 type="button" 
                                 className="btn btn-outline" 

@@ -155,7 +155,7 @@ export default function FinanzasResumen() {
             </div>
 
             {/* Middle Grid: Debt by Company & Debt by Bank */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.5rem', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '1.5rem', marginBottom: '1.5rem' }}>
                 {/* By Company */}
                 <div className="card glass" style={{ padding: '1.5rem' }}>
                     <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

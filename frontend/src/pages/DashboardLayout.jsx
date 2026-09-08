@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
@@ -71,6 +71,10 @@ export default function DashboardLayout() {
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [moreOpen, setMoreOpen] = useState(false);
 
+    // Refs for tabs auto-scroll
+    const desktopTabsRef = useRef(null);
+    const mobileTabsRef = useRef(null);
+
     const user = JSON.parse(localStorage.getItem('user')) || {};
     const hasPermission = (path) => user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator' || user.permissions?.includes(path);
 
@@ -137,17 +141,13 @@ export default function DashboardLayout() {
         }
         if (item) {
             // Abrir el tab SIN navegar (preserva la URL actual, p. ej. /edit/:formatId)
-            if (isMobile) {
-                setTabs([{ name: item.name, path: item.path, icon: item.icon || FileText }]);
-            } else {
-                setTabs(prev => prev.find(t => t.path === item.path) ? prev : [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }]);
-            }
+            setTabs(prev => prev.find(t => t.path === item.path) ? prev : [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }]);
             setActiveTabPath(item.path);
             setDrawerOpen(false);
         } else if (location.pathname === '/dashboard') {
             setActiveTabPath('/dashboard');
         }
-    }, [location.pathname, isMobile]);
+    }, [location.pathname]);
 
     // Android back: close mobile overlays before leaving the app
     useEffect(() => {
@@ -166,15 +166,10 @@ export default function DashboardLayout() {
     };
 
     const openTab = (item) => {
-        if (isMobile) {
-            // Mobile: single active view — the new module replaces the current one
-            setTabs([{ name: item.name, path: item.path, icon: item.icon || FileText }]);
-        } else {
-            setTabs(prev => {
-                if (prev.find(t => t.path === item.path)) return prev;
-                return [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }];
-            });
-        }
+        setTabs(prev => {
+            if (prev.find(t => t.path === item.path)) return prev;
+            return [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }];
+        });
         setActiveTabPath(item.path);
         setDrawerOpen(false);
         if (location.pathname !== item.path) {
@@ -190,11 +185,70 @@ export default function DashboardLayout() {
         setTabs(newTabs);
 
         if (activeTabPath === path) {
-            const nextTab = newTabs[newTabs.length - 1];
+            const nextTab = newTabs[newTabs.length - 1] || { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard };
             setActiveTabPath(nextTab.path);
             navigate(nextTab.path);
         }
     };
+
+    // Auto-scroll active tab into view
+    useEffect(() => {
+        const scrollActiveTab = (container) => {
+            if (!container) return;
+            const activeEl = container.querySelector('.tab-item.active');
+            if (activeEl) {
+                activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+            }
+        };
+        scrollActiveTab(desktopTabsRef.current);
+        scrollActiveTab(mobileTabsRef.current);
+    }, [activeTabPath, tabs]);
+
+    const handleTabsWheel = (e) => {
+        if (e.deltaY !== 0) {
+            e.currentTarget.scrollLeft += e.deltaY;
+        }
+    };
+
+    const renderTabsBar = (containerRef) => (
+        <div 
+            className="tabs-bar" 
+            ref={containerRef}
+            onWheel={handleTabsWheel}
+        >
+            {tabs.map(tab => {
+                const Icon = tab.icon || FileText;
+                const isActive = activeTabPath === tab.path;
+                return (
+                    <div 
+                        key={tab.path} 
+                        className={`tab-item ${isActive ? 'active' : ''}`}
+                        onClick={() => {
+                            setActiveTabPath(tab.path);
+                            if (location.pathname !== tab.path) {
+                                navigate(tab.path);
+                            }
+                        }}
+                        title={tab.name}
+                    >
+                        <Icon size={14} className="tab-icon" />
+                        <span className="tab-title">{tab.name}</span>
+                        {tab.path !== '/dashboard' && (
+                            <button
+                                type="button"
+                                className="tab-close" 
+                                onClick={(e) => closeTab(e, tab.path)}
+                                aria-label={`Cerrar pestaña ${tab.name}`}
+                                title={`Cerrar pestaña ${tab.name}`}
+                            >
+                                <X size={12} />
+                            </button>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
 
     // Mobile overlays: push a history state so Android back closes them first
     const openDrawer = () => {
@@ -460,26 +514,7 @@ export default function DashboardLayout() {
             </aside>
 
             <main className="main-content">
-                <div className="tabs-bar">
-                    {tabs.map(tab => {
-                        const Icon = tab.icon || FileText;
-                        return (
-                            <div 
-                                key={tab.path} 
-                                className={`tab-item ${activeTabPath === tab.path ? 'active' : ''}`}
-                                onClick={() => setActiveTabPath(tab.path)}
-                            >
-                                <Icon size={14} />
-                                <span>{tab.name}</span>
-                                {tab.path !== '/dashboard' && (
-                                    <div className="tab-close" onClick={(e) => closeTab(e, tab.path)}>
-                                        <X size={12} />
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
+                {renderTabsBar(desktopTabsRef)}
                 
                 {renderContent()}
             </main>
@@ -503,6 +538,8 @@ export default function DashboardLayout() {
                     <MoreHorizontal size={22} />
                 </button>
             </header>
+
+            {renderTabsBar(mobileTabsRef)}
 
             <main className="main-content">
                 {renderContent()}

@@ -278,21 +278,34 @@ select {
   display: flex;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
-  padding: 0.5rem 1rem 0;
-  gap: 0.25rem;
+  padding: 0.5rem 0.75rem 0;
+  gap: 0.35rem;
   overflow-x: auto;
-  scrollbar-width: none;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
 }
 
 .tabs-bar::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.tabs-bar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.tabs-bar::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .tab-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1rem;
+  gap: 0.45rem;
+  padding: 0.45rem 0.65rem;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-bottom: none;
@@ -300,11 +313,14 @@ select {
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
-  font-size: 0.85rem;
+  font-size: 0.825rem;
   transition: var(--transition);
   position: relative;
-  min-width: 120px;
-  max-width: 200px;
+  min-width: 80px;
+  max-width: 175px;
+  flex: 0 0 auto;
+  user-select: none;
+  box-sizing: border-box;
 }
 
 .tab-item:hover {
@@ -316,21 +332,47 @@ select {
   background: var(--primary);
   color: white;
   border-color: var(--primary);
+  font-weight: 500;
+}
+
+.tab-icon {
+  flex-shrink: 0;
+}
+
+.tab-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tab-close {
-  display: flex;
+  flex-shrink: 0;
+  margin-left: auto;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
   border-radius: 4px;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
   transition: var(--transition);
-  opacity: 0.6;
 }
 
 .tab-close:hover {
-  background: var(--hover-bg);
   opacity: 1;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.tab-item.active .tab-close:hover {
+  background: rgba(255, 255, 255, 0.25);
+  color: white;
 }
 
 .tab-content-container {
@@ -853,9 +895,31 @@ td {
 /* ---------- Media queries ---------- */
 
 @media (max-width: 768px) {
-  .sidebar,
-  .tabs-bar {
+  .sidebar {
     display: none;
+  }
+
+  .tabs-bar {
+    display: flex;
+    padding: 0.35rem 0.5rem 0;
+    gap: 0.25rem;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  .tab-item {
+    padding: 0.4rem 0.55rem;
+    font-size: 0.78rem;
+    min-width: 75px;
+    max-width: 140px;
+    border-radius: 6px 6px 0 0;
+  }
+
+  .tab-close {
+    width: 22px;
+    height: 22px;
   }
 
   .tab-content-container {

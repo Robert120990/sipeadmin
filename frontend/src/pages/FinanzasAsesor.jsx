@@ -284,7 +284,7 @@ export default function FinanzasAsesor() {
                             Compara matemáticamente el costo de los préstamos bancarios contra la rentabilidad esperada (TIR) de los proyectos en evaluación.
                         </p>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.2rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1rem', marginBottom: '1.2rem' }}>
                             <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)', textAlign: 'center' }}>
                                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Costo Deuda Bancaria</div>
                                 <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#f59e0b', margin: '0.2rem 0' }}>
@@ -407,7 +407,7 @@ export default function FinanzasAsesor() {
                 {/* Formulario de Input */}
                 <form 
                     onSubmit={(e) => { e.preventDefault(); handleEnviarConsulta(); }}
-                    style={{ display: 'flex', gap: '0.8rem' }}
+                    style={{ display: 'flex', gap: '0.8rem', flexWrap: 'wrap' }}
                 >
                     <input 
                         type="text" 
@@ -416,13 +416,13 @@ export default function FinanzasAsesor() {
                         onChange={e => setPromptText(e.target.value)}
                         placeholder="Escribe tu consulta financiera o de inversión (ej. ¿Cuál es el riesgo de tomar un nuevo crédito de $50,000?)..."
                         disabled={asking}
-                        style={{ flex: 1 }}
+                        style={{ flex: '1 1 200px', minWidth: 0 }}
                     />
                     <button 
                         type="submit" 
                         className="btn btn-primary"
                         disabled={asking || !promptText.trim()}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.4rem' }}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.6rem 1.4rem' }}
                     >
                         <Send size={16} /> {asking ? 'Pensando...' : 'Preguntar'}
                     </button>

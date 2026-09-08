@@ -752,7 +752,7 @@ export default function FinanzasInversiones() {
                                     Muestra la evolución del saldo neto desde el desembolso inicial hasta la recuperación de la inversión.
                                 </span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.8rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.8rem', flexWrap: 'wrap' }}>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                                     <span style={{ width: 12, height: 12, background: '#3b82f6', borderRadius: '50%' }} /> Flujo Acumulado
                                 </span>
@@ -765,7 +765,7 @@ export default function FinanzasInversiones() {
                         <div className="table-responsive" style={{ overflowX: 'auto', textAlign: 'center' }}>
                             <svg 
                                 viewBox={`0 0 ${svgWidth} ${svgHeight}`} 
-                                style={{ width: '100%', maxWidth: '850px', height: 'auto', overflow: 'visible' }}
+                                style={{ width: '100%', maxWidth: '850px', minWidth: '600px', height: 'auto', overflow: 'visible' }}
                             >
                                 <defs>
                                     <linearGradient id="invGradient" x1="0" y1="0" x2="0" y2="1">
@@ -1008,7 +1008,7 @@ export default function FinanzasInversiones() {
                             </select>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '0.6rem' }}>
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
                             <button 
                                 className="btn btn-outline" 
                                 onClick={exportToExcel}
