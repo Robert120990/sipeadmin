@@ -104,17 +104,37 @@ export const formatCurrency = (amount) => {
  * Add period to a date based on frequency
  */
 export const addPeriodToDate = (baseDate, periodIndex, frequency = 'mensual') => {
-    const d = new Date(baseDate);
-    if (isNaN(d.getTime())) return new Date();
+    let cleanStr = '';
+    if (baseDate instanceof Date) {
+        cleanStr = baseDate.toISOString().split('T')[0];
+    } else {
+        cleanStr = String(baseDate || '').split('T')[0];
+    }
+    const [yStr, mStr, dStr] = cleanStr.split('-');
+    const startYear = parseInt(yStr, 10);
+    const startMonth = parseInt(mStr, 10);
+    const startDay = parseInt(dStr, 10);
+
+    if (isNaN(startYear) || isNaN(startMonth) || isNaN(startDay)) {
+        return new Date();
+    }
 
     if (frequency === 'quincenal') {
-        d.setDate(d.getDate() + (periodIndex * 15));
+        const d = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+        d.setUTCDate(d.getUTCDate() + (periodIndex * 15));
+        return d;
     } else if (frequency === 'semanal') {
-        d.setDate(d.getDate() + (periodIndex * 7));
+        const d = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+        d.setUTCDate(d.getUTCDate() + (periodIndex * 7));
+        return d;
     } else {
-        d.setMonth(d.getMonth() + periodIndex);
+        const totalMonths = (startYear * 12) + (startMonth - 1) + periodIndex;
+        const targetYear = Math.floor(totalMonths / 12);
+        const targetMonth = (totalMonths % 12) + 1;
+        const daysInMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+        const targetDay = Math.min(startDay, daysInMonth);
+        return new Date(Date.UTC(targetYear, targetMonth - 1, targetDay, 12, 0, 0));
     }
-    return d;
 };
 
 /**

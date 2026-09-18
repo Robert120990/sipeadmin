@@ -62,3 +62,16 @@ export function daysFromNow(dateStr) {
     today.setHours(0, 0, 0, 0);
     return Math.ceil((d - today) / (1000 * 60 * 60 * 24));
 }
+
+export function addMonthsPreservingDay(dateStr, monthsToAdd) {
+    const parts = parseDateOnly(dateStr);
+    if (!parts) return null;
+    const { year: startYear, month: startMonth, day: startDay } = parts;
+    const totalMonths = (startYear * 12) + (startMonth - 1) + monthsToAdd;
+    const targetYear = Math.floor(totalMonths / 12);
+    const targetMonth = (totalMonths % 12) + 1;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+    const targetDay = Math.min(startDay, daysInTargetMonth);
+    return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+}
+

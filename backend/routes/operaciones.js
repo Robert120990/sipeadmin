@@ -265,6 +265,53 @@ router.get('/operaciones/recordatorios/parents/buscar', authenticateToken, async
     } catch (error) { res.status(500).json({ message: 'Error fetching parent recordatorios' }); }
 });
 
+function calculateRecurringDate(iniciarStr, n, repetirDesc) {
+    const cleanStr = String(iniciarStr).split('T')[0];
+    const [yStr, mStr, dStr] = cleanStr.split('-');
+    const startYear = parseInt(yStr, 10);
+    const startMonth = parseInt(mStr, 10); // 1 - 12
+    const startDay = parseInt(dStr, 10);   // 1 - 31
+
+    if (isNaN(startYear) || isNaN(startMonth) || isNaN(startDay)) {
+        return cleanStr;
+    }
+
+    const desc = String(repetirDesc || '').toUpperCase().trim();
+
+    if (desc === 'VEZ' || n === 1) {
+        return `${startYear}-${String(startMonth).padStart(2, '0')}-${String(startDay).padStart(2, '0')}`;
+    }
+
+    if (desc === 'MES' || desc === 'MESES') {
+        const totalMonths = (startYear * 12) + (startMonth - 1) + (n - 1);
+        const targetYear = Math.floor(totalMonths / 12);
+        const targetMonth = (totalMonths % 12) + 1; // 1 - 12
+        // Last day of targetMonth in targetYear using UTC
+        const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+        const targetDay = Math.min(startDay, daysInTargetMonth);
+        return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+    }
+
+    if (desc === 'AÑO' || desc === 'ANO' || desc === 'AÑOS' || desc === 'ANOS') {
+        const targetYear = startYear + (n - 1);
+        const targetMonth = startMonth;
+        const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+        const targetDay = Math.min(startDay, daysInTargetMonth);
+        return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+    }
+
+    if (desc === 'DIAS' || desc === 'DÍAS') {
+        const d = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+        d.setUTCDate(d.getUTCDate() + (n - 1));
+        const y = d.getUTCFullYear();
+        const m = d.getUTCMonth() + 1;
+        const day = d.getUTCDate();
+        return `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+
+    return cleanStr;
+}
+
 router.post('/operaciones/recordatorios', authenticateToken, async (req, res) => {
     try {
         const { id, descripcion, id_ubicacion, iniciar, activo, monto, repetir, repetir_desc, forma_pago, pagado, fecPago, formaPago2 } = req.body;
@@ -283,13 +330,9 @@ router.post('/operaciones/recordatorios', authenticateToken, async (req, res) =>
             }
             await connection.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?", [recordatorioId]);
             for (let n = 1; n <= repetir; n++) {
-                let dFecha = new Date(iniciar + 'T12:00:00');
+                const formattedDate = calculateRecurringDate(iniciar, n, repetir_desc);
                 let isPagado = false;
                 if (repetir_desc === 'VEZ') { if (pagado) isPagado = true; }
-                else if (repetir_desc === 'DIAS') { if (n > 1) dFecha.setDate(dFecha.getDate() + (n * repetir)); }
-                else if (repetir_desc === 'MES') { if (n > 1) dFecha.setMonth(dFecha.getMonth() + (n - 1)); }
-                else if (repetir_desc === 'AÑO' || repetir_desc === 'ANO') { if (n > 1) dFecha.setFullYear(dFecha.getFullYear() + n); }
-                const formattedDate = dFecha.toISOString().split('T')[0];
                 if (isPagado) {
                     await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, formaPago2]);
                 } else {
