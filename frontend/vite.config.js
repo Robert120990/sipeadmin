@@ -37,18 +37,13 @@ function devVersionPlugin() {
             server.middlewares.use((req, res, next) => {
                 const url = req.url ? req.url.split('?')[0] : '';
                 if (url === '/version.json') {
-                    try {
-                        const currentPkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8'));
-                        res.setHeader('Content-Type', 'application/json');
-                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-                        res.end(JSON.stringify({
-                            version: currentPkg.version,
-                            buildId: 'dev'
-                        }));
-                        return;
-                    } catch (e) {
-                        // ignore error
-                    }
+                    res.setHeader('Content-Type', 'application/json');
+                    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+                    res.end(JSON.stringify({
+                        version: APP_VERSION,
+                        buildId: 'dev'
+                    }));
+                    return;
                 }
                 next();
             });

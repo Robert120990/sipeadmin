@@ -2,27 +2,38 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { RefreshCw, AlertTriangle, Sparkles, X } from 'lucide-react';
 
 const CHECK_INTERVAL_MS = 3 * 60 * 1000; // Cada 3 minutos
+const SESSION_UPDATING_KEY = 'sipeadmin_updating_to';
+const SESSION_MINIMIZED_KEY = 'sipeadmin_update_minimized';
 
 /**
  * UpdateNotifier
  * Detecta nuevas versiones comparando la versión local (inyectada por Vite)
  * con /version.json (o por nuevo Service Worker en espera).
- * En lugar de recargar intempestivamente, muestra una alerta no invasiva y clara
- * advirtiendo al usuario que guarde sus cambios pendientes antes de proceder a actualizar.
+ * En entorno de desarrollo (npm run dev / Vite HMR), permanece inactivo.
+ * En producción, muestra una alerta no invasiva advirtiendo al usuario
+ * que guarde sus cambios pendientes antes de proceder a actualizar.
  */
 export default function UpdateNotifier() {
+    const isDev = Boolean(import.meta.env.DEV);
+
     const [updateInfo, setUpdateInfo] = useState({
         available: false,
         newVersion: '',
         currentVersion: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0',
         buildId: ''
     });
-    const [isMinimized, setIsMinimized] = useState(false);
+    const [isMinimized, setIsMinimized] = useState(() => {
+        try {
+            return sessionStorage.getItem(SESSION_MINIMIZED_KEY) === '1';
+        } catch {
+            return false;
+        }
+    });
     const [isUpdating, setIsUpdating] = useState(false);
     const busyRef = useRef(false);
 
     const checkVersion = useCallback(async () => {
-        if (busyRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+        if (isDev || busyRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
         busyRef.current = true;
         try {
             const res = await fetch(`/version.json?t=${Date.now()}`, {
@@ -35,23 +46,45 @@ export default function UpdateNotifier() {
             const local = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null;
             if (!local || !remote?.version) return;
 
-            // Detecta si la versión del servidor es diferente a la instalada actualmente
-            if (remote.version !== local) {
-                setUpdateInfo({
-                    available: true,
-                    newVersion: remote.version,
-                    currentVersion: local,
-                    buildId: remote.buildId || ''
-                });
+            // Si ya estamos en la misma versión que el servidor, limpiar flags de actualización
+            if (remote.version === local) {
+                try {
+                    sessionStorage.removeItem(SESSION_UPDATING_KEY);
+                    sessionStorage.removeItem(SESSION_MINIMIZED_KEY);
+                } catch {
+                    // ignorar
+                }
+                setUpdateInfo(prev => prev.available ? { ...prev, available: false } : prev);
+                return;
             }
-        } catch (e) {
+
+            // Si el usuario ya pulsó "Actualizar ahora" para esta versión específica en esta sesión,
+            // evitar re-mostrar la alerta si el navegador aún tiene recursos en caché
+            try {
+                if (sessionStorage.getItem(SESSION_UPDATING_KEY) === remote.version) {
+                    return;
+                }
+            } catch {
+                // ignorar
+            }
+
+            // Detecta si la versión del servidor es diferente a la instalada actualmente
+            setUpdateInfo({
+                available: true,
+                newVersion: remote.version,
+                currentVersion: local,
+                buildId: remote.buildId || ''
+            });
+        } catch {
             // Silencioso ante fallas transitorias de red
         } finally {
             busyRef.current = false;
         }
-    }, []);
+    }, [isDev]);
 
     useEffect(() => {
+        if (isDev) return;
+
         // Escucha si un nuevo Service Worker entra en estado 'waiting'
         if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistration().then(reg => {
@@ -98,11 +131,23 @@ export default function UpdateNotifier() {
             window.removeEventListener('focus', onFocus);
             window.removeEventListener('online', checkVersion);
         };
-    }, [checkVersion]);
+    }, [isDev, checkVersion]);
+
+    const handleMinimize = () => {
+        setIsMinimized(true);
+        try {
+            sessionStorage.setItem(SESSION_MINIMIZED_KEY, '1');
+        } catch {
+            // ignorar
+        }
+    };
 
     const handleApplyUpdate = async () => {
         setIsUpdating(true);
         try {
+            if (updateInfo.newVersion) {
+                sessionStorage.setItem(SESSION_UPDATING_KEY, updateInfo.newVersion);
+            }
             if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
                 const reg = await navigator.serviceWorker.getRegistration();
                 if (reg?.waiting) {
@@ -119,7 +164,7 @@ export default function UpdateNotifier() {
         }, 350);
     };
 
-    if (!updateInfo.available) return null;
+    if (isDev || !updateInfo.available) return null;
 
     // Estado minimizado: Píldora flotante accesible y no invasiva
     if (isMinimized) {
@@ -154,7 +199,7 @@ export default function UpdateNotifier() {
                     <button
                         type="button"
                         className="update-alert-close"
-                        onClick={() => setIsMinimized(true)}
+                        onClick={handleMinimize}
                         title="Minimizar notificación"
                         aria-label="Minimizar notificación"
                     >
@@ -180,7 +225,7 @@ export default function UpdateNotifier() {
                     <button
                         type="button"
                         className="update-btn-secondary"
-                        onClick={() => setIsMinimized(true)}
+                        onClick={handleMinimize}
                         disabled={isUpdating}
                     >
                         Recordar más tarde
