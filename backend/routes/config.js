@@ -158,4 +158,25 @@ router.post('/config/email/birthday-report-now', authenticateToken, requireRole(
     }
 });
 
+// --- Trigger Payment Reminder on Demand ---
+const { sendPaymentReminderNotification } = require('../services/paymentNotifier');
+
+router.post('/config/email/payment-reminder-now', authenticateToken, requireRole('Administrator'), async (req, res) => {
+    const { customRecipient, forceSendEmpty, sampleDate } = req.body;
+    try {
+        let targetDate = new Date();
+        if (sampleDate) {
+            targetDate = new Date(sampleDate);
+        }
+        const result = await sendPaymentReminderNotification({
+            customRecipient,
+            forceSendEmpty: forceSendEmpty !== undefined ? Boolean(forceSendEmpty) : true,
+            targetDate
+        });
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al procesar el envío del recordatorio de pagos', 500);
+    }
+});
+
 module.exports = router;
