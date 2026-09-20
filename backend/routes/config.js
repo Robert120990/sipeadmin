@@ -85,14 +85,20 @@ router.get('/config/email', authenticateToken, requireRole('Administrator'), asy
 });
 
 router.post('/config/email', authenticateToken, requireRole('Administrator'), async (req, res) => {
-    const { host, port, secure, user, password, from_address } = req.body;
+    const { host, port, secure, user, password, from_address, office_email } = req.body;
     try {
         const db = getDb();
         const [existing] = await db.query("SELECT id FROM email_configs LIMIT 1");
         if (existing.length > 0) {
-            await db.query("UPDATE email_configs SET host = ?, port = ?, secure = ?, user = ?, password = ?, from_address = ? WHERE id = ?", [host, port, secure, user, password, from_address, existing[0].id]);
+            await db.query(
+                "UPDATE email_configs SET host = ?, port = ?, secure = ?, user = ?, password = ?, from_address = ?, office_email = ? WHERE id = ?",
+                [host, port, secure, user, password, from_address, office_email || null, existing[0].id]
+            );
         } else {
-            await db.query("INSERT INTO email_configs (host, port, secure, user, password, from_address) VALUES (?, ?, ?, ?, ?, ?)", [host, port, secure, user, password, from_address]);
+            await db.query(
+                "INSERT INTO email_configs (host, port, secure, user, password, from_address, office_email) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [host, port, secure, user, password, from_address, office_email || null]
+            );
         }
         res.json({ message: 'Configuración de email guardada exitosamente' });
     } catch (error) {
@@ -101,7 +107,11 @@ router.post('/config/email', authenticateToken, requireRole('Administrator'), as
 });
 
 router.post('/config/email/test', authenticateToken, requireRole('Administrator'), async (req, res) => {
-    const { host, port, secure, user, password, from_address, to_email } = req.body;
+    const { host, port, secure, user, password, from_address, to_email, office_email } = req.body;
+    const recipient = to_email || office_email;
+    if (!recipient) {
+        return res.status(400).json({ message: 'Debe proporcionar un correo destinatario o configurar el correo de oficina.' });
+    }
     try {
         const transporter = nodemailer.createTransport({
             host,
@@ -115,13 +125,13 @@ router.post('/config/email/test', authenticateToken, requireRole('Administrator'
 
         await transporter.sendMail({
             from: `"${from_address}" <${user}>`,
-            to: to_email,
+            to: recipient,
             subject: 'Prueba de Conexión SMTP - SIPE Admin',
             text: '¡Felicidades! La configuración funciona correctamente.',
             html: '<b>¡Felicidades!</b> La configuración SMTP funciona correctamente.'
         });
 
-        res.json({ message: 'Conexión exitosa y correo enviado' });
+        res.json({ message: `Conexión exitosa y correo enviado a ${recipient}` });
     } catch (error) {
         sendSafeError(res, error, 'Fallo en la prueba de conexión SMTP', 400);
     }

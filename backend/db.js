@@ -160,10 +160,13 @@ const initDB = async () => {
                 user VARCHAR(255) NOT NULL,
                 password VARCHAR(255) NOT NULL,
                 from_address VARCHAR(255) NOT NULL,
+                office_email VARCHAR(255) NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             );
         `);
+
+        try { await pool.query("ALTER TABLE email_configs ADD COLUMN office_email VARCHAR(255) NULL"); } catch(e) { /* column may already exist */ }
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS carriers (
