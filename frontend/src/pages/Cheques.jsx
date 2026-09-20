@@ -8,6 +8,7 @@ import { todayStr } from '../utils/date';
 import PrintEngine from '../modules/check-designer/services/PrintEngine';
 import DesignerService from '../modules/check-designer/services/DesignerService';
 import { numeroALetras, formatMonto, formatearFechaEnLetras, formatearFechaEnLetrasCorta } from '../utils/numeroALetras';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 import { useNavigate } from 'react-router-dom';
 
 export default function Cheques() {
@@ -323,8 +324,8 @@ export default function Cheques() {
                             onChange={e => setFilters({...filters, numero_cuenta: e.target.value})}
                         >
                             <option value="">Todas las cuentas</option>
-                            {cuentas.filter(c => !filters.id_empresa || c.id_empresa === filters.id_empresa).map(acc => (
-                                <option key={acc.corr} value={acc.numero}>{acc.banco_nombre} - {acc.numero}</option>
+                            {sortCuentas(cuentas.filter(c => !filters.id_empresa || c.id_empresa === filters.id_empresa)).map(acc => (
+                                <option key={acc.corr} value={acc.numero}>{formatCuentaLabel(acc)}</option>
                             ))}
                         </select>
                     </div>
@@ -478,8 +479,8 @@ export default function Cheques() {
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
                         <select style={{ width: '100%' }} value={formData.numero_cuenta} onChange={e => setFormData({...formData, numero_cuenta: e.target.value})} disabled={!formData.id_empresa} required>
                             <option value="">Seleccione Cuenta...</option>
-                            {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
-                                <option key={c.corr} value={c.numero}>{c.nombre} - {c.numero}</option>
+                            {sortCuentas(cuentas.filter(c => c.id_empresa === formData.id_empresa)).map(c => (
+                                <option key={c.corr} value={c.numero}>{formatCuentaLabel(c)}</option>
                             ))}
                         </select>
                     </div>

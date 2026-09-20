@@ -3,6 +3,7 @@ import { Search, FileText, CheckCircle, CreditCard } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
 const ToggleSwitch = ({ checked, onChange }) => (
     <button
@@ -251,9 +252,9 @@ const ChequesContado = () => {
                         <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuenta Bancaria *</label>
                         <select value={cuentaSelected} onChange={e => setCuentaSelected(e.target.value)} style={{ width: '100%' }}>
                             <option value="">Seleccione cuenta...</option>
-                            {cuentas.map(c => (
+                            {sortCuentas(cuentas).map(c => (
                                 <option key={c.corr} value={c.corr}>
-                                    {c.banco} | {c.numero} | {c.nombre} ({c.empresa_nombre})
+                                    {formatCuentaLabel(c)}
                                 </option>
                             ))}
                         </select>

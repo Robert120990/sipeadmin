@@ -502,6 +502,26 @@ const initDB = async () => {
             console.error('Migration tipos_remesas:', e.message);
         }
 
+        try {
+            await pool.query("UPDATE IGNORE permissions SET name = '/dashboard/bancos/reportes/saldos-bancos' WHERE name = '/dashboard/consultas/saldos-bancos'");
+            await pool.query("UPDATE IGNORE permissions SET name = '/dashboard/bancos/reportes/saldos-chequera' WHERE name = '/dashboard/consultas/saldos-chequera'");
+            await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/bancos/reportes/saldos-bancos', 'Reporte de saldos consolidados en bancos')");
+            await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/bancos/reportes/saldos-chequera', 'Reporte de saldos en chequeras')");
+            await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/bancos/reportes/impresion-cheques', 'Reporte e impresión de cheques por rango')");
+            await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/bancos/reportes/cheques-fecha', 'Reporte de cheques por rango de fecha')");
+            await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/bancos/reportes/movimientos-fecha', 'Reporte de movimientos bancarios por rango de fecha')");
+
+            const [[adminRole]] = await pool.query("SELECT id FROM roles WHERE name = 'admin' LIMIT 1");
+            if (adminRole) {
+                const [reportPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('/dashboard/bancos/reportes/cheques-fecha', '/dashboard/bancos/reportes/movimientos-fecha', '/dashboard/bancos/reportes/impresion-cheques', '/dashboard/bancos/reportes/saldos-bancos', '/dashboard/bancos/reportes/saldos-chequera')");
+                for (const p of reportPerms) {
+                    await pool.query("INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", [adminRole.id, p.id]);
+                }
+            }
+        } catch (e) {
+            console.error('Migration bancos reportes permissions:', e.message);
+        }
+
         return pool;
     } catch (error) {
         console.error('DATABASE INITIALIZATION ERROR:', error.message);

@@ -26,6 +26,9 @@ import ConciliacionBancaria from './pages/ConciliacionBancaria';
 import Cheques from './pages/Cheques';
 import ChequesContado from './pages/ChequesContado';
 import CheckDesigner from './pages/CheckDesigner';
+import ImpresionCheques from './pages/ImpresionCheques';
+import ReporteChequesFecha from './pages/ReporteChequesFecha';
+import ReporteMovimientosFecha from './pages/ReporteMovimientosFecha';
 import BackupDBCheck from './pages/BackupDBCheck';
 import Bitacora from './pages/Bitacora';
 import FinanzasPrestamos from './pages/FinanzasPrestamos';
@@ -49,6 +52,8 @@ const PermissionRoute = ({ pathKey, children }) => {
     const user = JSON.parse(localStorage.getItem('user')) || {};
     if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return children;
     if (user.permissions?.includes(pathKey)) return children;
+    if (pathKey === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return children;
+    if (pathKey === '/dashboard/bancos/reportes/saldos-chequera' && user.permissions?.includes('/dashboard/consultas/saldos-chequera')) return children;
     return <Navigate to="/dashboard" replace />;
 };
 
@@ -82,8 +87,13 @@ function App() {
                         <Route path="consultas/estaciones/precios-competencia" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios-competencia"><ConsultasPreciosCompetencia /></PermissionRoute>} />
                         <Route path="operaciones/pedidos" element={<ProtectedRoute><PedidosCombustible /></ProtectedRoute>} />
                         <Route path="operaciones/recordatorios" element={<ProtectedRoute><ControlRecordatorios /></ProtectedRoute>} />
-                        <Route path="consultas/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />
-                        <Route path="consultas/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/consultas/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
+                        <Route path="bancos/reportes/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />
+                        <Route path="bancos/reportes/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
+                        <Route path="bancos/reportes/impresion-cheques" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/impresion-cheques"><ImpresionCheques /></PermissionRoute>} />
+                        <Route path="bancos/reportes/cheques-fecha" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/cheques-fecha"><ReporteChequesFecha /></PermissionRoute>} />
+                        <Route path="bancos/reportes/movimientos-fecha" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/movimientos-fecha"><ReporteMovimientosFecha /></PermissionRoute>} />
+                        <Route path="consultas/saldos-bancos" element={<Navigate to="/dashboard/bancos/reportes/saldos-bancos" replace />} />
+                        <Route path="consultas/saldos-chequera" element={<Navigate to="/dashboard/bancos/reportes/saldos-chequera" replace />} />
                         <Route path="consultas/otras/cumpleanos" element={<PermissionRoute pathKey="/dashboard/consultas/otras/cumpleanos"><ConsultasCumpleanos /></PermissionRoute>} />
                         <Route path="consultas/otras/backup-db-check" element={<PermissionRoute pathKey="/dashboard/consultas/otras/backup-db-check"><BackupDBCheck /></PermissionRoute>} />
                         <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />

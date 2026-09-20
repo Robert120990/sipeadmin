@@ -56,6 +56,20 @@ Frontend proxies to `localhost:5001` in dev; no env vars required.
   - Use `useToast` for success/error feedback (`addToast('Mensaje', 'success' | 'error' | 'warning')`)
   - Both `ConfirmProvider` and `ToastProvider` are already active in `App.jsx`
 
+## UI Compacta y Ergonómica (Regla Obligatoria)
+Toda pantalla de gestión, consulta o reporte DEBE seguir el estándar compacto implementado en Impresión de Cheques:
+- **Espaciado general**: Usar `gap: '1rem'` en el contenedor raíz; `.page-header` con `marginBottom: '0.75rem'` a `'1rem'`, títulos de `1.2rem - 1.25rem` con icono de `20-22px` y subtítulo de `0.8rem`.
+- **Filtros y Búsqueda**: Card con padding compacto (`1rem 1.25rem`). Inputs numéricos, códigos o rangos (ej. "Desde #", "Hasta #") NUNCA deben expandirse a columnas gigantes; fijar anchos proporcionales (`110px - 130px`). Altura estándar en filtros de `36px` a `38px`, `fontSize: '0.825rem'`. Botones de búsqueda compactos alineados inline (`height: 36px`, `padding: 0 1.25rem`).
+- **Checkboxes**: Siempre `16x16px` con labels inline (`display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.8rem; user-select: none; cursor: pointer;`).
+- **Tablas de datos**: Encabezados con `padding: 0.45rem 0.5rem`, `fontSize: 0.74rem`, uppercase, letterSpacing `0.03em`. Celdas con `padding: 0.45rem 0.5rem`, `fontSize: 0.8rem`. Badges de estado con `fontSize: 0.72rem`, `padding: 0.15rem 0.45rem`.
+- **Selectores de Cuenta Bancaria**: OBLIGATORIO usar `formatCuentaLabel(c)` y `sortCuentas(cuentas)` de `src/utils/cuentaUtils.js`. Formato: `[banco] nombre de la cuenta - (numero de cuenta)`, ordenado primero por banco ASC y luego por número de cuenta ASC.
+
+## Vista Previa de Reportes e Impresiones (`ReportPreviewModal`)
+Toda pantalla que genere, previsualice o imprima reportes o cheques DEBE utilizar el componente compartido `ReportPreviewModal` (`src/components/ReportPreviewModal.jsx`):
+- **Prohibido** disparar `window.print()` ciegamente sin vista previa previa.
+- Debe abrir `<ReportPreviewModal ... />` pasando el `pdfSource` (Blob o URL del PDF generado), `title`, `subtitle`, `badge`, `totalPages`, `fileName`, etc.
+- **Página Completa (Carta)**: Todo PDF o documento generado para impresión debe estructurarse a tamaño **Carta completo** (`letter`: 215.9mm x 279.4mm), evitando reducir el tamaño al del comprobante físico para garantizar legibilidad e impresión estándar.
+
 ## Versioning
 - Version number is stored in `frontend/package.json` (`version` field)
 - Displayed in sidebar as `vX.Y.Z`, injected at build time via Vite `define`
@@ -77,10 +91,13 @@ Frontend proxies to `localhost:5001` in dev; no env vars required.
 ### Regla obligatoria para NUEVAS pantallas (no opcional)
 Toda pantalla nueva DEBE cumplir esta checklist, verificada en DevTools a 375px y 320px antes de considerar terminada:
 - **Raíz**: prohibido `padding: '2rem'` inline en el contenedor raíz — los estilos inline no son anulables por media queries; usar el padding del `.tab-content-container`
+- **Diseño compacto**: aplicar alturas de 36-38px en filtros, campos numéricos con anchos limitados (110-130px), checkboxes de 16px, tablas con padding de 0.45rem
+- **Selectores de Cuenta**: usar `formatCuentaLabel` y `sortCuentas` de `cuentaUtils.js`
+- **Reportes e Impresión**: previsualizar obligatoriamente con `ReportPreviewModal` a tamaño Carta página completa
 - **Tablas**: SIEMPRE envolver en `<div className="table-responsive">` (o `card glass table-responsive`) Y fijar `minWidth` (800-1100px) en la tabla para que las columnas hagan scroll horizontal legible en móvil
 - **Flexbox con más de 2 controles** (filtros, botones de acción, paginación, barras de totales): `flexWrap: 'wrap'` obligatorio — nunca filas flex sin wrap que puedan desbordar en ≤400px
 - **Headers**: usar `.page-header`; **formularios**: `.form-grid` + `.form-grid-2`/`.form-grid-3` + `.span-2`/`.span-3` (colapsan a 1 columna en móvil); prohibido `gridTemplateColumns` inline
-- **Modales**: SIEMPRE el componente compartido `Modal` (`size="sm|md|lg|xl"`); nunca overlays con ancho fijo
+- **Modales**: SIEMPRE el componente compartido `Modal` (`size="sm|md|lg|xl"`) o `ReportPreviewModal` para vistas previas de reportes; nunca overlays con ancho fijo
 - **Botones destructivos**: `useConfirm` + `useToast` (ver Frontend Conventions)
 
 ## PWA

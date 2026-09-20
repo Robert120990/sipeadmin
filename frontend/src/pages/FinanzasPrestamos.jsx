@@ -8,6 +8,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import api from '../services/api';
 import { calculatePMT, formatCurrency, generateAmortizationSchedule, calculateRemainingPayoffFromBalance, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, COMMISSION_TYPES, calculatePeriodInsurance, calculatePeriodSavings, calculateDisbursementCommission } from '../utils/loanCalculations';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
 export default function FinanzasPrestamos() {
     const { addToast } = useToast();
@@ -666,8 +667,8 @@ export default function FinanzasPrestamos() {
                                 style={{ width: '100%', height: '42px' }}
                             >
                                 <option value="">(Opcional) Seleccione cuenta...</option>
-                                {cuentas.map(c => (
-                                    <option key={c.id} value={c.id}>{c.numero} - {c.nombre} ({c.banco_nombre || 'Banco'})</option>
+                                {sortCuentas(cuentas).map(c => (
+                                    <option key={c.id} value={c.id}>{formatCuentaLabel(c)}</option>
                                 ))}
                             </select>
                         </div>
@@ -1419,8 +1420,8 @@ export default function FinanzasPrestamos() {
                                 style={{ width: '100%', height: '42px' }}
                             >
                                 <option value="">(Opcional) Seleccione cuenta...</option>
-                                {cuentas.map(c => (
-                                    <option key={c.id} value={c.id}>{c.numero} - {c.nombre} ({c.banco_nombre || 'Banco'})</option>
+                                {sortCuentas(cuentas).map(c => (
+                                    <option key={c.id} value={c.id}>{formatCuentaLabel(c)}</option>
                                 ))}
                             </select>
                         </div>

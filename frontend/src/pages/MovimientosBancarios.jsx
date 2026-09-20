@@ -5,6 +5,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin, CheckCircle } from 'lucide-react';
 import { todayStr } from '../utils/date';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
 export default function MovimientosBancarios() {
     const [movements, setMovements] = useState([]);
@@ -355,8 +356,8 @@ export default function MovimientosBancarios() {
                             onChange={e => setFilters({...filters, numero_cuenta: e.target.value})}
                         >
                             <option value="">Todas las cuentas</option>
-                            {cuentas.filter(c => !filters.id_empresa || c.id_empresa === filters.id_empresa).map(acc => (
-                                <option key={acc.corr} value={acc.numero}>{acc.banco_nombre} - {acc.numero}</option>
+                            {sortCuentas(cuentas.filter(c => !filters.id_empresa || c.id_empresa === filters.id_empresa)).map(acc => (
+                                <option key={acc.corr} value={acc.numero}>{formatCuentaLabel(acc)}</option>
                             ))}
                         </select>
                     </div>
@@ -534,11 +535,11 @@ export default function MovimientosBancarios() {
                                     required
                                 >
                                     <option value="">Seleccione Cuenta a Debitar...</option>
-                                    {cuentas.filter(c => !formData.id_empresa || c.id_empresa === formData.id_empresa).map(c => (
-                                        <option key={c.corr} value={c.numero}>
-                                            {c.banco_nombre ? `${c.banco_nombre} - ` : ''}{c.numero} - {c.nombre}
-                                        </option>
-                                    ))}
+                                    {sortCuentas(cuentas.filter(c => !formData.id_empresa || c.id_empresa === formData.id_empresa)).map(c => (
+                                         <option key={c.corr} value={c.numero}>
+                                             {formatCuentaLabel(c)}
+                                         </option>
+                                     ))}
                                 </select>
                             </div>
 
@@ -554,10 +555,10 @@ export default function MovimientosBancarios() {
                                     required
                                 >
                                     <option value="">Seleccione Cuenta a Acreditar...</option>
-                                    {cuentas.filter(c => !formData.id_empresa || c.id_empresa === formData.id_empresa).map(c => (
-                                        <option key={c.corr} value={c.numero}>
-                                            {c.banco_nombre ? `${c.banco_nombre} - ` : ''}{c.numero} - {c.nombre}
-                                        </option>
+                                    {sortCuentas(cuentas.filter(c => !formData.id_empresa || c.id_empresa === formData.id_empresa)).map(c => (
+                                         <option key={c.corr} value={c.numero}>
+                                             {formatCuentaLabel(c)}
+                                         </option>
                                     ))}
                                 </select>
                             </div>
@@ -573,8 +574,8 @@ export default function MovimientosBancarios() {
                                 required
                             >
                                 <option value="">Seleccione Cuenta...</option>
-                                {cuentas.filter(c => c.id_empresa === formData.id_empresa).map(c => (
-                                    <option key={c.corr} value={c.numero}>{c.banco_nombre ? `${c.banco_nombre} - ` : ''}{c.numero} - {c.nombre}</option>
+                                {sortCuentas(cuentas.filter(c => c.id_empresa === formData.id_empresa)).map(c => (
+                                    <option key={c.corr} value={c.numero}>{formatCuentaLabel(c)}</option>
                                 ))}
                             </select>
                         </div>

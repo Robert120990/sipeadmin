@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles, Printer } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -41,9 +41,12 @@ export const bancosMenu = [
     { name: 'Diseñador de Cheques', path: '/dashboard/bancos/check-designer', icon: FileText },
 ];
 
-export const consultasBancos = [
-    { name: 'Saldos en Bancos', path: '/dashboard/consultas/saldos-bancos', icon: BarChart3 },
-    { name: 'Saldos en Chequera', path: '/dashboard/consultas/saldos-chequera', icon: BarChart3 },
+export const bancosReportes = [
+    { name: 'Saldos en Bancos', path: '/dashboard/bancos/reportes/saldos-bancos', icon: BarChart3 },
+    { name: 'Saldos en Chequera', path: '/dashboard/bancos/reportes/saldos-chequera', icon: BarChart3 },
+    { name: 'Impresión de Cheques', path: '/dashboard/bancos/reportes/impresion-cheques', icon: Printer },
+    { name: 'Cheques por Fecha', path: '/dashboard/bancos/reportes/cheques-fecha', icon: DollarSign },
+    { name: 'Movimientos por Fecha', path: '/dashboard/bancos/reportes/movimientos-fecha', icon: FileText },
 ];
 
 export const consultasOtras = [
@@ -80,10 +83,10 @@ export const allNavCategories = [
     { title: 'Principal', items: mainNavItems },
     { title: 'Catálogos', items: catalogItems },
     { title: 'Bancos', items: bancosMenu },
+    { title: 'Bancos - Reportes', items: bancosReportes },
     { title: 'Finanzas', items: finanzasMenu },
     { title: 'Operaciones', items: operacionesMenu },
     { title: 'Consultas - Estaciones', items: consultasEstaciones },
-    { title: 'Consultas - Bancos', items: consultasBancos },
     { title: 'Consultas - Otras', items: consultasOtras },
     { title: 'Seguridad', items: securityItems },
     { title: 'Configuración', items: configuracionMenu }

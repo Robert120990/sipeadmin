@@ -31,30 +31,115 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
                 const empresaId = empRows[0].id;
                 [cuentas] = await db.query(
                     'SELECT c.id as corr, e.codigo as id_empresa, c.numero, c.nombre, ' +
-                    'e.nombre as empresa_nombre, b.descripcion as banco_nombre ' +
+                    'e.nombre as empresa_nombre, b.descripcion as banco_nombre, c.banco_id ' +
                     'FROM cuentas_bancarias c ' +
                     'LEFT JOIN empresas e ON c.empresa_id = e.id ' +
                     'LEFT JOIN bancos b ON c.banco_id = b.id ' +
                     'WHERE c.activa = TRUE AND c.empresa_id = ? ' +
-                    'ORDER BY c.nombre ASC',
+                    'ORDER BY b.descripcion ASC, c.numero ASC',
                     [empresaId]
                 );
             }
         } else {
             [cuentas] = await db.query(
                 'SELECT c.id as corr, e.codigo as id_empresa, c.numero, c.nombre, ' +
-                'e.nombre as empresa_nombre, b.descripcion as banco_nombre ' +
+                'e.nombre as empresa_nombre, b.descripcion as banco_nombre, c.banco_id ' +
                 'FROM cuentas_bancarias c ' +
                 'LEFT JOIN empresas e ON c.empresa_id = e.id ' +
                 'LEFT JOIN bancos b ON c.banco_id = b.id ' +
                 'WHERE c.activa = TRUE ' +
-                'ORDER BY c.nombre ASC'
+                'ORDER BY b.descripcion ASC, c.numero ASC'
             );
         }
 
         res.json({ empresas, cuentas });
     } catch (error) {
         res.status(500).json({ message: 'Error al cargar catálogos', error: error.message });
+    }
+});
+
+router.get('/rango', authenticateToken, async (req, res) => {
+    const { cuenta_bancaria_id, desde_cheque, hasta_cheque } = req.query;
+    try {
+        if (!cuenta_bancaria_id || desde_cheque === undefined || hasta_cheque === undefined) {
+            return res.status(400).json({ message: 'Se requiere cuenta_bancaria_id, desde_cheque y hasta_cheque' });
+        }
+
+        const db = getDb();
+        const query = `
+            SELECT ch.id, ch.llave, e.codigo as id_empresa, cb.id as cuenta_bancaria_id, cb.numero as numero_cuenta, cb.nombre as cuenta_nombre,
+                   b.id as banco_id, b.descripcion as banco_nombre, e.nombre as empresa_nombre,
+                   ch.fecha, ch.cheque_anulado, ch.cheque, ch.valor, ch.a_nombre, ch.fecha_aplicado, ch.concepto,
+                   ch.es_reservado, ch.es_pago_contado, ch.fue_noemitido, ch.num_partida,
+                   IF(ch.es_contabilizado, 'S', 'N') as es_contabilizado
+            FROM cheques ch
+            LEFT JOIN empresas e ON ch.empresa_id = e.id
+            LEFT JOIN cuentas_bancarias cb ON ch.cuenta_bancaria_id = cb.id
+            LEFT JOIN bancos b ON cb.banco_id = b.id
+            WHERE ch.cuenta_bancaria_id = ?
+              AND CAST(ch.cheque AS UNSIGNED) BETWEEN ? AND ?
+            ORDER BY CAST(ch.cheque AS UNSIGNED) ASC, ch.id ASC
+        `;
+
+        const [rows] = await db.query(query, [cuenta_bancaria_id, Number(desde_cheque), Number(hasta_cheque)]);
+
+        const formatted = rows.map(r => ({
+            ...r,
+            fecha: toDisplayDate(r.fecha),
+            fecha_aplicado: toDisplayDate(r.fecha_aplicado)
+        }));
+
+        res.json(formatted);
+    } catch (error) {
+        res.status(500).json({ message: 'Error al consultar cheques por rango', error: error.message });
+    }
+});
+
+router.get('/reporte-fecha', authenticateToken, async (req, res) => {
+    const { cuenta_bancaria_id, desde, hasta, excluir_anulados, excluir_reservados } = req.query;
+    try {
+        if (!cuenta_bancaria_id || !desde || !hasta) {
+            return res.status(400).json({ message: 'Se requiere cuenta_bancaria_id, desde y hasta' });
+        }
+
+        const db = getDb();
+        let query = `
+            SELECT ch.id, ch.llave, e.codigo as id_empresa, cb.id as cuenta_bancaria_id, cb.numero as numero_cuenta, cb.nombre as cuenta_nombre,
+                   b.id as banco_id, b.descripcion as banco_nombre, e.nombre as empresa_nombre,
+                   ch.fecha, ch.cheque_anulado, ch.cheque, ch.valor, ch.a_nombre, ch.fecha_aplicado, ch.concepto,
+                   ch.es_reservado, ch.es_pago_contado, ch.fue_noemitido, ch.num_partida,
+                   IF(ch.es_contabilizado, 'S', 'N') as es_contabilizado
+            FROM cheques ch
+            LEFT JOIN empresas e ON ch.empresa_id = e.id
+            LEFT JOIN cuentas_bancarias cb ON ch.cuenta_bancaria_id = cb.id
+            LEFT JOIN bancos b ON cb.banco_id = b.id
+            WHERE ch.cuenta_bancaria_id = ?
+              AND ch.fecha BETWEEN ? AND ?
+        `;
+        const params = [cuenta_bancaria_id, desde, hasta];
+
+        if (excluir_anulados === 'true' || excluir_anulados === true) {
+            query += ' AND (ch.cheque_anulado = 0 OR ch.cheque_anulado IS NULL)';
+        }
+
+        if (excluir_reservados === 'true' || excluir_reservados === true) {
+            query += ' AND (ch.es_reservado = 0 OR ch.es_reservado IS NULL) AND (ch.fue_noemitido = 0 OR ch.fue_noemitido IS NULL)';
+        }
+
+        query += ' ORDER BY ch.fecha ASC, CAST(ch.cheque AS UNSIGNED) ASC, ch.id ASC';
+
+        const [rows] = await db.query(query, params);
+
+        const formatted = rows.map(r => ({
+            ...r,
+            fecha: toDisplayDate(r.fecha),
+            fecha_raw: r.fecha ? toDBDate(r.fecha) : '',
+            fecha_aplicado: toDisplayDate(r.fecha_aplicado)
+        }));
+
+        res.json(formatted);
+    } catch (error) {
+        res.status(500).json({ message: 'Error al generar reporte de cheques por fecha', error: error.message });
     }
 });
 

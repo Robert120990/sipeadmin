@@ -111,7 +111,17 @@ const PrintEngine = {
 <title>Cheque — ${datos.numero_cheque || ''}</title>
 <style>
     body { margin: 0; padding: 0; }
-    @page { margin: 0; }
+    @page {
+        size: letter;
+        margin: 0;
+    }
+    .page {
+        position: relative;
+        width: 215.9mm;
+        height: 279.4mm;
+        box-sizing: border-box;
+        overflow: hidden;
+    }
     .sheet { position: relative; width: ${widthMm}mm; height: ${heightMm}mm; overflow: hidden; }
     .content { position: absolute; left: 0; top: 0; width: ${widthPx}px; height: ${heightPx}px;
              transform: scale(${calibracion.scale || 1});
@@ -119,7 +129,102 @@ const PrintEngine = {
 </style>
 </head>
 <body>
-<div class="sheet"><div class="content">${camposHtml}</div></div>
+<div class="page"><div class="sheet"><div class="content">${camposHtml}</div></div></div>
+<script>window.onload = () => { window.print(); };</script>
+</body>
+</html>`;
+
+        this._openPrintWindow(html);
+    },
+
+    /**
+     * Imprime una lista de cheques en lote, cada uno en una página separada a tamaño Carta completo.
+     * @param {Object} formato - Formato del cheque.
+     * @param {Array} campos - Campos del diseño.
+     * @param {Array<Object>} listaDatos - Lista de datos de cheques a imprimir.
+     * @param {string} printerName - Nombre de la impresora para aplicar calibración.
+     */
+    async printBatch(formato, campos, listaDatos, printerName) {
+        if (!listaDatos || listaDatos.length === 0) return;
+
+        const widthMm = formato?.width || 152.4;
+        const heightMm = formato?.height || 69.85;
+        const widthPx = widthMm * MM_TO_PX;
+        const heightPx = heightMm * MM_TO_PX;
+
+        let calibracion = { offset_x: 0, offset_y: 0, scale: 1 };
+        if (printerName) {
+            try {
+                const calibrations = await DesignerService.getCalibrations();
+                calibracion = calibrations.find(c => c.printer_name === printerName) || calibracion;
+            } catch (e) {
+                // Sin calibración disponible, continuar con valores por defecto
+            }
+        }
+
+        const visibleCampos = (campos || []).filter(c => c.visible !== false);
+
+        const pagesHtml = listaDatos.map(datos => {
+            const camposHtml = visibleCampos.map(c => {
+                const valor = datos[c.tipo] || datos[c.variable] || (c.tipo === 'texto_fijo' ? c.etiqueta : '');
+                return `<div style="position:absolute;left:${c.x}px;top:${c.y}px;width:${c.ancho}px;height:${c.alto}px;
+                    transform:rotate(${c.rotacion || 0}deg);
+                    font-family:${c.fuente || 'Arial'};
+                    font-size:${c.fontSize || '12px'};
+                    font-weight:${c.peso === 'bold' ? 'bold' : 'normal'};
+                    font-style:${c.estilo === 'italic' ? 'italic' : 'normal'};
+                    text-decoration:${c.subrayado ? 'underline' : 'none'};
+                    color:${c.color || '#000'};
+                    text-align:${c.alineacion === 'centro' ? 'center' : c.alineacion === 'derecha' ? 'right' : 'left'};
+                    white-space:nowrap;overflow:hidden;line-height:1.2;">${valor}</div>`;
+            }).join('\n');
+
+            return `<div class="page"><div class="sheet"><div class="content">${camposHtml}</div></div></div>`;
+        }).join('\n');
+
+        const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Impresión de Cheques (${listaDatos.length})</title>
+<style>
+    body { margin: 0; padding: 0; }
+    @page {
+        size: letter;
+        margin: 0;
+    }
+    .page {
+        position: relative;
+        width: 215.9mm;
+        height: 279.4mm;
+        overflow: hidden;
+        page-break-after: always;
+        break-after: page;
+        box-sizing: border-box;
+    }
+    .page:last-child {
+        page-break-after: avoid;
+        break-after: avoid;
+    }
+    .sheet {
+        position: relative;
+        width: ${widthMm}mm;
+        height: ${heightMm}mm;
+        overflow: hidden;
+    }
+    .content {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: ${widthPx}px;
+        height: ${heightPx}px;
+        transform: scale(${calibracion.scale || 1});
+        transform-origin: ${(calibracion.offset_x || 0) * -1}px ${(calibracion.offset_y || 0) * -1}px;
+    }
+</style>
+</head>
+<body>
+${pagesHtml}
 <script>window.onload = () => { window.print(); };</script>
 </body>
 </html>`;

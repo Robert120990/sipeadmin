@@ -114,7 +114,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
             'LEFT JOIN empresas e ON cb.empresa_id = e.id ' +
             'LEFT JOIN bancos b ON cb.banco_id = b.id ' +
             'WHERE cb.activa = TRUE ' +
-            'ORDER BY e.nombre ASC, cb.orden ASC, cb.nombre ASC'
+            'ORDER BY b.descripcion ASC, cb.numero ASC'
         ));
         const [tiposRemesas] = await withRetry(() => db.query(
             'SELECT id, empresa_id, codigo, descripcion FROM tipos_remesas ORDER BY id ASC'

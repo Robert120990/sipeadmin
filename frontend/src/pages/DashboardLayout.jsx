@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign } from 'lucide-react';
+import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3 } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
-import { catalogItems, bancosMenu, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasBancos, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
+import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering
 import Dashboard from './Dashboard';
@@ -30,6 +30,9 @@ import ConciliacionBancaria from './ConciliacionBancaria';
 import Cheques from './Cheques';
 import ChequesContado from './ChequesContado';
 import CheckDesigner from './CheckDesigner';
+import ImpresionCheques from './ImpresionCheques';
+import ReporteChequesFecha from './ReporteChequesFecha';
+import ReporteMovimientosFecha from './ReporteMovimientosFecha';
 import BackupDBCheck from './BackupDBCheck';
 import Bitacora from './Bitacora';
 import FinanzasPrestamos from './FinanzasPrestamos';
@@ -52,11 +55,11 @@ export default function DashboardLayout() {
         catalogs: false,
         consultas: false,
         consultasEstaciones: false,
-        consultasBancos: false,
         consultasOtras: false,
         security: false,
         operaciones: false,
         bancos: false,
+        bancosReportes: false,
         finanzas: false,
         configuracion: false
     });
@@ -76,7 +79,13 @@ export default function DashboardLayout() {
     const mobileTabsRef = useRef(null);
 
     const user = JSON.parse(localStorage.getItem('user')) || {};
-    const hasPermission = (path) => user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator' || user.permissions?.includes(path);
+    const hasPermission = (path) => {
+        if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
+        if (user.permissions?.includes(path)) return true;
+        if (path === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return true;
+        if (path === '/dashboard/bancos/reportes/saldos-chequera' && user.permissions?.includes('/dashboard/consultas/saldos-chequera')) return true;
+        return false;
+    };
 
     // Component Registry Mapping
     const componentRegistry = {
@@ -93,6 +102,11 @@ export default function DashboardLayout() {
         '/dashboard/consultas/estaciones/precios-competencia': <ConsultasPreciosCompetencia />,
         '/dashboard/operaciones/pedidos': <PedidosCombustible />,
         '/dashboard/operaciones/recordatorios': <ControlRecordatorios />,
+        '/dashboard/bancos/reportes/saldos-bancos': <Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." />,
+        '/dashboard/bancos/reportes/saldos-chequera': <Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />,
+        '/dashboard/bancos/reportes/impresion-cheques': <ImpresionCheques />,
+        '/dashboard/bancos/reportes/cheques-fecha': <ReporteChequesFecha />,
+        '/dashboard/bancos/reportes/movimientos-fecha': <ReporteMovimientosFecha />,
         '/dashboard/consultas/saldos-bancos': <Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." />,
         '/dashboard/consultas/saldos-chequera': <Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />,
         '/dashboard/consultas/otras/cumpleanos': <ConsultasCumpleanos />,
@@ -123,10 +137,10 @@ export default function DashboardLayout() {
             ...catalogItems, 
             ...operacionesMenu, 
             ...bancosMenu, 
+            ...bancosReportes,
             ...finanzasMenu,
             ...consultasItemsRoot, 
             ...consultasEstaciones, 
-            ...consultasBancos, 
             ...consultasOtras, 
             ...securityItems, 
             ...configuracionMenu
@@ -277,9 +291,9 @@ export default function DashboardLayout() {
     const filteredCatalogs = getFiltered(catalogItems);
     const filteredOperaciones = getFiltered(operacionesMenu);
     const filteredBancosMenu = getFiltered(bancosMenu);
+    const filteredBancosReportes = getFiltered(bancosReportes);
     const filteredFinanzasMenu = getFiltered(finanzasMenu);
     const filteredEstaciones = getFiltered(consultasEstaciones);
-    const filteredBancos = getFiltered(consultasBancos);
     const filteredOtras = getFiltered(consultasOtras);
     const filteredSecurity = getFiltered(securityItems);
     const filteredConfiguracionMenu = getFiltered(configuracionMenu);
@@ -289,10 +303,15 @@ export default function DashboardLayout() {
         setOpenMenus(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
-    const renderNavItem = (item, isSubItem = false) => {
+    const renderNavItem = (item, isSubItem = false, depth = 1) => {
         const Icon = item.icon || FileText;
         const isActive = activeTabPath === item.path;
         
+        let pad = '0.75rem';
+        if (isSubItem && !isCollapsed) {
+            pad = depth === 2 ? '3.5rem' : '2.5rem';
+        }
+
         return (
             <div
                 key={item.name}
@@ -300,12 +319,12 @@ export default function DashboardLayout() {
                 className={`nav-item ${isActive ? 'active' : ''}`}
                 style={{ 
                     cursor: 'pointer',
-                    paddingLeft: isSubItem && !isCollapsed ? '2.5rem' : '0.75rem', 
-                    fontSize: isSubItem ? '0.9rem' : '1rem' 
+                    paddingLeft: pad, 
+                    fontSize: isSubItem ? (depth === 2 ? '0.85rem' : '0.9rem') : '1rem' 
                 }}
                 title={isCollapsed ? item.name : ''}
             >
-                <Icon size={isSubItem ? 18 : 20} />
+                <Icon size={isSubItem ? (depth === 2 ? 16 : 18) : 20} />
                 {!isCollapsed && <span>{item.name}</span>}
             </div>
         );
@@ -343,7 +362,7 @@ export default function DashboardLayout() {
                     </div>
                 )}
 
-                {filteredBancosMenu.length > 0 && (
+                {(filteredBancosMenu.length > 0 || filteredBancosReportes.length > 0) && (
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('bancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
@@ -352,7 +371,36 @@ export default function DashboardLayout() {
                             </div>
                             {!isCollapsed && (openMenus.bancos ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
                         </button>
-                        {openMenus.bancos && !isCollapsed && filteredBancosMenu.map(item => renderNavItem(item, true))}
+                        {openMenus.bancos && !isCollapsed && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                {filteredBancosMenu.map(item => renderNavItem(item, true))}
+                                {filteredBancosReportes.length > 0 && (
+                                    <div>
+                                        <button 
+                                            className="nav-item" 
+                                            onClick={() => toggleMenu('bancosReportes')} 
+                                            style={{ 
+                                                background: 'none', 
+                                                border: 'none', 
+                                                width: '100%', 
+                                                textAlign: 'left', 
+                                                paddingLeft: '2.5rem', 
+                                                fontSize: '0.9rem', 
+                                                color: 'var(--text-muted)',
+                                                justifyContent: 'space-between'
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                <BarChart3 size={16} />
+                                                <span>Reportes</span>
+                                            </div>
+                                            {openMenus.bancosReportes ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                        </button>
+                                        {openMenus.bancosReportes && filteredBancosReportes.map(item => renderNavItem(item, true, 2))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -370,7 +418,7 @@ export default function DashboardLayout() {
                 )}
 
                 {/* Consultas Section */}
-                {(filteredEstaciones.length > 0 || filteredBancos.length > 0 || filteredOtras.length > 0) && (
+                {(filteredEstaciones.length > 0 || filteredOtras.length > 0) && (
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('consultas')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
@@ -384,31 +432,21 @@ export default function DashboardLayout() {
                                 {/* Estaciones Submenu */}
                                 {filteredEstaciones.length > 0 && (
                                     <div>
-                                        <button className="nav-item" onClick={() => toggleMenu('consultasEstaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                        <button className="nav-item" onClick={() => toggleMenu('consultasEstaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)', justifyContent: 'space-between' }}>
                                             <span>Estaciones</span>
                                             {openMenus.consultasEstaciones ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                         </button>
-                                        {openMenus.consultasEstaciones && filteredEstaciones.map(item => renderNavItem(item, true))}
-                                    </div>
-                                )}
-                                {/* Bancos Submenu */}
-                                {filteredBancos.length > 0 && (
-                                    <div>
-                                        <button className="nav-item" onClick={() => toggleMenu('consultasBancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                                            <span>Bancos</span>
-                                            {openMenus.consultasBancos ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                        </button>
-                                        {openMenus.consultasBancos && filteredBancos.map(item => renderNavItem(item, true))}
+                                        {openMenus.consultasEstaciones && filteredEstaciones.map(item => renderNavItem(item, true, 2))}
                                     </div>
                                 )}
                                 {/* Otras Submenu */}
                                 {filteredOtras.length > 0 && (
                                     <div>
-                                        <button className="nav-item" onClick={() => toggleMenu('consultasOtras')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                        <button className="nav-item" onClick={() => toggleMenu('consultasOtras')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)', justifyContent: 'space-between' }}>
                                             <span>Otras</span>
                                             {openMenus.consultasOtras ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                         </button>
-                                        {openMenus.consultasOtras && filteredOtras.map(item => renderNavItem(item, true))}
+                                        {openMenus.consultasOtras && filteredOtras.map(item => renderNavItem(item, true, 2))}
                                     </div>
                                 )}
                             </div>

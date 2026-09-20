@@ -146,7 +146,7 @@ router.get('/movimientos/catalogos', authenticateToken, async (req, res) => {
                     'LEFT JOIN empresas e ON c.empresa_id = e.id ' +
                     'LEFT JOIN bancos b ON c.banco_id = b.id ' +
                     'WHERE c.activa = TRUE AND c.empresa_id = ? ' +
-                    'ORDER BY c.nombre ASC',
+                    'ORDER BY b.descripcion ASC, c.numero ASC',
                     [empresaId]
                 );
                 [remesas] = await db.query('SELECT codigo as id, descripcion FROM tipos_remesas WHERE empresa_id = ? ORDER BY id', [empresaId]);
@@ -159,7 +159,7 @@ router.get('/movimientos/catalogos', authenticateToken, async (req, res) => {
                 'LEFT JOIN empresas e ON c.empresa_id = e.id ' +
                 'LEFT JOIN bancos b ON c.banco_id = b.id ' +
                 'WHERE c.activa = TRUE ' +
-                'ORDER BY c.nombre ASC'
+                'ORDER BY b.descripcion ASC, c.numero ASC'
             );
         }
 
@@ -212,6 +212,65 @@ router.get('/movimientos', authenticateToken, async (req, res) => {
         res.json(formatted);
     } catch (error) {
         res.status(500).json({ message: 'Error al cargar movimientos bancarios', error: error.message });
+    }
+});
+
+router.get('/movimientos/reporte-fecha', authenticateToken, async (req, res) => {
+    const { cuenta_bancaria_id, numero_cuenta, desde, hasta, tipo } = req.query;
+    try {
+        if ((!cuenta_bancaria_id && !numero_cuenta) || !desde || !hasta) {
+            return res.status(400).json({ message: 'Se requiere cuenta bancaria (cuenta_bancaria_id o numero_cuenta), desde y hasta' });
+        }
+
+        const db = getDb();
+        let query = `
+            SELECT m.id, e.codigo as id_empresa, cb.id as cuenta_bancaria_id, cb.numero as numero_cuenta, cb.nombre as cuenta_nombre,
+                   b.id as banco_id, b.descripcion as banco_nombre, e.nombre as empresa_nombre,
+                   m.fecha, m.fecha_aplicado, m.documento, m.concepto, m.monto, m.cargo, m.abono,
+                   tr.codigo as cod_remesa, tr.descripcion as remesa_descripcion,
+                   m.cod_cta, m.num_partida,
+                   IF(m.es_contabilizado, 'S', 'N') as es_contabilizado
+            FROM movimientos_bancarios m
+            LEFT JOIN empresas e ON m.empresa_id = e.id
+            LEFT JOIN cuentas_bancarias cb ON m.cuenta_bancaria_id = cb.id
+            LEFT JOIN bancos b ON cb.banco_id = b.id
+            LEFT JOIN tipos_remesas tr ON m.tipo_remesa_id = tr.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (cuenta_bancaria_id) {
+            query += ' AND m.cuenta_bancaria_id = ?';
+            params.push(cuenta_bancaria_id);
+        } else if (numero_cuenta) {
+            query += ' AND cb.numero = ?';
+            params.push(numero_cuenta);
+        }
+
+        query += ' AND m.fecha BETWEEN ? AND ?';
+        params.push(desde, hasta);
+
+        if (tipo === 'CARGOS') {
+            query += ' AND m.cargo > 0';
+        } else if (tipo === 'ABONOS') {
+            query += ' AND m.abono > 0';
+        }
+
+        query += ' ORDER BY m.fecha ASC, m.id ASC';
+
+        const [rows] = await db.query(query, params);
+
+        const formatted = rows.map(r => ({
+            ...r,
+            llave: String(r.id),
+            fecha: toDisplayDate(r.fecha),
+            fecha_raw: r.fecha ? toDBDate(r.fecha) : '',
+            fecha_aplicado: toDisplayDate(r.fecha_aplicado)
+        }));
+
+        res.json(formatted);
+    } catch (error) {
+        res.status(500).json({ message: 'Error al generar reporte de movimientos por fecha', error: error.message });
     }
 });
 

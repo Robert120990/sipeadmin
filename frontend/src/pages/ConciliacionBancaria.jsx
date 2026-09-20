@@ -13,6 +13,7 @@ import { socket } from '../services/socket';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
 export default function ConciliacionBancaria() {
     const { addToast } = useToast();
@@ -1003,9 +1004,9 @@ export default function ConciliacionBancaria() {
                             onChange={(e) => setSelectedCuentaId(e.target.value)}
                             style={{ width: '100%', height: '38px', borderRadius: 'var(--border-radius)', padding: '0 0.5rem', fontWeight: '500' }}
                         >
-                            {cuentasFiltradas.map(c => (
+                            {sortCuentas(cuentasFiltradas).map(c => (
                                 <option key={c.id} value={c.id}>
-                                    {c.banco_nombre || 'BANCO'} - {c.numero} - {c.nombre} ({c.empresa_codigo})
+                                    {formatCuentaLabel(c)}
                                 </option>
                             ))}
                         </select>
