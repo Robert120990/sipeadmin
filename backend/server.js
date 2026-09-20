@@ -141,11 +141,13 @@ const finanzasRoutes = require('./routes/finanzas');
 const inteligenciaRoutes = require('./routes/inteligencia');
 const tasksRoutes = require('./routes/tasks');
 const notificationsRoutes = require('./routes/notifications');
+const githubChangesRoutes = require('./routes/githubChanges').router;
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/tasks', tasksRoutes);
+app.use('/api/seguridad/cambios-github', githubChangesRoutes);
 app.use('/api/bancos/conciliacion', conciliacionRoutes);
 app.use('/api/bancos', bancosRoutes);
 app.use('/api/finanzas', finanzasRoutes);

@@ -51,7 +51,8 @@ import {
     EstrategiaMermas,
     EstrategiaRentabilidad,
     EstrategiaCreditos,
-    Tareas
+    Tareas,
+    ConsultaCambiosGithub
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -139,6 +140,7 @@ function App() {
                                     <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />
                                     <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />
                                     <Route path="bitacora" element={<PermissionRoute pathKey="/dashboard/bitacora"><Bitacora /></PermissionRoute>} />
+                                    <Route path="seguridad/cambios" element={<PermissionRoute pathKey="/dashboard/seguridad/cambios"><ConsultaCambiosGithub /></PermissionRoute>} />
                                 </Route>
                                 <Route path="*" element={<Navigate to="/login" replace />} />
                             </Routes>

@@ -50,7 +50,8 @@ import {
     EstrategiaMermas,
     EstrategiaRentabilidad,
     EstrategiaCreditos,
-    Tareas
+    Tareas,
+    ConsultaCambiosGithub
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -167,6 +168,7 @@ export default function DashboardLayout() {
         '/dashboard/estrategia/mermas': <EstrategiaMermas />,
         '/dashboard/estrategia/rentabilidad': <EstrategiaRentabilidad />,
         '/dashboard/estrategia/creditos': <EstrategiaCreditos />,
+        '/dashboard/seguridad/cambios': <ConsultaCambiosGithub />,
     };
 
     // Sync with URL location

@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles, Printer, Compass, Fuel, ShieldAlert, CheckCircle2, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles, Printer, Compass, Fuel, ShieldAlert, CheckCircle2, ClipboardCheck, GitCommit } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -81,6 +81,7 @@ export const securityItems = [
     { name: 'Usuarios', path: '/dashboard/users', icon: Users },
     { name: 'Permisos', path: '/dashboard/permissions', icon: Shield },
     { name: 'Bitácora', path: '/dashboard/bitacora', icon: ClipboardList },
+    { name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: GitCommit },
 ];
 
 export const configuracionMenu = [

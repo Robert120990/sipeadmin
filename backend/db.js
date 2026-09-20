@@ -714,15 +714,19 @@ const initDB = async () => {
                 await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)", [permName, permDesc]);
             }
 
+            // Permisos de Consulta de Cambios (GitHub)
+            await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/seguridad/cambios', 'Consulta de cambios y versiones subidos a GitHub')");
+            await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('view_github_changes', 'Ver cambios y commits de GitHub')");
+
             const [[adminRole]] = await pool.query("SELECT id FROM roles WHERE name IN ('admin', 'Administrator') LIMIT 1");
             if (adminRole) {
-                const [allTargetPerms] = await pool.query("SELECT id FROM permissions WHERE name LIKE '/dashboard/estrategia/%' OR name LIKE '/dashboard/bancos/reportes/%' OR name = 'view_direccion_estrategica'");
+                const [allTargetPerms] = await pool.query("SELECT id FROM permissions WHERE name LIKE '/dashboard/estrategia/%' OR name LIKE '/dashboard/bancos/reportes/%' OR name = 'view_direccion_estrategica' OR name = '/dashboard/seguridad/cambios' OR name = 'view_github_changes'");
                 for (const p of allTargetPerms) {
                     await pool.query("INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", [adminRole.id, p.id]);
                 }
             }
         } catch (e) {
-            console.error('Migration bancos & estrategia permissions:', e.message);
+            console.error('Migration bancos & estrategia & seguridad permissions:', e.message);
         }
 
         return pool;
