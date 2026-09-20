@@ -8,7 +8,7 @@
     "dev": "nodemon server.js",
     "lint": "eslint .",
     "sync:dgehm": "node sync-dgehm-direct.js",
-    "test": "node --test test/**/*.test.js"
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
