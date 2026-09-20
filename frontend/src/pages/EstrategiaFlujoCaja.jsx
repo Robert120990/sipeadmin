@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { formatDateDMY } from '../utils/date';
 
 export default function EstrategiaFlujoCaja() {
     const { addToast } = useToast();
@@ -83,6 +84,7 @@ export default function EstrategiaFlujoCaja() {
                         if (idx % 5 === 0 || isDeficit || idx === timeline.length - 1) {
                             return (
                                 <g key={idx}>
+                                    <title>{formatDateDMY(t.fecha)}: ${Math.round(t.saldo_final_proyectado).toLocaleString()}</title>
                                     <circle cx={x} cy={y} r={isDeficit ? 4 : 3} fill={isDeficit ? '#ef4444' : 'var(--primary)'} />
                                     <text x={x} y={y - 8} fontSize="9" fill={isDeficit ? '#ef4444' : 'var(--text-muted)'} textAnchor="middle" fontWeight="bold">
                                         ${Math.round(t.saldo_final_proyectado / 1000)}k
@@ -183,7 +185,7 @@ export default function EstrategiaFlujoCaja() {
                         ${kpi.saldo_minimo_proyectado?.toLocaleString() || 0}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        Fecha estimada: {kpi.fecha_saldo_minimo || 'N/A'}
+                        Fecha estimada: {formatDateDMY(kpi.fecha_saldo_minimo) || 'N/A'}
                     </div>
                 </div>
 
@@ -314,7 +316,7 @@ export default function EstrategiaFlujoCaja() {
                                     return (
                                         <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '0.8rem' }}>
                                             <td style={{ padding: '0.45rem 0.5rem' }}>
-                                                <strong>{d.fecha}</strong>
+                                                <strong>{formatDateDMY(d.fecha)}</strong>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', display: 'block' }}>{d.dia_semana}</span>
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>

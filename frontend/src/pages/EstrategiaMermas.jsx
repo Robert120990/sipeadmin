@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { formatDateDMY } from '../utils/date';
 
 export default function EstrategiaMermas() {
     const { addToast } = useToast();
@@ -62,7 +63,7 @@ export default function EstrategiaMermas() {
                     <div>
                         <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold', margin: 0 }}>Auditoría de Mermas y Fugas en Pista</h1>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
-                            Monitoreo de diferencias físicas vs lecturas de dispensador y detección de descalibración
+                            Monitoreo de diferencias físicas vs lecturas de dispensador y detección de descalibración • Período: {formatDateDMY(desde)} al {formatDateDMY(hasta)}
                         </p>
                     </div>
                 </div>
@@ -106,7 +107,7 @@ export default function EstrategiaMermas() {
                         ${resumen.costo_total_perdida_usd?.toLocaleString() || 0} USD
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        {resumen.total_galones_perdidos?.toLocaleString() || 0} galones en el período
+                        {resumen.total_galones_perdidos?.toLocaleString() || 0} galones en el período ({formatDateDMY(desde)} - {formatDateDMY(hasta)})
                     </div>
                 </div>
 

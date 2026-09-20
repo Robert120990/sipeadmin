@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { formatDateDMY } from '../utils/date';
 
 export default function EstrategiaRentabilidad() {
     const { addToast } = useToast();
@@ -55,7 +56,7 @@ export default function EstrategiaRentabilidad() {
                     <div>
                         <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold', margin: 0 }}>Rentabilidad Operativa & P&L por Estación</h1>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
-                            Estado de resultados operativo, margen por galón despachado y punto de equilibrio
+                            Estado de resultados operativo, margen por galón despachado y punto de equilibrio • Período: {formatDateDMY(desde)} al {formatDateDMY(hasta)}
                         </p>
                     </div>
                 </div>
@@ -99,7 +100,7 @@ export default function EstrategiaRentabilidad() {
                         {resumen.galones_totales?.toLocaleString() || 0} gal
                     </div>
                     <div style={{ fontSize: '0.75rem', color: '#8b5cf6' }}>
-                        En {pnlData?.periodo?.dias || 30} días analizados
+                        En {pnlData?.periodo?.dias || 30} días analizados ({formatDateDMY(desde)} al {formatDateDMY(hasta)})
                     </div>
                 </div>
 

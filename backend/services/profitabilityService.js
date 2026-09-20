@@ -1,14 +1,4 @@
-const { getExternalDb, withRetry } = require('../db');
-
-/**
- * Normaliza fecha YYYY-MM-DD a formato DD/MM/YYYY
- */
-const toSystemDate = (dStr) => {
-    if (!dStr) return '';
-    const parts = dStr.split('-');
-    if (parts.length !== 3) return dStr;
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
-};
+const { getAccountingDb, withRetry } = require('../db');
 
 /**
  * Obtiene el P&L y Rentabilidad Operativa por Estación de Servicio
@@ -16,7 +6,7 @@ const toSystemDate = (dStr) => {
  * @param {string} fechaHasta - YYYY-MM-DD
  */
 const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
-    const externalDb = await getExternalDb();
+    const accountingDb = await getAccountingDb();
 
     // Fechas por defecto: últimos 30 días
     let dFin = fechaHasta;
@@ -29,98 +19,118 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         dInicio = prev.toISOString().split('T')[0];
     }
 
-    const datesArray = [];
-    let curr = new Date(dInicio + 'T12:00:00');
-    const endDate = new Date(dFin + 'T12:00:00');
-    while (curr <= endDate) {
-        datesArray.push(toSystemDate(curr.toISOString().split('T')[0]));
-        curr.setDate(curr.getDate() + 1);
+    const tInicio = new Date(dInicio + 'T00:00:00');
+    const tFin = new Date(dFin + 'T00:00:00');
+    const numDias = Math.max(1, Math.round((tFin - tInicio) / (1000 * 60 * 60 * 24)) + 1);
+
+    // 1. Estaciones activas con infraestructura de tanques
+    const [stations] = await withRetry(() => accountingDb.query(
+        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
+    ));
+
+    // 2. Ventas y galonaje de combustible por estación (solo turnos cerrados)
+    const sqlCombustibles = `
+        SELECT 
+            b.id as id_empresa,
+            COALESCE(SUM(r.diferencia), 0.0) as total_galones,
+            COALESCE(SUM(r.monto), 0.0) as venta_dolares,
+            COALESCE(SUM(CASE WHEN (r.codigo_producto LIKE '%DIESEL%' AND r.codigo_producto NOT LIKE '%ION%') OR p.tipo_combustible = 3 THEN r.diferencia ELSE 0 END), 0.0) as galones_diesel,
+            COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%REGULAR%' OR p.tipo_combustible = 1 THEN r.diferencia ELSE 0 END), 0.0) as galones_regular,
+            COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%SUPER%' OR p.tipo_combustible = 2 THEN r.diferencia ELSE 0 END), 0.0) as galones_super,
+            COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN r.diferencia ELSE 0 END), 0.0) as galones_ion
+        FROM branches b
+        JOIN gas_station_closeouts c ON b.id = c.branch_id
+        JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
+        LEFT JOIN products p ON r.product_id = p.id
+        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        GROUP BY b.id
+        ORDER BY b.id
+    `;
+    const [combustiblesRows] = await withRetry(() => accountingDb.query(sqlCombustibles, [dInicio, dFin]));
+
+    // 3. Costos promedio de combustible desde catálogo
+    const costMap = {
+        'DIESEL': 3.10,
+        'REGULAR': 3.35,
+        'SUPER': 3.65,
+        'IONDIESEL': 3.20
+    };
+    try {
+        const [costosRows] = await withRetry(() => accountingDb.query(`
+            SELECT 
+                CASE 
+                    WHEN tipo_combustible = 4 THEN 'IONDIESEL'
+                    WHEN tipo_combustible = 3 THEN 'DIESEL'
+                    WHEN tipo_combustible = 2 THEN 'SUPER'
+                    WHEN tipo_combustible = 1 THEN 'REGULAR'
+                    ELSE 'DIESEL'
+                END as cod_producto,
+                AVG(costo) as costo
+            FROM products
+            WHERE tipo_combustible > 0 AND costo > 0
+            GROUP BY cod_producto
+        `));
+        costosRows.forEach(c => {
+            if (c.cod_producto && Number(c.costo) > 0) {
+                costMap[c.cod_producto] = Number(c.costo);
+            }
+        });
+    } catch (e) {
+        // Fallback default
     }
 
-    // 1. Estaciones activas
-    const [stations] = await withRetry(() => externalDb.query(
-        "SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden"
-    ));
-
-    // 2. Ventas y galonaje de combustible por estación
-    const sqlCombustibles = `
-        SELECT a.id_empresa,
-               IFNULL(SUM(b.total), 0.0) as total_galones,
-               IFNULL(SUM(b.total * b.precio), 0.0) as venta_dolares,
-               IFNULL(SUM(IF(d.clasificacion = 'D', b.total, 0.0)), 0.0) as galones_diesel,
-               IFNULL(SUM(IF(d.clasificacion = 'R', b.total, 0.0)), 0.0) as galones_regular,
-               IFNULL(SUM(IF(d.clasificacion = 'S', b.total, 0.0)), 0.0) as galones_super,
-               IFNULL(SUM(IF(d.clasificacion = 'I', b.total, 0.0)), 0.0) as galones_ion
-        FROM web_consolidado a
-        LEFT JOIN cierre_turno_lecturas b ON a.id_empresa = b.id_empresa
-        INNER JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto
-        INNER JOIN cierre_turno c ON b.id_cierre_turno = c.id AND b.id_empresa = c.id_empresa
-        WHERE c.fecha_turno IN (?) AND a.grupo = 'ESTACION'
-        GROUP BY a.id_empresa
-        ORDER BY a.orden
-    `;
-    const [combustiblesRows] = await withRetry(() => externalDb.query(sqlCombustibles, [datesArray]));
-
-    // 3. Costos promedio de adquisición de combustible
-    const [costosRows] = await withRetry(() => externalDb.query(
-        "SELECT id_empresa, cod_producto, costo FROM combustibles_costos WHERE id IN (SELECT MAX(id) FROM combustibles_costos GROUP BY id_empresa, cod_producto)"
-    ));
-    const costMap = {};
-    costosRows.forEach(c => {
-        if (!costMap[c.id_empresa]) costMap[c.id_empresa] = {};
-        costMap[c.id_empresa][c.cod_producto] = Number(c.costo || 0);
-    });
-
-    // 4. Ventas de Tienda de conveniencia
-    const sqlTiendas = `
-        SELECT a.id_empresa,
-               IFNULL(SUM(b.monto), 0.0) as total_tienda
-        FROM web_consolidado a
-        LEFT JOIN ventas_tienda b ON a.id_empresa = b.id_empresa AND b.fecha BETWEEN ? AND ?
-        WHERE a.grupo = 'TIENDA'
-        GROUP BY a.id_empresa
-    `;
-    const [tiendasRows] = await withRetry(() => externalDb.query(sqlTiendas, [dInicio, dFin]));
+    // 4. Ventas de Tienda de conveniencia (sales_headers POS en la sucursal)
     const tiendasMap = {};
-    tiendasRows.forEach(t => {
-        tiendasMap[t.id_empresa] = Number(t.total_tienda || 0);
-    });
+    try {
+        const sqlTiendas = `
+            SELECT branch_id as id_empresa, COALESCE(SUM(total_pagar), 0.0) as total_tienda
+            FROM sales_headers
+            WHERE estado = 'emitido' AND fecha_emision BETWEEN ? AND ?
+            GROUP BY branch_id
+        `;
+        const [tiendasRows] = await withRetry(() => accountingDb.query(sqlTiendas, [dInicio, dFin]));
+        tiendasRows.forEach(t => {
+            tiendasMap[t.id_empresa] = Number(t.total_tienda || 0);
+        });
+    } catch (e) {
+        // Si no hay ventas de tienda registradas
+    }
 
-    // 5. Ventas de Lubricantes
-    const sqlLubricantes = `
-        SELECT a.id_empresa,
-               IFNULL(SUM(b.precio_total), 0.0) as total_lubricantes
-        FROM web_consolidado a
-        LEFT JOIN inventario_lubricantes b ON a.id_empresa = b.id_empresa AND b.fecha_turno IN (?)
-        WHERE a.grupo = 'ESTACION'
-        GROUP BY a.id_empresa
-    `;
-    const [lubricantesRows] = await withRetry(() => externalDb.query(sqlLubricantes, [datesArray]));
+    // 5. Ventas de Lubricantes en cierres de pista cerrados
     const lubricantesMap = {};
-    lubricantesRows.forEach(l => {
-        lubricantesMap[l.id_empresa] = Number(l.total_lubricantes || 0);
-    });
+    try {
+        const sqlLubricantes = `
+            SELECT c.branch_id as id_empresa, COALESCE(SUM(l.total), 0.0) as total_lubricantes
+            FROM gas_station_closeouts c
+            JOIN gas_station_closeout_lubricant_readings l ON c.id = l.closeout_id
+            WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+            GROUP BY c.branch_id
+        `;
+        const [lubricantesRows] = await withRetry(() => accountingDb.query(sqlLubricantes, [dInicio, dFin]));
+        lubricantesRows.forEach(l => {
+            lubricantesMap[l.id_empresa] = Number(l.total_lubricantes || 0);
+        });
+    } catch (e) {
+        // Si no hay lubricantes registrados
+    }
 
-    // 6. Gastos operativos registrados en turnos
+    // 6. Gastos operativos registrados en turnos cerrados
     const sqlGastos = `
-        SELECT a.id_empresa,
-               IFNULL(SUM(b.valor), 0.0) as total_gastos
-        FROM web_consolidado a
-        LEFT JOIN cierre_turno_gastos b ON a.id_empresa = b.id_empresa
-        INNER JOIN cierre_turno c ON b.id_cierre_turno = c.id AND b.id_empresa = c.id_empresa
-        WHERE c.fecha_turno IN (?) AND a.grupo = 'ESTACION'
-        GROUP BY a.id_empresa
+        SELECT c.branch_id as id_empresa, COALESCE(SUM(e.valor), 0.0) as total_gastos
+        FROM gas_station_closeouts c
+        JOIN gas_station_closeout_expenses e ON c.id = e.closeout_id
+        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        GROUP BY c.branch_id
     `;
-    const [gastosRows] = await withRetry(() => externalDb.query(sqlGastos, [datesArray]));
+    const [gastosRows] = await withRetry(() => accountingDb.query(sqlGastos, [dInicio, dFin]));
     const gastosMap = {};
     gastosRows.forEach(g => {
         gastosMap[g.id_empresa] = Number(g.total_gastos || 0);
     });
 
     // Costos operativos fijos estimados adicionales por estación (energía eléctrica, personal, fletes)
-    // Se prorratean unos $4,500 - $6,500 mensuales por estación típica
     const estimacionGastosFijosMensuales = 5500;
-    const factorDias = datesArray.length / 30;
+    const factorDias = numDias / 30;
     const gastosFijosPeriodo = estimacionGastosFijosMensuales * factorDias;
 
     let granTotalGalones = 0;
@@ -140,13 +150,13 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         const gS = Number(rowC.galones_super || 0);
         const gI = Number(rowC.galones_ion || 0);
 
-        const cD = (costMap[id] && costMap[id]['DIESEL']) || 3.10;
-        const cR = (costMap[id] && costMap[id]['REGULAR']) || 3.35;
-        const cS = (costMap[id] && costMap[id]['SUPER']) || 3.65;
-        const cI = (costMap[id] && costMap[id]['IONDIESEL']) || 3.20;
+        const cD = costMap['DIESEL'] || 3.10;
+        const cR = costMap['REGULAR'] || 3.35;
+        const cS = costMap['SUPER'] || 3.65;
+        const cI = costMap['IONDIESEL'] || 3.20;
 
         const costoCombustible = (gD * cD) + (gR * cR) + (gS * cS) + (gI * cI);
-        const margenCombustible = ventaCombustible > 0 ? (ventaCombustible - costoCombustible) : (galonesTotal * 0.28); // Fallback razonable si no hay costos
+        const margenCombustible = ventaCombustible > 0 ? (ventaCombustible - costoCombustible) : (galonesTotal * 0.28);
 
         // Tiendas (Margen comercial promedio 24%)
         const ventaTienda = tiendasMap[id] || 0;
@@ -216,7 +226,7 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
     reporteEstaciones.sort((a, b) => b.utilidad_operativa_neta - a.utilidad_operativa_neta);
 
     return {
-        periodo: { desde: dInicio, hasta: dFin, dias: datesArray.length },
+        periodo: { desde: dInicio, hasta: dFin, dias: numDias },
         resumen_consolidado: {
             galones_totales: Math.round(granTotalGalones),
             ingresos_totales: Math.round(granTotalIngresos),

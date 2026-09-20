@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { formatDateDMY } from '../utils/date';
 
 export default function EstrategiaCombustible() {
     const { addToast } = useToast();
@@ -87,6 +88,7 @@ export default function EstrategiaCombustible() {
                         <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold', margin: 0 }}>Inteligencia de Combustible & DGEHM</h1>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
                             Autonomía de tanques en tiempo real y recomendador estratégico de compras pre-cambio oficial
+                            {autonomiaData?.fecha_corte && ` • Último corte: ${formatDateDMY(autonomiaData.fecha_corte)}`}
                         </p>
                     </div>
                 </div>

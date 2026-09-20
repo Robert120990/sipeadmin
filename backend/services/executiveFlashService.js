@@ -1,44 +1,78 @@
 const nodemailer = require('nodemailer');
 const { GoogleGenAI } = require('@google/genai');
-const { getDb, getExternalDb, withRetry } = require('../db');
+const { getDb, getAccountingDb, getExternalDb, withRetry } = require('../db');
 const { getTanquesAutonomia } = require('./fuelIntelligence');
+
+/**
+ * Formatea una fecha YYYY-MM-DD a texto en español (ej. sábado, 19 de septiembre de 2026)
+ */
+const formatFechaTexto = (dateStr) => {
+    if (!dateStr) return '';
+    const [y, m, d] = String(dateStr).split('-').map(Number);
+    if (!y || !m || !d) return String(dateStr);
+    const dt = new Date(y, m - 1, d);
+    return dt.toLocaleDateString('es-SV', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+};
 
 /**
  * Genera el Flash Ejecutivo Diario para Dueños y Directores
  */
 const getFlashEjecutivo = async () => {
     const db = getDb();
-    const externalDb = await getExternalDb();
+    const accountingDb = await getAccountingDb();
     const today = new Date();
     const todayStr = today.toISOString().split('T')[0];
 
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    const yDay = String(yesterday.getDate()).padStart(2, '0');
-    const yMonth = String(yesterday.getMonth() + 1).padStart(2, '0');
-    const yYear = yesterday.getFullYear();
-    const yesterdaySysDate = `${yDay}/${yMonth}/${yYear}`;
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
 
-    // 1. Ventas de ayer por estación
-    let ventasAyer = { total_galones: 0, total_dolares: 0, margen_promedio_galon: 0.28, estaciones: [] };
+    // 1. Ventas por estación (solo turnos cerrados) para Ayer y Hoy
+    const sqlVentasTurno = `
+        SELECT b.id as id_empresa, b.nombre as estacion,
+               COALESCE(SUM(r.diferencia), 0.0) as galones,
+               COALESCE(SUM(r.monto), 0.0) as venta_monto
+        FROM branches b
+        JOIN gas_station_closeouts c ON b.id = c.branch_id
+        JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
+        WHERE c.estado = 'cerrado' AND c.fecha_turno = ?
+        GROUP BY b.id, b.nombre
+        ORDER BY b.id
+    `;
+
+    let ventasAyer = { 
+        fecha: yesterdayStr,
+        fecha_texto: formatFechaTexto(yesterdayStr),
+        total_galones: 0, 
+        total_dolares: 0, 
+        margen_promedio_galon: 0.28, 
+        estaciones: [] 
+    };
+
     try {
-        const sqlVentasAyer = `
-            SELECT a.id_empresa, a.titulo as estacion,
-                   IFNULL(SUM(b.total), 0.0) as galones,
-                   IFNULL(SUM(b.total * b.precio), 0.0) as venta_monto
-            FROM web_consolidado a
-            LEFT JOIN cierre_turno_lecturas b ON a.id_empresa = b.id_empresa
-            INNER JOIN cierre_turno c ON b.id_cierre_turno = c.id AND b.id_empresa = c.id_empresa
-            WHERE c.fecha_turno = ? AND a.grupo = 'ESTACION'
-            GROUP BY a.id_empresa
-            ORDER BY a.orden
-        `;
-        const [rowsAyer] = await withRetry(() => externalDb.query(sqlVentasAyer, [yesterdaySysDate]));
+        let [rowsAyer] = await withRetry(() => accountingDb.query(sqlVentasTurno, [yesterdayStr]));
+        let fechaAplicada = yesterdayStr;
+
+        // Si ayer aún no tiene turnos cerrados, tomar el último día con turnos cerrados
+        if (rowsAyer.length === 0) {
+            const [latestClosedRows] = await withRetry(() => accountingDb.query(
+                "SELECT MAX(fecha_turno) as latest_date FROM gas_station_closeouts WHERE estado = 'cerrado'"
+            ));
+            let lastClosedDate = latestClosedRows[0]?.latest_date;
+            if (lastClosedDate instanceof Date) lastClosedDate = lastClosedDate.toISOString().split('T')[0];
+            if (lastClosedDate) {
+                fechaAplicada = lastClosedDate;
+                const [rowsLatest] = await withRetry(() => accountingDb.query(sqlVentasTurno, [lastClosedDate]));
+                rowsAyer = rowsLatest;
+            }
+        }
+
         if (rowsAyer.length > 0) {
             const totG = rowsAyer.reduce((s, r) => s + Number(r.galones || 0), 0);
             const totV = rowsAyer.reduce((s, r) => s + Number(r.venta_monto || 0), 0);
             ventasAyer = {
-                fecha: yesterdaySysDate,
+                fecha: fechaAplicada,
+                fecha_texto: formatFechaTexto(fechaAplicada),
                 total_galones: Math.round(totG),
                 total_dolares: Math.round(totV),
                 margen_promedio_galon: 0.28,
@@ -54,36 +88,108 @@ const getFlashEjecutivo = async () => {
         console.warn('Error al obtener ventas de ayer:', err.message);
     }
 
-    // 2. Saldos disponibles en bancos
+    // Ventas de hoy en curso (turnos cerrados hasta el momento)
+    let ventasHoy = {
+        fecha: todayStr,
+        fecha_texto: formatFechaTexto(todayStr),
+        total_galones: 0,
+        total_dolares: 0,
+        margen_promedio_galon: 0.28,
+        estaciones: []
+    };
+
+    try {
+        const [rowsHoy] = await withRetry(() => accountingDb.query(sqlVentasTurno, [todayStr]));
+        if (rowsHoy.length > 0) {
+            const totGHoy = rowsHoy.reduce((s, r) => s + Number(r.galones || 0), 0);
+            const totVHoy = rowsHoy.reduce((s, r) => s + Number(r.venta_monto || 0), 0);
+            ventasHoy = {
+                fecha: todayStr,
+                fecha_texto: formatFechaTexto(todayStr),
+                total_galones: Math.round(totGHoy),
+                total_dolares: Math.round(totVHoy),
+                margen_promedio_galon: 0.28,
+                estaciones: rowsHoy.map(r => ({
+                    id_empresa: r.id_empresa,
+                    estacion: r.estacion,
+                    galones: Math.round(Number(r.galones || 0)),
+                    venta_monto: Math.round(Number(r.venta_monto || 0))
+                }))
+            };
+        }
+    } catch (err) {
+        console.warn('Error al obtener ventas de hoy:', err.message);
+    }
+
+    // 2. Saldos disponibles en bancos (desde SP de bancos o cuentas activas)
     let totalBancos = 0;
     let bancosDetalle = [];
+    const bankNameMap = {
+        'AMERICA CENTRAL': 'BAC Credomatic',
+        'CITIBANK': 'Banco Cuscatlán',
+        'AGRICOLA': 'Banco Agrícola',
+        'PROMERICA': 'Banco Promerica',
+        'DAVIVIENDA': 'Banco Davivienda',
+        'HIPOTECARIO': 'Banco Hipotecario',
+        'ATLANTIDA': 'Banco Atlántida',
+        'BANCO AZUL': 'Banco Azul',
+        'CONSTELACION': 'Constelación',
+        'FOMENTO AGROPECUARIO': 'Banco de Fomento Agropecuario'
+    };
+
     try {
+        const externalDb = await getExternalDb();
         const [spResults] = await withRetry(() => externalDb.query('CALL sp_saldo_en_bancos(?)', [todayStr]));
         const rows = spResults[0] || [];
-        rows.forEach(r => {
-            const m = Number(r.saldo || r.saldo_banco || r.monto || 0);
-            totalBancos += m;
-            bancosDetalle.push({
-                banco: r.banco || r.nombre || 'Banco',
-                cuenta: r.cuenta || r.numero || '',
-                saldo: Math.round(m)
-            });
-        });
+
+        const parsed = rows
+            .filter(r => Number(r.new_saldo || 0) > 0)
+            .map(r => {
+                const raw = (r.nom_banco || '').replace(/^A\s*-\s*/, '').trim();
+                const parts = raw.split(/\s*-\s*/);
+                const bancoKey = parts[0]?.trim() || 'Banco';
+                const banco = bankNameMap[bancoKey] || bancoKey;
+                const cuentaDesc = parts.slice(1).join(' - ')?.trim() || r.num_cta || '';
+                return {
+                    banco,
+                    cuenta: r.num_cta ? (cuentaDesc ? `${cuentaDesc} (${r.num_cta})` : r.num_cta) : cuentaDesc,
+                    saldo: Math.round(Number(r.new_saldo || 0))
+                };
+            })
+            .sort((a, b) => b.saldo - a.saldo);
+
+        if (parsed.length > 0) {
+            bancosDetalle = parsed;
+            totalBancos = parsed.reduce((sum, b) => sum + b.saldo, 0);
+        }
     } catch (err) {
-        // Fallback a movimientos bancarios en db local
+        console.warn('Error al obtener saldos bancarios desde sp_saldo_en_bancos:', err.message);
+    }
+
+    // Fallback a cuentas locales si SP falló o no devolvió cuentas
+    if (bancosDetalle.length === 0) {
         try {
             const [bRows] = await db.query(`
-                SELECT b.descripcion as banco, c.numero as cuenta, COALESCE(SUM(m.abono - m.cargo), 0) as saldo
+                SELECT b.descripcion as banco, c.nombre as cuenta_desc, c.numero as cuenta,
+                       COALESCE(SUM(m.abono - m.cargo), 0) as saldo
                 FROM cuentas_bancarias c
                 LEFT JOIN bancos b ON c.banco_id = b.id
                 LEFT JOIN movimientos_bancarios m ON c.id = m.cuenta_bancaria_id
                 WHERE c.activa = 1
-                GROUP BY c.id
+                GROUP BY c.id, b.descripcion, c.nombre, c.numero
+                HAVING saldo > 0
+                ORDER BY saldo DESC
             `);
-            bancosDetalle = bRows.map(r => ({ banco: r.banco || 'Banco', cuenta: r.cuenta, saldo: Math.round(Number(r.saldo || 0)) }));
-            totalBancos = bancosDetalle.reduce((s, b) => s + b.saldo, 0);
-        } catch (e) {
-            totalBancos = 85000;
+            if (bRows.length > 0) {
+                bancosDetalle = bRows.map(r => ({
+                    banco: r.banco || 'Banco',
+                    cuenta: r.cuenta ? `${r.cuenta_desc || ''} (${r.cuenta})` : r.cuenta_desc,
+                    saldo: Math.round(Number(r.saldo || 0))
+                }));
+                totalBancos = bancosDetalle.reduce((sum, b) => sum + b.saldo, 0);
+            }
+        } catch (errFallback) {
+            console.warn('Error fallback bancos:', errFallback.message);
         }
     }
 
@@ -108,9 +214,10 @@ const getFlashEjecutivo = async () => {
         const diaHoy = today.getDate();
         const diaManana = new Date(today.getTime() + 24 * 60 * 60 * 1000).getDate();
         const [pRows] = await db.query(`
-            SELECT numero_prestamo, descripcion, cuota_total, dia_pago
+            SELECT numero_prestamo, descripcion, cuota_total,
+                   COALESCE(DAY(fecha_primer_pago), 15) as dia_pago
             FROM prestamos
-            WHERE estado = 'activo' AND dia_pago IN (?, ?)
+            WHERE estado = 'activo' AND COALESCE(DAY(fecha_primer_pago), 15) IN (?, ?)
         `, [diaHoy, diaManana]);
         pRows.forEach(p => {
             const m = Number(p.cuota_total || 0);
@@ -123,22 +230,21 @@ const getFlashEjecutivo = async () => {
             });
         });
 
-        // Recordatorios de pago
-        const [recRows] = await withRetry(() => externalDb.query(`
-            SELECT a.vencimiento, b.descripcion, b.monto
-            FROM web_rc_recordatorios_vencimientos a
-            INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id
-            WHERE a.vencimiento BETWEEN ? AND ?
-              AND a.estado = 'P' AND b.activo = 1
+        // Quedans / cuentas por pagar de proveedores de Nova SaaS
+        const [recRows] = await withRetry(() => accountingDb.query(`
+            SELECT fecha_vencimiento, CONCAT('Quedan #', num_quedan) as descripcion, total as monto
+            FROM purchase_quedans
+            WHERE fecha_vencimiento BETWEEN ? AND ?
+              AND status IN ('PENDING', 'SOLICITADO')
         `, [todayStr, en48hStr]));
         recRows.forEach(r => {
             const m = Number(r.monto || 0);
             totalCompromisos48h += m;
             compromisosProximos.push({
-                tipo: 'Pago / Recordatorio',
+                tipo: 'Pago / Quedan',
                 descripcion: r.descripcion,
                 monto: Math.round(m),
-                fecha: r.vencimiento instanceof Date ? r.vencimiento.toISOString().split('T')[0] : r.vencimiento
+                fecha: r.fecha_vencimiento instanceof Date ? r.fecha_vencimiento.toISOString().split('T')[0] : r.fecha_vencimiento
             });
         });
     } catch (err) {
@@ -170,16 +276,25 @@ Responde únicamente con el texto ejecutivo directo sin títulos ni introduccion
     }
 
     // 6. Generar texto preformateado para WhatsApp / Telegram
-    const fechaLimpia = today.toLocaleDateString('es-SV', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
-    let whatsappText = `📊 *FLASH EJECUTIVO SIPE - ${fechaLimpia.toUpperCase()}*\n`;
+    const formatDMY = (dStr) => {
+        if (!dStr) return '';
+        const parts = String(dStr).split('T')[0].split('-');
+        if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+        return dStr;
+    };
+    const fechaDMY = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+    let whatsappText = `📊 *FLASH EJECUTIVO SIPE - ${fechaDMY}*\n`;
     whatsappText += `────────────────────────────\n`;
-    whatsappText += `⛽ *Ventas de Ayer:* $${ventasAyer.total_dolares.toLocaleString()} (${ventasAyer.total_galones.toLocaleString()} gal)\n`;
+    whatsappText += `⛽ *Ventas de Ayer (${formatDMY(ventasAyer.fecha)}):* $${ventasAyer.total_dolares.toLocaleString()} (${ventasAyer.total_galones.toLocaleString()} gal)\n`;
     if (ventasAyer.estaciones && ventasAyer.estaciones.length > 0) {
         ventasAyer.estaciones.forEach(e => {
             whatsappText += `   • ${e.estacion}: $${e.venta_monto.toLocaleString()} (${e.galones.toLocaleString()} gal)\n`;
         });
     }
-    whatsappText += `\n🏦 *Liquidez en Bancos:* $${Math.round(totalBancos).toLocaleString()} USD\n`;
+    if (ventasHoy.total_dolares > 0) {
+        whatsappText += `\n⛽ *Ventas de Hoy (${formatDMY(ventasHoy.fecha)}):* $${ventasHoy.total_dolares.toLocaleString()} (${ventasHoy.total_galones.toLocaleString()} gal en turnos cerrados)\n`;
+    }
+    whatsappText += `\n🏦 *Liquidez en Bancos:* $${Math.round(totalBancos).toLocaleString()} USD (${bancosDetalle.length} cuentas)\n`;
     whatsappText += `💳 *Compromisos Próximas 48h:* $${Math.round(totalCompromisos48h).toLocaleString()} USD\n`;
 
     if (tanquesCriticos.length > 0) {
@@ -198,16 +313,20 @@ Responde únicamente con el texto ejecutivo directo sin títulos ni introduccion
 
     return {
         fecha: todayStr,
-        fecha_texto: fechaLimpia,
+        fecha_texto: fechaDMY,
         kpi: {
             ventas_ayer_usd: ventasAyer.total_dolares,
             ventas_ayer_galones: ventasAyer.total_galones,
+            ventas_hoy_usd: ventasHoy.total_dolares,
+            ventas_hoy_galones: ventasHoy.total_galones,
             liquidez_bancos_usd: Math.round(totalBancos),
             compromisos_48h_usd: Math.round(totalCompromisos48h),
             tanques_criticos_count: tanquesCriticos.length
         },
         ventas_ayer: ventasAyer,
-        bancos: bancosDetalle.slice(0, 6),
+        ventas_hoy: ventasHoy,
+        bancos: bancosDetalle.slice(0, 10),
+        total_bancos_cuentas: bancosDetalle.length,
         tanques_criticos: tanquesCriticos,
         compromisos_48h: compromisosProximos,
         diagnostico_ia: aiDiagnostico,

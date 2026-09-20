@@ -17,6 +17,26 @@ export function formatDateDisplay(str, options = { day: 'numeric', month: 'long'
     return d.toLocaleDateString('es-ES', options);
 }
 
+export function formatDateDMY(val) {
+    if (!val) return '';
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) return trimmed;
+        const parts = parseDateOnly(trimmed);
+        if (parts) {
+            const day = String(parts.day).padStart(2, '0');
+            const month = String(parts.month).padStart(2, '0');
+            return `${day}/${month}/${parts.year}`;
+        }
+    }
+    if (val instanceof Date && !isNaN(val.getTime())) {
+        const day = String(val.getDate()).padStart(2, '0');
+        const month = String(val.getMonth() + 1).padStart(2, '0');
+        return `${day}/${month}/${val.getFullYear()}`;
+    }
+    return String(val);
+}
+
 export function todayStr() {
     const d = new Date();
     const y = d.getFullYear();

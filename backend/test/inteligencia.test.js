@@ -103,4 +103,114 @@ describe('Suite de Inteligencia y Decisión Estratégica Tests', () => {
             assert.strictEqual(estado, 'reserva_baja');
         });
     });
+
+    describe('Normalización de Estructuras Nova SaaS (db_sistema_saas)', () => {
+        it('debe mapear correctamente los tipos de combustible numéricos a códigos estándar (R, S, D, I)', () => {
+            const mapTipo = (tipoNum, desc = '') => {
+                if (tipoNum === 4 || desc.includes('Ion')) return 'I';
+                if (tipoNum === 3 || desc.includes('Diesel')) return 'D';
+                if (tipoNum === 2 || desc.includes('Super')) return 'S';
+                if (tipoNum === 1 || desc.includes('Regular')) return 'R';
+                return 'D';
+            };
+
+            assert.strictEqual(mapTipo(1, 'Tanque Regular'), 'R');
+            assert.strictEqual(mapTipo(2, 'Tanque Super'), 'S');
+            assert.strictEqual(mapTipo(3, 'Tanque Diesel'), 'D');
+            assert.strictEqual(mapTipo(4, 'Tanque Ion Diesel'), 'I');
+            assert.strictEqual(mapTipo(5, 'Master Diesel'), 'D');
+        });
+
+        it('debe calcular horas y días restantes de autonomía basados en stock útil y consumo horario', () => {
+            const reserva = 200;
+            const stockActual = 4200;
+            const consumoDiario = 1200; // gal/día
+
+            const stockUtil = Math.max(0, stockActual - reserva); // 4000
+            const consumoHora = consumoDiario / 24; // 50 gal/hora
+
+            const horasRestantes = Math.round((stockUtil / consumoHora) * 10) / 10;
+            const diasRestantes = Math.round((stockUtil / consumoDiario) * 10) / 10;
+
+            assert.strictEqual(horasRestantes, 80.0);
+            assert.strictEqual(diasRestantes, 3.3);
+
+            let estado = 'optimo';
+            if (horasRestantes < 24) estado = 'critico';
+            else if (horasRestantes < 48) estado = 'advertencia';
+
+            assert.strictEqual(estado, 'optimo');
+        });
+
+        it('debe clasificar como CRITICO si las horas restantes son menores a 24 horas', () => {
+            const stockUtil = 800;
+            const consumoHora = 50; // 16 horas restantes
+            const horasRestantes = Math.round((stockUtil / consumoHora) * 10) / 10;
+
+            let estado = 'optimo';
+            if (horasRestantes < 24) estado = 'critico';
+            else if (horasRestantes < 48) estado = 'advertencia';
+
+            assert.strictEqual(horasRestantes, 16.0);
+            assert.strictEqual(estado, 'critico');
+        });
+
+        it('debe descartar turnos no cerrados en el filtro de estado', () => {
+            const turnos = [
+                { id: 1, estado: 'cerrado', galones: 1200 },
+                { id: 2, estado: 'abierto', galones: 300 },
+                { id: 3, estado: 'reabierto', galones: 150 },
+                { id: 4, estado: 'cerrado', galones: 850 }
+            ];
+
+            const turnosValidos = turnos.filter(t => t.estado === 'cerrado');
+            const totalGalonesCerrados = turnosValidos.reduce((s, t) => s + t.galones, 0);
+
+            assert.strictEqual(turnosValidos.length, 2);
+            assert.strictEqual(totalGalonesCerrados, 2050);
+        });
+    });
+
+    describe('Formato de Fechas dd/mm/yyyy en Módulo Dirección Estratégica', () => {
+        const formatDMY = (val) => {
+            if (!val) return '';
+            if (typeof val === 'string') {
+                const trimmed = val.trim();
+                if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) return trimmed;
+                const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                if (match) {
+                    const [, y, m, d] = match;
+                    return `${d}/${m}/${y}`;
+                }
+            }
+            if (val instanceof Date && !isNaN(val.getTime())) {
+                const day = String(val.getDate()).padStart(2, '0');
+                const month = String(val.getMonth() + 1).padStart(2, '0');
+                return `${day}/${month}/${val.getFullYear()}`;
+            }
+            return String(val);
+        };
+
+        it('debe formatear cadenas ISO YYYY-MM-DD a dd/mm/yyyy sin desfase de zona horaria', () => {
+            assert.strictEqual(formatDMY('2026-09-20'), '20/09/2026');
+            assert.strictEqual(formatDMY('2026-01-05'), '05/01/2026');
+            assert.strictEqual(formatDMY('2026-12-31'), '31/12/2026');
+        });
+
+        it('debe mantener cadenas que ya están en dd/mm/yyyy', () => {
+            assert.strictEqual(formatDMY('20/09/2026'), '20/09/2026');
+        });
+
+        it('debe manejar strings con timestamp ISO conservando la fecha exacta en dd/mm/yyyy', () => {
+            assert.strictEqual(formatDMY('2026-09-20T14:30:00.000Z'), '20/09/2026');
+            assert.strictEqual(formatDMY('2026-10-05 08:00:00'), '05/10/2026');
+        });
+
+        it('debe retornar cadena vacía ante valores nulos o indefinidos', () => {
+            assert.strictEqual(formatDMY(null), '');
+            assert.strictEqual(formatDMY(undefined), '');
+            assert.strictEqual(formatDMY(''), '');
+        });
+    });
 });
+

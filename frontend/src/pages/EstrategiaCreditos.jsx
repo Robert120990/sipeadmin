@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { formatDateDMY } from '../utils/date';
 
 export default function EstrategiaCreditos() {
     const { addToast } = useToast();
@@ -62,6 +63,7 @@ export default function EstrategiaCreditos() {
                         <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold', margin: 0 }}>Control de Crédito & Flotas Corporativas</h1>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
                             Monitoreo de líneas de crédito, riesgo de incobrables y suspensión preventiva de vales
+                            {resumen?.fecha_corte && ` • Corte: ${formatDateDMY(resumen.fecha_corte)}`}
                         </p>
                     </div>
                 </div>
@@ -238,6 +240,11 @@ export default function EstrategiaCreditos() {
                                                 {c.dias_mora > 0 && (
                                                     <span style={{ display: 'block', color: '#ef4444', fontWeight: 'bold', fontSize: '0.72rem' }}>
                                                         +{c.dias_mora}d mora
+                                                        {c.fecha_antigua && (
+                                                            <span style={{ display: 'block', fontWeight: 'normal', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                                                (desde {formatDateDMY(c.fecha_antigua)})
+                                                            </span>
+                                                        )}
                                                     </span>
                                                 )}
                                             </td>

@@ -1,88 +1,76 @@
-const { getAccountingDb, getExternalDb, withRetry } = require('../db');
+const { getAccountingDb, withRetry } = require('../db');
 
 /**
  * Monitoreo de riesgo crediticio para flotas y clientes corporativos
+ * Conectado exclusivamente a Nova SaaS (db_sistema_saas)
  */
 const getRiesgoCreditoFlotas = async () => {
     let clientes = [];
 
-    // 1. Intentar consultar base de datos de Nova SaaS (db_sistema_saas)
-    try {
-        const accountingDb = await getAccountingDb();
-        const query = `
-            SELECT 
-                c.id,
-                c.company_id,
-                comp.nombre_comercial as empresa_emisora,
-                COALESCE(c.nombre_comercial, c.nombre) as cliente_nombre,
-                c.nit,
-                c.nrc,
-                COALESCE(c.limite_credito, 5000.00) as limite_credito,
-                COALESCE(c.dias_credito, 15) as dias_plazo,
-                COALESCE(SUM(s.monto_total), 0.0) as facturado_credito,
-                COALESCE(p.total_pagado, 0.0) as total_pagado,
-                (COALESCE(SUM(s.monto_total), 0.0) - COALESCE(p.total_pagado, 0.0)) as saldo_pendiente,
-                MIN(s.fecha_emision) as factura_mas_antigua_pendiente
-            FROM customers c
-            INNER JOIN companies comp ON c.company_id = comp.id
-            LEFT JOIN sales_headers s ON c.id = s.customer_id AND s.condicion_operacion = 'CREDITO' AND s.status != 'ANULADA'
-            LEFT JOIN (
-                SELECT customer_id, SUM(monto) as total_pagado
-                FROM customer_payments
-                GROUP BY customer_id
-            ) p ON c.id = p.customer_id
-            WHERE c.es_credito = 1 OR c.limite_credito > 0
-            GROUP BY c.id
-            ORDER BY saldo_pendiente DESC
-        `;
-        const [rows] = await withRetry(() => accountingDb.query(query));
-        clientes = rows;
-    } catch (err) {
-        console.warn('Fallback a clientes de crédito de cierre de turnos:', err.message);
-    }
+    const accountingDb = await getAccountingDb();
 
-    // 2. Si no hay clientes en Nova SaaS o falló la conexión, tomar de cierre_turno_credito en db_system_rrs
-    if (clientes.length === 0) {
-        try {
-            const externalDb = await getExternalDb();
-            const sqlRrs = `
-                SELECT 
-                    a.nom_cliente as cliente_nombre,
-                    b.titulo as empresa_emisora,
-                    SUM(a.total_descuento) as saldo_pendiente,
-                    5000.00 as limite_credito,
-                    15 as dias_plazo,
-                    COUNT(a.id) as transacciones_activas
-                FROM cierre_turno_credito a
-                INNER JOIN web_consolidado b ON a.id_empresa = b.id_empresa
-                GROUP BY a.nom_cliente, b.titulo
-                HAVING saldo_pendiente > 0
-                ORDER BY saldo_pendiente DESC
-                LIMIT 25
-            `;
-            const [rowsRrs] = await withRetry(() => externalDb.query(sqlRrs));
-            clientes = rowsRrs.map((r, idx) => ({
-                id: idx + 1,
-                cliente_nombre: r.cliente_nombre || 'Cliente Flota',
-                empresa_emisora: r.empresa_emisora,
-                limite_credito: Number(r.limite_credito),
-                dias_plazo: Number(r.dias_plazo),
-                saldo_pendiente: Number(r.saldo_pendiente),
-                factura_mas_antigua_pendiente: null
-            }));
-        } catch (e) {
-            console.error('Error al consultar clientes en RRS:', e.message);
-        }
+    // 1. Facturas y saldos de clientes a crédito
+    const query = `
+        SELECT 
+            c.id,
+            c.company_id,
+            comp.nombre_comercial as empresa_emisora,
+            COALESCE(c.nombre_comercial, c.nombre) as cliente_nombre,
+            c.nit,
+            c.nrc,
+            COALESCE(c.dias_credito, 15) as dias_plazo,
+            COALESCE(SUM(s.total_pagar), 0.0) as facturado_credito,
+            COALESCE(p.total_pagado, 0.0) as total_pagado,
+            (COALESCE(SUM(s.total_pagar), 0.0) - COALESCE(p.total_pagado, 0.0)) as saldo_pendiente,
+            MIN(s.fecha_emision) as factura_mas_antigua_pendiente
+        FROM customers c
+        INNER JOIN companies comp ON c.company_id = comp.id
+        LEFT JOIN sales_headers s ON c.id = s.customer_id AND s.condicion_operacion = 2 AND s.estado = 'emitido'
+        LEFT JOIN (
+            SELECT customer_id, SUM(monto) as total_pagado
+            FROM customer_payments
+            GROUP BY customer_id
+        ) p ON c.id = p.customer_id
+        WHERE c.es_credito = 1
+        GROUP BY c.id, c.company_id, comp.nombre_comercial, c.nombre_comercial, c.nombre, c.nit, c.nrc, c.dias_credito
+        HAVING saldo_pendiente > 0 OR facturado_credito > 0
+        ORDER BY saldo_pendiente DESC
+        LIMIT 50
+    `;
+    const [rows] = await withRetry(() => accountingDb.query(query));
+    clientes = rows;
+
+    // 2. Vales de pista no facturados en turnos cerrados (gas_station_closeout_creditos)
+    const valesPistaMap = {};
+    try {
+        const [valesRows] = await withRetry(() => accountingDb.query(`
+            SELECT gsc.cliente_id, COALESCE(SUM(gsc.monto), 0.0) as total_vales
+            FROM gas_station_closeout_creditos gsc
+            JOIN gas_station_closeouts c ON gsc.closeout_id = c.id
+            WHERE c.estado = 'cerrado'
+            GROUP BY gsc.cliente_id
+        `));
+        valesRows.forEach(v => {
+            if (v.cliente_id) valesPistaMap[v.cliente_id] = Number(v.total_vales || 0);
+        });
+    } catch (e) {
+        // Opcional si la tabla no está poblada
     }
 
     const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
     let totalCarteraCredito = 0;
     let totalSaldoVencido = 0;
     let clientesEnRiesgoAlto = 0;
 
     const reporteClientes = clientes.map(c => {
-        const saldo = Math.max(0, Number(c.saldo_pendiente || 0));
-        const limite = Math.max(1, Number(c.limite_credito || 5000));
+        const valesPista = valesPistaMap[c.id] || 0;
+        const saldoFacturas = Math.max(0, Number(c.saldo_pendiente || 0));
+        const saldo = saldoFacturas + valesPista;
+
+        // Línea de crédito estimada si la base no tiene columna de límite explícito
+        const facturado = Number(c.facturado_credito || 0);
+        const limite = Math.max(5000, Math.ceil((facturado > 0 ? facturado * 1.2 : 5000) / 1000) * 1000);
         const plazoDias = Number(c.dias_plazo || 15);
 
         const porcentajeUtilizado = Math.min(100, Math.round((saldo / limite) * 100));
@@ -124,6 +112,7 @@ const getRiesgoCreditoFlotas = async () => {
             porcentaje_utilizado: porcentajeUtilizado,
             dias_plazo: plazoDias,
             dias_mora: diasMora,
+            fecha_antigua: c.factura_mas_antigua_pendiente ? (c.factura_mas_antigua_pendiente instanceof Date ? c.factura_mas_antigua_pendiente.toISOString().split('T')[0] : String(c.factura_mas_antigua_pendiente).split('T')[0]) : null,
             nivel_riesgo: nivelRiesgo,
             accion_sugerida: accionSugerida
         };
@@ -131,6 +120,7 @@ const getRiesgoCreditoFlotas = async () => {
 
     return {
         resumen_cartera: {
+            fecha_corte: todayStr,
             total_cartera_activa_usd: Math.round(totalCarteraCredito * 100) / 100,
             total_saldo_vencido_usd: Math.round(totalSaldoVencido * 100) / 100,
             porcentaje_morosidad: totalCarteraCredito > 0 ? Math.round((totalSaldoVencido / totalCarteraCredito) * 100) : 0,

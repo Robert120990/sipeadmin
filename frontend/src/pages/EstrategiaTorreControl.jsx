@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
+import { formatDateDMY } from '../utils/date';
 
 export default function EstrategiaTorreControl() {
     const { addToast } = useToast();
@@ -15,6 +16,7 @@ export default function EstrategiaTorreControl() {
 
     const [flashData, setFlashData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [periodoVentas, setPeriodoVentas] = useState('ayer'); // 'ayer' | 'hoy'
     const [emailModalOpen, setEmailModalOpen] = useState(false);
     const [emailDestino, setEmailDestino] = useState('');
     const [sendingEmail, setSendingEmail] = useState(false);
@@ -71,7 +73,8 @@ export default function EstrategiaTorreControl() {
 
     const kpi = flashData?.kpi || {};
     const tanquesCriticos = flashData?.tanques_criticos || [];
-    const ventasEstaciones = flashData?.ventas_ayer?.estaciones || [];
+    const currentVentas = periodoVentas === 'ayer' ? (flashData?.ventas_ayer || {}) : (flashData?.ventas_hoy || {});
+    const ventasEstaciones = currentVentas?.estaciones || [];
     const bancos = flashData?.bancos || [];
     const compromisos = flashData?.compromisos_48h || [];
 
@@ -86,7 +89,7 @@ export default function EstrategiaTorreControl() {
                     <div>
                         <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold', margin: 0 }}>Torre de Control Ejecutiva</h1>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
-                            Centro de decisiones y flash matutino para directores • {flashData?.fecha_texto}
+                            Centro de decisiones y flash matutino para directores • {formatDateDMY(flashData?.fecha) || flashData?.fecha_texto}
                         </p>
                     </div>
                 </div>
@@ -138,19 +141,52 @@ export default function EstrategiaTorreControl() {
                 gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', 
                 gap: '0.85rem' 
             }}>
-                {/* Card 1: Ventas Ayer */}
+                {/* Card 1: Ventas */}
                 <div className="card glass" style={{ padding: '0.85rem 1rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
                         <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', fontWeight: 600 }}>
-                            Ventas Ayer
+                            {periodoVentas === 'ayer' ? 'Ventas Ayer' : 'Ventas Hoy'}
                         </span>
-                        <TrendingUp size={16} color="#3b82f6" />
+                        <div style={{ display: 'inline-flex', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: '6px', padding: '2px', gap: '2px' }}>
+                            <button
+                                type="button"
+                                onClick={() => setPeriodoVentas('ayer')}
+                                style={{
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    padding: '0.15rem 0.45rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: periodoVentas === 'ayer' ? 700 : 500,
+                                    backgroundColor: periodoVentas === 'ayer' ? 'var(--primary)' : 'transparent',
+                                    color: periodoVentas === 'ayer' ? '#fff' : 'var(--text-muted)',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Ayer
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPeriodoVentas('hoy')}
+                                style={{
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    padding: '0.15rem 0.45rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: periodoVentas === 'hoy' ? 700 : 500,
+                                    backgroundColor: periodoVentas === 'hoy' ? 'var(--primary)' : 'transparent',
+                                    color: periodoVentas === 'hoy' ? '#fff' : 'var(--text-muted)',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Hoy
+                            </button>
+                        </div>
                     </div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: 'var(--text)' }}>
-                        ${kpi.ventas_ayer_usd?.toLocaleString() || 0}
+                        ${(currentVentas?.total_dolares || 0).toLocaleString()}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: '#3b82f6', marginTop: '0.2rem' }}>
-                        {kpi.ventas_ayer_galones?.toLocaleString() || 0} galones despachados
+                    <div style={{ fontSize: '0.75rem', color: '#3b82f6', marginTop: '0.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>{(currentVentas?.total_galones || 0).toLocaleString()} galones {periodoVentas === 'hoy' ? 'cerrados' : 'despachados'}</span>
                     </div>
                 </div>
 
@@ -166,7 +202,7 @@ export default function EstrategiaTorreControl() {
                         ${kpi.liquidez_bancos_usd?.toLocaleString() || 0}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                        Disponible consolidado
+                        Disponible ({flashData?.total_bancos_cuentas || bancos.length} cuentas activas)
                     </div>
                 </div>
 
@@ -247,13 +283,52 @@ export default function EstrategiaTorreControl() {
 
             {/* Dos Columnas: Ventas de Ayer vs Posición de Liquidez */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
-                {/* Columna Izquierda: Ventas de Ayer por Estación */}
+                {/* Columna Izquierda: Ventas por Estación */}
                 <div className="card glass" style={{ padding: '1rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                         <h3 style={{ fontSize: '0.95rem', fontWeight: 'bold', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <TrendingUp size={16} color="var(--primary)" /> Desglose de Ventas de Ayer
+                            <TrendingUp size={16} color="var(--primary)" /> 
+                            {periodoVentas === 'ayer' ? 'Desglose de Ventas de Ayer' : 'Desglose de Ventas de Hoy'}
                         </h3>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{flashData?.fecha_texto}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ display: 'inline-flex', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: '6px', padding: '2px', gap: '2px' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setPeriodoVentas('ayer')}
+                                    style={{
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        padding: '0.15rem 0.5rem',
+                                        fontSize: '0.72rem',
+                                        fontWeight: periodoVentas === 'ayer' ? 700 : 500,
+                                        backgroundColor: periodoVentas === 'ayer' ? 'var(--primary)' : 'transparent',
+                                        color: periodoVentas === 'ayer' ? '#fff' : 'var(--text-muted)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Ayer
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setPeriodoVentas('hoy')}
+                                    style={{
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        padding: '0.15rem 0.5rem',
+                                        fontSize: '0.72rem',
+                                        fontWeight: periodoVentas === 'hoy' ? 700 : 500,
+                                        backgroundColor: periodoVentas === 'hoy' ? 'var(--primary)' : 'transparent',
+                                        color: periodoVentas === 'hoy' ? '#fff' : 'var(--text-muted)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Hoy
+                                </button>
+                            </div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {formatDateDMY(currentVentas?.fecha) || currentVentas?.fecha_texto}
+                            </span>
+                        </div>
                     </div>
 
                     <div className="table-responsive">
@@ -269,7 +344,9 @@ export default function EstrategiaTorreControl() {
                                 {ventasEstaciones.length === 0 ? (
                                     <tr>
                                         <td colSpan="3" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                                            No se registran turnos de venta finalizados para ayer.
+                                            {periodoVentas === 'ayer'
+                                                ? 'No se registran turnos de venta finalizados para ayer.'
+                                                : 'No se registran turnos de venta finalizados para hoy aún.'}
                                         </td>
                                     </tr>
                                 ) : (
@@ -321,7 +398,7 @@ export default function EstrategiaTorreControl() {
                                     bancos.map((b, idx) => (
                                         <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '0.8rem' }}>
                                             <td style={{ padding: '0.45rem 0.5rem' }}>
-                                                <strong>{b.banco}</strong>
+                                                <strong style={{ color: 'var(--text)' }}>{b.banco}</strong>
                                                 {b.cuenta && <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', display: 'block' }}>{b.cuenta}</span>}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 'bold', color: b.saldo < 5000 ? '#f59e0b' : '#10b981' }}>
@@ -331,6 +408,16 @@ export default function EstrategiaTorreControl() {
                                     ))
                                 )}
                             </tbody>
+                            {bancos.length > 0 && (
+                                <tfoot>
+                                    <tr style={{ borderTop: '2px solid var(--border-color)', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                        <td style={{ padding: '0.5rem' }}>Total disponible:</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'right', color: '#10b981' }}>
+                                            ${kpi.liquidez_bancos_usd?.toLocaleString() || 0}
+                                        </td>
+                                    </tr>
+                                </tfoot>
+                            )}
                         </table>
                     </div>
 
@@ -343,7 +430,7 @@ export default function EstrategiaTorreControl() {
                             <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                 {compromisos.map((c, idx) => (
                                     <li key={idx}>
-                                        <strong>{c.tipo}:</strong> {c.descripcion} — <span style={{ color: 'var(--text)', fontWeight: 600 }}>${c.monto?.toLocaleString()}</span> ({c.fecha})
+                                        <strong>{c.tipo}:</strong> {c.descripcion} — <span style={{ color: 'var(--text)', fontWeight: 600 }}>${c.monto?.toLocaleString()}</span> ({formatDateDMY(c.fecha)})
                                     </li>
                                 ))}
                             </ul>

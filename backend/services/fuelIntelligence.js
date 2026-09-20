@@ -1,29 +1,20 @@
-const { getExternalDb, withRetry } = require('../db');
+const { getAccountingDb, withRetry } = require('../db');
 
-/**
- * Normaliza fecha YYYY-MM-DD a formato DD/MM/YYYY usado en los cierres de turno
- */
-const toSystemDate = (dStr) => {
-    if (!dStr) return '';
-    const parts = dStr.split('-');
-    if (parts.length !== 3) return dStr;
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
-};
 
 /**
  * 1. Obtiene la autonomía en horas y días de todos los tanques por estación
  */
 const getTanquesAutonomia = async () => {
-    const externalDb = await getExternalDb();
+    const accountingDb = await getAccountingDb();
 
-    // 1. Obtener lista de estaciones
-    const [stations] = await withRetry(() => externalDb.query(
-        "SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden"
+    // 1. Obtener lista de estaciones con tanques
+    const [stations] = await withRetry(() => accountingDb.query(
+        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
     ));
 
-    // 2. Obtener la última fecha registrada de lecturas de tanque
-    const [maxFechaRows] = await withRetry(() => externalDb.query(
-        "SELECT MAX(fecha) as last_date FROM lecturas_tanque"
+    // 2. Obtener la última fecha registrada de cierres de estación cerrados
+    const [maxFechaRows] = await withRetry(() => accountingDb.query(
+        "SELECT MAX(fecha_turno) as last_date FROM gas_station_closeouts WHERE estado = 'cerrado'"
     ));
     let lastDate = maxFechaRows[0]?.last_date;
     if (lastDate instanceof Date) {
@@ -34,49 +25,65 @@ const getTanquesAutonomia = async () => {
         lastDate = today.toISOString().split('T')[0];
     }
 
-    // 3. Obtener lecturas más recientes de tanques
+    // 3. Obtener lecturas más recientes de tanques correspondientes a turnos cerrados
     const tankQuery = `
-        SELECT a.id_empresa,
-               b.codigo_producto,
-               c.descripcion AS tanque_nombre,
-               c.capacidad,
-               c.galones_reserva,
-               IF(c.tipo_combustible='M', 'I', c.tipo_combustible) as tipo_combustible,
-               b.lectura as stock_actual
-        FROM lecturas_tanque a
-        INNER JOIN (
-            SELECT id_empresa, fecha, MAX(turno) as max_turno
-            FROM lecturas_tanque
-            WHERE fecha = ?
-            GROUP BY id_empresa, fecha
-        ) m ON a.id_empresa = m.id_empresa AND a.fecha = m.fecha AND a.turno = m.max_turno
-        INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa
-        INNER JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa
-        WHERE a.fecha = ?
+        SELECT 
+            t.id as tank_id,
+            t.branch_id as id_empresa,
+            b.nombre as estacion,
+            t.codigo as tanque_codigo,
+            t.descripcion as tanque_nombre,
+            t.capacidad,
+            t.reserva as galones_reserva,
+            CASE 
+                WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                ELSE 'D'
+            END as tipo_combustible,
+            COALESCE(lr.lectura_actual, 0) as stock_actual,
+            c.fecha_turno as fecha_lectura
+        FROM gas_station_tanks t
+        JOIN branches b ON t.branch_id = b.id
+        LEFT JOIN (
+            SELECT tr.tank_id, tr.lectura_actual, tr.closeout_id
+            FROM gas_station_closeout_tank_readings tr
+            INNER JOIN (
+                SELECT tr2.tank_id, MAX(tr2.closeout_id) as max_closeout_id
+                FROM gas_station_closeout_tank_readings tr2
+                JOIN gas_station_closeouts c2 ON tr2.closeout_id = c2.id
+                WHERE c2.estado = 'cerrado'
+                GROUP BY tr2.tank_id
+            ) m ON tr.tank_id = m.tank_id AND tr.closeout_id = m.max_closeout_id
+        ) lr ON t.id = lr.tank_id
+        LEFT JOIN gas_station_closeouts c ON lr.closeout_id = c.id
+        ORDER BY b.nombre, t.codigo
     `;
-    const [tankRows] = await withRetry(() => externalDb.query(tankQuery, [lastDate, lastDate]));
+    const [tankRows] = await withRetry(() => accountingDb.query(tankQuery));
 
-    // 4. Calcular el consumo promedio diario de los últimos 7 días
-    const dates7d = [];
-    const baseD = new Date(lastDate + 'T12:00:00');
-    for (let i = 1; i <= 7; i++) {
-        const d = new Date(baseD);
-        d.setDate(d.getDate() - i);
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const year = d.getFullYear();
-        dates7d.push(`${day}/${month}/${year}`);
-    }
-
-    const [consumptionRows] = await withRetry(() => externalDb.query(`
-        SELECT a.id_empresa,
-               IF(a.id_empresa = '004' AND a.codigo_producto = '0007', 'I', LEFT(a.nom_producto, 1)) AS tipo_combustible,
-               SUM(a.total) as total_7d
-        FROM cierre_turno_lecturas a
-        INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa
-        WHERE b.fecha_turno IN (?)
-        GROUP BY a.id_empresa, tipo_combustible
-    `, [dates7d]));
+    // 4. Calcular el consumo promedio diario de los últimos 7 días considerando solo turnos cerrados
+    const consumptionQuery = `
+        SELECT id_empresa, tipo_combustible, SUM(diferencia) as total_7d
+        FROM (
+            SELECT 
+                c.branch_id as id_empresa,
+                CASE 
+                    WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
+                    WHEN r.codigo_producto LIKE '%DIESEL%' OR r.descripcion_producto LIKE '%DIESEL%' OR p.tipo_combustible = 3 THEN 'D'
+                    WHEN r.codigo_producto LIKE '%SUPER%' OR r.descripcion_producto LIKE '%SUPER%' OR p.tipo_combustible = 2 THEN 'S'
+                    WHEN r.codigo_producto LIKE '%REGULAR%' OR r.descripcion_producto LIKE '%REGULAR%' OR p.tipo_combustible = 1 THEN 'R'
+                    ELSE 'D'
+                END as tipo_combustible,
+                r.diferencia
+            FROM gas_station_closeouts c
+            JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
+            LEFT JOIN products p ON r.product_id = p.id
+            WHERE c.estado = 'cerrado' AND c.fecha_turno >= DATE_SUB(?, INTERVAL 7 DAY)
+        ) sub
+        GROUP BY id_empresa, tipo_combustible
+    `;
+    const [consumptionRows] = await withRetry(() => accountingDb.query(consumptionQuery, [lastDate]));
 
     const consumptionMap = {};
     consumptionRows.forEach(r => {
@@ -101,7 +108,7 @@ const getTanquesAutonomia = async () => {
         const idEmpresa = t.id_empresa;
         const tipo = t.tipo_combustible;
         const station = stations.find(s => String(s.id_empresa) === String(idEmpresa));
-        const stationName = station ? station.titulo : `Estación ${idEmpresa}`;
+        const stationName = t.estacion || (station ? station.titulo : `Estación ${idEmpresa}`);
 
         const capacidad = Number(t.capacidad || 0);
         const reserva = Number(t.galones_reserva || 0);
@@ -264,7 +271,7 @@ const calcularSimuladorDGEHM = async (params = {}) => {
  * Compara variaciones entre inventario físico (vara/sensor) y ventas teóricas
  */
 const getAuditoriaMermas = async (desde, hasta) => {
-    const externalDb = await getExternalDb();
+    const accountingDb = await getAccountingDb();
 
     // Si no se reciben fechas, tomar últimos 7 días
     let dFin = hasta;
@@ -277,49 +284,82 @@ const getAuditoriaMermas = async (desde, hasta) => {
         dInicio = prev.toISOString().split('T')[0];
     }
 
-    const datesArray = [];
-    let curr = new Date(dInicio + 'T12:00:00');
-    const endDate = new Date(dFin + 'T12:00:00');
-    while (curr <= endDate) {
-        datesArray.push(toSystemDate(curr.toISOString().split('T')[0]));
-        curr.setDate(curr.getDate() + 1);
-    }
-
     // Ventas acumuladas de cierres
     const sqlVentas = `
-        SELECT x.id_empresa, a.titulo as estacion, z.clasificacion as tipo,
-               SUM(y.total) as venta_galones
-        FROM cierre_turno x
-        INNER JOIN cierre_turno_lecturas y ON x.id_empresa = y.id_empresa AND x.id = y.id_cierre_turno
-        INNER JOIN cfg_combustibles z ON y.id_empresa = z.id_empresa AND y.id_producto = z.id_producto
-        INNER JOIN web_consolidado a ON x.id_empresa = a.id_empresa
-        WHERE x.fecha_turno IN (?) AND a.grupo = 'ESTACION'
-        GROUP BY x.id_empresa, a.titulo, z.clasificacion, a.orden
-        ORDER BY a.orden, z.clasificacion
+        SELECT c.branch_id as id_empresa, b.nombre as estacion,
+               CASE 
+                   WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
+                   WHEN r.codigo_producto LIKE '%DIESEL%' OR r.descripcion_producto LIKE '%DIESEL%' OR p.tipo_combustible = 3 THEN 'D'
+                   WHEN r.codigo_producto LIKE '%SUPER%' OR r.descripcion_producto LIKE '%SUPER%' OR p.tipo_combustible = 2 THEN 'S'
+                   WHEN r.codigo_producto LIKE '%REGULAR%' OR r.descripcion_producto LIKE '%REGULAR%' OR p.tipo_combustible = 1 THEN 'R'
+                   ELSE 'D'
+               END as tipo,
+               SUM(r.diferencia) as venta_galones
+        FROM gas_station_closeouts c
+        JOIN branches b ON c.branch_id = b.id
+        JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
+        LEFT JOIN products p ON r.product_id = p.id
+        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        GROUP BY c.branch_id, b.nombre, tipo
+        ORDER BY c.branch_id, tipo
     `;
-    const [ventasRows] = await withRetry(() => externalDb.query(sqlVentas, [datesArray]));
+    const [ventasRows] = await withRetry(() => accountingDb.query(sqlVentas, [dInicio, dFin]));
 
     // Movimientos físicos de tanques (inicial, recargas, final)
     const sqlMovs = `
-        SELECT a.id_empresa, a.fecha, a.turno, c.tipo_combustible,
-               SUM(b.anterior) as anterior, SUM(b.recarga) as recarga, SUM(b.lectura) as lectura
-        FROM lecturas_tanque a
-        INNER JOIN detalle_lecturas_tanque b ON a.id_empresa = b.id_empresa AND a.id = b.id_lectura
-        INNER JOIN tanques c ON a.id_empresa = c.id_empresa AND b.codigo_producto = c.id
-        WHERE a.fecha BETWEEN ? AND ?
-        GROUP BY a.id_empresa, c.tipo_combustible, a.fecha, a.turno
-        ORDER BY a.id_empresa, a.fecha, a.turno
+        SELECT 
+            c.branch_id as id_empresa,
+            b.nombre as estacion,
+            CASE 
+                WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                ELSE 'D'
+            END as tipo_combustible,
+            SUM(tr.recarga) as recarga,
+            CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_anterior ORDER BY c.fecha_turno ASC, c.numero_turno ASC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as anterior,
+            CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_actual ORDER BY c.fecha_turno DESC, c.numero_turno DESC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as lectura
+        FROM gas_station_closeouts c
+        JOIN branches b ON c.branch_id = b.id
+        JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
+        JOIN gas_station_tanks t ON tr.tank_id = t.id
+        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        GROUP BY c.branch_id, b.nombre, tipo_combustible
+        ORDER BY c.branch_id, tipo_combustible
     `;
-    const [movsRows] = await withRetry(() => externalDb.query(sqlMovs, [dInicio, dFin]));
+    const [movsRows] = await withRetry(() => accountingDb.query(sqlMovs, [dInicio, dFin]));
 
     // Costos promedio de combustible para valorizar merma
-    const [costosRows] = await withRetry(() => externalDb.query(
-        "SELECT id_empresa, cod_producto, costo FROM combustibles_costos WHERE id IN (SELECT MAX(id) FROM combustibles_costos GROUP BY id_empresa, cod_producto)"
-    ));
-    const costMap = {};
-    costosRows.forEach(c => {
-        costMap[`${c.id_empresa}_${c.cod_producto}`] = Number(c.costo || 0);
-    });
+    const costMap = {
+        'S': 3.65,
+        'R': 3.35,
+        'D': 3.10,
+        'I': 3.20
+    };
+    try {
+        const [costosRows] = await withRetry(() => accountingDb.query(`
+            SELECT 
+                CASE 
+                    WHEN tipo_combustible = 4 THEN 'I'
+                    WHEN tipo_combustible = 3 THEN 'D'
+                    WHEN tipo_combustible = 2 THEN 'S'
+                    WHEN tipo_combustible = 1 THEN 'R'
+                    ELSE 'D'
+                END as tipo,
+                AVG(costo) as costo
+            FROM products
+            WHERE tipo_combustible > 0 AND costo > 0
+            GROUP BY tipo
+        `));
+        costosRows.forEach(c => {
+            if (c.tipo && Number(c.costo) > 0) {
+                costMap[c.tipo] = Number(c.costo);
+            }
+        });
+    } catch (e) {
+        // Fallback ya configurado en costMap
+    }
 
     const combustiblesCodigos = {
         'S': 'SUPER',
