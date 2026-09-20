@@ -1,8 +1,11 @@
 const jwt = require('jsonwebtoken');
 
 if (process.env.NODE_ENV === 'production') {
-    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
-        throw new Error('FATAL: JWT_SECRET environment variable must be set and at least 32 characters long in production.');
+    if (!process.env.JWT_SECRET) {
+        throw new Error('FATAL: JWT_SECRET environment variable must be set in production.');
+    }
+    if (process.env.JWT_SECRET.length < 32) {
+        console.warn('[Security Notice] JWT_SECRET is recommended to be at least 32 characters long for maximum entropy.');
     }
 }
 

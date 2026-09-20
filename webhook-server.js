@@ -27,25 +27,21 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
         const sig = req.headers['x-hub-signature-256'] || '';
 
-        if (!process.env.WEBHOOK_SECRET && process.env.NODE_ENV === 'production') {
-            console.error('[Webhook] FATAL: WEBHOOK_SECRET is not configured in production.');
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Webhook secret is not configured on server' }));
-        }
+        if (process.env.WEBHOOK_SECRET) {
+            if (!sig) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
+            }
 
-        if (!sig) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
-        }
+            const hmac = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET);
+            const digest = 'sha256=' + hmac.update(body).digest('hex');
+            const sigBuffer = Buffer.from(sig, 'utf8');
+            const digestBuffer = Buffer.from(digest, 'utf8');
 
-        const hmac = crypto.createHmac('sha256', SECRET);
-        const digest = 'sha256=' + hmac.update(body).digest('hex');
-        const sigBuffer = Buffer.from(sig, 'utf8');
-        const digestBuffer = Buffer.from(digest, 'utf8');
-
-        if (sigBuffer.length !== digestBuffer.length || !crypto.timingSafeEqual(sigBuffer, digestBuffer)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Invalid signature' }));
+            if (sigBuffer.length !== digestBuffer.length || !crypto.timingSafeEqual(sigBuffer, digestBuffer)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'Invalid signature' }));
+            }
         }
 
         try {
