@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, getExternalDb, withTransaction } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
 const toDisplayDate = (dateVal) => {
@@ -55,7 +55,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
 
         res.json({ empresas, cuentas });
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar catálogos', error: error.message });
+        sendSafeError(res, error, 'Error al cargar catálogos');
     }
 });
 
@@ -92,7 +92,7 @@ router.get('/rango', authenticateToken, async (req, res) => {
 
         res.json(formatted);
     } catch (error) {
-        res.status(500).json({ message: 'Error al consultar cheques por rango', error: error.message });
+        sendSafeError(res, error, 'Error al consultar cheques por rango');
     }
 });
 
@@ -120,11 +120,11 @@ router.get('/reporte-fecha', authenticateToken, async (req, res) => {
         const params = [cuenta_bancaria_id, desde, hasta];
 
         if (excluir_anulados === 'true' || excluir_anulados === true) {
-            query += ' AND (ch.cheque_anulado = 0 OR ch.cheque_anulado IS NULL)';
+            query += ' AND ch.cheque_anulado = FALSE';
         }
 
         if (excluir_reservados === 'true' || excluir_reservados === true) {
-            query += ' AND (ch.es_reservado = 0 OR ch.es_reservado IS NULL) AND (ch.fue_noemitido = 0 OR ch.fue_noemitido IS NULL)';
+            query += ' AND ch.es_reservado = FALSE';
         }
 
         query += ' ORDER BY ch.fecha ASC, CAST(ch.cheque AS UNSIGNED) ASC, ch.id ASC';
@@ -140,7 +140,7 @@ router.get('/reporte-fecha', authenticateToken, async (req, res) => {
 
         res.json(formatted);
     } catch (error) {
-        res.status(500).json({ message: 'Error al generar reporte de cheques por fecha', error: error.message });
+        sendSafeError(res, error, 'Error al generar reporte de cheques por fecha');
     }
 });
 
@@ -186,11 +186,11 @@ router.get('/', authenticateToken, async (req, res) => {
 
         res.json(formatted);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar cheques', error: error.message });
+        sendSafeError(res, error, 'Error al cargar cheques');
     }
 });
 
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, requirePermission(['manage_cheques', '/dashboard/bancos/cheques']), async (req, res) => {
     const {
         id_empresa, numero_cuenta, fecha, fecha_aplicado, cheque, valor,
         a_nombre, concepto,
@@ -233,7 +233,7 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 });
 
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requirePermission(['manage_cheques', '/dashboard/bancos/cheques']), async (req, res) => {
     const { id } = req.params;
     const {
         id_empresa, numero_cuenta, fecha, fecha_aplicado, cheque, valor,
@@ -269,18 +269,18 @@ router.put('/:id', authenticateToken, async (req, res) => {
         );
         res.json({ message: 'Cheque actualizado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al actualizar cheque', error: error.message });
+        sendSafeError(res, error, 'Error al actualizar cheque');
     }
 });
 
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requirePermission(['manage_cheques', '/dashboard/bancos/cheques']), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
         await db.query('DELETE FROM cheques WHERE id = ?', [id]);
         res.json({ message: 'Cheque eliminado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al eliminar cheque', error: error.message });
+        sendSafeError(res, error, 'Error al eliminar cheque');
     }
 });
 
@@ -352,7 +352,7 @@ router.get('/contado/solicitudes', authenticateToken, async (req, res) => {
     }
 });
 
-router.post('/contado/generar', authenticateToken, async (req, res) => {
+router.post('/contado/generar', authenticateToken, requirePermission(['manage_cheques_contado', '/dashboard/bancos/cheques-contado']), async (req, res) => {
     try {
         const { llave, id_empresa, numero_cuenta, cheque_num, fecha, valor, a_nombre, concepto } = req.body;
         if (!llave || !id_empresa || !numero_cuenta || !cheque_num) {
@@ -393,7 +393,7 @@ router.post('/contado/generar', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Cheque generado exitosamente', llaveCheque });
     } catch (error) {
-        res.status(500).json({ message: 'Error al generar cheque', error: error.message });
+        sendSafeError(res, error, 'Error al generar cheque');
     }
 });
 

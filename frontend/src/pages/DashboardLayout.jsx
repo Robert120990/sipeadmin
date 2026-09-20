@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3 } from 'lucide-react';
+import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
-import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
+import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering (Code-split with lazy)
 import LoadingFallback from '../components/LoadingFallback';
@@ -42,9 +42,16 @@ import {
     FinanzasInversiones,
     FinanzasPlanesMantenimiento,
     FinanzasAsesor,
-    FinanzasResumen
+    FinanzasResumen,
+    EstrategiaTorreControl,
+    EstrategiaCombustible,
+    EstrategiaFlujoCaja,
+    EstrategiaMermas,
+    EstrategiaRentabilidad,
+    EstrategiaCreditos
 } from './lazyPages';
 import pkg from '../../package.json';
+import { getStoredUser } from '../utils/auth';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -55,6 +62,7 @@ export default function DashboardLayout() {
     // UI State
     const [isCollapsed, setIsCollapsed] = useState(false);
     const [openMenus, setOpenMenus] = useState({
+        estrategia: false,
         catalogs: false,
         consultas: false,
         consultasEstaciones: false,
@@ -100,7 +108,7 @@ export default function DashboardLayout() {
     const desktopTabsRef = useRef(null);
     const mobileTabsRef = useRef(null);
 
-    const user = JSON.parse(localStorage.getItem('user')) || {};
+    const user = getStoredUser();
     const hasPermission = (path) => {
         if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
         if (user.permissions?.includes(path)) return true;
@@ -150,12 +158,19 @@ export default function DashboardLayout() {
         '/dashboard/finanzas/planes-mantenimiento': <FinanzasPlanesMantenimiento />,
         '/dashboard/finanzas/asesor': <FinanzasAsesor />,
         '/dashboard/finanzas/resumen': <FinanzasResumen />,
+        '/dashboard/estrategia/torre-control': <EstrategiaTorreControl />,
+        '/dashboard/estrategia/combustible': <EstrategiaCombustible />,
+        '/dashboard/estrategia/flujo-caja': <EstrategiaFlujoCaja />,
+        '/dashboard/estrategia/mermas': <EstrategiaMermas />,
+        '/dashboard/estrategia/rentabilidad': <EstrategiaRentabilidad />,
+        '/dashboard/estrategia/creditos': <EstrategiaCreditos />,
     };
 
     // Sync with URL location
     useEffect(() => {
         // Find the module in any of our navigation lists
         const allNavItems = [
+            ...estrategiaMenu,
             ...catalogItems, 
             ...operacionesMenu, 
             ...bancosMenu, 
@@ -317,6 +332,7 @@ export default function DashboardLayout() {
     // Filtered Menus
     const getFiltered = (menu) => menu.filter(item => hasPermission(item.path));
     
+    const filteredEstrategia = getFiltered(estrategiaMenu);
     const filteredCatalogs = getFiltered(catalogItems);
     const filteredOperaciones = getFiltered(operacionesMenu);
     const filteredBancosMenu = getFiltered(bancosMenu);
@@ -364,6 +380,19 @@ export default function DashboardLayout() {
         return (
             <nav className={navClassName} style={variant === 'drawer' ? undefined : { flex: 1, overflowY: 'auto' }}>
                 {renderNavItem({ name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard })}
+
+                {filteredEstrategia.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('estrategia')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <Compass size={20} color="var(--primary)" />
+                                {!isCollapsed && <span style={{ fontWeight: 600 }}>Dirección Estratégica</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.estrategia ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.estrategia && !isCollapsed && filteredEstrategia.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
 
                 {filteredCatalogs.length > 0 && (
                     <div>

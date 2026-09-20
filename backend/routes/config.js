@@ -118,7 +118,7 @@ router.post('/config/email/test', authenticateToken, requireRole('Administrator'
             port: port || 587,
             secure: Boolean(secure),
             auth: { user, pass: password },
-            tls: { rejectUnauthorized: false }
+            tls: { rejectUnauthorized: process.env.SMTP_ALLOW_SELF_SIGNED === 'true' ? false : true }
         });
 
         await transporter.verify();

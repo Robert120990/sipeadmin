@@ -12,17 +12,22 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
+let isRedirecting = false;
+
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        if (error.response?.status === 401 || error.response?.status === 403) {
-            // Evitar redirección si es la petición de login
-            if (!error.config.url.includes('/login')) {
+        // 401: Sesión expirada o no autenticado
+        if (error.response?.status === 401) {
+            const isLoginRequest = error.config?.url?.includes('/login');
+            if (!isLoginRequest && !isRedirecting && !window.location.pathname.startsWith('/login')) {
+                isRedirecting = true;
                 localStorage.removeItem('token');
                 localStorage.removeItem('user');
                 window.location.href = '/login?expired=1';
             }
         }
+        // 403 es permiso denegado en una acción específica (no expulsa al usuario)
         return Promise.reject(error);
     }
 );

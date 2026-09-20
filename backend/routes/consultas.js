@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { getExternalDb, getAccountingDb, withRetry } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 // --- Ventas ---
 router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
@@ -224,8 +225,7 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, async
             total: rows.length
         });
     } catch (error) { 
-        console.error('Error fetching competencia:', error);
-        res.status(500).json({ message: 'Error fetching competencia', error: error.message }); 
+        sendSafeError(res, error, 'Error al consultar precios de competencia'); 
     }
 });
 
@@ -235,8 +235,7 @@ router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateT
         const [rows] = await withRetry(() => externalDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia'));
         res.json(rows);
     } catch (error) { 
-        console.error('Error fetching estaciones competencia:', error);
-        res.status(500).json({ message: 'Error fetching estaciones competencia', error: error.message }); 
+        sendSafeError(res, error, 'Error al consultar estaciones de competencia'); 
     }
 });
 
@@ -264,12 +263,11 @@ router.get('/consultas/estaciones/precios-competencia/catalogo', authenticateTok
             catalogo_dgehm: catalogoDgehm
         });
     } catch (error) {
-        console.error('Error fetching catalogo estaciones competencia:', error);
-        res.status(500).json({ message: 'Error fetching catalogo estaciones competencia', error: error.message });
+        sendSafeError(res, error, 'Error al cargar catálogo de estaciones de competencia');
     }
 });
 
-router.post('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, async (req, res) => {
+router.post('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
     try {
         const { id_estacion, competencia, es_propia } = req.body;
         if (!id_estacion || !competencia || !competencia.trim()) {
@@ -310,12 +308,11 @@ router.post('/consultas/estaciones/precios-competencia/estaciones', authenticate
             es_propia: isPropiaNum
         });
     } catch (error) {
-        console.error('Error adding estacion competencia:', error);
-        res.status(500).json({ message: 'Error al agregar estación: ' + error.message });
+        sendSafeError(res, error, 'Error al agregar estación');
     }
 });
 
-router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authenticateToken, async (req, res) => {
+router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
     const { id } = req.params;
     const { competencia, es_propia, id_estacion } = req.body;
     try {
@@ -344,12 +341,11 @@ router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authentic
 
         res.json({ message: 'Estación actualizada con éxito', id, competencia: newComp, es_propia: newPropia, id_estacion: newIdEstacion });
     } catch (error) {
-        console.error('Error updating estacion competencia:', error);
-        res.status(500).json({ message: 'Error al actualizar estación: ' + error.message });
+        sendSafeError(res, error, 'Error al actualizar estación');
     }
 });
 
-router.delete('/consultas/estaciones/precios-competencia/estaciones/:id', authenticateToken, async (req, res) => {
+router.delete('/consultas/estaciones/precios-competencia/estaciones/:id', authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
     const { id } = req.params;
     try {
         const externalDb = await getExternalDb();
@@ -369,8 +365,7 @@ router.delete('/consultas/estaciones/precios-competencia/estaciones/:id', authen
 
         res.json({ message: `Estación "${stationName}" quitada correctamente` });
     } catch (error) {
-        console.error('Error deleting estacion competencia:', error);
-        res.status(500).json({ message: 'Error al quitar estación: ' + error.message });
+        sendSafeError(res, error, 'Error al quitar estación');
     }
 });
 
@@ -383,12 +378,11 @@ router.get('/consultas/estaciones/precios', authenticateToken, async (req, res) 
         const [rows] = await withRetry(() => externalDb.query(sql, [sysDate]));
         res.json(rows.map(r => ({ empresa: r.titulo, diesel_a: Number(r.diesel_a), regular_a: Number(r.regular_a), super_a: Number(r.super_a), diesel_c: Number(r.diesel_c), regular_c: Number(r.regular_c), super_c: Number(r.super_c), ion_diesel: Number(r.ion_diesel), master: Number(r.master) })));
     } catch (error) { 
-        console.error('Error fetching precios estacion:', error);
-        res.status(500).json({ message: 'Error fetching precios', error: error.message }); 
+        sendSafeError(res, error, 'Error al consultar precios por estación'); 
     }
 });
 
-router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticateToken, async (req, res) => {
+router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
     try {
         const axios = require('axios');
         const https = require('https');
@@ -562,12 +556,11 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
             conn.release();
         }
     } catch (error) {
-        console.error('Error sincronizando precios con DGEHM:', error);
-        res.status(500).json({ message: 'Error sincronizando con DGEHM: ' + (error.message || 'Error de conexión') });
+        sendSafeError(res, error, 'Error al sincronizar precios con DGEHM');
     }
 });
 
-router.post('/consultas/estaciones/precios-competencia/upload', authenticateToken, async (req, res) => {
+router.post('/consultas/estaciones/precios-competencia/upload', authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
     try {
         const { data } = req.body;
         if (!Array.isArray(data) || data.length === 0) {

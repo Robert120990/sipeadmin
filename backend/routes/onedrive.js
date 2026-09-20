@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 // Globals only used inside puppeteer page.evaluate() (browser context)
 /* global document, window, navigator */
@@ -267,7 +268,7 @@ const findLatestFile = (files) => {
 
 // ── Route ────────────────────────────────────────────────────────────────────
 
-router.get('/onedrive/estado', authenticateToken, async (req, res) => {
+router.get('/onedrive/estado', authenticateToken, requirePermission(['manage_backup_db', '/dashboard/consultas/otras/backup-db-check']), async (req, res) => {
     // Check cache first (unless force refresh)
     const forceRefresh = req.query.force === '1';
     if (!forceRefresh && cachedResult && (Date.now() - cacheTimestamp) < CACHE_TTL_MS) {
@@ -392,7 +393,7 @@ router.get('/onedrive/estado', authenticateToken, async (req, res) => {
             return res.json(cachedResult);
         }
 
-        res.status(500).json({ message: 'Error al consultar OneDrive', detail: error.message });
+        sendSafeError(res, error, 'Error al consultar OneDrive');
     } finally {
         fetchInProgress = false;
         if (browser) await browser.close();

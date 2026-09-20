@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../db');
-const { authenticateToken, requirePermission, requireRole, JWT_SECRET } = require('../middleware/auth');
+const { authenticateToken, requirePermission, requireRole, JWT_SECRET, revokeUser, restoreUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
 const withRetry = async (fn, retries = 2) => {
@@ -49,8 +49,8 @@ router.post('/login', async (req, res) => {
         const [perms] = await withRetry(() => db.query('SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ?', [user.role_id]));
         const permissions = perms.map(p => p.name);
 
-        const token = jwt.sign({ id: user.id, username: user.username, role: user.role_name, role_id: user.role_id, permissions }, JWT_SECRET, { expiresIn: '8h' });
-        res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre, role: user.role_name, role_id: user.role_id, permissions } });
+        const token = jwt.sign({ id: user.id, username: user.username, role: user.role_name, role_id: user.role_id, permissions, status: user.status }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre, role: user.role_name, role_id: user.role_id, permissions, status: user.status } });
     } catch (error) {
         sendSafeError(res, error, 'Error al iniciar sesión');
     }
@@ -78,10 +78,16 @@ router.get('/users', authenticateToken, requirePermission('/dashboard/users'), a
 
 router.post('/users', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     const { username, nombre, email, password, role_id } = req.body;
+    if (!username || typeof username !== 'string' || !username.trim()) {
+        return res.status(400).json({ message: 'El nombre de usuario es requerido.' });
+    }
+    if (!password || typeof password !== 'string' || password.length < 8) {
+        return res.status(400).json({ message: 'La contraseña debe tener al menos 8 caracteres.' });
+    }
     try {
         const db = getDb();
         const hashedPassword = await bcrypt.hash(password, 10);
-        await db.query('INSERT INTO users (username, nombre, email, password, role_id) VALUES (?, ?, ?, ?, ?)', [username, nombre || null, email || null, hashedPassword, role_id]);
+        await db.query('INSERT INTO users (username, nombre, email, password, role_id) VALUES (?, ?, ?, ?, ?)', [username.trim(), nombre || null, email || null, hashedPassword, role_id]);
         res.status(201).json({ message: 'Usuario creado exitosamente' });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El nombre de usuario ya existe' });
@@ -92,6 +98,14 @@ router.post('/users', authenticateToken, requirePermission('/dashboard/users'), 
 router.put('/users/:id', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     const { id } = req.params;
     const { username, nombre, email, password, status, role_id } = req.body;
+    if (password !== undefined && password !== null && password !== '') {
+        if (typeof password !== 'string' || password.length < 8) {
+            return res.status(400).json({ message: 'La contraseña debe tener al menos 8 caracteres.' });
+        }
+    }
+    if (status && !['active', 'inactive'].includes(status)) {
+        return res.status(400).json({ message: 'Estado inválido. Debe ser "active" o "inactive".' });
+    }
     try {
         const db = getDb();
         let query = 'UPDATE users SET status = ?, role_id = ?, nombre = ?, email = ?';
@@ -99,7 +113,7 @@ router.put('/users/:id', authenticateToken, requirePermission('/dashboard/users'
 
         if (username) {
             query += ', username = ?';
-            params.push(username);
+            params.push(username.trim());
         }
         if (password) {
             const hashedPassword = await bcrypt.hash(password, 10);
@@ -111,6 +125,11 @@ router.put('/users/:id', authenticateToken, requirePermission('/dashboard/users'
         params.push(id);
 
         await db.query(query, params);
+        if (status === 'inactive') {
+            revokeUser(id);
+        } else if (status === 'active') {
+            restoreUser(id);
+        }
         res.json({ message: 'Usuario actualizado exitosamente' });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar usuario');
@@ -125,6 +144,7 @@ router.delete('/users/:id', authenticateToken, requirePermission('/dashboard/use
             return res.status(400).json({ message: 'No puedes eliminar tu propio usuario' });
         }
         await db.query('DELETE FROM users WHERE id = ?', [id]);
+        revokeUser(id);
         res.json({ message: 'Usuario eliminado exitosamente' });
     } catch (error) {
         sendSafeError(res, error, 'Error al eliminar usuario');
@@ -134,9 +154,17 @@ router.delete('/users/:id', authenticateToken, requirePermission('/dashboard/use
 router.put('/users/:id/status', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
+    if (!status || !['active', 'inactive'].includes(status)) {
+        return res.status(400).json({ message: 'Estado inválido. Debe ser "active" o "inactive".' });
+    }
     try {
         const db = getDb();
         await db.query('UPDATE users SET status = ? WHERE id = ?', [status, id]);
+        if (status === 'inactive') {
+            revokeUser(id);
+        } else if (status === 'active') {
+            restoreUser(id);
+        }
         res.json({ message: 'User status updated' });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar estado');

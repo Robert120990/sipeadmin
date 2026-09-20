@@ -5,6 +5,7 @@ import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
 import { ThemeProvider } from './components/ThemeProvider';
 import UpdateNotifier from './components/UpdateNotifier';
+import { getStoredUser, getStoredToken } from './utils/auth';
 
 import {
     Dashboard,
@@ -41,20 +42,26 @@ import {
     FinanzasInversiones,
     FinanzasPlanesMantenimiento,
     FinanzasAsesor,
-    FinanzasResumen
+    FinanzasResumen,
+    EstrategiaTorreControl,
+    EstrategiaCombustible,
+    EstrategiaFlujoCaja,
+    EstrategiaMermas,
+    EstrategiaRentabilidad,
+    EstrategiaCreditos
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
 const DashboardLayout = lazy(() => import('./pages/DashboardLayout'));
 
 const ProtectedRoute = ({ children }) => {
-    const token = localStorage.getItem('token');
+    const token = getStoredToken();
     if (!token) return <Navigate to="/login" replace />;
     return children;
 };
 
 const PermissionRoute = ({ pathKey, children }) => {
-    const user = JSON.parse(localStorage.getItem('user')) || {};
+    const user = getStoredUser();
     if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return children;
     if (user.permissions?.includes(pathKey)) return children;
     if (pathKey === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return children;
@@ -115,6 +122,12 @@ function App() {
                                     <Route path="finanzas/planes-mantenimiento" element={<PermissionRoute pathKey="/dashboard/finanzas/planes-mantenimiento"><FinanzasPlanesMantenimiento /></PermissionRoute>} />
                                     <Route path="finanzas/asesor" element={<PermissionRoute pathKey="/dashboard/finanzas/asesor"><FinanzasAsesor /></PermissionRoute>} />
                                     <Route path="finanzas/resumen" element={<PermissionRoute pathKey="/dashboard/finanzas/resumen"><FinanzasResumen /></PermissionRoute>} />
+                                    <Route path="estrategia/torre-control" element={<PermissionRoute pathKey="/dashboard/estrategia/torre-control"><EstrategiaTorreControl /></PermissionRoute>} />
+                                    <Route path="estrategia/combustible" element={<PermissionRoute pathKey="/dashboard/estrategia/combustible"><EstrategiaCombustible /></PermissionRoute>} />
+                                    <Route path="estrategia/flujo-caja" element={<PermissionRoute pathKey="/dashboard/estrategia/flujo-caja"><EstrategiaFlujoCaja /></PermissionRoute>} />
+                                    <Route path="estrategia/mermas" element={<PermissionRoute pathKey="/dashboard/estrategia/mermas"><EstrategiaMermas /></PermissionRoute>} />
+                                    <Route path="estrategia/rentabilidad" element={<PermissionRoute pathKey="/dashboard/estrategia/rentabilidad"><EstrategiaRentabilidad /></PermissionRoute>} />
+                                    <Route path="estrategia/creditos" element={<PermissionRoute pathKey="/dashboard/estrategia/creditos"><EstrategiaCreditos /></PermissionRoute>} />
                                     <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
                                     <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />
                                     <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />

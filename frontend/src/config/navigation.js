@@ -1,7 +1,16 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles, Printer } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles, Printer, Compass, Fuel, ShieldAlert, CheckCircle2 } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+];
+
+export const estrategiaMenu = [
+    { name: 'Torre de Control', path: '/dashboard/estrategia/torre-control', icon: Compass },
+    { name: 'Combustible & DGEHM', path: '/dashboard/estrategia/combustible', icon: Fuel },
+    { name: 'Flujo de Caja Predictivo', path: '/dashboard/estrategia/flujo-caja', icon: DollarSign },
+    { name: 'Auditoría de Mermas', path: '/dashboard/estrategia/mermas', icon: ShieldAlert },
+    { name: 'P&L por Estación', path: '/dashboard/estrategia/rentabilidad', icon: TrendingUp },
+    { name: 'Crédito y Flotas', path: '/dashboard/estrategia/creditos', icon: CheckCircle2 },
 ];
 
 export const catalogItems = [
@@ -81,6 +90,7 @@ export const systemNavItems = [
 
 export const allNavCategories = [
     { title: 'Principal', items: mainNavItems },
+    { title: 'Dirección Estratégica', items: estrategiaMenu },
     { title: 'Catálogos', items: catalogItems },
     { title: 'Bancos', items: bancosMenu },
     { title: 'Bancos - Reportes', items: bancosReportes },

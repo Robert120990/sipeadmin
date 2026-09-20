@@ -14,12 +14,13 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
+import { getStoredUser } from '../utils/auth';
 
 export default function ConciliacionBancaria() {
     const { addToast } = useToast();
     const { confirm } = useConfirm();
 
-    const user = JSON.parse(localStorage.getItem('user')) || {};
+    const user = getStoredUser();
     const canEditMonto = user.role_id === 1 || user.permissions?.includes('edit_monto_conciliacion');
 
     // Catálogos y Filtros

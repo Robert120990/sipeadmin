@@ -18,6 +18,29 @@ function logAction(db, req, accion, entidad, entidadId, detalles) {
     });
 }
 
+const SENSITIVE_KEY_REGEX = /^(pass(word)?|token|secret|key|apiKey|authorization|pin|cvv|credentials)$/i;
+
+function sanitizeData(data, depth = 0) {
+    if (!data || depth > 5) return data;
+    if (typeof data !== 'object') return data;
+
+    if (Array.isArray(data)) {
+        return data.map(item => sanitizeData(item, depth + 1));
+    }
+
+    const sanitized = {};
+    for (const [k, v] of Object.entries(data)) {
+        if (SENSITIVE_KEY_REGEX.test(k) || k.toLowerCase().includes('password') || k.toLowerCase().includes('secret')) {
+            sanitized[k] = '***';
+        } else if (v && typeof v === 'object') {
+            sanitized[k] = sanitizeData(v, depth + 1);
+        } else {
+            sanitized[k] = v;
+        }
+    }
+    return sanitized;
+}
+
 function autoLogMiddleware() {
     return (req, res, next) => {
         if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
@@ -59,11 +82,9 @@ function autoLogMiddleware() {
             let detalles = null;
             if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
                 try {
-                    const sanitized = { ...req.body };
-                    if (sanitized.password) sanitized.password = '***';
-                    if (sanitized.token) sanitized.token = '***';
+                    const sanitized = sanitizeData(req.body);
                     detalles = JSON.stringify(sanitized);
-                } catch (e) {
+                } catch {
                     detalles = null;
                 }
             }
@@ -76,4 +97,4 @@ function autoLogMiddleware() {
     };
 }
 
-module.exports = { logAction, autoLogMiddleware };
+module.exports = { logAction, autoLogMiddleware, sanitizeData };

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
 
 // --- Carriers (Transportistas) ---
 router.get('/carriers', authenticateToken, async (req, res) => {
@@ -12,7 +12,7 @@ router.get('/carriers', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error fetching carriers' }); }
 });
 
-router.post('/carriers', authenticateToken, async (req, res) => {
+router.post('/carriers', authenticateToken, requirePermission(['manage_catalogos', '/dashboard/carriers']), async (req, res) => {
     const { code, description } = req.body;
     try {
         const db = getDb();
@@ -22,7 +22,7 @@ router.post('/carriers', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error creating carrier' }); }
 });
 
-router.put('/carriers/:id', authenticateToken, async (req, res) => {
+router.put('/carriers/:id', authenticateToken, requirePermission(['manage_catalogos', '/dashboard/carriers']), async (req, res) => {
     const { id } = req.params;
     const { code, description } = req.body;
     try {
@@ -33,7 +33,7 @@ router.put('/carriers/:id', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error updating carrier' }); }
 });
 
-router.delete('/carriers/:id', authenticateToken, async (req, res) => {
+router.delete('/carriers/:id', authenticateToken, requirePermission(['manage_catalogos', '/dashboard/carriers']), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
@@ -57,7 +57,7 @@ router.get('/tankers', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error fetching tankers' }); }
 });
 
-router.post('/tankers', authenticateToken, async (req, res) => {
+router.post('/tankers', authenticateToken, requirePermission(['manage_catalogos', '/dashboard/tankers']), async (req, res) => {
     const { code, carrier_id, compartments } = req.body;
     try {
         const db = getDb();
@@ -67,7 +67,7 @@ router.post('/tankers', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error creating tanker' }); }
 });
 
-router.put('/tankers/:id', authenticateToken, async (req, res) => {
+router.put('/tankers/:id', authenticateToken, requirePermission(['manage_catalogos', '/dashboard/tankers']), async (req, res) => {
     const { id } = req.params;
     const { code, carrier_id, compartments } = req.body;
     try {
@@ -78,7 +78,7 @@ router.put('/tankers/:id', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error updating tanker' }); }
 });
 
-router.delete('/tankers/:id', authenticateToken, async (req, res) => {
+router.delete('/tankers/:id', authenticateToken, requirePermission(['manage_catalogos', '/dashboard/tankers']), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();

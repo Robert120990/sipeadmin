@@ -644,15 +644,29 @@ const initDB = async () => {
             await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/bancos/reportes/cheques-fecha', 'Reporte de cheques por rango de fecha')");
             await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES ('/dashboard/bancos/reportes/movimientos-fecha', 'Reporte de movimientos bancarios por rango de fecha')");
 
-            const [[adminRole]] = await pool.query("SELECT id FROM roles WHERE name = 'admin' LIMIT 1");
+            // Permisos de Dirección Estratégica
+            const estrategiaPerms = [
+                ['view_direccion_estrategica', 'Acceso al módulo de Dirección Estratégica'],
+                ['/dashboard/estrategia/torre-control', 'Torre de Control Ejecutiva y Flash Diario'],
+                ['/dashboard/estrategia/combustible', 'Inteligencia de Combustible y Compras DGEHM'],
+                ['/dashboard/estrategia/flujo-caja', 'Flujo de Caja Predictivo a 30/60 días'],
+                ['/dashboard/estrategia/mermas', 'Auditoría de Mermas y Descalibración de Pista'],
+                ['/dashboard/estrategia/rentabilidad', 'P&L y Rentabilidad Operativa por Estación'],
+                ['/dashboard/estrategia/creditos', 'Control de Riesgo de Crédito y Flotas']
+            ];
+            for (const [permName, permDesc] of estrategiaPerms) {
+                await pool.query("INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)", [permName, permDesc]);
+            }
+
+            const [[adminRole]] = await pool.query("SELECT id FROM roles WHERE name IN ('admin', 'Administrator') LIMIT 1");
             if (adminRole) {
-                const [reportPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('/dashboard/bancos/reportes/cheques-fecha', '/dashboard/bancos/reportes/movimientos-fecha', '/dashboard/bancos/reportes/impresion-cheques', '/dashboard/bancos/reportes/saldos-bancos', '/dashboard/bancos/reportes/saldos-chequera')");
-                for (const p of reportPerms) {
+                const [allTargetPerms] = await pool.query("SELECT id FROM permissions WHERE name LIKE '/dashboard/estrategia/%' OR name LIKE '/dashboard/bancos/reportes/%' OR name = 'view_direccion_estrategica'");
+                for (const p of allTargetPerms) {
                     await pool.query("INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", [adminRole.id, p.id]);
                 }
             }
         } catch (e) {
-            console.error('Migration bancos reportes permissions:', e.message);
+            console.error('Migration bancos & estrategia permissions:', e.message);
         }
 
         return pool;
@@ -693,12 +707,12 @@ const getExternalDb = async () => {
     }
     
     const config = (configs && configs.length > 0) ? configs[0] : {
-        host: process.env.DB_HOST || '207.244.251.167',
-        user: process.env.DB_USER || 'sysadmin',
-        password: process.env.DB_PASSWORD || 'QwErTy123',
-        database_name: 'db_system_rrs',
-        database: 'db_system_rrs',
-        port: 3306
+        host: process.env.EXTERNAL_DB_HOST || process.env.DB_HOST || '127.0.0.1',
+        user: process.env.EXTERNAL_DB_USER || process.env.DB_USER || 'root',
+        password: process.env.EXTERNAL_DB_PASSWORD || process.env.DB_PASSWORD || '',
+        database_name: process.env.EXTERNAL_DB_NAME || 'db_system_rrs',
+        database: process.env.EXTERNAL_DB_NAME || 'db_system_rrs',
+        port: parseInt(process.env.EXTERNAL_DB_PORT || process.env.DB_PORT || '3306')
     };
     const dbName = config.database_name || config.database || 'db_system_rrs';
     const poolKey = `main:${config.host}:${config.port || 3306}:${dbName}:${config.user}`;

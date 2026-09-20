@@ -30,6 +30,7 @@ module.exports = {
         NODE_ENV: 'production',
         WEBHOOK_PORT: 7778
       },
+      env_file: './backend/.env',
       max_restarts: 10,
       restart_delay: 3000,
       error_file: './logs/webhook-error.log',

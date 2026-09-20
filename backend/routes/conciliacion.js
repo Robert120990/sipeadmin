@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
 const toDisplayDate = (dateVal) => {
@@ -122,8 +122,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
         ));
         res.json({ empresas, cuentas, tipos_remesas: tiposRemesas });
     } catch (error) {
-        console.error('Error en catalogos conciliacion:', error);
-        res.status(500).json({ message: 'Error al cargar catálogos', error: error.message });
+        sendSafeError(res, error, 'Error al cargar catálogos');
     }
 });
 
@@ -291,7 +290,7 @@ router.get('/data', authenticateToken, async (req, res) => {
 });
 
 // ── 3. Aplicar o Desconciliar Masivamente ────────────────────────────────────
-router.post('/aplicar', authenticateToken, async (req, res) => {
+router.post('/aplicar', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const { items, fecha_aplicado, accion } = req.body;
     // accion: 'CONCILIAR' o 'DESCONCILIAR'
     if (!Array.isArray(items) || items.length === 0) {
@@ -331,13 +330,12 @@ router.post('/aplicar', authenticateToken, async (req, res) => {
             actualizados: items.length
         });
     } catch (error) {
-        console.error('Error en /aplicar conciliacion:', error);
-        res.status(500).json({ message: 'Error al aplicar cambios en conciliación', error: error.message });
+        sendSafeError(res, error, 'Error al aplicar cambios en conciliación');
     }
 });
 
 // ── 4. Registrar Validación de Saldo en Banco ───────────────────────────────
-router.post('/validar-saldo', authenticateToken, async (req, res) => {
+router.post('/validar-saldo', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const { cuenta_bancaria_id, monto_banco, saldo_chequera, diferencia, notas } = req.body;
 
     if (!cuenta_bancaria_id) {
@@ -359,13 +357,12 @@ router.post('/validar-saldo', authenticateToken, async (req, res) => {
             validacion: saved
         });
     } catch (error) {
-        console.error('Error al guardar validacion de saldo:', error);
-        res.status(500).json({ message: 'Error al guardar validación', error: error.message });
+        sendSafeError(res, error, 'Error al guardar validación');
     }
 });
 
 // ── 5. Parser y Auto-Matcher de Extractos Bancarios ─────────────────────────
-router.post('/parse-extracto', authenticateToken, async (req, res) => {
+router.post('/parse-extracto', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const { cuenta_id, raw_data, banco_formato } = req.body;
     if (!cuenta_id || !raw_data) {
         return res.status(400).json({ message: 'Faltan datos requeridos (cuenta y datos de extracto).' });
@@ -567,13 +564,12 @@ router.post('/parse-extracto', authenticateToken, async (req, res) => {
             conceptos_sugeridos: conceptosSugeridos
         });
     } catch (error) {
-        console.error('Error al procesar extracto bancario:', error);
-        res.status(500).json({ message: 'Error al parsear extracto bancario', error: error.message });
+        sendSafeError(res, error, 'Error al parsear extracto bancario');
     }
 });
 
 // ── 5.1. Crear Movimiento y Conciliar Directamente ─────────────────────────
-router.post('/crear-y-aplicar', authenticateToken, async (req, res) => {
+router.post('/crear-y-aplicar', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const {
         cuenta_bancaria_id,
         fecha,
@@ -664,13 +660,12 @@ router.post('/crear-y-aplicar', authenticateToken, async (req, res) => {
             fecha_aplicado: dbFechaAplicado
         });
     } catch (error) {
-        console.error('Error al crear y aplicar movimiento:', error);
-        res.status(500).json({ message: 'Error al registrar movimiento', error: error.message });
+        sendSafeError(res, error, 'Error al registrar movimiento');
     }
 });
 
 // ── 5.2. Crear y Aplicar Movimientos Masivamente ───────────────────────────
-router.post('/crear-masivo-y-aplicar', authenticateToken, async (req, res) => {
+router.post('/crear-masivo-y-aplicar', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const { cuenta_bancaria_id, items, fecha_aplicado_general, aplicar_inmediatamente } = req.body;
     if (!cuenta_bancaria_id || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ message: 'Debe especificar la cuenta bancaria y al menos un movimiento.' });
@@ -738,13 +733,12 @@ router.post('/crear-masivo-y-aplicar', authenticateToken, async (req, res) => {
             creados: creadosCount
         });
     } catch (error) {
-        console.error('Error en crear-masivo-y-aplicar:', error);
-        res.status(500).json({ message: 'Error al procesar movimientos en lote', error: error.message });
+        sendSafeError(res, error, 'Error al procesar movimientos en lote');
     }
 });
 
 // ── 6. Edición Controlada de Movimiento ──────────────────────────────────────
-router.put('/movimiento/:id', authenticateToken, async (req, res) => {
+router.put('/movimiento/:id', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const { id } = req.params;
     const { concepto, documento, fecha, monto, origen_tipo } = req.body;
 
@@ -789,8 +783,7 @@ router.put('/movimiento/:id', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Registro actualizado correctamente' });
     } catch (error) {
-        console.error('Error al editar movimiento en conciliacion:', error);
-        res.status(500).json({ message: 'Error al actualizar registro', error: error.message });
+        sendSafeError(res, error, 'Error al actualizar registro');
     }
 });
 

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { GoogleGenAI } = require('@google/genai');
 const { authenticateToken } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 router.post('/pagos/chat', authenticateToken, async (req, res) => {
     try {
@@ -60,8 +61,7 @@ DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
 
         res.json(JSON.parse(rawText));
     } catch (error) {
-        console.error("AI Agent Error:", error);
-        res.status(500).json({ error: "No se pudo procesar la solicitud con IA.", details: error.message });
+        sendSafeError(res, error, 'No se pudo procesar la solicitud con IA.');
     }
 });
 

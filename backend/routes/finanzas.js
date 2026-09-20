@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { GoogleGenAI } = require('@google/genai');
 const { getDb, withTransaction } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
 // --- Helper Functions ---
@@ -46,8 +46,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
 
         res.json({ empresas, bancos, cuentas });
     } catch (error) {
-        console.error('Error fetching finanzas catalogos:', error);
-        res.status(500).json({ message: 'Error al obtener catálogos', error: error.message });
+        sendSafeError(res, error, 'Error al obtener catálogos');
     }
 });
 
@@ -126,8 +125,7 @@ router.get('/prestamos', authenticateToken, async (req, res) => {
 
         res.json(formatted);
     } catch (error) {
-        console.error('Error fetching prestamos:', error);
-        res.status(500).json({ message: 'Error al listar préstamos', error: error.message });
+        sendSafeError(res, error, 'Error al listar préstamos');
     }
 });
 
@@ -208,13 +206,12 @@ router.get('/prestamos/:id', authenticateToken, async (req, res) => {
             }))
         });
     } catch (error) {
-        console.error('Error fetching prestamo detail:', error);
-        res.status(500).json({ message: 'Error al obtener detalle del préstamo', error: error.message });
+        sendSafeError(res, error, 'Error al obtener detalle del préstamo');
     }
 });
 
 // --- POST /prestamos ---
-router.post('/prestamos', authenticateToken, async (req, res) => {
+router.post('/prestamos', authenticateToken, requirePermission(['manage_finanzas_prestamos', '/dashboard/finanzas/prestamos']), async (req, res) => {
     const {
         empresa_id,
         banco_id,
@@ -304,16 +301,15 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
 
         res.status(201).json({ message: 'Préstamo registrado exitosamente', id: result.insertId, cuota_calculada: cuota, cuota_total: totalCuota });
     } catch (error) {
-        console.error('Error creating prestamo:', error);
         if (error.code === 'ER_DUP_ENTRY') {
-            return res.status(400).json({ message: `El número de préstamo "${numero_prestamo}" ya se encuentra registrado`, error: error.message });
+            return res.status(400).json({ message: `El número de préstamo "${numero_prestamo}" ya se encuentra registrado` });
         }
-        res.status(500).json({ message: 'Error al registrar préstamo: ' + error.message, error: error.message });
+        sendSafeError(res, error, 'Error al registrar préstamo');
     }
 });
 
 // --- PUT /prestamos/:id ---
-router.put('/prestamos/:id', authenticateToken, async (req, res) => {
+router.put('/prestamos/:id', authenticateToken, requirePermission(['manage_finanzas_prestamos', '/dashboard/finanzas/prestamos']), async (req, res) => {
     const { id } = req.params;
     const {
         empresa_id,
@@ -421,13 +417,12 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Préstamo actualizado exitosamente' });
     } catch (error) {
-        console.error('Error updating prestamo:', error);
-        res.status(500).json({ message: 'Error al actualizar préstamo: ' + error.message, error: error.message });
+        sendSafeError(res, error, 'Error al actualizar préstamo');
     }
 });
 
 // --- DELETE /prestamos/:id ---
-router.delete('/prestamos/:id', authenticateToken, async (req, res) => {
+router.delete('/prestamos/:id', authenticateToken, requirePermission(['manage_finanzas_prestamos', '/dashboard/finanzas/prestamos']), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
@@ -442,13 +437,12 @@ router.delete('/prestamos/:id', authenticateToken, async (req, res) => {
         await db.query('DELETE FROM prestamos WHERE id = ?', [id]);
         res.json({ message: 'Préstamo eliminado exitosamente' });
     } catch (error) {
-        console.error('Error deleting prestamo:', error);
-        res.status(500).json({ message: 'Error al eliminar préstamo: ' + error.message, error: error.message });
+        sendSafeError(res, error, 'Error al eliminar préstamo');
     }
 });
 
 // --- POST /prestamos/:id/pagos ---
-router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
+router.post('/prestamos/:id/pagos', authenticateToken, requirePermission(['manage_finanzas_pagos', '/dashboard/finanzas/prestamos']), async (req, res) => {
     const { id } = req.params;
     const {
         numero_cuota,
@@ -535,7 +529,7 @@ router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
 });
 
 // --- DELETE /pagos/:pagoId ---
-router.delete('/pagos/:pagoId', authenticateToken, async (req, res) => {
+router.delete('/pagos/:pagoId', authenticateToken, requirePermission(['manage_finanzas_pagos', '/dashboard/finanzas/prestamos']), async (req, res) => {
     const { pagoId } = req.params;
     try {
         await withTransaction(async (connection) => {
@@ -684,8 +678,7 @@ router.get('/resumen', authenticateToken, async (req, res) => {
             }))
         });
     } catch (error) {
-        console.error('Error fetching finanzas resumen:', error);
-        res.status(500).json({ message: 'Error al obtener resumen de finanzas', error: error.message });
+        sendSafeError(res, error, 'Error al obtener resumen de finanzas');
     }
 });
 
@@ -734,8 +727,7 @@ router.get('/proyectos', authenticateToken, async (req, res) => {
             flujos_json: typeof r.flujos_json === 'string' ? JSON.parse(r.flujos_json) : (r.flujos_json || [])
         })));
     } catch (error) {
-        console.error('Error fetching proyectos:', error);
-        res.status(500).json({ message: 'Error al obtener proyectos de inversión', error: error.message });
+        sendSafeError(res, error, 'Error al obtener proyectos de inversión');
     }
 });
 
@@ -772,13 +764,12 @@ router.get('/proyectos/:id', authenticateToken, async (req, res) => {
             flujos_json: typeof r.flujos_json === 'string' ? JSON.parse(r.flujos_json) : (r.flujos_json || [])
         });
     } catch (error) {
-        console.error('Error fetching proyecto:', error);
-        res.status(500).json({ message: 'Error al obtener detalle del proyecto', error: error.message });
+        sendSafeError(res, error, 'Error al obtener detalle del proyecto');
     }
 });
 
 // POST /proyectos
-router.post('/proyectos', authenticateToken, async (req, res) => {
+router.post('/proyectos', authenticateToken, requirePermission(['manage_finanzas_inversiones', '/dashboard/finanzas/inversiones']), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -836,13 +827,12 @@ router.post('/proyectos', authenticateToken, async (req, res) => {
 
         res.status(201).json({ id: result.insertId, message: 'Proyecto registrado exitosamente' });
     } catch (error) {
-        console.error('Error saving proyecto:', error);
-        res.status(500).json({ message: 'Error al registrar proyecto de inversión', error: error.message });
+        sendSafeError(res, error, 'Error al registrar proyecto de inversión');
     }
 });
 
 // PUT /proyectos/:id
-router.put('/proyectos/:id', authenticateToken, async (req, res) => {
+router.put('/proyectos/:id', authenticateToken, requirePermission(['manage_finanzas_inversiones', '/dashboard/finanzas/inversiones']), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -909,13 +899,12 @@ router.put('/proyectos/:id', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Proyecto actualizado exitosamente' });
     } catch (error) {
-        console.error('Error updating proyecto:', error);
-        res.status(500).json({ message: 'Error al actualizar proyecto', error: error.message });
+        sendSafeError(res, error, 'Error al actualizar proyecto');
     }
 });
 
 // DELETE /proyectos/:id
-router.delete('/proyectos/:id', authenticateToken, async (req, res) => {
+router.delete('/proyectos/:id', authenticateToken, requirePermission(['manage_finanzas_inversiones', '/dashboard/finanzas/inversiones']), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -923,8 +912,7 @@ router.delete('/proyectos/:id', authenticateToken, async (req, res) => {
         await db.query('DELETE FROM finanzas_proyectos_inversion WHERE id = ?', [id]);
         res.json({ message: 'Proyecto eliminado exitosamente' });
     } catch (error) {
-        console.error('Error deleting proyecto:', error);
-        res.status(500).json({ message: 'Error al eliminar proyecto', error: error.message });
+        sendSafeError(res, error, 'Error al eliminar proyecto');
     }
 });
 
@@ -968,13 +956,12 @@ router.get('/mantenimiento', authenticateToken, async (req, res) => {
             costo_estimado: parseFloat(r.costo_estimado || 0)
         })));
     } catch (error) {
-        console.error('Error fetching mantenimiento:', error);
-        res.status(500).json({ message: 'Error al obtener planes de mantenimiento', error: error.message });
+        sendSafeError(res, error, 'Error al obtener planes de mantenimiento');
     }
 });
 
 // POST /mantenimiento
-router.post('/mantenimiento', authenticateToken, async (req, res) => {
+router.post('/mantenimiento', authenticateToken, requirePermission(['manage_finanzas_mantenimiento', '/dashboard/finanzas/planes-mantenimiento']), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -1021,13 +1008,12 @@ router.post('/mantenimiento', authenticateToken, async (req, res) => {
 
         res.status(201).json({ id: result.insertId, message: 'Plan de mantenimiento registrado exitosamente' });
     } catch (error) {
-        console.error('Error saving mantenimiento:', error);
-        res.status(500).json({ message: 'Error al registrar mantenimiento', error: error.message });
+        sendSafeError(res, error, 'Error al registrar mantenimiento');
     }
 });
 
 // PUT /mantenimiento/:id
-router.put('/mantenimiento/:id', authenticateToken, async (req, res) => {
+router.put('/mantenimiento/:id', authenticateToken, requirePermission(['manage_finanzas_mantenimiento', '/dashboard/finanzas/planes-mantenimiento']), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -1083,13 +1069,12 @@ router.put('/mantenimiento/:id', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Mantenimiento actualizado exitosamente' });
     } catch (error) {
-        console.error('Error updating mantenimiento:', error);
-        res.status(500).json({ message: 'Error al actualizar mantenimiento', error: error.message });
+        sendSafeError(res, error, 'Error al actualizar mantenimiento');
     }
 });
 
 // DELETE /mantenimiento/:id
-router.delete('/mantenimiento/:id', authenticateToken, async (req, res) => {
+router.delete('/mantenimiento/:id', authenticateToken, requirePermission(['manage_finanzas_mantenimiento', '/dashboard/finanzas/planes-mantenimiento']), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -1097,8 +1082,7 @@ router.delete('/mantenimiento/:id', authenticateToken, async (req, res) => {
         await db.query('DELETE FROM finanzas_planes_mantenimiento WHERE id = ?', [id]);
         res.json({ message: 'Registro de mantenimiento eliminado exitosamente' });
     } catch (error) {
-        console.error('Error deleting mantenimiento:', error);
-        res.status(500).json({ message: 'Error al eliminar mantenimiento', error: error.message });
+        sendSafeError(res, error, 'Error al eliminar mantenimiento');
     }
 });
 
@@ -1107,7 +1091,7 @@ router.delete('/mantenimiento/:id', authenticateToken, async (req, res) => {
 // ==========================================
 
 // POST /asesor-ia
-router.post('/asesor-ia', authenticateToken, async (req, res) => {
+router.post('/asesor-ia', authenticateToken, requirePermission(['/dashboard/finanzas/asesor', 'manage_finanzas_asesor']), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -1344,8 +1328,7 @@ ${recomendacionArbitraje}
             data: fallbackResponse
         });
     } catch (error) {
-        console.error('Error in asesor-ia:', error);
-        res.status(500).json({ message: 'Error al procesar asesoría financiera con IA', error: error.message });
+        sendSafeError(res, error, 'Error al procesar asesoría financiera con IA');
     }
 });
 

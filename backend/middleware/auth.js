@@ -1,10 +1,26 @@
 const jwt = require('jsonwebtoken');
 
-if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
-    throw new Error('FATAL: JWT_SECRET environment variable must be set in production.');
+if (process.env.NODE_ENV === 'production') {
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+        throw new Error('FATAL: JWT_SECRET environment variable must be set and at least 32 characters long in production.');
+    }
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'sipeadmin_dev_jwt_secret_change_in_production';
+
+const revokedUsers = new Set();
+
+const revokeUser = (userId) => {
+    if (userId) revokedUsers.add(Number(userId));
+};
+
+const restoreUser = (userId) => {
+    if (userId) revokedUsers.delete(Number(userId));
+};
+
+const isUserRevoked = (userId) => {
+    return revokedUsers.has(Number(userId));
+};
 
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -13,7 +29,12 @@ const authenticateToken = (req, res, next) => {
     if (!token) return res.status(401).json({ message: 'Token de acceso requerido' });
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ message: 'Token inválido o expirado' });
+        if (err) return res.status(401).json({ message: 'Token inválido o expirado' });
+
+        if (user.status === 'inactive' || isUserRevoked(user.id)) {
+            return res.status(403).json({ message: 'Usuario inactivo o suspendido' });
+        }
+
         req.user = user;
         next();
     });
@@ -71,5 +92,13 @@ const requireRole = (allowedRoles) => {
     };
 };
 
-module.exports = { authenticateToken, requirePermission, requireRole, JWT_SECRET };
+module.exports = { 
+    authenticateToken, 
+    requirePermission, 
+    requireRole, 
+    JWT_SECRET,
+    revokeUser,
+    restoreUser,
+    isUserRevoked
+};
 

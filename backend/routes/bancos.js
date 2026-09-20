@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 const toDisplayDate = (dateVal) => {
     if (!dateVal) return null;
@@ -38,7 +39,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
 
         res.json({ empresas, bancos, tipos });
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar catálogos', error: error.message });
+        sendSafeError(res, error, 'Error al cargar catálogos');
     }
 });
 
@@ -57,11 +58,11 @@ router.get('/cuentas', authenticateToken, async (req, res) => {
         );
         res.json(rows);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar cuentas', error: error.message });
+        sendSafeError(res, error, 'Error al cargar cuentas');
     }
 });
 
-router.post('/cuentas', authenticateToken, async (req, res) => {
+router.post('/cuentas', authenticateToken, requirePermission('/dashboard/bancos/cuentas'), async (req, res) => {
     const { id_empresa, numero, nombre, cod_banco, cod_tipo, cod_cta, orden } = req.body;
     try {
         const db = getDb();
@@ -82,11 +83,11 @@ router.post('/cuentas', authenticateToken, async (req, res) => {
         );
         res.status(201).json({ message: 'Cuenta creada exitosamente', id: result.insertId });
     } catch (error) {
-        res.status(500).json({ message: 'Error al crear cuenta', error: error.message });
+        sendSafeError(res, error, 'Error al crear cuenta');
     }
 });
 
-router.put('/cuentas/:id', authenticateToken, async (req, res) => {
+router.put('/cuentas/:id', authenticateToken, requirePermission('/dashboard/bancos/cuentas'), async (req, res) => {
     const { id } = req.params;
     const { id_empresa, numero, nombre, cod_banco, cod_tipo, cod_cta, activa, orden } = req.body;
     try {
@@ -109,18 +110,18 @@ router.put('/cuentas/:id', authenticateToken, async (req, res) => {
         );
         res.json({ message: 'Cuenta actualizada exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al actualizar cuenta', error: error.message });
+        sendSafeError(res, error, 'Error al actualizar cuenta');
     }
 });
 
-router.delete('/cuentas/:id', authenticateToken, async (req, res) => {
+router.delete('/cuentas/:id', authenticateToken, requirePermission('/dashboard/bancos/cuentas'), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
         await db.query('UPDATE cuentas_bancarias SET activa = FALSE WHERE id = ?', [id]);
         res.json({ message: 'Cuenta desactivada exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al desactivar cuenta', error: error.message });
+        sendSafeError(res, error, 'Error al desactivar cuenta');
     }
 });
 
@@ -165,7 +166,7 @@ router.get('/movimientos/catalogos', authenticateToken, async (req, res) => {
 
         res.json({ cuentas, remesas, empresas });
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar catálogos de movimientos', error: error.message });
+        sendSafeError(res, error, 'Error al cargar catálogos de movimientos');
     }
 });
 
@@ -211,7 +212,7 @@ router.get('/movimientos', authenticateToken, async (req, res) => {
 
         res.json(formatted);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar movimientos bancarios', error: error.message });
+        sendSafeError(res, error, 'Error al cargar movimientos bancarios');
     }
 });
 
@@ -270,11 +271,11 @@ router.get('/movimientos/reporte-fecha', authenticateToken, async (req, res) => 
 
         res.json(formatted);
     } catch (error) {
-        res.status(500).json({ message: 'Error al generar reporte de movimientos por fecha', error: error.message });
+        sendSafeError(res, error, 'Error al generar reporte de movimientos por fecha');
     }
 });
 
-router.post('/movimientos', authenticateToken, async (req, res) => {
+router.post('/movimientos', authenticateToken, requirePermission('/dashboard/bancos/movimientos'), async (req, res) => {
     const {
         id_empresa, numero_cuenta, numero_cuenta_debitar, numero_cuenta_acreditar,
         fecha, fecha_aplicado, documento, concepto,
@@ -422,11 +423,11 @@ router.post('/movimientos', authenticateToken, async (req, res) => {
 
         res.status(201).json({ message: 'Movimiento registrado exitosamente', id: result.insertId });
     } catch (error) {
-        res.status(500).json({ message: 'Error al registrar movimiento', error: error.message });
+        sendSafeError(res, error, 'Error al registrar movimiento');
     }
 });
 
-router.put('/movimientos/:id', authenticateToken, async (req, res) => {
+router.put('/movimientos/:id', authenticateToken, requirePermission('/dashboard/bancos/movimientos'), async (req, res) => {
     const { id } = req.params;
     const {
         id_empresa, numero_cuenta, fecha, fecha_aplicado, documento, concepto,
@@ -471,18 +472,18 @@ router.put('/movimientos/:id', authenticateToken, async (req, res) => {
         );
         res.json({ message: 'Movimiento actualizado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al actualizar movimiento', error: error.message });
+        sendSafeError(res, error, 'Error al actualizar movimiento');
     }
 });
 
-router.delete('/movimientos/:id', authenticateToken, async (req, res) => {
+router.delete('/movimientos/:id', authenticateToken, requirePermission('/dashboard/bancos/movimientos'), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
         await db.query('DELETE FROM movimientos_bancarios WHERE id = ?', [id]);
         res.json({ message: 'Movimiento eliminado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al eliminar movimiento', error: error.message });
+        sendSafeError(res, error, 'Error al eliminar movimiento');
     }
 });
 

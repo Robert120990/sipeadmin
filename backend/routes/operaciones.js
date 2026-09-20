@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { getExternalDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 // --- Dashboard / Vencimientos ---
 router.get('/dashboard/vencimientos', authenticateToken, async (req, res) => {
@@ -136,7 +137,7 @@ router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateT
     } catch (error) { res.status(500).json({ message: 'Error fetching pedidos programados' }); }
 });
 
-router.post('/operaciones/pedidos/agregar', authenticateToken, async (req, res) => {
+router.post('/operaciones/pedidos/agregar', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
         const { id_pedido, id_estacion, fecha, id_transportista, diesel, regular, super: s, iondiesel, id_calibracion_diesel } = req.body;
         const externalDb = await getExternalDb();
@@ -148,20 +149,20 @@ router.post('/operaciones/pedidos/agregar', authenticateToken, async (req, res) 
                 [id_estacion, fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null]);
         }
         res.json({ success: true, message: 'Pedido Guardado!' });
-    } catch (error) { res.status(500).json({ message: 'Error agregando pedido' }); }
+    } catch (error) { sendSafeError(res, error, 'Error agregando pedido'); }
 });
 
-router.delete('/operaciones/pedidos/anular/:id', authenticateToken, async (req, res) => {
+router.delete('/operaciones/pedidos/anular/:id', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [ex] = await externalDb.query("SELECT count(id_origen) as cont FROM web_pedidos WHERE id_origen = ?", [req.params.id]);
         if (ex[0].cont > 0) return res.status(400).json({ message: "Pedido Confirmado. No Puede Anular." });
         await externalDb.query("DELETE FROM web_pedidos_temp WHERE id = ?", [req.params.id]);
         res.json({ success: true, message: 'Pedido Anulado' });
-    } catch (error) { res.status(500).json({ message: 'Error anulando pedido' }); }
+    } catch (error) { sendSafeError(res, error, 'Error anulando pedido'); }
 });
 
-router.post('/operaciones/pedidos/confirmar', authenticateToken, async (req, res) => {
+router.post('/operaciones/pedidos/confirmar', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
         const { id_pedido, numero, id_estacion, forma_pago, costo_d, costo_s, costo_r, costo_i } = req.body;
         const externalDb = await getExternalDb();
@@ -199,7 +200,7 @@ router.post('/operaciones/pedidos/confirmar', authenticateToken, async (req, res
         } finally {
             connection.release();
         }
-    } catch (error) { res.status(500).json({ message: 'Error al confirmar pedido: ' + error.message }); }
+    } catch (error) { sendSafeError(res, error, 'Error al confirmar pedido'); }
 });
 
 // --- RECORDATORIOS / PAGOS ---
@@ -312,7 +313,7 @@ function calculateRecurringDate(iniciarStr, n, repetirDesc) {
     return cleanStr;
 }
 
-router.post('/operaciones/recordatorios', authenticateToken, async (req, res) => {
+router.post('/operaciones/recordatorios', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
     try {
         const { id, descripcion, id_ubicacion, iniciar, activo, monto, repetir, repetir_desc, forma_pago, pagado, fecPago, formaPago2 } = req.body;
         const externalDb = await getExternalDb();
@@ -342,25 +343,25 @@ router.post('/operaciones/recordatorios', authenticateToken, async (req, res) =>
             await connection.commit();
             res.json({ success: true, message: 'Recordatorio Guardado!' });
         } catch(errTx) { await connection.rollback(); throw errTx; } finally { connection.release(); }
-    } catch (error) { res.status(500).json({ message: 'Error saving recordatorio: ' + error.message }); }
+    } catch (error) { sendSafeError(res, error, 'Error al guardar recordatorio'); }
 });
 
-router.put('/operaciones/recordatorios/pagar/:id', authenticateToken, async (req, res) => {
+router.put('/operaciones/recordatorios/pagar/:id', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
     try {
         const { id } = req.params;
         const { forma_pago, fecha_cancelacion } = req.body;
         const externalDb = await getExternalDb();
         await externalDb.query("UPDATE web_rc_recordatorios_vencimientos SET estado = 'C', fecha_cancelacion = ?, forma_pago = ? WHERE id = ?", [fecha_cancelacion, forma_pago, id]);
         res.json({ success: true, message: 'Pago Realizado!' });
-    } catch (error) { res.status(500).json({ message: 'Error marking paid' }); }
+    } catch (error) { sendSafeError(res, error, 'Error al registrar pago'); }
 });
 
-router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, async (req, res) => {
+router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         await externalDb.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id = ?", [req.params.id]);
         res.json({ success: true, message: 'Recordatorio Eliminado!' });
-    } catch (error) { res.status(500).json({ message: 'Error deleting vencimiento' }); }
+    } catch (error) { sendSafeError(res, error, 'Error al eliminar vencimiento'); }
 });
 
 module.exports = router;

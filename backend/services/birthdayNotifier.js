@@ -189,7 +189,7 @@ async function sendBirthdayNotification(options = {}) {
             port: emailConfig.port || 587,
             secure: Boolean(emailConfig.secure),
             auth: { user: emailConfig.user, pass: emailConfig.password },
-            tls: { rejectUnauthorized: false }
+            tls: { rejectUnauthorized: process.env.SMTP_ALLOW_SELF_SIGNED === 'true' ? false : true }
         });
 
         await transporter.sendMail({
@@ -218,7 +218,7 @@ async function sendBirthdayNotification(options = {}) {
         port: emailConfig.port || 587,
         secure: Boolean(emailConfig.secure),
         auth: { user: emailConfig.user, pass: emailConfig.password },
-        tls: { rejectUnauthorized: false }
+        tls: { rejectUnauthorized: process.env.SMTP_ALLOW_SELF_SIGNED === 'true' ? false : true }
     });
 
     const htmlContent = buildBirthdayEmailHtml(birthdays, dateFormatted);

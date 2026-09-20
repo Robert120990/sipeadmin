@@ -10,6 +10,7 @@ import DesignerService from '../modules/check-designer/services/DesignerService'
 import { numeroALetras, formatMonto, formatearFechaEnLetras, formatearFechaEnLetrasCorta } from '../utils/numeroALetras';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 import { useNavigate } from 'react-router-dom';
+import { getStoredUser } from '../utils/auth';
 
 export default function Cheques() {
     const [cheques, setCheques] = useState([]);
@@ -196,7 +197,7 @@ export default function Cheques() {
                 return;
             }
 
-            const user = JSON.parse(localStorage.getItem('user')) || {};
+            const user = getStoredUser();
             const partesFecha = (cheque.fecha || '').split('/');
             const datos = {
                 fecha: cheque.fecha || '',

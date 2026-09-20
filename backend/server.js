@@ -7,20 +7,52 @@ const { initDB } = require('./db');
 dotenv.config();
 
 const app = express();
+// Enable trust proxy for reverse proxy environments (Caddy on VPS) to accurately read client IP
+app.set('trust proxy', 1);
 const server = http.createServer(app);
+const helmet = require('helmet');
+
+// Hardened CORS allowed origins
+const defaultOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'https://admin.sipesv.com'];
+const configuredOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(s => s.trim()) : [];
+const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
+
+const corsOptions = {
+    origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+            return callback(null, true);
+        }
+        return callback(new Error(`Bloqueado por política CORS: origen no autorizado (${origin})`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+};
+
 const { Server } = require("socket.io");
 const io = new Server(server, {
-  cors: {
-    origin: "*", 
-    methods: ["GET", "POST", "PUT", "DELETE"]
-  }
+    cors: {
+        origin: (origin, callback) => {
+            if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+                return callback(null, true);
+            }
+            return callback(new Error('Socket.io CORS origin not allowed'));
+        },
+        methods: ["GET", "POST", "PUT", "DELETE"],
+        credentials: true
+    }
 });
 
 const PORT = process.env.PORT || 5001;
 
-// Global Middleware
-app.use(cors());
-app.use(express.json());
+// Global Security Middleware
+app.disable('x-powered-by');
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: false
+}));
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '10mb' }));
 
 // Inject io into request
 app.use((req, res, next) => {
@@ -69,9 +101,19 @@ const aiLimiter = rateLimit({
     message: { message: 'Límite de consultas de IA alcanzado por este minuto. Intente de nuevo en breve.' }
 });
 
+// Rate limiting para procesos intensivos en memoria/CPU como Puppeteer/OneDrive (10 req / 5 min por IP)
+const heavyProcessLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Límite de solicitudes para procesos intensivos alcanzado. Espere unos minutos.' }
+});
+
 app.use('/api/login', loginLimiter);
 app.use('/api/ai/', aiLimiter);
 app.use('/api/finanzas/chat', aiLimiter);
+app.use('/api/onedrive', heavyProcessLimiter);
 app.use('/api/', apiLimiter);
 
 // Import Routes
@@ -88,12 +130,14 @@ const bitacoraRoutes = require('./routes/bitacora');
 const checkDesignerRoutes = require('./routes/checkDesigner');
 const conciliacionRoutes = require('./routes/conciliacion');
 const finanzasRoutes = require('./routes/finanzas');
+const inteligenciaRoutes = require('./routes/inteligencia');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
 app.use('/api/bancos/conciliacion', conciliacionRoutes);
 app.use('/api/bancos', bancosRoutes);
 app.use('/api/finanzas', finanzasRoutes);
+app.use('/api/inteligencia', inteligenciaRoutes);
 app.use('/api', catalogosRoutes); // Carriers, Tankers
 app.use('/api', operacionesRoutes); // Dashboard, Operaciones
 app.use('/api', consultasRoutes); // Ventas, Consultas

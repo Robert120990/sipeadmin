@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 /**
  * @route GET /api/check-designer/formats
@@ -40,7 +41,7 @@ router.get('/formats', authenticateToken, async (req, res) => {
         const [formats] = await db.query(query, params);
         res.json(formats);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar formatos de cheque', error: error.message });
+        sendSafeError(res, error, 'Error al cargar formatos de cheque');
     }
 });
 
@@ -48,7 +49,7 @@ router.get('/formats', authenticateToken, async (req, res) => {
  * @route POST /api/check-designer/formats
  * @desc Crear un nuevo formato de cheque.
  */
-router.post('/formats', authenticateToken, async (req, res) => {
+router.post('/formats', authenticateToken, requirePermission(['manage_check_designer', '/dashboard/bancos/check-designer']), async (req, res) => {
     const { name, banco_id, description, width, height, orientation, margin_top, margin_right, margin_bottom, margin_left, resolution, printer_name, design_json } = req.body;
     try {
         const db = getDb();
@@ -73,7 +74,7 @@ router.post('/formats', authenticateToken, async (req, res) => {
         if (error.code === 'ER_DUP_ENTRY') {
             res.status(409).json({ message: 'Ya existe un formato con ese nombre' });
         } else {
-            res.status(500).json({ message: 'Error al crear formato de cheque', error: error.message });
+            sendSafeError(res, error, 'Error al crear formato de cheque');
         }
     }
 });
@@ -107,7 +108,7 @@ router.get('/formats/:id', authenticateToken, async (req, res) => {
 
         res.json(format);
     } catch (error) {
-        res.status(500).json({ message: 'Error al obtener formato de cheque', error: error.message });
+        sendSafeError(res, error, 'Error al obtener formato de cheque');
     }
 });
 
@@ -115,7 +116,7 @@ router.get('/formats/:id', authenticateToken, async (req, res) => {
  * @route PUT /api/check-designer/formats/:id
  * @desc Actualizar la configuración general de un formato de cheque (no el diseño JSON).
  */
-router.put('/formats/:id', authenticateToken, async (req, res) => {
+router.put('/formats/:id', authenticateToken, requirePermission(['manage_check_designer', '/dashboard/bancos/check-designer']), async (req, res) => {
     const { id } = req.params;
     const { name, banco_id, description, width, height, orientation, margin_top, margin_right, margin_bottom, margin_left, resolution, printer_name, is_active } = req.body;
     try {
@@ -162,7 +163,7 @@ router.put('/formats/:id', authenticateToken, async (req, res) => {
         if (error.code === 'ER_DUP_ENTRY') {
             res.status(409).json({ message: 'Ya existe un formato con ese nombre' });
         } else {
-            res.status(500).json({ message: 'Error al actualizar formato de cheque', error: error.message });
+            sendSafeError(res, error, 'Error al actualizar formato de cheque');
         }
     }
 });
@@ -171,7 +172,7 @@ router.put('/formats/:id', authenticateToken, async (req, res) => {
  * @route PATCH /api/check-designer/formats/:id/design
  * @desc Actualizar específicamente el diseño JSON de un formato.
  */
-router.patch('/formats/:id/design', authenticateToken, async (req, res) => {
+router.patch('/formats/:id/design', authenticateToken, requirePermission(['manage_check_designer', '/dashboard/bancos/check-designer']), async (req, res) => {
     const { id } = req.params;
     const { design_json } = req.body;
 
@@ -188,7 +189,7 @@ router.patch('/formats/:id/design', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Diseño del formato actualizado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al actualizar el diseño del formato', error: error.message });
+        sendSafeError(res, error, 'Error al actualizar el diseño del formato');
     }
 });
 
@@ -196,7 +197,7 @@ router.patch('/formats/:id/design', authenticateToken, async (req, res) => {
  * @route DELETE /api/check-designer/formats/:id
  * @desc Desactivar (borrado lógico) un formato de cheque.
  */
-router.delete('/formats/:id', authenticateToken, async (req, res) => {
+router.delete('/formats/:id', authenticateToken, requirePermission(['manage_check_designer', '/dashboard/bancos/check-designer']), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
@@ -208,7 +209,7 @@ router.delete('/formats/:id', authenticateToken, async (req, res) => {
         await db.query('UPDATE check_format SET is_active = FALSE WHERE id = ?', [id]);
         res.json({ message: 'Formato de cheque desactivado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al desactivar formato de cheque', error: error.message });
+        sendSafeError(res, error, 'Error al desactivar formato de cheque');
     }
 });
 
@@ -224,7 +225,7 @@ router.get('/calibrations', authenticateToken, async (req, res) => {
         const [calibrations] = await db.query('SELECT * FROM printer_calibration ORDER BY printer_name ASC');
         res.json(calibrations);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar calibraciones', error: error.message });
+        sendSafeError(res, error, 'Error al cargar calibraciones');
     }
 });
 
@@ -232,7 +233,7 @@ router.get('/calibrations', authenticateToken, async (req, res) => {
  * @route POST /api/check-designer/calibrations
  * @desc Crear o actualizar una calibración de impresora.
  */
-router.post('/calibrations', authenticateToken, async (req, res) => {
+router.post('/calibrations', authenticateToken, requirePermission(['manage_check_designer', '/dashboard/bancos/check-designer']), async (req, res) => {
     const { printer_name, offset_x, offset_y, scale } = req.body;
     try {
         const db = getDb();
@@ -247,7 +248,7 @@ router.post('/calibrations', authenticateToken, async (req, res) => {
 
         res.status(201).json({ message: 'Calibración guardada exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Error al guardar calibración', error: error.message });
+        sendSafeError(res, error, 'Error al guardar calibración');
     }
 });
 
@@ -269,7 +270,7 @@ router.get('/bancos', authenticateToken, async (req, res) => {
         );
         res.json(bancos);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar bancos', error: error.message });
+        sendSafeError(res, error, 'Error al cargar bancos');
     }
 });
 
