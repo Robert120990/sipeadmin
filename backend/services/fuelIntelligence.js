@@ -161,11 +161,11 @@ const getTanquesAutonomia = async () => {
         });
     });
 
-    // Ordenar primero los críticos, luego advertencias, luego por horas restantes ASC
+    // Ordenar por estación ASC y luego por nivel de ocupación ASC
     tanquesDetalle.sort((a, b) => {
-        const weight = { critico: 0, advertencia: 1, optimo: 2 };
-        if (weight[a.estado] !== weight[b.estado]) return weight[a.estado] - weight[b.estado];
-        return a.horas_restantes - b.horas_restantes;
+        const cmpEstacion = (a.estacion || '').localeCompare(b.estacion || '', 'es', { numeric: true });
+        if (cmpEstacion !== 0) return cmpEstacion;
+        return (a.porcentaje_ocupacion || 0) - (b.porcentaje_ocupacion || 0);
     });
 
     return {

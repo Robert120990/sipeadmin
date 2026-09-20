@@ -18,9 +18,10 @@ export default function EstrategiaCombustible() {
     const [simuladorData, setSimuladorData] = useState(null);
     const [calculandoSimulador, setCalculandoSimulador] = useState(false);
 
-    // Filtros
+    // Filtros y Orden
     const [filtroEstacion, setFiltroEstacion] = useState('todas');
     const [filtroTipo, setFiltroTipo] = useState('todos');
+    const [ordenNivel, setOrdenNivel] = useState('asc'); // 'asc' | 'desc'
 
     const fetchAutonomia = async () => {
         setLoadingAutonomia(true);
@@ -74,7 +75,17 @@ export default function EstrategiaCombustible() {
         return true;
     });
 
-    const estacionesUnicas = Array.from(new Set(tanques.map(t => JSON.stringify({ id: t.id_empresa, nombre: t.estacion })))).map(s => JSON.parse(s));
+    const tanquesOrdenados = [...tanquesFiltrados].sort((a, b) => {
+        const cmpEstacion = (a.estacion || '').localeCompare(b.estacion || '', 'es', { numeric: true });
+        if (cmpEstacion !== 0) return cmpEstacion;
+        const nivelA = Number(a.porcentaje_ocupacion || 0);
+        const nivelB = Number(b.porcentaje_ocupacion || 0);
+        return ordenNivel === 'desc' ? nivelB - nivelA : nivelA - nivelB;
+    });
+
+    const estacionesUnicas = Array.from(new Set(tanques.map(t => JSON.stringify({ id: t.id_empresa, nombre: t.estacion }))))
+        .map(s => JSON.parse(s))
+        .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es', { numeric: true }));
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', animation: 'fadeIn 0.3s ease-out' }}>
@@ -298,6 +309,17 @@ export default function EstrategiaCombustible() {
                             <option value="D">Diésel</option>
                             <option value="I">Ion Diésel</option>
                         </select>
+
+                        <select 
+                            value={ordenNivel} 
+                            onChange={(e) => setOrdenNivel(e.target.value)}
+                            className="form-control"
+                            style={{ height: '36px', fontSize: '0.825rem', width: 'auto' }}
+                            title="Ordenar por estación y luego por nivel de ocupación"
+                        >
+                            <option value="asc">Estación &rarr; Nivel (Menor a Mayor)</option>
+                            <option value="desc">Estación &rarr; Nivel (Mayor a Menor)</option>
+                        </select>
                     </div>
                 </div>
 
@@ -307,7 +329,13 @@ export default function EstrategiaCombustible() {
                             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'left', color: 'var(--text-muted)' }}>ESTACIÓN / TANQUE</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'left', color: 'var(--text-muted)' }}>PRODUCTO</th>
-                                <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'center', color: 'var(--text-muted)' }}>CAPACIDAD & OCUPACIÓN</th>
+                                <th 
+                                    style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'center', color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none' }}
+                                    onClick={() => setOrdenNivel(prev => prev === 'asc' ? 'desc' : 'asc')}
+                                    title="Clic para alternar orden por nivel (menor a mayor / mayor a menor)"
+                                >
+                                    CAPACIDAD & OCUPACIÓN {ordenNivel === 'asc' ? '↑' : '↓'}
+                                </th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>STOCK ACTUAL</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>ESPACIO LIBRE (ULLAGE)</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>CONSUMO DÍA</th>
@@ -322,14 +350,14 @@ export default function EstrategiaCombustible() {
                                         Cargando datos de tanques...
                                     </td>
                                 </tr>
-                            ) : tanquesFiltrados.length === 0 ? (
+                            ) : tanquesOrdenados.length === 0 ? (
                                 <tr>
                                     <td colSpan="8" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.825rem' }}>
                                         No se encontraron tanques con los filtros aplicados.
                                     </td>
                                 </tr>
                             ) : (
-                                tanquesFiltrados.map((t, idx) => {
+                                tanquesOrdenados.map((t, idx) => {
                                     const esCritico = t.estado === 'critico';
                                     const esAdvertencia = t.estado === 'advertencia';
 
