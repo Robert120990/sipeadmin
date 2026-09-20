@@ -131,8 +131,11 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Expr
     });
 });
 
-// Initialize DB and Start Server
+// Initialize DB, Schedulers and Start Server
+const { initBirthdayScheduler } = require('./services/birthdayNotifier');
+
 initDB().then(() => {
+    initBirthdayScheduler();
     server.listen(PORT, () => {
         console.log(`Server HTTP y Socket.io running on port ${PORT}`);
     });

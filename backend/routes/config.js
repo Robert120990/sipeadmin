@@ -137,4 +137,25 @@ router.post('/config/email/test', authenticateToken, requireRole('Administrator'
     }
 });
 
+// --- Trigger Birthday Report on Demand ---
+const { sendBirthdayNotification } = require('../services/birthdayNotifier');
+
+router.post('/config/email/birthday-report-now', authenticateToken, requireRole('Administrator'), async (req, res) => {
+    const { customRecipient, forceSendEmpty, sampleDate } = req.body;
+    try {
+        let targetDate = new Date();
+        if (sampleDate) {
+            targetDate = new Date(sampleDate);
+        }
+        const result = await sendBirthdayNotification({
+            customRecipient,
+            forceSendEmpty: forceSendEmpty !== undefined ? Boolean(forceSendEmpty) : true,
+            targetDate
+        });
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al procesar el envío del informe de cumpleañeros', 500);
+    }
+});
+
 module.exports = router;

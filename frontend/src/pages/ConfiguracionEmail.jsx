@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
-import { Mail, Save, Send } from 'lucide-react';
+import { Mail, Save, Send, Calendar, Clock } from 'lucide-react';
 
 export default function ConfiguracionEmail() {
     const { addToast } = useToast();
@@ -18,6 +18,7 @@ export default function ConfiguracionEmail() {
     const [testEmail, setTestEmail] = useState('');
     const [savingEmail, setSavingEmail] = useState(false);
     const [testingEmail, setTestingEmail] = useState(false);
+    const [sendingReport, setSendingReport] = useState(false);
 
     useEffect(() => {
         fetchConfig();
@@ -69,6 +70,26 @@ export default function ConfiguracionEmail() {
         }
     };
 
+    const handleBirthdayReportTest = async () => {
+        const target = testEmail || emailConfig.office_email;
+        if (!target) {
+            addToast('Configure el correo de oficina o ingrese un destinatario para probar el informe', 'error');
+            return;
+        }
+        setSendingReport(true);
+        try {
+            const res = await api.post('/config/email/birthday-report-now', {
+                customRecipient: target,
+                forceSendEmpty: true
+            });
+            addToast(res.data.message || 'Informe de cumpleañeros enviado', 'success');
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al enviar informe de cumpleañeros', 'error');
+        } finally {
+            setSendingReport(false);
+        }
+    };
+
     if (loading) return <div className="p-8 text-center text-muted">Cargando configuración...</div>;
 
     return (
@@ -78,7 +99,7 @@ export default function ConfiguracionEmail() {
                 <div>
                     <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>Configuración de Correo</h1>
                     <p style={{ color: 'var(--text-muted)', margin: 0, fontSize: '0.8rem' }}>
-                        Credenciales SMTP y dirección de correo de oficina para notificaciones y alertas.
+                        Credenciales SMTP y dirección de correo de oficina para notificaciones y alertas automáticas.
                     </p>
                 </div>
             </div>
@@ -159,7 +180,7 @@ export default function ConfiguracionEmail() {
                                 style={{ height: '36px', fontSize: '0.825rem' }}
                             />
                             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                Correo principal de la oficina para recepción de copias y reportes.
+                                Correo principal de la oficina donde se enviarán los reportes diarios.
                             </span>
                         </div>
                         <div className="span-2" style={{ display: 'flex', alignItems: 'center', marginTop: '0.25rem' }}>
@@ -206,6 +227,37 @@ export default function ConfiguracionEmail() {
                         </button>
                     </div>
                 </form>
+            </div>
+
+            {/* Daily Birthday Report Card */}
+            <div className="card glass shadow-sm" style={{ padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                    <Calendar size={18} color="var(--primary, #3b82f6)" />
+                    <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>Informe Automático de Cumpleañeros</h3>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    <Clock size={15} color="#10b981" />
+                    <span>
+                        Horario programado: <strong>Todos los días a las 8:00 AM</strong> (Hora El Salvador / Centroamérica).
+                    </span>
+                </div>
+                <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    El sistema consulta automáticamente la nómina activa de empleados de la base de datos de contabilidad. Si existen colaboradores cumpliendo años en el día, se genera y envía un informe detallado con sus nombres, empresa y departamento al <strong>Correo de Oficina</strong> configurado. Si no hay cumpleañeros, el envío se omite automáticamente para no saturar la bandeja de entrada.
+                </p>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.25rem', flexWrap: 'wrap' }}>
+                    <button 
+                        type="button" 
+                        className="btn-secondary" 
+                        onClick={handleBirthdayReportTest} 
+                        disabled={sendingReport}
+                        style={{ height: '36px', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.825rem', padding: '0 1rem' }}
+                    >
+                        <Send size={15} /> {sendingReport ? 'Enviando Informe...' : 'Probar Envío de Informe Ahora'}
+                    </button>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {emailConfig.office_email ? `Se enviará a: ${emailConfig.office_email}` : 'Configure primero el Correo de Oficina arriba.'}
+                    </span>
+                </div>
             </div>
         </div>
     );
