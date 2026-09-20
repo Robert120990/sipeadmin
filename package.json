@@ -5,6 +5,8 @@
   "scripts": {
     "build": "pnpm --filter frontend run build",
     "build:all": "pnpm install && pnpm --filter frontend run build",
+    "lint": "pnpm --filter frontend run lint && pnpm --filter backend run lint",
+    "test": "pnpm --filter backend test",
     "deploy": "node deploy.js"
   }
 }

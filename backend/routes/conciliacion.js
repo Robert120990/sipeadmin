@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 const toDisplayDate = (dateVal) => {
     if (!dateVal) return null;
@@ -154,25 +155,6 @@ router.get('/data', authenticateToken, async (req, res) => {
         const dbDesde = desde ? toDBDate(desde) : '2000-01-01';
         const dbHasta = hasta ? toDBDate(hasta) : '2099-12-31';
 
-        // Asegurar que la tabla validaciones_saldo_banco exista
-        try {
-            await withRetry(() => db.query(`
-                CREATE TABLE IF NOT EXISTS validaciones_saldo_banco (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    cuenta_bancaria_id INT NOT NULL,
-                    fecha_validacion DATETIME NOT NULL,
-                    monto_banco DECIMAL(14,2) NOT NULL DEFAULT 0,
-                    saldo_chequera DECIMAL(14,2) DEFAULT 0,
-                    diferencia DECIMAL(14,2) DEFAULT 0,
-                    notas TEXT,
-                    created_by INT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE CASCADE,
-                    INDEX idx_cta_fecha (cuenta_bancaria_id, fecha_validacion)
-                )
-            `));
-        } catch (e) { /* ignore if already exists */ }
-
         // 2. Última validación registrada para la cuenta
         let ultimaValidacion = null;
         try {
@@ -304,8 +286,7 @@ router.get('/data', authenticateToken, async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Error al obtener datos de conciliación:', error);
-        res.status(500).json({ message: 'Error al consultar conciliación', error: error.message });
+        sendSafeError(res, error, 'Error al consultar conciliación');
     }
 });
 

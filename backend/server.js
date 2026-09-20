@@ -69,11 +69,45 @@ app.use('/api/ai', aiRoutes);
 app.use('/api', bitacoraRoutes);
 app.use('/api/check-designer', checkDesignerRoutes);
 
-// Health Check
-app.get('/api/debug-ping', (req, res) => res.json({ message: 'pong' }));
+const rateLimit = require('express-rate-limit');
+const { authenticateToken, requireRole } = require('./middleware/auth');
 
-// DB diagnostic endpoint (no auth required)
-app.get('/api/debug-db', async (req, res) => {
+// Rate limiting general para la API (300 req / min por IP)
+const apiLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Demasiadas solicitudes desde esta IP, por favor intente nuevamente en un momento.' }
+});
+app.use('/api/', apiLimiter);
+
+// Rate limiting estricto para Login (10 intentos / 15 min por IP)
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Demasiados intentos fallidos de inicio de sesión. Por favor espere 15 minutos.' }
+});
+app.use('/api/login', loginLimiter);
+
+// Rate limiting para endpoints de Inteligencia Artificial (20 req / min por IP)
+const aiLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Límite de consultas de IA alcanzado por este minuto. Intente de nuevo en breve.' }
+});
+app.use('/api/ai/', aiLimiter);
+app.use('/api/finanzas/chat', aiLimiter);
+
+// Health Check público
+app.get('/api/debug-ping', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+
+// Endpoint de diagnóstico protegido (solo administradores autenticados)
+app.get('/api/debug-db', authenticateToken, requireRole('Administrator'), async (req, res) => {
     try {
         const { getDb } = require('./db');
         const db = getDb();
@@ -81,14 +115,19 @@ app.get('/api/debug-db', async (req, res) => {
         const [rows] = await db.query('SELECT 1 AS test');
         res.json({ ok: true, result: rows[0] });
     } catch (e) {
-        res.json({ ok: false, error: e.message, code: e.code });
+        console.error('Debug DB Error:', e.message);
+        res.status(500).json({ ok: false, message: 'Fallo en comprobación de base de datos' });
     }
 });
 
-// Global error handler
+// Global error handler sanitizado
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Express requires 4 args to detect error handlers
     console.error('Unhandled error:', err);
-    res.status(err.status || 500).json({ message: err.message || 'Error interno del servidor' });
+    const isDev = process.env.NODE_ENV !== 'production';
+    res.status(err.status || 500).json({ 
+        message: err.userMessage || 'Error interno del servidor',
+        ...(isDev && err.message ? { debug: err.message } : {})
+    });
 });
 
 // Initialize DB and Start Server

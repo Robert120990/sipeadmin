@@ -2,20 +2,21 @@ const express = require('express');
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const { getDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireRole } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 // --- External Database Configuration ---
-router.get('/config', authenticateToken, async (req, res) => {
+router.get('/config', authenticateToken, requireRole('Administrator'), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
         res.json(rows[0] || {});
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al consultar configuración');
     }
 });
 
-router.post('/config', authenticateToken, async (req, res) => {
+router.post('/config', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { host, user, password, database_name, port } = req.body;
     try {
         const db = getDb();
@@ -37,20 +38,22 @@ router.post('/config', authenticateToken, async (req, res) => {
         }
         res.json({ message: 'Configuración guardada y conexión exitosa' });
     } catch (error) {
-        res.status(400).json({ message: `Error de conexión: ${error.message}` });
+        sendSafeError(res, error, 'Error al guardar configuración de base de datos principal', 400);
     }
 });
 
 // --- Accounting Database Configuration ---
-router.get('/accounting-config', authenticateToken, async (req, res) => {
+router.get('/accounting-config', authenticateToken, requireRole('Administrator'), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
         res.json(rows[0] || {});
-    } catch (error) { res.status(500).json({ message: 'Server error' }); }
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar configuración de contabilidad');
+    }
 });
 
-router.post('/accounting-config', authenticateToken, async (req, res) => {
+router.post('/accounting-config', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { host, user, password, database_name, port } = req.body;
     try {
         const db = getDb();
@@ -64,20 +67,24 @@ router.post('/accounting-config', authenticateToken, async (req, res) => {
         } else {
             await db.query("INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, ?, ?, 'accounting')", [host, user, password, database_name, port || 3306]);
         }
-        res.json({ message: 'Configuración de contabilidad guardada' });
-    } catch (error) { res.status(400).json({ message: `Error de conexión contabilidad: ${error.message}` }); }
+        res.json({ message: 'Configuración de contabilidad guardada y probada exitosamente' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al conectar con la base de datos de contabilidad', 400);
+    }
 });
 
 // --- Email Configuration ---
-router.get('/config/email', authenticateToken, async (req, res) => {
+router.get('/config/email', authenticateToken, requireRole('Administrator'), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query("SELECT * FROM email_configs ORDER BY created_at DESC LIMIT 1");
         res.json(rows[0] || {});
-    } catch (error) { res.status(500).json({ message: 'Server error' }); }
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar configuración de email');
+    }
 });
 
-router.post('/config/email', authenticateToken, async (req, res) => {
+router.post('/config/email', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { host, port, secure, user, password, from_address } = req.body;
     try {
         const db = getDb();
@@ -87,11 +94,13 @@ router.post('/config/email', authenticateToken, async (req, res) => {
         } else {
             await db.query("INSERT INTO email_configs (host, port, secure, user, password, from_address) VALUES (?, ?, ?, ?, ?, ?)", [host, port, secure, user, password, from_address]);
         }
-        res.json({ message: 'Configuración de email guardada' });
-    } catch (error) { res.status(500).json({ message: 'Error al guardar configuración de email' }); }
+        res.json({ message: 'Configuración de email guardada exitosamente' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al guardar configuración de email');
+    }
 });
 
-router.post('/config/email/test', authenticateToken, async (req, res) => {
+router.post('/config/email/test', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { host, port, secure, user, password, from_address, to_email } = req.body;
     try {
         const transporter = nodemailer.createTransport({
@@ -114,7 +123,7 @@ router.post('/config/email/test', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Conexión exitosa y correo enviado' });
     } catch (error) {
-        res.status(400).json({ message: `Error SMTP: ${error.message}` });
+        sendSafeError(res, error, 'Fallo en la prueba de conexión SMTP', 400);
     }
 });
 

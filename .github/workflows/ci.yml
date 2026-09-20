@@ -1,0 +1,41 @@
+name: CI & Quality Assurance
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Run Backend Lint
+        run: pnpm --filter backend run lint
+
+      - name: Run Frontend Lint
+        run: pnpm --filter frontend run lint
+
+      - name: Run Backend Automated Tests
+        run: pnpm --filter backend test
+
+      - name: Test Frontend Production Build
+        run: pnpm --filter frontend run build

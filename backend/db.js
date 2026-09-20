@@ -4,22 +4,6 @@ const dotenv = require('dotenv');
 dotenv.config(); // Standard config works better across environments
 
 const getDbConfig = () => {
-    const config = {
-        host: process.env.DB_HOST || '207.244.251.167',
-        user: process.env.DB_USER || 'sysadmin',
-        password: process.env.DB_PASSWORD || 'QwErTy123',
-        database: process.env.DB_NAME || 'db_sipe_admin',
-        port: parseInt(process.env.DB_PORT || '3306'),
-        connectTimeout: 10000,
-        waitForConnections: true,
-        connectionLimit: 10,
-        maxIdle: 5,
-        idleTimeout: 30000,
-        enableKeepAlive: true,
-        keepAliveInitialDelay: 10000,
-        timezone: 'Z'
-    };
-
     if (process.env.DATABASE_URL) {
         try {
             const url = new URL(process.env.DATABASE_URL);
@@ -42,7 +26,26 @@ const getDbConfig = () => {
             console.error('Error parsing DATABASE_URL:', e);
         }
     }
-    return config;
+
+    if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL && !process.env.DB_HOST) {
+        throw new Error('FATAL: Database configuration missing. DATABASE_URL or DB_HOST must be provided in production.');
+    }
+
+    return {
+        host: process.env.DB_HOST || '127.0.0.1',
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_NAME || 'db_sipe_admin',
+        port: parseInt(process.env.DB_PORT || '3306'),
+        connectTimeout: 10000,
+        waitForConnections: true,
+        connectionLimit: 10,
+        maxIdle: 5,
+        idleTimeout: 30000,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10000,
+        timezone: 'Z'
+    };
 };
 
 const dbConfig = getDbConfig();
@@ -324,6 +327,133 @@ const initDB = async () => {
             );
         `);
 
+        // Tabla de validaciones de saldo de banco (Conciliación)
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS validaciones_saldo_banco (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cuenta_bancaria_id INT NOT NULL,
+                fecha_validacion DATETIME NOT NULL,
+                monto_banco DECIMAL(14,2) NOT NULL DEFAULT 0,
+                saldo_chequera DECIMAL(14,2) DEFAULT 0,
+                diferencia DECIMAL(14,2) DEFAULT 0,
+                notas TEXT,
+                created_by INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE CASCADE,
+                INDEX idx_cta_fecha (cuenta_bancaria_id, fecha_validacion)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        // Tablas del módulo de Finanzas
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS prestamos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                banco_id INT NULL,
+                cuenta_bancaria_id INT NULL,
+                numero_prestamo VARCHAR(50) NOT NULL UNIQUE,
+                descripcion VARCHAR(255) NOT NULL,
+                monto_original DECIMAL(14,2) NOT NULL,
+                tasa_interes_anual DECIMAL(6,3) NOT NULL,
+                plazo_meses INT NOT NULL,
+                frecuencia_pago VARCHAR(20) DEFAULT 'mensual',
+                fecha_inicio DATE NOT NULL,
+                fecha_primer_pago DATE NOT NULL,
+                cuota_calculada DECIMAL(14,2) NOT NULL,
+                seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                seguro_valor DECIMAL(10,4) DEFAULT 0,
+                seguro_cuota DECIMAL(10,2) DEFAULT 0,
+                ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
+                ahorro_valor DECIMAL(10,4) DEFAULT 0,
+                ahorro_cuota DECIMAL(10,2) DEFAULT 0,
+                cuota_total DECIMAL(14,2) DEFAULT 0,
+                comision_tipo VARCHAR(30) DEFAULT 'none',
+                comision_valor DECIMAL(10,4) DEFAULT 0,
+                comision_monto DECIMAL(14,2) DEFAULT 0,
+                monto_neto_desembolsado DECIMAL(14,2) DEFAULT 0,
+                dias_gracia INT DEFAULT 0,
+                estado VARCHAR(20) DEFAULT 'activo',
+                notas TEXT,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_empresa_estado (empresa_id, estado)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        try { await pool.query("ALTER TABLE prestamos ADD COLUMN comision_tipo VARCHAR(30) DEFAULT 'none'"); } catch(e) { /* existe */ }
+        try { await pool.query("ALTER TABLE prestamos ADD COLUMN comision_valor DECIMAL(10,4) DEFAULT 0"); } catch(e) { /* existe */ }
+        try { await pool.query("ALTER TABLE prestamos ADD COLUMN comision_monto DECIMAL(14,2) DEFAULT 0"); } catch(e) { /* existe */ }
+        try { await pool.query("ALTER TABLE prestamos ADD COLUMN monto_neto_desembolsado DECIMAL(14,2) DEFAULT 0"); } catch(e) { /* existe */ }
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS prestamos_pagos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                prestamo_id INT NOT NULL,
+                numero_cuota INT NULL,
+                fecha_pago DATE NOT NULL,
+                tipo_pago VARCHAR(30) DEFAULT 'cuota_normal',
+                monto_total DECIMAL(14,2) NOT NULL,
+                monto_capital DECIMAL(14,2) NOT NULL,
+                monto_interes DECIMAL(14,2) DEFAULT 0,
+                monto_seguro DECIMAL(10,2) DEFAULT 0,
+                monto_ahorro DECIMAL(10,2) DEFAULT 0,
+                monto_otros DECIMAL(10,2) DEFAULT 0,
+                saldo_restante DECIMAL(14,2) NOT NULL,
+                numero_comprobante VARCHAR(50) NULL,
+                cuenta_origen_id INT NULL,
+                notas TEXT,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (prestamo_id) REFERENCES prestamos(id) ON DELETE CASCADE,
+                INDEX idx_prestamo_fecha (prestamo_id, fecha_pago)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS finanzas_proyectos_inversion (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                nombre VARCHAR(150) NOT NULL,
+                descripcion TEXT,
+                inversion_inicial DECIMAL(14,2) NOT NULL,
+                tasa_descuento DECIMAL(6,3) DEFAULT 10.0,
+                duracion_anos INT NOT NULL,
+                flujos_anuales JSON,
+                van DECIMAL(14,2) DEFAULT 0,
+                tir DECIMAL(6,3) DEFAULT 0,
+                payback_anos DECIMAL(5,2) DEFAULT 0,
+                roi DECIMAL(6,3) DEFAULT 0,
+                estado VARCHAR(20) DEFAULT 'en_evaluacion',
+                notas TEXT,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_empresa_inversion (empresa_id, estado)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS finanzas_planes_mantenimiento (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                empresa_id INT NOT NULL,
+                nombre VARCHAR(150) NOT NULL,
+                categoria VARCHAR(50) DEFAULT 'equipo',
+                costo_estimado DECIMAL(14,2) NOT NULL,
+                frecuencia VARCHAR(20) DEFAULT 'anual',
+                fecha_programada DATE NOT NULL,
+                fecha_completado DATE NULL,
+                estado VARCHAR(20) DEFAULT 'pendiente',
+                responsable VARCHAR(100),
+                proveedor VARCHAR(100),
+                notas TEXT,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_empresa_mantenimiento (empresa_id, estado, fecha_programada)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
         // Seed initial data
         const [roles] = await pool.query('SELECT * FROM roles WHERE name = "Administrator"');
         if (roles.length === 0) {
@@ -602,14 +732,14 @@ const getAccountingDb = async () => {
     }
     
     const config = (configs && configs.length > 0) ? configs[0] : {
-        host: process.env.DB_HOST || '207.244.251.167',
-        user: process.env.DB_USER || 'sysadmin',
-        password: process.env.DB_PASSWORD || 'QwErTy123',
-        database_name: 'db_sytem_rrs_conta',
-        database: 'db_sytem_rrs_conta',
-        port: 3306
+        host: process.env.DB_HOST || '127.0.0.1',
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        database_name: 'db_sistema_saas',
+        database: 'db_sistema_saas',
+        port: parseInt(process.env.DB_PORT || '3306')
     };
-    const dbName = config.database_name || config.database || 'db_sytem_rrs_conta';
+    const dbName = config.database_name || config.database || 'db_sistema_saas';
     const poolKey = `accounting:${config.host}:${config.port || 3306}:${dbName}:${config.user}`;
     
     let externalDb = externalPools[poolKey];
@@ -634,4 +764,24 @@ const getAccountingDb = async () => {
     return externalDb;
 };
 
-module.exports = { initDB, getDb, getExternalDb, getAccountingDb, withRetry };
+/**
+ * Helper para ejecutar operaciones multi-tabla dentro de una transacción gestionada
+ */
+const withTransaction = async (callback) => {
+    const mainPool = getDb();
+    if (!mainPool) throw new Error('Database pool not initialized');
+    const connection = await mainPool.getConnection();
+    try {
+        await connection.beginTransaction();
+        const result = await callback(connection);
+        await connection.commit();
+        return result;
+    } catch (err) {
+        await connection.rollback();
+        throw err;
+    } finally {
+        connection.release();
+    }
+};
+
+module.exports = { initDB, getDb, getExternalDb, getAccountingDb, withRetry, withTransaction };

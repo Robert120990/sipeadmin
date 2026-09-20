@@ -5,42 +5,45 @@ import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu } from '../config/navigation';
 
-// Import All Page Components for Tab Rendering
-import Dashboard from './Dashboard';
-import Users from './Users';
-import Carriers from './Carriers';
-import Tankers from './Tankers';
-import Consultas from './Consultas';
-import VentasEstaciones from './VentasEstaciones';
-import Lubricantes from './Lubricantes';
-import ResumenPista from './ResumenPista';
-import DiferenciasCombustible from './DiferenciasCombustible';
-import PreciosEstacion from './PreciosEstacion';
-import ConsultasPreciosCompetencia from './ConsultasPreciosCompetencia';
-import PedidosCombustible from './PedidosCombustible';
-import ControlRecordatorios from './ControlRecordatorios';
-import Permissions from './Permissions';
-import CuentasBancarias from './CuentasBancarias';
-import ConfiguracionDb from './ConfiguracionDb';
-import ConfiguracionEmail from './ConfiguracionEmail';
-import ConfiguracionContabilidad from './ConfiguracionContabilidad';
-import ConsultasCumpleanos from './ConsultasCumpleanos';
-import MovimientosBancarios from './MovimientosBancarios';
-import ConciliacionBancaria from './ConciliacionBancaria';
-import Cheques from './Cheques';
-import ChequesContado from './ChequesContado';
-import CheckDesigner from './CheckDesigner';
-import ImpresionCheques from './ImpresionCheques';
-import ReporteChequesFecha from './ReporteChequesFecha';
-import ReporteMovimientosFecha from './ReporteMovimientosFecha';
-import BackupDBCheck from './BackupDBCheck';
-import Bitacora from './Bitacora';
-import FinanzasPrestamos from './FinanzasPrestamos';
-import FinanzasCalculadora from './FinanzasCalculadora';
-import FinanzasInversiones from './FinanzasInversiones';
-import FinanzasPlanesMantenimiento from './FinanzasPlanesMantenimiento';
-import FinanzasAsesor from './FinanzasAsesor';
-import FinanzasResumen from './FinanzasResumen';
+// Import All Page Components for Tab Rendering (Code-split with lazy)
+import LoadingFallback from '../components/LoadingFallback';
+import {
+    Dashboard,
+    Users,
+    Carriers,
+    Tankers,
+    Consultas,
+    VentasEstaciones,
+    Lubricantes,
+    ResumenPista,
+    DiferenciasCombustible,
+    PreciosEstacion,
+    ConsultasPreciosCompetencia,
+    PedidosCombustible,
+    ControlRecordatorios,
+    Permissions,
+    CuentasBancarias,
+    ConfiguracionDb,
+    ConfiguracionEmail,
+    ConfiguracionContabilidad,
+    ConsultasCumpleanos,
+    MovimientosBancarios,
+    ConciliacionBancaria,
+    Cheques,
+    ChequesContado,
+    CheckDesigner,
+    ImpresionCheques,
+    ReporteChequesFecha,
+    ReporteMovimientosFecha,
+    BackupDBCheck,
+    Bitacora,
+    FinanzasPrestamos,
+    FinanzasCalculadora,
+    FinanzasInversiones,
+    FinanzasPlanesMantenimiento,
+    FinanzasAsesor,
+    FinanzasResumen
+} from './lazyPages';
 import pkg from '../../package.json';
 
 export default function DashboardLayout() {
@@ -69,6 +72,25 @@ export default function DashboardLayout() {
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard }
     ]);
     const [activeTabPath, setActiveTabPath] = useState('/dashboard');
+    const [mountedTabPaths, setMountedTabPaths] = useState(() => new Set(['/dashboard']));
+
+    // Defer tab DOM rendering: keep active tab mounted and limit memory to max 8 concurrent tabs
+    useEffect(() => {
+        setMountedTabPaths(prev => {
+            if (prev.has(activeTabPath)) return prev;
+            const next = new Set(prev);
+            if (next.size >= 8) {
+                for (const p of next) {
+                    if (p !== activeTabPath && p !== '/dashboard') {
+                        next.delete(p);
+                        break;
+                    }
+                }
+            }
+            next.add(activeTabPath);
+            return next;
+        });
+    }, [activeTabPath]);
 
     // Mobile UI State
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -197,6 +219,13 @@ export default function DashboardLayout() {
 
         const newTabs = tabs.filter(t => t.path !== path);
         setTabs(newTabs);
+
+        setMountedTabPaths(prev => {
+            if (!prev.has(path)) return prev;
+            const next = new Set(prev);
+            next.delete(path);
+            return next;
+        });
 
         if (activeTabPath === path) {
             const nextTab = newTabs[newTabs.length - 1] || { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard };
@@ -485,22 +514,31 @@ export default function DashboardLayout() {
 
     const renderContent = () => (
         <div className="tab-content-container">
-            {tabs.map(tab => (
-                <div 
-                    key={tab.path} 
-                    className={`tab-panel ${activeTabPath === tab.path ? 'active' : ''}`}
-                >
-                    {hasPermission(tab.path) || tab.path === '/dashboard' ? (
-                        componentRegistry[tab.path] || <div className="card glass">Módulo no registrado: {tab.path}</div>
-                    ) : (
-                        <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
-                            <Shield size={48} color="var(--danger)" style={{ marginBottom: '1rem' }} />
-                            <h2>Acceso Restringido</h2>
-                            <p>No tiene permisos suficientes para ver el módulo {tab.path}.</p>
-                        </div>
-                    )}
-                </div>
-            ))}
+            {tabs.map(tab => {
+                const isCurrent = activeTabPath === tab.path;
+                const isMounted = mountedTabPaths.has(tab.path) || isCurrent;
+
+                return (
+                    <div 
+                        key={tab.path} 
+                        className={`tab-panel ${isCurrent ? 'active' : ''}`}
+                    >
+                        {isMounted ? (
+                            <React.Suspense fallback={<LoadingFallback message={`Cargando ${tab.name}...`} />}>
+                                {hasPermission(tab.path) || tab.path === '/dashboard' ? (
+                                    componentRegistry[tab.path] || <div className="card glass">Módulo no registrado: {tab.path}</div>
+                                ) : (
+                                    <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
+                                        <Shield size={48} color="var(--danger)" style={{ marginBottom: '1rem' }} />
+                                        <h2>Acceso Restringido</h2>
+                                        <p>No tiene permisos suficientes para ver el módulo {tab.path}.</p>
+                                    </div>
+                                )}
+                            </React.Suspense>
+                        ) : null}
+                    </div>
+                );
+            })}
         </div>
     );
 

@@ -1,158 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const { GoogleGenAI } = require('@google/genai');
-const { getDb } = require('../db');
+const { getDb, withTransaction } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 // --- Helper Functions ---
-let tablesEnsured = false;
-const ensureFinanzasTables = async (db) => {
-    if (tablesEnsured) return;
-    try {
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS prestamos (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                empresa_id INT NOT NULL,
-                banco_id INT NULL,
-                cuenta_bancaria_id INT NULL,
-                numero_prestamo VARCHAR(50) NOT NULL UNIQUE,
-                descripcion VARCHAR(255) NOT NULL,
-                monto_original DECIMAL(14,2) NOT NULL,
-                tasa_interes_anual DECIMAL(6,3) NOT NULL,
-                plazo_meses INT NOT NULL,
-                frecuencia_pago VARCHAR(20) DEFAULT 'mensual',
-                fecha_inicio DATE NOT NULL,
-                fecha_primer_pago DATE NOT NULL,
-                cuota_calculada DECIMAL(14,2) NOT NULL,
-                seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
-                seguro_valor DECIMAL(10,4) DEFAULT 0,
-                seguro_cuota DECIMAL(10,2) DEFAULT 0,
-                ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
-                ahorro_valor DECIMAL(10,4) DEFAULT 0,
-                ahorro_cuota DECIMAL(10,2) DEFAULT 0,
-                cuota_total DECIMAL(14,2) DEFAULT 0,
-                comision_tipo VARCHAR(30) DEFAULT 'none',
-                comision_valor DECIMAL(10,4) DEFAULT 0,
-                comision_monto DECIMAL(14,2) DEFAULT 0,
-                monto_neto_desembolsado DECIMAL(14,2) DEFAULT 0,
-                dias_gracia INT DEFAULT 0,
-                estado VARCHAR(20) DEFAULT 'activo',
-                notas TEXT,
-                created_by INT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_empresa_estado (empresa_id, estado)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        `);
-
-        try { await db.query("ALTER TABLE prestamos ADD COLUMN comision_tipo VARCHAR(30) DEFAULT 'none'"); } catch(e) { /* column exists */ }
-        try { await db.query("ALTER TABLE prestamos ADD COLUMN comision_valor DECIMAL(10,4) DEFAULT 0"); } catch(e) { /* column exists */ }
-        try { await db.query("ALTER TABLE prestamos ADD COLUMN comision_monto DECIMAL(14,2) DEFAULT 0"); } catch(e) { /* column exists */ }
-        try { await db.query("ALTER TABLE prestamos ADD COLUMN monto_neto_desembolsado DECIMAL(14,2) DEFAULT 0"); } catch(e) { /* column exists */ }
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS prestamos_pagos (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                prestamo_id INT NOT NULL,
-                numero_cuota INT NULL,
-                fecha_pago DATE NOT NULL,
-                tipo_pago ENUM('regular', 'capital_extra', 'cancelacion_total') DEFAULT 'regular',
-                monto_total DECIMAL(14,2) NOT NULL,
-                monto_capital DECIMAL(14,2) NOT NULL,
-                monto_interes DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                monto_seguro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                monto_ahorro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                monto_otros DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                saldo_restante DECIMAL(14,2) NOT NULL,
-                numero_comprobante VARCHAR(50) NULL,
-                cuenta_origen_id INT NULL,
-                notas TEXT,
-                created_by INT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_prestamo_fecha (prestamo_id, fecha_pago)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        `);
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS finanzas_proyectos_inversion (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                empresa_id INT NOT NULL,
-                nombre_proyecto VARCHAR(150) NOT NULL,
-                descripcion TEXT,
-                categoria VARCHAR(50) DEFAULT 'general',
-                inversion_inicial DECIMAL(14,2) NOT NULL,
-                tasa_descuento DECIMAL(6,3) NOT NULL DEFAULT 10.000,
-                plazo_anios INT NOT NULL DEFAULT 5,
-                valor_residual DECIMAL(14,2) DEFAULT 0.00,
-                roi_estimado DECIMAL(8,2) DEFAULT 0.00,
-                vpn_estimado DECIMAL(14,2) DEFAULT 0.00,
-                tir_estimada DECIMAL(8,2) NULL,
-                payback_meses DECIMAL(8,2) DEFAULT 0.00,
-                payback_descontado_meses DECIMAL(8,2) DEFAULT 0.00,
-                relacion_bc DECIMAL(8,2) DEFAULT 0.00,
-                flujos_json JSON NULL,
-                estado VARCHAR(30) DEFAULT 'evaluacion',
-                created_by INT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_proyecto_empresa (empresa_id, estado)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        `);
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS finanzas_planes_mantenimiento (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                empresa_id INT NOT NULL,
-                nombre_activo VARCHAR(150) NOT NULL,
-                tipo_activo VARCHAR(80) NOT NULL,
-                costo_estimado DECIMAL(14,2) NOT NULL,
-                tipo_gasto VARCHAR(30) DEFAULT 'preventivo',
-                frecuencia VARCHAR(30) DEFAULT 'anual',
-                fecha_programada DATE NOT NULL,
-                fecha_ejecutada DATE NULL,
-                responsable VARCHAR(120) NULL,
-                proveedor VARCHAR(150) NULL,
-                criticidad VARCHAR(20) DEFAULT 'media',
-                estado VARCHAR(30) DEFAULT 'programado',
-                notas TEXT NULL,
-                created_by INT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_mantenimiento_empresa (empresa_id, estado, fecha_programada)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        `);
-
-        try {
-            const [cols] = await db.query("SHOW COLUMNS FROM prestamos LIKE 'seguro_tipo'");
-            if (cols.length === 0) {
-                await db.query(`
-                    ALTER TABLE prestamos
-                    ADD COLUMN seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
-                    ADD COLUMN seguro_valor DECIMAL(10,4) DEFAULT 0,
-                    ADD COLUMN seguro_cuota DECIMAL(10,2) DEFAULT 0,
-                    ADD COLUMN ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
-                    ADD COLUMN ahorro_valor DECIMAL(10,4) DEFAULT 0,
-                    ADD COLUMN ahorro_cuota DECIMAL(10,2) DEFAULT 0,
-                    ADD COLUMN cuota_total DECIMAL(14,2) DEFAULT 0
-                `);
-            }
-            const [pCols] = await db.query("SHOW COLUMNS FROM prestamos_pagos LIKE 'monto_seguro'");
-            if (pCols.length === 0) {
-                await db.query(`
-                    ALTER TABLE prestamos_pagos
-                    ADD COLUMN monto_seguro DECIMAL(14,2) DEFAULT 0.00 AFTER monto_interes,
-                    ADD COLUMN monto_ahorro DECIMAL(14,2) DEFAULT 0.00 AFTER monto_seguro
-                `);
-            }
-        } catch (colErr) {
-            console.warn('Migration columns check in finanzas:', colErr.message);
-        }
-
-        tablesEnsured = true;
-    } catch (err) {
-        console.error('ensureFinanzasTables error:', err);
-    }
-};
+// Las tablas se inicializan centralmente en initDB() al arrancar el servidor
+const ensureFinanzasTables = async () => {};
 
 const calculatePMT = (principal, annualRate, termMonths, frequency = 'mensual') => {
     const P = parseFloat(principal);
@@ -179,7 +34,6 @@ const calculatePMT = (principal, annualRate, termMonths, frequency = 'mensual') 
 router.get('/catalogos', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
-        await ensureFinanzasTables(db);
         const [empresas] = await db.query('SELECT id, codigo, nombre FROM empresas ORDER BY nombre ASC');
         const [bancos] = await db.query('SELECT id, empresa_id, codigo, descripcion FROM bancos ORDER BY descripcion ASC');
         const [cuentas] = await db.query(`
@@ -202,7 +56,6 @@ router.get('/prestamos', authenticateToken, async (req, res) => {
     const { empresa_id, estado, search } = req.query;
     try {
         const db = getDb();
-        await ensureFinanzasTables(db);
         let query = `
             SELECT 
                 p.*,
@@ -283,7 +136,6 @@ router.get('/prestamos/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
-        await ensureFinanzasTables(db);
         const [rows] = await db.query(`
             SELECT 
                 p.*,
@@ -397,7 +249,6 @@ router.post('/prestamos', authenticateToken, async (req, res) => {
 
     try {
         const db = getDb();
-        await ensureFinanzasTables(db);
         const cuota = parseFloat(cuota_calculada) || calculatePMT(monto_original, tasa_interes_anual, plazo_meses, frecuencia_pago);
         const segCuota = parseFloat(seguro_cuota) || 0;
         const ahorrCuota = parseFloat(ahorro_cuota) || 0;
@@ -495,7 +346,6 @@ router.put('/prestamos/:id', authenticateToken, async (req, res) => {
 
     try {
         const db = getDb();
-        await ensureFinanzasTables(db);
         const cuota = parseFloat(cuota_calculada) || calculatePMT(monto_original, tasa_interes_anual, plazo_meses, frecuencia_pago);
         const segCuota = parseFloat(seguro_cuota) || 0;
         const ahorrCuota = parseFloat(ahorro_cuota) || 0;
@@ -581,7 +431,6 @@ router.delete('/prestamos/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
-        await ensureFinanzasTables(db);
         // Check if has payments
         const [pagos] = await db.query('SELECT id FROM prestamos_pagos WHERE prestamo_id = ?', [id]);
         if (pagos.length > 0) {
@@ -616,64 +465,72 @@ router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
         notas
     } = req.body;
 
-    if (!fecha_pago || !monto_total || parseFloat(monto_total) <= 0 || !monto_capital || parseFloat(monto_capital) <= 0) {
+    if (!fecha_pago || !monto_total || !monto_capital) {
         return res.status(400).json({ message: 'Debe ingresar fecha y montos válidos de pago y capital' });
     }
 
     try {
-        const db = getDb();
-        await ensureFinanzasTables(db);
-        const [pRows] = await db.query('SELECT * FROM prestamos WHERE id = ?', [id]);
-        if (pRows.length === 0) return res.status(404).json({ message: 'Préstamo no encontrado' });
-        const prestamo = pRows[0];
+        const responseData = await withTransaction(async (connection) => {
+            const [pRows] = await connection.query('SELECT * FROM prestamos WHERE id = ? FOR UPDATE', [id]);
+            if (pRows.length === 0) {
+                const err = new Error('Préstamo no encontrado');
+                err.status = 404;
+                throw err;
+            }
+            const prestamo = pRows[0];
 
-        // Get current capital paid so far
-        const [sumRows] = await db.query('SELECT COALESCE(SUM(monto_capital), 0) as pagado FROM prestamos_pagos WHERE prestamo_id = ?', [id]);
-        const capitalPagadoAnterior = parseFloat(sumRows[0].pagado || 0);
-        const saldoAnterior = Math.max(0, parseFloat(prestamo.monto_original) - capitalPagadoAnterior);
+            // Get current capital paid so far
+            const [sumRows] = await connection.query('SELECT COALESCE(SUM(monto_capital), 0) as pagado FROM prestamos_pagos WHERE prestamo_id = ?', [id]);
+            const capitalPagadoAnterior = parseFloat(sumRows[0].pagado || 0);
+            const saldoAnterior = Math.max(0, parseFloat(prestamo.monto_original) - capitalPagadoAnterior);
 
-        const capitalAbonado = parseFloat(monto_capital);
-        const nuevoSaldo = Math.max(0, Math.round((saldoAnterior - capitalAbonado) * 100) / 100);
+            const capitalAbonado = parseFloat(monto_capital);
+            const nuevoSaldo = Math.max(0, Math.round((saldoAnterior - capitalAbonado) * 100) / 100);
 
-        const [result] = await db.query(`
-            INSERT INTO prestamos_pagos (
-                prestamo_id, numero_cuota, fecha_pago, tipo_pago,
-                monto_total, monto_capital, monto_interes, monto_seguro, monto_ahorro, monto_otros,
-                saldo_restante, numero_comprobante, cuenta_origen_id,
-                notas, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            id,
-            numero_cuota || null,
-            fecha_pago,
-            tipo_pago,
-            parseFloat(monto_total),
-            capitalAbonado,
-            parseFloat(monto_interes || 0),
-            parseFloat(monto_seguro || 0),
-            parseFloat(monto_ahorro || 0),
-            parseFloat(monto_otros || 0),
-            nuevoSaldo,
-            numero_comprobante ? numero_comprobante.trim().toUpperCase() : null,
-            cuenta_origen_id || null,
-            notas || null,
-            req.user?.id || null
-        ]);
+            const [result] = await connection.query(`
+                INSERT INTO prestamos_pagos (
+                    prestamo_id, numero_cuota, fecha_pago, tipo_pago,
+                    monto_total, monto_capital, monto_interes, monto_seguro, monto_ahorro, monto_otros,
+                    saldo_restante, numero_comprobante, cuenta_origen_id,
+                    notas, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                id,
+                numero_cuota || null,
+                fecha_pago,
+                tipo_pago,
+                parseFloat(monto_total),
+                capitalAbonado,
+                parseFloat(monto_interes || 0),
+                parseFloat(monto_seguro || 0),
+                parseFloat(monto_ahorro || 0),
+                parseFloat(monto_otros || 0),
+                nuevoSaldo,
+                numero_comprobante ? numero_comprobante.trim().toUpperCase() : null,
+                cuenta_origen_id || null,
+                notas || null,
+                req.user?.id || null
+            ]);
 
-        // If loan is settled, update status
-        if (nuevoSaldo <= 0.05) {
-            await db.query('UPDATE prestamos SET estado = "pagado" WHERE id = ?', [id]);
-        }
+            // If loan is settled, update status
+            if (nuevoSaldo <= 0.05) {
+                await connection.query('UPDATE prestamos SET estado = "pagado" WHERE id = ?', [id]);
+            }
+
+            return {
+                id: result.insertId,
+                saldo_restante: nuevoSaldo,
+                liquidado: nuevoSaldo <= 0.05
+            };
+        });
 
         res.status(201).json({
             message: 'Pago registrado exitosamente',
-            id: result.insertId,
-            saldo_restante: nuevoSaldo,
-            liquidado: nuevoSaldo <= 0.05
+            ...responseData
         });
     } catch (error) {
-        console.error('Error creating pago:', error);
-        res.status(500).json({ message: 'Error al registrar pago', error: error.message });
+        if (error.status === 404) return res.status(404).json({ message: error.message });
+        sendSafeError(res, error, 'Error al registrar pago');
     }
 });
 
@@ -681,27 +538,32 @@ router.post('/prestamos/:id/pagos', authenticateToken, async (req, res) => {
 router.delete('/pagos/:pagoId', authenticateToken, async (req, res) => {
     const { pagoId } = req.params;
     try {
-        const db = getDb();
-        const [pagoRows] = await db.query('SELECT prestamo_id FROM prestamos_pagos WHERE id = ?', [pagoId]);
-        if (pagoRows.length === 0) return res.status(404).json({ message: 'Pago no encontrado' });
-        const prestamoId = pagoRows[0].prestamo_id;
-
-        await db.query('DELETE FROM prestamos_pagos WHERE id = ?', [pagoId]);
-
-        // Check if balance still has unpaid balance, restore to activo
-        const [pRows] = await db.query('SELECT monto_original FROM prestamos WHERE id = ?', [prestamoId]);
-        if (pRows.length > 0) {
-            const [sumRows] = await db.query('SELECT COALESCE(SUM(monto_capital), 0) as pagado FROM prestamos_pagos WHERE prestamo_id = ?', [prestamoId]);
-            const saldo = parseFloat(pRows[0].monto_original) - parseFloat(sumRows[0].pagado);
-            if (saldo > 0.05) {
-                await db.query('UPDATE prestamos SET estado = "activo" WHERE id = ?', [prestamoId]);
+        await withTransaction(async (connection) => {
+            const [pagoRows] = await connection.query('SELECT prestamo_id FROM prestamos_pagos WHERE id = ? FOR UPDATE', [pagoId]);
+            if (pagoRows.length === 0) {
+                const err = new Error('Pago no encontrado');
+                err.status = 404;
+                throw err;
             }
-        }
+            const prestamoId = pagoRows[0].prestamo_id;
+
+            await connection.query('DELETE FROM prestamos_pagos WHERE id = ?', [pagoId]);
+
+            // Check if balance still has unpaid balance, restore to activo
+            const [pRows] = await connection.query('SELECT monto_original FROM prestamos WHERE id = ? FOR UPDATE', [prestamoId]);
+            if (pRows.length > 0) {
+                const [sumRows] = await connection.query('SELECT COALESCE(SUM(monto_capital), 0) as pagado FROM prestamos_pagos WHERE prestamo_id = ?', [prestamoId]);
+                const saldo = parseFloat(pRows[0].monto_original) - parseFloat(sumRows[0].pagado);
+                if (saldo > 0.05) {
+                    await connection.query('UPDATE prestamos SET estado = "activo" WHERE id = ?', [prestamoId]);
+                }
+            }
+        });
 
         res.json({ message: 'Pago revertido exitosamente' });
     } catch (error) {
-        console.error('Error deleting pago:', error);
-        res.status(500).json({ message: 'Error al revertir pago', error: error.message });
+        if (error.status === 404) return res.status(404).json({ message: error.message });
+        sendSafeError(res, error, 'Error al revertir pago');
     }
 });
 

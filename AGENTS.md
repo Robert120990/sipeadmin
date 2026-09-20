@@ -19,15 +19,19 @@ Backend requires `.env` in `backend/`:
 
 Frontend proxies to `localhost:5001` in dev; no env vars required.
 
-## Deployment (Vercel)
-- `vercel.json` routes `/api/*` to `backend/server.js` and all other paths to static frontend
-- `initDB()` in `backend/db.js` is **skipped on Vercel** (`process.env.VERCEL` check) due to serverless timeout
-- Database tables must exist before Vercel deploy (no auto-migration in production)
+## Deployment & Architecture (VPS Host)
+- **Production Server**: VPS Linux (`5.252.55.29`) running behind **Caddy** reverse proxy (`admin.sipesv.com`)
+- **Process Manager**: PM2 manages `sipeadmin-backend` (port 5001) and `sipeadmin-webhook` (port 9000)
+- **Package Manager**: pnpm workspace
+- **Auto-deployment**: Webhook listening on port 9000 triggers `/home/sistemas/deploy-sipeadmin.sh` on git push to `main`
+- **Socket.io & Puppeteer**: Fully supported with persistent Node.js process on VPS
+- **Legacy Vercel**: `vercel.json` kept for fallback/migration compatibility
 
-## Gotchas
-- `public/` is a build artifact (root build script creates it), not source code — it is gitignored
-- Backend has no test infrastructure (dummy `npm test` exits with error)
-- Frontend and backend both use ESLint (`npm run lint` in each); **run lint before committing** — backend fixes found so far are documented in `backend/routes/onedrive.js` (browser globals inside `page.evaluate` are declared at top)
+## Testing & Quality Assurance
+- **Backend automated tests**: `npm test` runs Node.js native test runner (`node --test test/**/*.test.js`)
+- **Frontend build & code-splitting**: Uses `React.lazy()` with Rollup `manualChunks` in `vite.config.js` (<200 kB initial bundle)
+- **CI Pipeline**: `.github/workflows/ci.yml` validates frontend/backend linting, automated tests, and production build on push/PR
+- **ESLint**: Both frontend and backend use ESLint; run `npm run lint` before committing
 - Socket.io runs on same port as Express (not a separate port)
 
 ## Bitácora (Audit Log)

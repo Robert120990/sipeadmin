@@ -30,32 +30,47 @@ function versionJsonPlugin() {
     };
 }
 
-function devVersionPlugin() {
-    return {
-        name: 'dev-version-server',
-        configureServer(server) {
-            server.middlewares.use((req, res, next) => {
-                const url = req.url ? req.url.split('?')[0] : '';
-                if (url === '/version.json') {
-                    res.setHeader('Content-Type', 'application/json');
-                    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-                    res.end(JSON.stringify({
-                        version: APP_VERSION,
-                        buildId: 'dev'
-                    }));
-                    return;
-                }
-                next();
-            });
-        }
-    };
-}
-
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), versionJsonPlugin(), devVersionPlugin()],
+  plugins: [react(), versionJsonPlugin()],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION)
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          if (id.includes('node_modules')) {
+            if (id.includes('lucide-react')) {
+              return 'vendor-ui';
+            }
+            if (id.includes('jspdf')) {
+              return 'vendor-pdf';
+            }
+            if (id.includes('konva') || id.includes('react-konva')) {
+              return 'vendor-canvas';
+            }
+            if (id.includes('xlsx')) {
+              return 'vendor-xlsx';
+            }
+            if (
+              id.includes('/react/') || 
+              id.includes('\\react\\') || 
+              id.includes('/react-dom/') || 
+              id.includes('\\react-dom\\') || 
+              id.includes('/react-router/') || 
+              id.includes('\\react-router\\') || 
+              id.includes('/react-router-dom/') || 
+              id.includes('\\react-router-dom\\') ||
+              id.includes('/scheduler/') ||
+              id.includes('\\scheduler\\')
+            ) {
+              return 'vendor-react';
+            }
+          }
+        }
+      }
+    }
   },
   server: {
     proxy: {

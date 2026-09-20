@@ -3,7 +3,8 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../db');
-const { authenticateToken, JWT_SECRET } = require('../middleware/auth');
+const { authenticateToken, requirePermission, requireRole, JWT_SECRET } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 const withRetry = async (fn, retries = 2) => {
     try {
@@ -23,15 +24,25 @@ router.post('/login', async (req, res) => {
     const { username, password } = req.body;
     try {
         const db = getDb();
-        const [rows] = await withRetry(() => db.query('SELECT u.*, r.name as role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.username = ?', [username]));
-        const user = rows[0];
+        const [rows] = await withRetry(() => db.query(`
+            SELECT u.*, r.name as role_name 
+            FROM users u 
+            LEFT JOIN roles r ON u.role_id = r.id 
+            WHERE u.username = ?
+        `, [username]));
 
-        if (!user || !(await bcrypt.compare(password, user.password))) {
-            return res.status(401).json({ message: 'Invalid credentials' });
+        if (rows.length === 0) {
+            return res.status(401).json({ message: 'Credenciales inválidas' });
         }
 
-        if (user.status === 'inactive') {
-            return res.status(403).json({ message: 'User is inactive' });
+        const user = rows[0];
+        if (user.status !== 'active') {
+            return res.status(403).json({ message: 'Usuario inactivo. Contacte al administrador.' });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ message: 'Credenciales inválidas' });
         }
 
         // Fetch permissions
@@ -41,43 +52,44 @@ router.post('/login', async (req, res) => {
         const token = jwt.sign({ id: user.id, username: user.username, role: user.role_name, role_id: user.role_id, permissions }, JWT_SECRET, { expiresIn: '8h' });
         res.json({ token, user: { id: user.id, username: user.username, nombre: user.nombre, role: user.role_name, role_id: user.role_id, permissions } });
     } catch (error) {
-        console.error('LOGIN ERROR:', error);
-        const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND' || error.code === 'ER_ACCESS_DENIED';
-        const detail = isConnError
-            ? 'No se pudo conectar a la base de datos. Verifica las credenciales en Vercel (DB_HOST, DB_USER, DB_PASSWORD, DB_NAME).'
-            : error.message;
-        res.status(500).json({ message: detail, error: error.message });
+        sendSafeError(res, error, 'Error al iniciar sesión');
     }
 });
 
-// --- User Management ---
-router.get('/users', authenticateToken, async (req, res) => {
+// --- Verify Token ---
+router.get('/verify', authenticateToken, (req, res) => {
+    res.json({ valid: true, user: req.user });
+});
+
+// --- Users Management ---
+router.get('/users', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query(`
-            SELECT u.id, u.username, u.nombre, u.email, u.status, r.name as role_name, u.created_at
-            FROM users u
+            SELECT u.id, u.username, u.nombre, u.email, u.status, u.role_id, r.name as role_name 
+            FROM users u 
             LEFT JOIN roles r ON u.role_id = r.id
         `);
         res.json(rows);
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al obtener usuarios');
     }
 });
 
-router.post('/users', authenticateToken, async (req, res) => {
+router.post('/users', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     const { username, nombre, email, password, role_id } = req.body;
     try {
         const db = getDb();
         const hashedPassword = await bcrypt.hash(password, 10);
         await db.query('INSERT INTO users (username, nombre, email, password, role_id) VALUES (?, ?, ?, ?, ?)', [username, nombre || null, email || null, hashedPassword, role_id]);
-        res.status(201).json({ message: 'User created' });
+        res.status(201).json({ message: 'Usuario creado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El nombre de usuario ya existe' });
+        sendSafeError(res, error, 'Error al crear usuario');
     }
 });
 
-router.put('/users/:id', authenticateToken, async (req, res) => {
+router.put('/users/:id', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     const { id } = req.params;
     const { username, nombre, email, password, status, role_id } = req.body;
     try {
@@ -99,24 +111,27 @@ router.put('/users/:id', authenticateToken, async (req, res) => {
         params.push(id);
 
         await db.query(query, params);
-        res.json({ message: 'User updated' });
+        res.json({ message: 'Usuario actualizado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al actualizar usuario');
     }
 });
 
-router.delete('/users/:id', authenticateToken, async (req, res) => {
+router.delete('/users/:id', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
+        if (req.user.id === parseInt(id)) {
+            return res.status(400).json({ message: 'No puedes eliminar tu propio usuario' });
+        }
         await db.query('DELETE FROM users WHERE id = ?', [id]);
-        res.json({ message: 'User deleted' });
+        res.json({ message: 'Usuario eliminado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al eliminar usuario');
     }
 });
 
-router.put('/users/:id/status', authenticateToken, async (req, res) => {
+router.put('/users/:id/status', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
     try {
@@ -124,12 +139,12 @@ router.put('/users/:id/status', authenticateToken, async (req, res) => {
         await db.query('UPDATE users SET status = ? WHERE id = ?', [status, id]);
         res.json({ message: 'User status updated' });
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al actualizar estado');
     }
 });
 
 // --- Roles Management ---
-router.get('/roles', authenticateToken, async (req, res) => {
+router.get('/roles', authenticateToken, requireRole('Administrator'), async (req, res) => {
     try {
         const db = getDb();
         const [roles] = await db.query('SELECT * FROM roles');
@@ -139,11 +154,11 @@ router.get('/roles', authenticateToken, async (req, res) => {
         }
         res.json(roles);
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al obtener roles');
     }
 });
 
-router.post('/roles', authenticateToken, async (req, res) => {
+router.post('/roles', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { name, description, permissions } = req.body;
     try {
         const db = getDb();
@@ -162,11 +177,11 @@ router.post('/roles', authenticateToken, async (req, res) => {
         res.status(201).json({ message: 'Rol creado exitosamente' });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El rol ya existe' });
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al crear rol');
     }
 });
 
-router.put('/roles/:id', authenticateToken, async (req, res) => {
+router.put('/roles/:id', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { id } = req.params;
     const { name, description, permissions } = req.body;
     try {
@@ -185,19 +200,19 @@ router.put('/roles/:id', authenticateToken, async (req, res) => {
         }
         res.json({ message: 'Rol actualizado exitosamente' });
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        sendSafeError(res, error, 'Error al actualizar rol');
     }
 });
 
-router.delete('/roles/:id', authenticateToken, async (req, res) => {
+router.delete('/roles/:id', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
         await db.query('DELETE FROM roles WHERE id = ?', [id]);
         res.json({ message: 'Rol eliminado' });
     } catch (error) {
-        if (error.code === 'ER_ROW_IS_REFERENCED_2') return res.status(400).json({message: 'No puede eliminarse porque tiene usuarios asignados'});
-        res.status(500).json({ message: 'Server error' });
+        if (error.code === 'ER_ROW_IS_REFERENCED_2') return res.status(400).json({ message: 'No puede eliminarse porque tiene usuarios asignados' });
+        sendSafeError(res, error, 'Error al eliminar rol');
     }
 });
 

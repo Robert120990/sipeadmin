@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { getDb, getExternalDb } = require('../db');
+const { getDb, getExternalDb, withTransaction } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 const toDisplayDate = (dateVal) => {
     if (!dateVal) return null;
@@ -211,21 +212,24 @@ router.post('/', authenticateToken, async (req, res) => {
             return res.status(400).json({ message: 'Cuenta bancaria no encontrada o inactiva' });
         }
         const cuentaBancariaId = cuentaRows[0].id;
-
-        const [maxRow] = await db.query('SELECT MAX(id) as max_id FROM cheques');
-        const nextNum = (maxRow[0].max_id || 0) + 1;
-        const llave = 'CHQ' + nextNum.toString().padStart(17, '0');
-
         const dbFecha = toDBDate(fecha);
         const dbFechaAplicado = toDBDate(fecha_aplicado);
 
-        const [result] = await db.query(
-            'INSERT INTO cheques (empresa_id, cuenta_bancaria_id, llave, fecha, cheque_anulado, cheque, valor, a_nombre, fecha_aplicado, concepto, es_reservado, es_pago_contado, fue_noemitido, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [empresaId, cuentaBancariaId, llave, dbFecha, cheque_anulado ? 1 : 0, cheque || '', valor || 0, a_nombre || '', dbFechaAplicado, (concepto || '').toUpperCase(), es_reservado ? 1 : 0, es_pago_contado ? 1 : 0, fue_noemitido ? 1 : 0, num_partida || null]
-        );
-        res.status(201).json({ message: 'Cheque registrado exitosamente', llave, id: result.insertId });
+        const { llave, insertId } = await withTransaction(async (conn) => {
+            const [maxRow] = await conn.query('SELECT MAX(id) as max_id FROM cheques FOR UPDATE');
+            const nextNum = (maxRow[0].max_id || 0) + 1;
+            const nuevaLlave = 'CHQ' + nextNum.toString().padStart(17, '0');
+
+            const [result] = await conn.query(
+                'INSERT INTO cheques (empresa_id, cuenta_bancaria_id, llave, fecha, cheque_anulado, cheque, valor, a_nombre, fecha_aplicado, concepto, es_reservado, es_pago_contado, fue_noemitido, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [empresaId, cuentaBancariaId, nuevaLlave, dbFecha, cheque_anulado ? 1 : 0, cheque || '', valor || 0, a_nombre || '', dbFechaAplicado, (concepto || '').toUpperCase(), es_reservado ? 1 : 0, es_pago_contado ? 1 : 0, fue_noemitido ? 1 : 0, num_partida || null]
+            );
+            return { llave: nuevaLlave, insertId: result.insertId };
+        });
+
+        res.status(201).json({ message: 'Cheque registrado exitosamente', llave, id: insertId });
     } catch (error) {
-        res.status(500).json({ message: 'Error al registrar cheque', error: error.message });
+        sendSafeError(res, error, 'Error al registrar cheque');
     }
 });
 
