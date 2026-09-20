@@ -1,9 +1,11 @@
 import React, { useEffect } from 'react';
 import { X } from 'lucide-react';
 
-export default function Modal({ open, onClose, title, size = 'md', footer, children }) {
+export default function Modal({ open, isOpen, onClose, title, size = 'md', footer, children }) {
+    const activeOpen = Boolean(open !== undefined ? open : isOpen);
+
     useEffect(() => {
-        if (!open) return undefined;
+        if (!activeOpen) return undefined;
         const onKey = (e) => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', onKey);
         document.body.style.overflow = 'hidden';
@@ -11,9 +13,9 @@ export default function Modal({ open, onClose, title, size = 'md', footer, child
             window.removeEventListener('keydown', onKey);
             document.body.style.overflow = '';
         };
-    }, [open, onClose]);
+    }, [activeOpen, onClose]);
 
-    if (!open) return null;
+    if (!activeOpen) return null;
 
     const sizeClass = size === 'sm' ? 'modal-sm' : size === 'lg' ? 'modal-lg' : size === 'xl' ? 'modal-xl' : '';
 

@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles, Printer, Compass, Fuel, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Settings as SettingsIcon, Truck, Container, FileText, BarChart3, Droplets, ClipboardList, DollarSign, Landmark, Database, Mail, CreditCard, HardDrive, Scale, Calculator, TrendingUp, Wrench, Sparkles, Printer, Compass, Fuel, ShieldAlert, CheckCircle2, ClipboardCheck } from 'lucide-react';
 
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -39,6 +39,11 @@ export const operacionesMenu = [
         name: 'Control de Pagos',
         path: '/dashboard/operaciones/recordatorios',
         icon: FileText
+    },
+    {
+        name: 'Gestión de Tareas',
+        path: '/dashboard/operaciones/tareas',
+        icon: ClipboardCheck
     }
 ];
 export const bancosMenu = [

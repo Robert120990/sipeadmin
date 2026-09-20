@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Plus, Edit2, Trash2, Save, X, CheckSquare, Square } from 'lucide-react';
+import { Shield, Plus, Edit2, Trash2, Save, X, CheckSquare, Square, Loader2 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import api from '../services/api';
@@ -8,6 +8,8 @@ import { allNavCategories } from '../config/navigation';
 export default function Permissions() {
     const [roles, setRoles] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [deletingId, setDeletingId] = useState(null);
     const [selectedRole, setSelectedRole] = useState(null);
     const [isEditing, setIsEditing] = useState(false);
     const { addToast } = useToast();
@@ -30,12 +32,13 @@ export default function Permissions() {
     }, []);
 
     const handleSelectRole = (role) => {
+        if (saving) return;
         setSelectedRole(role ? { ...role, permissions: role.permissions || [] } : { name: '', description: '', permissions: [] });
         setIsEditing(true);
     };
 
     const togglePermission = (path) => {
-        if (!selectedRole) return;
+        if (!selectedRole || saving) return;
         const currentPerms = selectedRole.permissions || [];
         const perms = currentPerms.includes(path)
             ? currentPerms.filter(p => p !== path)
@@ -44,7 +47,7 @@ export default function Permissions() {
     };
 
     const toggleAllPermissions = () => {
-        if (!selectedRole) return;
+        if (!selectedRole || saving) return;
         const currentPerms = selectedRole.permissions || [];
         const allPaths = allNavCategories.flatMap(c => c.items.map(i => i.path));
         const hasAll = allPaths.every(path => currentPerms.includes(path));
@@ -55,7 +58,7 @@ export default function Permissions() {
     };
 
     const toggleCategoryPermissions = (categoryItems) => {
-        if (!selectedRole) return;
+        if (!selectedRole || saving) return;
         const currentPerms = selectedRole.permissions || [];
         const categoryPaths = categoryItems.map(i => i.path);
         const hasAllCategory = categoryPaths.every(path => currentPerms.includes(path));
@@ -72,6 +75,8 @@ export default function Permissions() {
 
     const saveRole = async () => {
         if (!selectedRole.name.trim()) return addToast('El nombre del rol es requerido', 'warning');
+        if (saving) return;
+        setSaving(true);
         try {
             if (selectedRole.id) {
                 await api.put(`/roles/${selectedRole.id}`, selectedRole);
@@ -81,22 +86,28 @@ export default function Permissions() {
                 addToast('Rol creado exitosamente', 'success');
             }
             setIsEditing(false);
-            fetchRoles();
+            await fetchRoles();
         } catch (error) {
             addToast(error.response?.data?.message || 'Error al guardar el rol', 'error');
+        } finally {
+            setSaving(false);
         }
     };
 
     const deleteRole = async (id, name) => {
         if (name === 'Administrator') return addToast('No puedes eliminar el rol principal', 'warning');
+        if (saving || deletingId) return;
         if (!await confirm(`¿Estás seguro de eliminar el rol ${name}?`, { variant: 'danger' })) return;
+        setDeletingId(id);
         try {
             await api.delete(`/roles/${id}`);
             addToast('Rol eliminado', 'success');
             if (selectedRole?.id === id) setIsEditing(false);
-            fetchRoles();
+            await fetchRoles();
         } catch (error) {
             addToast(error.response?.data?.message || 'Error al eliminar', 'error');
+        } finally {
+            setDeletingId(null);
         }
     };
 
@@ -108,7 +119,13 @@ export default function Permissions() {
                     <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.25rem' }}>
                         <Shield size={24} color="var(--primary)" /> Roles
                     </h2>
-                    <button onClick={() => handleSelectRole(null)} className="btn-primary" style={{ padding: '0.5rem', borderRadius: '50%' }} title="Nuevo Rol">
+                    <button 
+                        onClick={() => !saving && handleSelectRole(null)} 
+                        className="btn-primary" 
+                        disabled={saving}
+                        style={{ padding: '0.5rem', borderRadius: '50%', opacity: saving ? 0.6 : 1, cursor: saving ? 'not-allowed' : 'pointer' }} 
+                        title="Nuevo Rol"
+                    >
                         <Plus size={18} />
                     </button>
                 </div>
@@ -125,7 +142,8 @@ export default function Permissions() {
                                     background: selectedRole?.id === role.id ? 'rgba(37, 99, 235, 0.1)' : 'var(--bg-color)', 
                                     border: `1px solid ${selectedRole?.id === role.id ? 'var(--primary)' : 'var(--border)'}`, 
                                     borderRadius: 'var(--border-radius)',
-                                    cursor: 'pointer',
+                                    cursor: saving ? 'not-allowed' : 'pointer',
+                                    opacity: saving && selectedRole?.id !== role.id ? 0.6 : 1,
                                     display: 'flex', justifyContent: 'space-between', alignItems: 'center'
                                 }}
                                 onClick={() => handleSelectRole(role)}
@@ -135,8 +153,20 @@ export default function Permissions() {
                                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{role.permissions?.length || 0} módulos accesibles</div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                    <button onClick={(e) => { e.stopPropagation(); deleteRole(role.id, role.name); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                                        <Trash2 size={16} />
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); deleteRole(role.id, role.name); }} 
+                                        disabled={saving || deletingId === role.id}
+                                        style={{ 
+                                            background: 'none', 
+                                            border: 'none', 
+                                            color: 'var(--text-muted)', 
+                                            cursor: (saving || deletingId === role.id) ? 'not-allowed' : 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center'
+                                        }}
+                                        title="Eliminar rol"
+                                    >
+                                        {deletingId === role.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
                                     </button>
                                 </div>
                             </div>
@@ -155,16 +185,45 @@ export default function Permissions() {
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '100%' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '1rem' }}>
-                            <h2 style={{ fontSize: '1.25rem' }}>{selectedRole.id ? 'Editar Rol' : 'Nuevo Rol'}</h2>
+                            <h2 style={{ fontSize: '1.25rem', margin: 0 }}>{selectedRole.id ? 'Editar Rol' : 'Nuevo Rol'}</h2>
                             <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                <button onClick={() => setIsEditing(false)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <button 
+                                    onClick={() => setIsEditing(false)} 
+                                    className="btn-secondary" 
+                                    disabled={saving}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: saving ? 0.6 : 1, cursor: saving ? 'not-allowed' : 'pointer' }}
+                                >
                                     <X size={16} /> Cancelar
                                 </button>
-                                <button onClick={saveRole} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <Save size={16} /> Guardar
+                                <button 
+                                    onClick={saveRole} 
+                                    className="btn-primary" 
+                                    disabled={saving}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: saving ? 0.75 : 1, cursor: saving ? 'not-allowed' : 'pointer' }}
+                                >
+                                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                                    {saving ? 'Guardando...' : 'Guardar'}
                                 </button>
                             </div>
                         </div>
+
+                        {saving && (
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                padding: '0.75rem 1rem',
+                                background: 'rgba(37, 99, 235, 0.12)',
+                                border: '1px solid var(--primary)',
+                                borderRadius: 'var(--border-radius)',
+                                color: 'var(--primary)',
+                                fontSize: '0.875rem',
+                                fontWeight: 500
+                            }}>
+                                <Loader2 size={18} className="animate-spin" />
+                                <span>Guardando configuración y sincronizando permisos del rol...</span>
+                            </div>
+                        )}
 
                         <div style={{ display: 'flex', gap: '1rem' }}>
                             <div className="form-group" style={{ flex: 1 }}>
@@ -175,7 +234,7 @@ export default function Permissions() {
                                     onChange={e => setSelectedRole({...selectedRole, name: e.target.value})} 
                                     className="form-control" 
                                     placeholder="Ej. Gerente de Estación"
-                                    disabled={selectedRole.name === 'Administrator'}
+                                    disabled={saving || selectedRole.name === 'Administrator'}
                                 />
                             </div>
                             <div className="form-group" style={{ flex: 2 }}>
@@ -186,6 +245,7 @@ export default function Permissions() {
                                     onChange={e => setSelectedRole({...selectedRole, description: e.target.value})} 
                                     className="form-control" 
                                     placeholder="Descripción del cargo o rol"
+                                    disabled={saving}
                                 />
                             </div>
                         </div>
@@ -193,7 +253,12 @@ export default function Permissions() {
                         <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
                                 <h3 style={{ fontSize: '1rem', margin: 0 }}>Módulos Mapeados Automáticamente</h3>
-                                <button onClick={toggleAllPermissions} className="btn-secondary" style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}>
+                                <button 
+                                    onClick={toggleAllPermissions} 
+                                    className="btn-secondary" 
+                                    disabled={saving}
+                                    style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', opacity: saving ? 0.6 : 1, cursor: saving ? 'not-allowed' : 'pointer' }}
+                                >
                                     Marcar / Desmarcar Todos
                                 </button>
                             </div>
@@ -206,7 +271,11 @@ export default function Permissions() {
                                     <div key={idx} style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                                             <h4 style={{ fontSize: '0.9rem', color: 'var(--primary)', margin: 0 }}>{category.title}</h4>
-                                            <button onClick={(e) => { e.preventDefault(); toggleCategoryPermissions(category.items); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.75rem', textDecoration: 'underline' }}>
+                                            <button 
+                                                onClick={(e) => { e.preventDefault(); toggleCategoryPermissions(category.items); }} 
+                                                disabled={saving}
+                                                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.75rem', textDecoration: 'underline' }}
+                                            >
                                                 Todo el grupo
                                             </button>
                                         </div>
@@ -214,7 +283,7 @@ export default function Permissions() {
                                             {category.items.map(item => {
                                                 const isChecked = selectedRole.permissions.includes(item.path);
                                                 return (
-                                                    <label key={item.path} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                                    <label key={item.path} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, fontSize: '0.85rem' }}>
                                                         <div onClick={(e) => { e.preventDefault(); togglePermission(item.path); }}>
                                                             {isChecked ? <CheckSquare size={18} color="var(--primary)" /> : <Square size={18} color="rgba(255,255,255,0.2)" />}
                                                         </div>

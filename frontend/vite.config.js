@@ -36,6 +36,16 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION)
   },
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+    alias: {
+      'react': resolve(__dirname, 'node_modules/react'),
+      'react-dom': resolve(__dirname, 'node_modules/react-dom')
+    }
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-router-dom', 'lucide-react']
+  },
   build: {
     rollupOptions: {
       output: {

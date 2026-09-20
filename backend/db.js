@@ -560,6 +560,60 @@ const initDB = async () => {
             );
         `);
 
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                titulo VARCHAR(200) NOT NULL,
+                descripcion TEXT NULL,
+                tipo_plazo ENUM('dia_especifico', 'rango') DEFAULT 'dia_especifico',
+                fecha_inicio DATE NULL,
+                fecha_vencimiento DATE NOT NULL,
+                hora_limite TIME NULL,
+                prioridad ENUM('baja', 'media', 'alta', 'urgente') DEFAULT 'media',
+                estado ENUM('pendiente', 'en_proceso', 'en_revision', 'completada', 'cancelada') DEFAULT 'pendiente',
+                orden INT DEFAULT 0,
+                categoria VARCHAR(50) DEFAULT 'General',
+                assigned_to INT NOT NULL,
+                created_by INT NOT NULL,
+                checklist JSON NULL,
+                completada_en DATETIME NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE RESTRICT,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+                INDEX idx_tasks_assigned (assigned_to, estado),
+                INDEX idx_tasks_vencimiento (fecha_vencimiento)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS task_comments (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                task_id INT NOT NULL,
+                user_id INT NOT NULL,
+                comentario TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
+                INDEX idx_comments_task (task_id)
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                type VARCHAR(50) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                message TEXT NOT NULL,
+                data JSON NULL,
+                is_read TINYINT(1) DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                INDEX idx_user_read (user_id, is_read, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
         // Migration for seguro and ahorro columns
         try {
             const [cols] = await pool.query("SHOW COLUMNS FROM prestamos LIKE 'seguro_tipo'");
@@ -607,7 +661,9 @@ const initDB = async () => {
                     ['manage_finanzas_prestamos', 'Permite crear, editar y eliminar préstamos'],
                     ['manage_finanzas_pagos', 'Permite registrar y anular pagos de préstamos'],
                     ['manage_finanzas_inversiones', 'Permite gestionar proyectos de inversión y presupuestos'],
-                    ['manage_finanzas_mantenimiento', 'Permite programar y gestionar mantenimientos']
+                    ['manage_finanzas_mantenimiento', 'Permite programar y gestionar mantenimientos'],
+                    ['/dashboard/operaciones/tareas', 'Acceso a Asignación y Gestión de Tareas'],
+                    ['manage_tasks', 'Permite crear, asignar y eliminar tareas']
                 ];
                 for (const [pName, pDesc] of newPerms) {
                     await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);

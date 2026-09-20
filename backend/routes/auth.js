@@ -175,10 +175,24 @@ router.put('/users/:id/status', authenticateToken, requirePermission('/dashboard
 router.get('/roles', authenticateToken, requireRole('Administrator'), async (req, res) => {
     try {
         const db = getDb();
-        const [roles] = await db.query('SELECT * FROM roles');
-        for (let role of roles) {
-            const [perms] = await db.query('SELECT p.name FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ?', [role.id]);
-            role.permissions = perms.map(p => p.name);
+        const [roles] = await db.query('SELECT * FROM roles ORDER BY id ASC');
+        if (roles.length > 0) {
+            const roleIds = roles.map(r => r.id);
+            const [perms] = await db.query(
+                `SELECT rp.role_id, p.name 
+                 FROM permissions p 
+                 JOIN role_permissions rp ON p.id = rp.permission_id 
+                 WHERE rp.role_id IN (?)`,
+                [roleIds]
+            );
+            const permsByRole = {};
+            for (const p of perms) {
+                if (!permsByRole[p.role_id]) permsByRole[p.role_id] = [];
+                permsByRole[p.role_id].push(p.name);
+            }
+            for (const role of roles) {
+                role.permissions = permsByRole[role.id] || [];
+            }
         }
         res.json(roles);
     } catch (error) {
@@ -188,47 +202,59 @@ router.get('/roles', authenticateToken, requireRole('Administrator'), async (req
 
 router.post('/roles', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { name, description, permissions } = req.body;
+    const db = getDb();
+    const conn = await db.getConnection();
     try {
-        const db = getDb();
-        const [result] = await db.query('INSERT INTO roles (name, description) VALUES (?, ?)', [name, description]);
+        await conn.beginTransaction();
+        const [result] = await conn.query('INSERT INTO roles (name, description) VALUES (?, ?)', [name, description]);
         const roleId = result.insertId;
-        
-        if (permissions && permissions.length > 0) {
-            for (const permName of permissions) {
-                await db.query('INSERT IGNORE INTO permissions (name) VALUES (?)', [permName]);
-                const [[perm]] = await db.query('SELECT id FROM permissions WHERE name = ?', [permName]);
-                if (perm) {
-                    await db.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [roleId, perm.id]);
-                }
+
+        const cleanPerms = Array.isArray(permissions) ? [...new Set(permissions.filter(Boolean))] : [];
+        if (cleanPerms.length > 0) {
+            await conn.query('INSERT IGNORE INTO permissions (name) VALUES ?', [cleanPerms.map(p => [p])]);
+            const [permRows] = await conn.query('SELECT id FROM permissions WHERE name IN (?)', [cleanPerms]);
+            if (permRows.length > 0) {
+                const rolePermValues = permRows.map(p => [roleId, p.id]);
+                await conn.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES ?', [rolePermValues]);
             }
         }
+        await conn.commit();
         res.status(201).json({ message: 'Rol creado exitosamente' });
     } catch (error) {
+        await conn.rollback();
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El rol ya existe' });
         sendSafeError(res, error, 'Error al crear rol');
+    } finally {
+        conn.release();
     }
 });
 
 router.put('/roles/:id', authenticateToken, requireRole('Administrator'), async (req, res) => {
     const { id } = req.params;
     const { name, description, permissions } = req.body;
+    const db = getDb();
+    const conn = await db.getConnection();
     try {
-        const db = getDb();
-        await db.query('UPDATE roles SET name = ?, description = ? WHERE id = ?', [name, description, id]);
-        await db.query('DELETE FROM role_permissions WHERE role_id = ?', [id]);
-        
-        if (permissions && permissions.length > 0) {
-            for (const permName of permissions) {
-                await db.query('INSERT IGNORE INTO permissions (name) VALUES (?)', [permName]);
-                const [[perm]] = await db.query('SELECT id FROM permissions WHERE name = ?', [permName]);
-                if (perm) {
-                    await db.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [id, perm.id]);
-                }
+        await conn.beginTransaction();
+        await conn.query('UPDATE roles SET name = ?, description = ? WHERE id = ?', [name, description, id]);
+        await conn.query('DELETE FROM role_permissions WHERE role_id = ?', [id]);
+
+        const cleanPerms = Array.isArray(permissions) ? [...new Set(permissions.filter(Boolean))] : [];
+        if (cleanPerms.length > 0) {
+            await conn.query('INSERT IGNORE INTO permissions (name) VALUES ?', [cleanPerms.map(p => [p])]);
+            const [permRows] = await conn.query('SELECT id FROM permissions WHERE name IN (?)', [cleanPerms]);
+            if (permRows.length > 0) {
+                const rolePermValues = permRows.map(p => [id, p.id]);
+                await conn.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES ?', [rolePermValues]);
             }
         }
+        await conn.commit();
         res.json({ message: 'Rol actualizado exitosamente' });
     } catch (error) {
+        await conn.rollback();
         sendSafeError(res, error, 'Error al actualizar rol');
+    } finally {
+        conn.release();
     }
 });
 

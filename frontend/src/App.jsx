@@ -6,6 +6,8 @@ import { ConfirmProvider } from './components/ConfirmDialog';
 import { ThemeProvider } from './components/ThemeProvider';
 import UpdateNotifier from './components/UpdateNotifier';
 import { getStoredUser, getStoredToken } from './utils/auth';
+import { NotificationProvider } from './context/NotificationContext';
+import { RealtimeNotificationToast } from './components/NotificationBell';
 
 import {
     Dashboard,
@@ -48,7 +50,8 @@ import {
     EstrategiaFlujoCaja,
     EstrategiaMermas,
     EstrategiaRentabilidad,
-    EstrategiaCreditos
+    EstrategiaCreditos,
+    Tareas
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -76,7 +79,9 @@ function App() {
                 <ConfirmProvider>
                     <UpdateNotifier />
                     <BrowserRouter>
-                        <Suspense fallback={<LoadingFallback fullScreen message="Cargando SIPE Admin..." />}>
+                        <NotificationProvider>
+                            <RealtimeNotificationToast />
+                            <Suspense fallback={<LoadingFallback fullScreen message="Cargando SIPE Admin..." />}>
                             <Routes>
                                 <Route path="/login" element={<Login />} />
                                 <Route
@@ -100,6 +105,7 @@ function App() {
                                     <Route path="consultas/estaciones/precios-competencia" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios-competencia"><ConsultasPreciosCompetencia /></PermissionRoute>} />
                                     <Route path="operaciones/pedidos" element={<ProtectedRoute><PedidosCombustible /></ProtectedRoute>} />
                                     <Route path="operaciones/recordatorios" element={<ProtectedRoute><ControlRecordatorios /></ProtectedRoute>} />
+                                    <Route path="operaciones/tareas" element={<PermissionRoute pathKey="/dashboard/operaciones/tareas"><Tareas /></PermissionRoute>} />
                                     <Route path="bancos/reportes/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />
                                     <Route path="bancos/reportes/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
                                     <Route path="bancos/reportes/impresion-cheques" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/impresion-cheques"><ImpresionCheques /></PermissionRoute>} />
@@ -137,6 +143,7 @@ function App() {
                                 <Route path="*" element={<Navigate to="/login" replace />} />
                             </Routes>
                         </Suspense>
+                        </NotificationProvider>
                     </BrowserRouter>
                 </ConfirmProvider>
             </ToastProvider>

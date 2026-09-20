@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
+import NotificationBell from '../components/NotificationBell';
 import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering (Code-split with lazy)
@@ -48,7 +49,8 @@ import {
     EstrategiaFlujoCaja,
     EstrategiaMermas,
     EstrategiaRentabilidad,
-    EstrategiaCreditos
+    EstrategiaCreditos,
+    Tareas
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -132,6 +134,7 @@ export default function DashboardLayout() {
         '/dashboard/consultas/estaciones/precios-competencia': <ConsultasPreciosCompetencia />,
         '/dashboard/operaciones/pedidos': <PedidosCombustible />,
         '/dashboard/operaciones/recordatorios': <ControlRecordatorios />,
+        '/dashboard/operaciones/tareas': <Tareas />,
         '/dashboard/bancos/reportes/saldos-bancos': <Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." />,
         '/dashboard/bancos/reportes/saldos-chequera': <Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />,
         '/dashboard/bancos/reportes/impresion-cheques': <ImpresionCheques />,
@@ -273,6 +276,7 @@ export default function DashboardLayout() {
             className="tabs-bar" 
             ref={containerRef}
             onWheel={handleTabsWheel}
+            style={{ borderBottom: 'none' }}
         >
             {tabs.map(tab => {
                 const Icon = tab.icon || FileText;
@@ -619,7 +623,14 @@ export default function DashboardLayout() {
             </aside>
 
             <main className="main-content">
-                {renderTabsBar(desktopTabsRef)}
+                <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', borderBottom: '1px solid var(--border)', paddingRight: '0.75rem' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        {renderTabsBar(desktopTabsRef)}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', paddingLeft: '0.5rem', flexShrink: 0 }}>
+                        <NotificationBell />
+                    </div>
+                </div>
                 
                 {renderContent()}
             </main>
@@ -639,9 +650,12 @@ export default function DashboardLayout() {
                 <div style={{ flex: 1, textAlign: 'center', overflow: 'hidden' }}>
                     <div className="header-title">{headerTitle}</div>
                 </div>
-                <button className="header-btn" onClick={openMore} aria-label="Más opciones">
-                    <MoreHorizontal size={22} />
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <NotificationBell isMobile={true} />
+                    <button className="header-btn" onClick={openMore} aria-label="Más opciones">
+                        <MoreHorizontal size={22} />
+                    </button>
+                </div>
             </header>
 
             {renderTabsBar(mobileTabsRef)}

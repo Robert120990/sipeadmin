@@ -43,6 +43,8 @@ const io = new Server(server, {
     }
 });
 
+app.set('io', io);
+
 const PORT = process.env.PORT || 5001;
 
 // Global Security Middleware
@@ -66,6 +68,12 @@ app.use(autoLogMiddleware());
 
 io.on("connection", (socket) => {
     console.log(`Usuario conectado a Socket.io: ${socket.id}`);
+    socket.on("join", (userId) => {
+        if (userId) {
+            socket.join(`user_${userId}`);
+            console.log(`Socket ${socket.id} unido al canal user_${userId}`);
+        }
+    });
     socket.on("disconnect", () => {
         console.log(`Usuario desconectado: ${socket.id}`);
     });
@@ -131,9 +139,13 @@ const checkDesignerRoutes = require('./routes/checkDesigner');
 const conciliacionRoutes = require('./routes/conciliacion');
 const finanzasRoutes = require('./routes/finanzas');
 const inteligenciaRoutes = require('./routes/inteligencia');
+const tasksRoutes = require('./routes/tasks');
+const notificationsRoutes = require('./routes/notifications');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
+app.use('/api/notifications', notificationsRoutes);
+app.use('/api/tasks', tasksRoutes);
 app.use('/api/bancos/conciliacion', conciliacionRoutes);
 app.use('/api/bancos', bancosRoutes);
 app.use('/api/finanzas', finanzasRoutes);
