@@ -83,6 +83,31 @@ Toda pantalla que genere, previsualice o imprima reportes o cheques DEBE utiliza
 - Root-level `npm run deploy` automates bump + commit + push
 - The build emits `dist/version.json` (`version` + `buildId` via the `version-json` plugin in `vite.config.js`) — used by `sw.js` (cache names) and `UpdateNotifier` (new-version detection)
 
+## Git, Commits y Sincronización Remota (Regla Obligatoria)
+1. **Sincronización Previa Obligatoria (Antes de Push)**:
+   - ANTES de realizar cualquier `git push`, es OBLIGATORIO verificar si hay cambios en el repositorio remoto:
+     ```bash
+     git fetch origin main
+     ```
+   - Si el remoto tiene cambios (`git log HEAD..origin/main`), se deben sincronizar inmediatamente antes de pushear:
+     ```bash
+     git pull --rebase origin main
+     ```
+   - Resolver cualquier conflicto con máxima precaución preservando las funcionalidades remotas y locales.
+   - Tras sincronizar, ejecutar pruebas (`npm test`) y verificar compilación (`npm run build`) antes de empujar.
+2. **Commits Atómicos**:
+   - Cada commit debe representar un cambio único, coherente y autocontenido (una sola tarea, corrección o feature delimitada).
+   - Prohibido acumular múltiples funcionalidades o refactorizaciones masivas no relacionadas en un solo commit indiscriminado.
+3. **Mensajes de Commit en Español**:
+   - Todos los mensajes de commit DEBEN redactarse estrictamente en **español**.
+   - Seguir la convención semántica:
+     - `feat: agregar sistema de notificaciones en tiempo real`
+     - `fix: corregir desconexión de backend y validación de clave JWT`
+     - `chore: incrementar versión a 1.0.59`
+     - `refactor: optimizar tablero Kanban de tareas`
+     - `test: agregar pruebas unitarias para notificaciones`
+
+
 ## Responsive / Mobile
 - Breakpoint: **768px** — `useViewport()` hook in `src/hooks/useViewport.js` switches `DashboardLayout` between Desktop shell (sidebar + tabs, unchanged) and Mobile shell (header + single active view + bottom nav Inicio/Menú/Más + drawer)
 - Mobile navigation reuses the same filtered menus and `componentRegistry`; `openTab` replaces the tab list on mobile (single active view)

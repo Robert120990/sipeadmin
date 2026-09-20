@@ -12,7 +12,11 @@ pkg.version = parts.join('.');
 require('fs').writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 console.log(`Version bumped to ${pkg.version}`);
 
+console.log('>> Verificando y sincronizando cambios remotos con git fetch & pull...');
+execSync('git fetch origin main', { stdio: 'inherit' });
+execSync('git pull --rebase origin main', { stdio: 'inherit' });
+
 execSync('git add frontend/package.json', { stdio: 'inherit' });
-execSync(`git commit -m "chore: bump version to ${pkg.version}"`, { stdio: 'inherit' });
-execSync('git push', { stdio: 'inherit' });
-console.log('Deployed!');
+execSync(`git commit -m "chore: incrementar versión a ${pkg.version}"`, { stdio: 'inherit' });
+execSync('git push origin main', { stdio: 'inherit' });
+console.log('¡Despliegue completado con éxito!');
