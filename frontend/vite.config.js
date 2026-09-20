@@ -30,9 +30,35 @@ function versionJsonPlugin() {
     };
 }
 
+function devVersionPlugin() {
+    return {
+        name: 'dev-version-server',
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                const url = req.url ? req.url.split('?')[0] : '';
+                if (url === '/version.json') {
+                    try {
+                        const currentPkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8'));
+                        res.setHeader('Content-Type', 'application/json');
+                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+                        res.end(JSON.stringify({
+                            version: currentPkg.version,
+                            buildId: 'dev'
+                        }));
+                        return;
+                    } catch (e) {
+                        // ignore error
+                    }
+                }
+                next();
+            });
+        }
+    };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), versionJsonPlugin()],
+  plugins: [react(), versionJsonPlugin(), devVersionPlugin()],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION)
   },

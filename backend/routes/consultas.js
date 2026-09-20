@@ -170,10 +170,26 @@ router.get('/ventas/precios-estacion/:date', authenticateToken, async (req, res)
 router.get('/consultas/cumpleanos', authenticateToken, async (req, res) => {
     try {
         const accountingDb = await getAccountingDb();
-        const query = `SELECT CONCAT(e.nombre_dui, ' ', e.apellidos_dui) as nombre, STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y') as fecha_nacimiento, m.nombre as empresa, d.descripcion as departamento FROM empleados e JOIN empresas_mayores m ON e.id_empresa = m.id INNER JOIN departamentos_personal d ON e.cod_area_trabajo = d.id AND e.id_empresa = d.id_empresa WHERE e.activo = 1 AND e.fecha_nacimiento IS NOT NULL AND MONTH(STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y')) = MONTH(CURRENT_DATE()) ORDER BY m.nombre, d.descripcion, DAY(STR_TO_DATE(e.fecha_nacimiento, '%d/%m/%Y'))`;
+        const query = `
+            SELECT 
+                CONCAT(TRIM(e.nombres), ' ', TRIM(e.apellidos)) AS nombre,
+                DATE_FORMAT(e.fecha_nacimiento, '%Y-%m-%d') AS fecha_nacimiento,
+                c.razon_social AS empresa,
+                COALESCE(d.descripcion, 'Sin asignar') AS departamento
+            FROM rh_empleados e
+            JOIN companies c ON e.company_id = c.id
+            LEFT JOIN rh_departamentos d ON e.departamento_personal_id = d.id
+            WHERE e.es_activo = 1 
+              AND e.fecha_nacimiento IS NOT NULL 
+              AND MONTH(e.fecha_nacimiento) = MONTH(CURRENT_DATE())
+            ORDER BY c.razon_social, d.descripcion, DAY(e.fecha_nacimiento)
+        `;
         const [rows] = await accountingDb.query(query);
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching cumpleanos' }); }
+    } catch (error) {
+        console.error('Error fetching cumpleanos:', error.message);
+        res.status(500).json({ message: 'Error fetching cumpleanos' });
+    }
 });
 
 router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken, async (req, res) => {

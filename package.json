@@ -1,8 +1,10 @@
 {
   "name": "sipeadmin-root",
   "version": "1.0.0",
+  "private": true,
   "scripts": {
-    "build": "rm -rf public && cd frontend && npm install && npm run build && cp -a dist ../public && cd ../backend && npm install",
+    "build": "pnpm --filter frontend run build",
+    "build:all": "pnpm install && pnpm --filter frontend run build",
     "deploy": "node deploy.js"
   }
 }

@@ -1,0 +1,11 @@
+packages:
+  - 'backend'
+  - 'frontend'
+
+allowBuilds:
+  '@google/genai': true
+  protobufjs: true
+  puppeteer: true
+  core-js: true
+  esbuild: true
+  bcrypt: true
