@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, Folder, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass } from 'lucide-react';
+import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import NotificationBell from '../components/NotificationBell';
@@ -404,7 +404,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('catalogs')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <Folder size={20} />
+                                <BookOpen size={20} />
                                 {!isCollapsed && <span>Catálogos</span>}
                             </div>
                             {!isCollapsed && (openMenus.catalogs ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -417,7 +417,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('operaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <Folder size={20} />
+                                <Briefcase size={20} />
                                 {!isCollapsed && <span>Operaciones</span>}
                             </div>
                             {!isCollapsed && (openMenus.operaciones ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -430,7 +430,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('bancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <Folder size={20} />
+                                <Landmark size={20} />
                                 {!isCollapsed && <span>Bancos</span>}
                             </div>
                             {!isCollapsed && (openMenus.bancos ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
