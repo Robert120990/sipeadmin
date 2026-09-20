@@ -379,9 +379,17 @@ export default function EstrategiaTorreControl() {
                         </button>
                     </div>
 
-                    <div className="table-responsive">
+                    <div 
+                        className="table-responsive" 
+                        style={{ 
+                            maxHeight: '190px', 
+                            overflowY: 'auto',
+                            border: '1px solid var(--border-color)', 
+                            borderRadius: '6px'
+                        }}
+                    >
                         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '320px' }}>
-                            <thead>
+                            <thead style={{ position: 'sticky', top: 0, backgroundColor: 'var(--card-bg)', zIndex: 1 }}>
                                 <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                                     <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'left', color: 'var(--text-muted)' }}>BANCO / CUENTA</th>
                                     <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>SALDO ($)</th>
@@ -408,26 +416,35 @@ export default function EstrategiaTorreControl() {
                                     ))
                                 )}
                             </tbody>
-                            {bancos.length > 0 && (
-                                <tfoot>
-                                    <tr style={{ borderTop: '2px solid var(--border-color)', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                                        <td style={{ padding: '0.5rem' }}>Total disponible:</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'right', color: '#10b981' }}>
-                                            ${kpi.liquidez_bancos_usd?.toLocaleString() || 0}
-                                        </td>
-                                    </tr>
-                                </tfoot>
-                            )}
                         </table>
                     </div>
 
+                    {bancos.length > 0 && (
+                        <div style={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center', 
+                            padding: '0.45rem 0.6rem', 
+                            backgroundColor: 'rgba(16, 185, 129, 0.08)', 
+                            borderRadius: '6px', 
+                            border: '1px solid rgba(16, 185, 129, 0.2)',
+                            fontSize: '0.8rem', 
+                            fontWeight: 'bold' 
+                        }}>
+                            <span>Total disponible:</span>
+                            <span style={{ color: '#10b981' }}>
+                                ${kpi.liquidez_bancos_usd?.toLocaleString() || 0}
+                            </span>
+                        </div>
+                    )}
+
                     {/* Compromisos en 48h */}
                     {compromisos.length > 0 && (
-                        <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
+                        <div style={{ marginTop: '0.25rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.6rem' }}>
                             <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#f59e0b', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                                 <Clock size={14} /> Pagos Próximos (48 horas):
                             </div>
-                            <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.75rem', color: 'var(--text-muted)', maxHeight: '90px', overflowY: 'auto' }}>
                                 {compromisos.map((c, idx) => (
                                     <li key={idx}>
                                         <strong>{c.tipo}:</strong> {c.descripcion} — <span style={{ color: 'var(--text)', fontWeight: 600 }}>${c.monto?.toLocaleString()}</span> ({formatDateDMY(c.fecha)})
