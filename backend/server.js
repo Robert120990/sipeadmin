@@ -39,6 +39,41 @@ io.on("connection", (socket) => {
     });
 });
 
+const rateLimit = require('express-rate-limit');
+const { authenticateToken, requireRole } = require('./middleware/auth');
+
+// Rate limiting general para la API (300 req / min por IP)
+const apiLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Demasiadas solicitudes desde esta IP, por favor intente nuevamente en un momento.' }
+});
+
+// Rate limiting estricto para Login (10 intentos / 15 min por IP)
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Demasiados intentos fallidos de inicio de sesión. Por favor espere 15 minutos.' }
+});
+
+// Rate limiting para endpoints de Inteligencia Artificial (20 req / min por IP)
+const aiLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Límite de consultas de IA alcanzado por este minuto. Intente de nuevo en breve.' }
+});
+
+app.use('/api/login', loginLimiter);
+app.use('/api/ai/', aiLimiter);
+app.use('/api/finanzas/chat', aiLimiter);
+app.use('/api/', apiLimiter);
+
 // Import Routes
 const authRoutes = require('./routes/auth');
 const bancosRoutes = require('./routes/bancos');
@@ -68,40 +103,6 @@ app.use('/api', onedriveRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api', bitacoraRoutes);
 app.use('/api/check-designer', checkDesignerRoutes);
-
-const rateLimit = require('express-rate-limit');
-const { authenticateToken, requireRole } = require('./middleware/auth');
-
-// Rate limiting general para la API (300 req / min por IP)
-const apiLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 300,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { message: 'Demasiadas solicitudes desde esta IP, por favor intente nuevamente en un momento.' }
-});
-app.use('/api/', apiLimiter);
-
-// Rate limiting estricto para Login (10 intentos / 15 min por IP)
-const loginLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { message: 'Demasiados intentos fallidos de inicio de sesión. Por favor espere 15 minutos.' }
-});
-app.use('/api/login', loginLimiter);
-
-// Rate limiting para endpoints de Inteligencia Artificial (20 req / min por IP)
-const aiLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 20,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { message: 'Límite de consultas de IA alcanzado por este minuto. Intente de nuevo en breve.' }
-});
-app.use('/api/ai/', aiLimiter);
-app.use('/api/finanzas/chat', aiLimiter);
 
 // Health Check público
 app.get('/api/debug-ping', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
