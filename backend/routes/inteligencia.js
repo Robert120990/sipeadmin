@@ -5,7 +5,7 @@ const { sendSafeError } = require('../utils/errorHandler');
 const { getTanquesAutonomia, calcularSimuladorDGEHM, getAuditoriaMermas } = require('../services/fuelIntelligence');
 const { getFlujoCajaProyectado } = require('../services/cashflowForecast');
 const { getRentabilidadPorEstacion } = require('../services/profitabilityService');
-const { getRiesgoCreditoFlotas } = require('../services/creditRiskService');
+const { getRiesgoCreditoFlotas, getDetalleDtesCliente } = require('../services/creditRiskService');
 const { getFlashEjecutivo, enviarFlashPorEmail } = require('../services/executiveFlashService');
 
 // 1. Flash Ejecutivo para Dueños
@@ -90,6 +90,17 @@ router.get('/credito-flotas', authenticateToken, async (req, res) => {
         res.json(data);
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar riesgo crediticio');
+    }
+});
+
+// 8. Detalle de DTEs, Estado de Pago y Abonos por Cliente
+router.get('/credito-flotas/:customerId/dtes', authenticateToken, async (req, res) => {
+    const { customerId } = req.params;
+    try {
+        const data = await getDetalleDtesCliente(customerId);
+        res.json(data);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar DTEs y abonos del cliente');
     }
 });
 

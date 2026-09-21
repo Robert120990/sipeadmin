@@ -131,6 +131,264 @@ const getRiesgoCreditoFlotas = async () => {
     };
 };
 
+/**
+ * Evalúa el estado de pago, porcentaje pagado y mora de un DTE
+ */
+const calcularEstadoPagoDte = ({ total_pagar = 0, total_abonado = 0, condicion_operacion = 2, fecha_emision = null, dias_plazo = 15, fecha_referencia = new Date() }) => {
+    const total = Number(total_pagar || 0);
+    const abonado = Number(total_abonado || 0);
+    const saldo = Math.max(0, Math.round((total - abonado) * 100) / 100);
+    const esCredito = Number(condicion_operacion) === 2;
+
+    let estado_pago = 'PENDIENTE';
+    if (!esCredito) {
+        estado_pago = 'PAGADO_CONTADO';
+    } else if (saldo <= 0.01) {
+        estado_pago = 'PAGADO';
+    } else if (abonado > 0) {
+        estado_pago = 'ABONADO_PARCIAL';
+    } else {
+        estado_pago = 'PENDIENTE';
+    }
+
+    let dias_transcurridos = 0;
+    let dias_mora = 0;
+    if (fecha_emision) {
+        const fEmi = new Date(fecha_emision);
+        if (!isNaN(fEmi.getTime())) {
+            const diff = Math.abs(fecha_referencia - fEmi);
+            dias_transcurridos = Math.floor(diff / (1000 * 60 * 60 * 24));
+            if (esCredito && estado_pago !== 'PAGADO' && dias_transcurridos > dias_plazo) {
+                dias_mora = dias_transcurridos - dias_plazo;
+            }
+        }
+    }
+
+    const porcentaje_pagado = total > 0 ? Math.min(100, Math.round((abonado / total) * 100)) : 100;
+
+    return {
+        total_pagar: total,
+        total_abonado: abonado,
+        saldo_pendiente: saldo,
+        porcentaje_pagado,
+        estado_pago,
+        dias_transcurridos,
+        dias_mora,
+        vencido: dias_mora > 0
+    };
+};
+
+/**
+ * Consulta de DTEs, estado de pago y abonos de un cliente específico
+ * Conectado exclusivamente a Nova SaaS (db_sistema_saas)
+ * @param {number|string} customerId 
+ */
+const getDetalleDtesCliente = async (customerId) => {
+    const accountingDb = await getAccountingDb();
+
+    // 1. Datos del cliente
+    const [custRows] = await withRetry(() => accountingDb.query(`
+        SELECT 
+            c.id,
+            c.company_id,
+            comp.nombre_comercial as empresa_emisora,
+            COALESCE(c.nombre_comercial, c.nombre) as cliente_nombre,
+            c.nit,
+            c.nrc,
+            COALESCE(c.dias_credito, 15) as dias_plazo
+        FROM customers c
+        INNER JOIN companies comp ON c.company_id = comp.id
+        WHERE c.id = ?
+        LIMIT 1
+    `, [customerId]));
+
+    if (!custRows || custRows.length === 0) {
+        throw new Error('Cliente no encontrado en la base de datos');
+    }
+    const cliente = custRows[0];
+
+    // 2. DTEs emitidos para el cliente
+    const [dtesRows] = await withRetry(() => accountingDb.query(`
+        SELECT 
+            s.id as sale_id,
+            s.company_id,
+            s.branch_id,
+            b.nombre as sucursal_nombre,
+            s.tipo_documento,
+            s.dte_type,
+            s.numero_control,
+            s.codigo_generacion,
+            s.sello_recepcion,
+            s.fecha_emision,
+            s.hora_emision,
+            s.condicion_operacion,
+            s.estado,
+            s.total_gravado,
+            s.total_iva,
+            s.total_pagar,
+            COALESCE(p.total_abonado, 0.0) as total_abonado
+        FROM sales_headers s
+        LEFT JOIN branches b ON s.branch_id = b.id
+        LEFT JOIN (
+            SELECT sale_id, SUM(monto) as total_abonado
+            FROM customer_payments
+            WHERE sale_id IS NOT NULL
+            GROUP BY sale_id
+        ) p ON s.id = p.sale_id
+        WHERE s.customer_id = ?
+          AND s.estado != 'invalidado'
+        ORDER BY s.fecha_emision DESC, s.id DESC
+        LIMIT 250
+    `, [customerId]));
+
+    // 3. Abonos y pagos recibidos del cliente
+    const [pagosRows] = await withRetry(() => accountingDb.query(`
+        SELECT 
+            cp.id,
+            cp.company_id,
+            cp.branch_id,
+            b.nombre as sucursal_nombre,
+            cp.customer_id,
+            cp.sale_id,
+            cp.monto,
+            cp.fecha_pago,
+            cp.metodo_pago,
+            cp.referencia,
+            cp.notas,
+            cp.created_at,
+            s.numero_control,
+            s.codigo_generacion,
+            s.fecha_emision as dte_fecha_emision
+        FROM customer_payments cp
+        LEFT JOIN branches b ON cp.branch_id = b.id
+        LEFT JOIN sales_headers s ON cp.sale_id = s.id
+        WHERE cp.customer_id = ?
+        ORDER BY cp.fecha_pago DESC, cp.id DESC
+        LIMIT 250
+    `, [customerId]));
+
+    const TIPO_DTE_LABELS = {
+        '01': 'Factura Electrónica (FE)',
+        '03': 'Comprobante Crédito Fiscal (CCF)',
+        '05': 'Nota de Crédito (NC)',
+        '06': 'Nota de Débito (ND)',
+        '11': 'Factura de Exportación (FEX)',
+        '14': 'Factura Sujeto Excluido (FSE)'
+    };
+
+    const METODOS_PAGO_LABELS = {
+        '01': 'Efectivo',
+        '02': 'Tarjeta Débito/Crédito',
+        '03': 'Cheque',
+        '04': 'Transferencia / Depósito',
+        '05': 'Giro Bancario',
+        '06': 'Otros'
+    };
+
+    const today = new Date();
+    const plazoDias = Number(cliente.dias_plazo || 15);
+
+    let totalFacturado = 0;
+    let totalAbonado = 0;
+    let totalSaldoPendiente = 0;
+    let dtesPagadosCount = 0;
+    let dtesPendientesCount = 0;
+    let dtesAbonoParcialCount = 0;
+
+    const dtes = dtesRows.map(row => {
+        const calculos = calcularEstadoPagoDte({
+            total_pagar: row.total_pagar,
+            total_abonado: row.total_abonado,
+            condicion_operacion: row.condicion_operacion,
+            fecha_emision: row.fecha_emision,
+            dias_plazo: plazoDias,
+            fecha_referencia: today
+        });
+
+        totalFacturado += calculos.total_pagar;
+        totalAbonado += calculos.total_abonado;
+        totalSaldoPendiente += calculos.saldo_pendiente;
+
+        if (calculos.estado_pago === 'PAGADO' || calculos.estado_pago === 'PAGADO_CONTADO') {
+            dtesPagadosCount++;
+        } else if (calculos.estado_pago === 'ABONADO_PARCIAL') {
+            dtesAbonoParcialCount++;
+        } else {
+            dtesPendientesCount++;
+        }
+
+        const tipoCodigo = row.dte_type || row.tipo_documento || '03';
+        const tipoDesc = TIPO_DTE_LABELS[tipoCodigo] || `DTE-${tipoCodigo}`;
+
+        return {
+            id: row.sale_id,
+            numero_control: row.numero_control || `VTA-${row.sale_id}`,
+            codigo_generacion: row.codigo_generacion || null,
+            sello_recepcion: row.sello_recepcion || null,
+            tipo_dte: tipoCodigo,
+            tipo_dte_desc: tipoDesc,
+            condicion_operacion: Number(row.condicion_operacion) === 2 ? 'Crédito' : 'Contado',
+            fecha_emision: row.fecha_emision ? (row.fecha_emision instanceof Date ? row.fecha_emision.toISOString().split('T')[0] : String(row.fecha_emision).split('T')[0]) : null,
+            hora_emision: row.hora_emision || null,
+            sucursal_nombre: row.sucursal_nombre || 'Estación Central',
+            total_gravado: Number(row.total_gravado || 0),
+            total_iva: Number(row.total_iva || 0),
+            total_pagar: calculos.total_pagar,
+            total_abonado: calculos.total_abonado,
+            saldo_pendiente: calculos.saldo_pendiente,
+            porcentaje_pagado: calculos.porcentaje_pagado,
+            estado_pago: calculos.estado_pago,
+            dias_transcurridos: calculos.dias_transcurridos,
+            dias_mora: calculos.dias_mora,
+            vencido: calculos.vencido
+        };
+    });
+
+    const abonos = pagosRows.map(p => {
+        const metodoKey = String(p.metodo_pago || '').trim();
+        return {
+            id: p.id,
+            monto: Number(p.monto || 0),
+            fecha_pago: p.fecha_pago ? (p.fecha_pago instanceof Date ? p.fecha_pago.toISOString().split('T')[0] : String(p.fecha_pago).split('T')[0]) : null,
+            metodo_pago: METODOS_PAGO_LABELS[metodoKey] || p.metodo_pago || 'Pago Registrado',
+            referencia: p.referencia || 'S/R',
+            notas: p.notas || '',
+            sale_id: p.sale_id || null,
+            numero_control: p.numero_control || (p.sale_id ? `Venta #${p.sale_id}` : null),
+            codigo_generacion: p.codigo_generacion || null,
+            tipo_abono: p.sale_id ? 'ABONO_DTE' : 'ABONO_GENERAL'
+        };
+    });
+
+    const totalPagosRegistrados = abonos.reduce((sum, a) => sum + a.monto, 0);
+
+    return {
+        cliente: {
+            id: cliente.id,
+            nombre: cliente.cliente_nombre,
+            empresa_emisora: cliente.empresa_emisora,
+            nit: cliente.nit,
+            nrc: cliente.nrc,
+            dias_plazo: plazoDias
+        },
+        resumen: {
+            total_facturado_usd: Math.round(totalFacturado * 100) / 100,
+            total_abonado_usd: Math.round(totalAbonado * 100) / 100,
+            total_pagos_recibidos_usd: Math.round(totalPagosRegistrados * 100) / 100,
+            saldo_pendiente_usd: Math.max(0, Math.round((totalFacturado - totalPagosRegistrados) * 100) / 100),
+            saldo_pendiente_dtes_usd: Math.round(totalSaldoPendiente * 100) / 100,
+            total_dtes: dtes.length,
+            dtes_pagados: dtesPagadosCount,
+            dtes_con_abono: dtesAbonoParcialCount,
+            dtes_pendientes: dtesPendientesCount
+        },
+        dtes,
+        abonos
+    };
+};
+
 module.exports = {
-    getRiesgoCreditoFlotas
+    getRiesgoCreditoFlotas,
+    getDetalleDtesCliente,
+    calcularEstadoPagoDte
 };

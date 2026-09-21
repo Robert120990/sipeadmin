@@ -212,5 +212,68 @@ describe('Suite de Inteligencia y Decisión Estratégica Tests', () => {
             assert.strictEqual(formatDMY(''), '');
         });
     });
+
+    describe('Evaluación de Estado de Pago de DTEs y Abonos', () => {
+        const { calcularEstadoPagoDte } = require('../services/creditRiskService');
+
+        it('debe marcar DTE como PAGADO si el total abonado cubre el total de la factura', () => {
+            const res = calcularEstadoPagoDte({
+                total_pagar: 1500,
+                total_abonado: 1500,
+                condicion_operacion: 2
+            });
+            assert.strictEqual(res.estado_pago, 'PAGADO');
+            assert.strictEqual(res.saldo_pendiente, 0);
+            assert.strictEqual(res.porcentaje_pagado, 100);
+            assert.strictEqual(res.vencido, false);
+        });
+
+        it('debe marcar DTE como ABONADO_PARCIAL si hay un abono pero queda saldo pendiente', () => {
+            const res = calcularEstadoPagoDte({
+                total_pagar: 1000,
+                total_abonado: 350,
+                condicion_operacion: 2
+            });
+            assert.strictEqual(res.estado_pago, 'ABONADO_PARCIAL');
+            assert.strictEqual(res.saldo_pendiente, 650);
+            assert.strictEqual(res.porcentaje_pagado, 35);
+        });
+
+        it('debe marcar DTE como PENDIENTE si no tiene ningún abono', () => {
+            const res = calcularEstadoPagoDte({
+                total_pagar: 850,
+                total_abonado: 0,
+                condicion_operacion: 2
+            });
+            assert.strictEqual(res.estado_pago, 'PENDIENTE');
+            assert.strictEqual(res.saldo_pendiente, 850);
+            assert.strictEqual(res.porcentaje_pagado, 0);
+        });
+
+        it('debe calcular mora correctamente cuando los días transcurridos superan el plazo', () => {
+            const refDate = new Date('2026-09-20T12:00:00Z');
+            const fechaEmision = '2026-08-20'; // 31 días atrás
+            const res = calcularEstadoPagoDte({
+                total_pagar: 1200,
+                total_abonado: 0,
+                condicion_operacion: 2,
+                fecha_emision: fechaEmision,
+                dias_plazo: 15,
+                fecha_referencia: refDate
+            });
+            assert.strictEqual(res.vencido, true);
+            assert.ok(res.dias_mora >= 15);
+        });
+
+        it('debe marcar documento de contado como PAGADO_CONTADO', () => {
+            const res = calcularEstadoPagoDte({
+                total_pagar: 500,
+                total_abonado: 0,
+                condicion_operacion: 1
+            });
+            assert.strictEqual(res.estado_pago, 'PAGADO_CONTADO');
+        });
+    });
 });
+
 
