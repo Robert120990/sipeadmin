@@ -1680,7 +1680,7 @@ export default function ConciliacionBancaria() {
             >
                 {selectedItem && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', fontSize: '0.9rem' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.8rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.8rem' }}>
                             <div>
                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Tipo de Documento:</span>
                                 <div style={{ fontWeight: 'bold' }}>{renderTipoBadge(selectedItem.tipo)} {selectedItem.origen_tipo === 'CK' ? 'Cheque' : 'Movimiento'}</div>

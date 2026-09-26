@@ -106,8 +106,8 @@ export default function VentasEstaciones() {
                 <h3 style={{ margin: '0', padding: '1rem', borderBottom: '1px solid var(--border)', fontSize: '1rem', color: 'var(--text-muted)' }}>
                     Resumen de Ventas Tiendas E-Market
                 </h3>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
+                <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '650px' }}>
                         <thead>
                             <tr>
                                 <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Fecha</th>
@@ -152,8 +152,8 @@ export default function VentasEstaciones() {
                 <h3 style={{ margin: '0', padding: '1rem', borderBottom: '1px solid var(--border)', fontSize: '1rem', color: 'var(--text-muted)' }}>
                     Resumen de Ventas Estaciones
                 </h3>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
+                <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '700px' }}>
                         <thead>
                             <tr>
                                 <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Sucursal</th>
@@ -190,8 +190,8 @@ export default function VentasEstaciones() {
                 <h3 style={{ margin: '0', padding: '1rem', borderBottom: '1px solid var(--border)', fontSize: '1rem', color: 'var(--text-muted)' }}>
                     Márgenes de Combustible
                 </h3>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
+                <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '850px' }}>
                         <thead>
                             <tr>
                                 <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Sucursal</th>
@@ -232,8 +232,8 @@ export default function VentasEstaciones() {
                 <h3 style={{ margin: '0', padding: '1rem', borderBottom: '1px solid var(--border)', fontSize: '1rem', color: 'var(--text-muted)' }}>
                     Resumen de Inventario de Combustibles
                 </h3>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
+                <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '850px' }}>
                         <thead>
                             <tr>
                                 <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Sucursal</th>

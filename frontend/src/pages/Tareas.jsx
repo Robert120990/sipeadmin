@@ -1565,7 +1565,7 @@ export default function Tareas() {
                         {/* Meta info grid */}
                         <div style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(2, 1fr)',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
                             gap: '0.65rem',
                             padding: '0.65rem 0.85rem',
                             background: 'var(--bg-secondary)',

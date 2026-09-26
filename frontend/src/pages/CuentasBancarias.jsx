@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
@@ -209,7 +209,7 @@ export default function CuentasBancarias() {
             </div>
 
             <div className="card glass table-responsive">
-                <table style={{ fontSize: '0.75rem', width: '100%', borderCollapse: 'collapse' }}>
+                <table style={{ fontSize: '0.75rem', width: '100%', minWidth: '850px', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)' }}>
                             <th style={{ padding: '0.75rem 1rem', textAlign: 'left' }}>Empresa</th>

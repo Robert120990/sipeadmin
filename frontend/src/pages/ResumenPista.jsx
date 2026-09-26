@@ -147,9 +147,8 @@ export default function ResumenPista() {
             </div>
 
             {/* Table */}
-            <div className="card glass" style={{ padding: '0' }}>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
+            <div className="card glass table-responsive" style={{ padding: '0' }}>
+                <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '950px' }}>
                         <thead>
                             <tr>
                                 <th style={{ textAlign: 'left', padding: '1rem 0.5rem' }}>Sucursal</th>
@@ -192,7 +191,6 @@ export default function ResumenPista() {
                             )}
                         </tbody>
                     </table>
-                </div>
             </div>
         </div>
     );

@@ -375,6 +375,17 @@ router.put('/:id', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
+
+        const [existingTasks] = await db.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [taskId]);
+        if (existingTasks.length === 0) {
+            return res.status(404).json({ message: 'Tarea no encontrada' });
+        }
+
+        const taskRow = existingTasks[0];
+        if (req.user.role_id !== 1 && req.user.role !== 'Administrator' && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
+            return res.status(403).json({ message: 'No tiene permisos para modificar esta tarea.' });
+        }
+
         const {
             titulo,
             descripcion,
@@ -491,6 +502,16 @@ router.patch('/:id/status', authenticateToken, async (req, res) => {
         const taskId = req.params.id;
         const { estado, orden } = req.body;
 
+        const [existingTasks] = await db.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [taskId]);
+        if (existingTasks.length === 0) {
+            return res.status(404).json({ message: 'Tarea no encontrada' });
+        }
+
+        const taskRow = existingTasks[0];
+        if (req.user.role_id !== 1 && req.user.role !== 'Administrator' && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
+            return res.status(403).json({ message: 'No tiene permisos para cambiar el estado de esta tarea.' });
+        }
+
         const validStatuses = ['pendiente', 'en_proceso', 'en_revision', 'completada', 'cancelada'];
         if (!validStatuses.includes(estado)) {
             return res.status(400).json({ message: 'Estado de tarea no válido.' });
@@ -567,6 +588,16 @@ router.patch('/:id/checklist', authenticateToken, async (req, res) => {
         const db = getDb();
         const taskId = req.params.id;
         const { checklist } = req.body;
+
+        const [existingTasks] = await db.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [taskId]);
+        if (existingTasks.length === 0) {
+            return res.status(404).json({ message: 'Tarea no encontrada' });
+        }
+
+        const taskRow = existingTasks[0];
+        if (req.user.role_id !== 1 && req.user.role !== 'Administrator' && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
+            return res.status(403).json({ message: 'No tiene permisos para modificar la lista de verificación de esta tarea.' });
+        }
 
         if (!Array.isArray(checklist)) {
             return res.status(400).json({ message: 'El checklist debe ser una lista de ítems.' });

@@ -104,8 +104,8 @@ function App() {
                                     <Route path="consultas/estaciones/diferencias-combustible" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/diferencias-combustible"><DiferenciasCombustible /></PermissionRoute>} />
                                     <Route path="consultas/estaciones/precios" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios"><PreciosEstacion /></PermissionRoute>} />
                                     <Route path="consultas/estaciones/precios-competencia" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios-competencia"><ConsultasPreciosCompetencia /></PermissionRoute>} />
-                                    <Route path="operaciones/pedidos" element={<ProtectedRoute><PedidosCombustible /></ProtectedRoute>} />
-                                    <Route path="operaciones/recordatorios" element={<ProtectedRoute><ControlRecordatorios /></ProtectedRoute>} />
+                                    <Route path="operaciones/pedidos" element={<PermissionRoute pathKey="/dashboard/operaciones/pedidos"><PedidosCombustible /></PermissionRoute>} />
+                                    <Route path="operaciones/recordatorios" element={<PermissionRoute pathKey="/dashboard/operaciones/recordatorios"><ControlRecordatorios /></PermissionRoute>} />
                                     <Route path="operaciones/tareas" element={<PermissionRoute pathKey="/dashboard/operaciones/tareas"><Tareas /></PermissionRoute>} />
                                     <Route path="bancos/reportes/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />
                                     <Route path="bancos/reportes/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />

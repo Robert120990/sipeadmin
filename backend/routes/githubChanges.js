@@ -449,8 +449,8 @@ router.get(
     async (req, res) => {
         try {
             const { sha } = req.params;
-            if (!sha || sha.length < 4) {
-                return res.status(400).json({ message: 'SHA de commit inválido' });
+            if (!sha || !/^[a-fA-F0-9]{6,40}$/.test(sha)) {
+                return res.status(400).json({ message: 'SHA de commit inválido (debe ser un hash hexadecimal de 6 a 40 caracteres)' });
             }
 
             const detail = await fetchCommitDetail(sha);

@@ -564,9 +564,9 @@ export default function PedidosCombustible() {
                 </div>
 
                 {/* Panel Derecho: Matriz de Resultados */}
-                <div className="card glass" style={{ padding: 0, overflowX: 'auto' }}>
+                <div className="card glass table-responsive" style={{ padding: 0, overflowX: 'auto' }}>
                     <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', background: 'rgba(37,99,235,0.1)', padding: '0.5rem' }}>RESUMEN DE DATOS OPERACIONALES</h3>
-                    <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                    <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '550px' }}>
                         <thead>
                             <tr style={{ background: 'var(--bg-color)' }}>
                                 <th style={{ padding: '0.5rem', textAlign: 'left' }}>METRICA</th>
@@ -639,10 +639,10 @@ export default function PedidosCombustible() {
             </div>
 
             {/* Tablas Inferiores */}
-            <div className="card glass" style={{ padding: 0, opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
+            <div className="card glass table-responsive" style={{ padding: 0, opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
                 <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', background: 'var(--bg-active)', padding: '0.5rem', borderBottom: '1px solid var(--border)' }}>PEDIDOS PROGRAMADOS POR ESTACION</h3>
                 <div style={{ overflowX: 'auto', padding: '0.5rem' }}>
-                    <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                    <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '600px' }}>
                         <thead>
                             <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg-color)' }}>
                                 <th style={{ textAlign: 'left', padding: '0.5rem' }}>FECHA</th>

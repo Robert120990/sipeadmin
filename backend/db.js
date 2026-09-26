@@ -663,7 +663,10 @@ const initDB = async () => {
                     ['manage_finanzas_inversiones', 'Permite gestionar proyectos de inversión y presupuestos'],
                     ['manage_finanzas_mantenimiento', 'Permite programar y gestionar mantenimientos'],
                     ['/dashboard/operaciones/tareas', 'Acceso a Asignación y Gestión de Tareas'],
-                    ['manage_tasks', 'Permite crear, asignar y eliminar tareas']
+                    ['manage_tasks', 'Permite crear, asignar y eliminar tareas'],
+                    ['/dashboard/operaciones/pedidos', 'Acceso a Pedidos de Combustible'],
+                    ['/dashboard/operaciones/recordatorios', 'Acceso a Control de Recordatorios y Pagos'],
+                    ['manage_recordatorios', 'Permite crear, editar, pagar y anular recordatorios']
                 ];
                 for (const [pName, pDesc] of newPerms) {
                     await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);
