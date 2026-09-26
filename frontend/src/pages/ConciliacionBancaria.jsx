@@ -3,7 +3,7 @@ import {
     Scale, Search, CheckSquare, Square, RefreshCw, UploadCloud, 
     FileSpreadsheet, FileText, Eye, Edit2, CheckCircle2, 
     AlertCircle, ArrowRightLeft, Sparkles, Filter, X, ShieldAlert,
-    Calendar, Building2, Landmark, DollarSign, Check, Clock, Plus, Link2, Layers
+    Calendar, Building2, Landmark, DollarSign, Check, Clock, Plus, Link2, Layers, Printer
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -13,6 +13,7 @@ import { socket } from '../services/socket';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 import { getStoredUser } from '../utils/auth';
 
@@ -114,6 +115,14 @@ export default function ConciliacionBancaria() {
     const [showEditModal, setShowEditModal] = useState(false);
     const [showValidationModal, setShowValidationModal] = useState(false);
     const [showAssignModal, setShowAssignModal] = useState(false);
+
+    // ReportPreviewModal state
+    const [showPdfPreview, setShowPdfPreview] = useState(false);
+    const [previewPdfBlob, setPreviewPdfBlob] = useState(null);
+    const [previewTotalPages, setPreviewTotalPages] = useState(1);
+    const [previewTitle, setPreviewTitle] = useState('Conciliación Bancaria');
+    const [previewSubtitle, setPreviewSubtitle] = useState('');
+    const [previewFileName, setPreviewFileName] = useState('Conciliacion.pdf');
 
     // Item seleccionado para detalle/edición
     const [selectedItem, setSelectedItem] = useState(null);
@@ -845,12 +854,16 @@ export default function ConciliacionBancaria() {
         addToast('Archivo Excel descargado', 'success');
     };
 
-    // Exportar a PDF
+    // Exportar a PDF con ReportPreviewModal (Tamaño Carta)
     const exportToPDF = () => {
         const dataToExport = activeTab === 'MOVIMIENTOS' ? filteredMovimientos : filteredPendientes;
         if (dataToExport.length === 0) return;
 
-        const doc = new jsPDF('landscape');
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
         const title = `Conciliación Bancaria - ${activeTab === 'MOVIMIENTOS' ? 'Movimientos Aplicados' : 'Documentos Pendientes'}`;
         doc.setFontSize(14);
         doc.text(title, 14, 15);
@@ -860,6 +873,8 @@ export default function ConciliacionBancaria() {
         doc.text(sub, 14, 22);
 
         const tableColumn = ['FECHA', 'TIPO', 'DOCUMENTO', 'CONCEPTO', 'BENEFICIARIO', 'MONTO', 'APLICADO'];
+        const totalMonto = dataToExport.reduce((acc, r) => acc + Number(r.monto_display || 0), 0);
+
         const tableRows = dataToExport.map(r => [
             r.fecha_display || '',
             r.tipo || '',
@@ -877,11 +892,47 @@ export default function ConciliacionBancaria() {
             theme: 'striped',
             styles: { fontSize: 8, cellPadding: 2 },
             headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] },
-            alternateRowStyles: { fillColor: [248, 250, 252] }
+            alternateRowStyles: { fillColor: [248, 250, 252] },
+            columnStyles: {
+                0: { cellWidth: 22 },
+                1: { cellWidth: 16, halign: 'center' },
+                2: { cellWidth: 28 },
+                3: { cellWidth: 'auto' },
+                4: { cellWidth: 45 },
+                5: { cellWidth: 26, halign: 'right' },
+                6: { cellWidth: 24, halign: 'center' }
+            },
+            foot: [
+                [
+                    { content: `TOTAL (${dataToExport.length} registros):`, colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
+                    { content: `$${totalMonto.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, styles: { halign: 'right', fontStyle: 'bold', textColor: [37, 99, 235] } },
+                    { content: '', styles: { halign: 'center' } }
+                ]
+            ],
+            footStyles: {
+                fillColor: [241, 245, 249],
+                textColor: [15, 23, 42],
+                fontSize: 8.5
+            },
+            didDrawPage: (data) => {
+                const pageCount = doc.internal.getNumberOfPages();
+                doc.setFontSize(8);
+                doc.setTextColor(148, 163, 184);
+                doc.text(`Página ${data.pageNumber} de ${pageCount}`, doc.internal.pageSize.width - 14, doc.internal.pageSize.height - 8, { align: 'right' });
+                doc.text('SIPE Admin - Reporte de Conciliación Bancaria', 14, doc.internal.pageSize.height - 8);
+            }
         });
 
-        doc.save(`Conciliacion_${activeTab}_${hasta}.pdf`);
-        addToast('Documento PDF descargado', 'success');
+        const blob = doc.output('blob');
+        const totalPages = doc.internal.getNumberOfPages();
+        const cuentaNom = cuentaInfo ? `${cuentaInfo.banco_nombre}_${cuentaInfo.numero}` : 'Conciliacion';
+        const fileName = `Conciliacion_${activeTab}_${cuentaNom}_${hasta}.pdf`;
+        setPreviewPdfBlob(blob);
+        setPreviewTotalPages(totalPages);
+        setPreviewTitle(title);
+        setPreviewSubtitle(sub);
+        setPreviewFileName(fileName);
+        setShowPdfPreview(true);
     };
 
     // Render de Badges por tipo de movimiento
@@ -957,10 +1008,10 @@ export default function ConciliacionBancaria() {
                     <button 
                         onClick={exportToPDF} 
                         className="btn-secondary" 
-                        title="Exportar a PDF"
+                        title="Vista previa e impresión en tamaño Carta"
                         style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
                     >
-                        <FileText size={16} /> PDF
+                        <Printer size={16} /> Vista Previa / PDF
                     </button>
                     <button 
                         onClick={fetchData} 
@@ -2128,6 +2179,16 @@ export default function ConciliacionBancaria() {
                 </div>
             </Modal>
 
+            <ReportPreviewModal
+                isOpen={showPdfPreview}
+                onClose={() => setShowPdfPreview(false)}
+                pdfSource={previewPdfBlob}
+                title={previewTitle}
+                subtitle={previewSubtitle}
+                badge={activeTab === 'MOVIMIENTOS' ? 'CONCILIADOS' : 'PENDIENTES'}
+                totalPages={previewTotalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 }

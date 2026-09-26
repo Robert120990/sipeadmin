@@ -134,7 +134,7 @@ const ChequesContado = () => {
     const isPending = (sol) => !sol.num_cheque || sol.num_cheque.trim() === '';
 
     return (
-        <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+        <div style={{ animation: 'fadeIn 0.5s ease-out' }}>
             <div className="page-header">
                 <div>
                     <h1 style={{ color: 'var(--primary)', marginBottom: '0.25rem' }}>Emisión de Cheques de Contado</h1>
@@ -165,9 +165,8 @@ const ChequesContado = () => {
                 </button>
             </div>
 
-            <div className="card glass" style={{ padding: 0, overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+            <div className="card glass table-responsive">
+                <table style={{ width: '100%', minWidth: '850px', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                         <thead>
                             <tr style={{ backgroundColor: 'rgba(0,0,0,0.2)', textAlign: 'left' }}>
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Fecha</th>
@@ -228,7 +227,6 @@ const ChequesContado = () => {
                         </tbody>
                     </table>
                 </div>
-            </div>
 
             <Modal open={showModal && !!selectedSolicitud} onClose={() => setShowModal(false)} title={<span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><CreditCard size={20} color="var(--primary)" />Generar Cheque de Contado</span>}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>

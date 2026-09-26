@@ -1,10 +1,11 @@
 import React, { useState, useMemo } from 'react';
-import { Calculator, DollarSign, Calendar, Percent, TrendingDown, ArrowRight, FileSpreadsheet, FileText, Plus, Trash2, CheckCircle2, Landmark, RefreshCw, ShieldCheck, PiggyBank, Coins } from 'lucide-react';
+import { Calculator, DollarSign, Calendar, Percent, TrendingDown, ArrowRight, FileSpreadsheet, FileText, Plus, Trash2, CheckCircle2, Landmark, RefreshCw, ShieldCheck, PiggyBank, Coins, Printer } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import api from '../services/api';
 import { calculatePMT, calculatePV, generateAmortizationSchedule, formatCurrency, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, COMMISSION_TYPES } from '../utils/loanCalculations';
 
@@ -48,6 +49,13 @@ export default function FinanzasCalculadora() {
         notas: ''
     });
     const [savingLoan, setSavingLoan] = useState(false);
+
+    // ReportPreviewModal state
+    const [showPdfPreview, setShowPdfPreview] = useState(false);
+    const [previewPdfBlob, setPreviewPdfBlob] = useState(null);
+    const [previewTotalPages, setPreviewTotalPages] = useState(1);
+    const [previewSubtitle, setPreviewSubtitle] = useState('');
+    const [previewFileName, setPreviewFileName] = useState('Tabla_Amortizacion.pdf');
 
     // Dynamic calculation
     const effectivePrincipal = useMemo(() => {
@@ -201,10 +209,14 @@ export default function FinanzasCalculadora() {
         addToast('Archivo Excel descargado', 'success');
     };
 
-    // Export to PDF according to ui_standards.md
+    // Export to PDF according to ui_standards.md (Letter size with ReportPreviewModal)
     const exportToPDF = () => {
         if (result.schedule.length === 0) return;
-        const doc = new jsPDF('landscape');
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
         const title = 'Tabla de Amortización del Préstamo';
 
         doc.setFontSize(15);
@@ -248,11 +260,24 @@ export default function FinanzasCalculadora() {
             theme: 'striped',
             styles: { fontSize: 8, cellPadding: 2 },
             headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] },
-            alternateRowStyles: { fillColor: [245, 245, 245] }
+            alternateRowStyles: { fillColor: [245, 245, 245] },
+            didDrawPage: (data) => {
+                const pageCount = doc.internal.getNumberOfPages();
+                doc.setFontSize(8);
+                doc.setTextColor(148, 163, 184);
+                doc.text(`Página ${data.pageNumber} de ${pageCount}`, doc.internal.pageSize.width - 14, doc.internal.pageSize.height - 8, { align: 'right' });
+                doc.text('SIPE Admin - Tabla de Amortización Proyectada', 14, doc.internal.pageSize.height - 8);
+            }
         });
 
-        doc.save(`Tabla_Amortizacion_${new Date().toISOString().split('T')[0]}.pdf`);
-        addToast('Documento PDF descargado', 'success');
+        const blob = doc.output('blob');
+        const totalPages = doc.internal.getNumberOfPages();
+        const fileName = `Tabla_Amortizacion_${new Date().toISOString().split('T')[0]}.pdf`;
+        setPreviewPdfBlob(blob);
+        setPreviewTotalPages(totalPages);
+        setPreviewSubtitle(subtitle);
+        setPreviewFileName(fileName);
+        setShowPdfPreview(true);
     };
 
     // Prepare chart points for SVG
@@ -355,8 +380,8 @@ export default function FinanzasCalculadora() {
                     <button onClick={exportToExcel} disabled={result.schedule.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <FileSpreadsheet size={18} /> Excel
                     </button>
-                    <button onClick={exportToPDF} disabled={result.schedule.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <FileText size={18} /> PDF
+                    <button onClick={exportToPDF} disabled={result.schedule.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} title="Vista previa e impresión en tamaño Carta">
+                        <Printer size={18} /> Vista Previa / PDF
                     </button>
                 </div>
             </div>
@@ -1235,6 +1260,17 @@ export default function FinanzasCalculadora() {
                     </div>
                 </form>
             </Modal>
+
+            <ReportPreviewModal
+                isOpen={showPdfPreview}
+                onClose={() => setShowPdfPreview(false)}
+                pdfSource={previewPdfBlob}
+                title="Tabla de Amortización del Préstamo"
+                subtitle={previewSubtitle}
+                badge="CALCULADORA"
+                totalPages={previewTotalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 }

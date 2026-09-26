@@ -82,7 +82,7 @@ const BackupDBCheck = () => {
     });
 
     return (
-        <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+        <div style={{ animation: 'fadeIn 0.5s ease-out' }}>
             <div className="page-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <HardDrive size={32} color="var(--primary)" />
@@ -116,9 +116,8 @@ const BackupDBCheck = () => {
                 </div>
             </div>
 
-            <div className="card glass" style={{ padding: 0, overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+            <div className="card glass table-responsive">
+                <table style={{ width: '100%', minWidth: '600px', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                         <thead>
                             <tr style={{ backgroundColor: 'rgba(0,0,0,0.2)', textAlign: 'left' }}>
                                 <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Carpeta</th>
@@ -185,7 +184,6 @@ const BackupDBCheck = () => {
                         </tbody>
                     </table>
                 </div>
-            </div>
         </div>
     );
 };

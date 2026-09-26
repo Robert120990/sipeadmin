@@ -181,7 +181,7 @@ export default function CuentasBancarias() {
     if (loading) return <div className="p-8 text-center text-muted">Cargando cuentas bancarias...</div>;
 
     return (
-        <div style={{ padding: '2rem' }}>
+        <div>
             <div className="page-header">
                 <div>
                     <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

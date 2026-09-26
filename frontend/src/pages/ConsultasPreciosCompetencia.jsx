@@ -1378,8 +1378,8 @@ const ConsultasPreciosCompetencia = () => {
                     </div>
 
                     {/* Monitored Stations List Table */}
-                    <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'auto', maxHeight: '45vh' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                    <div className="table-responsive" style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'auto', maxHeight: '45vh' }}>
+                        <table style={{ width: '100%', minWidth: '580px', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                             <thead>
                                 <tr style={{ backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--border)' }}>
                                     <th style={{ padding: '0.6rem 0.85rem', textAlign: 'left' }}>Sucursal del Sistema</th>
@@ -1542,8 +1542,8 @@ const ConsultasPreciosCompetencia = () => {
                             </button>
                         </div>
 
-                        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'auto', maxHeight: '55vh' }}>
-                            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.78rem' }}>
+                        <div className="table-responsive" style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'auto', maxHeight: '55vh' }}>
+                            <table style={{ width: '100%', minWidth: '780px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.78rem' }}>
                                 <thead>
                                     <tr>
                                         <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', backgroundColor: 'var(--card-bg)', position: 'sticky', top: 0, zIndex: 2, borderBottom: '2px solid var(--primary)' }}>Estación</th>

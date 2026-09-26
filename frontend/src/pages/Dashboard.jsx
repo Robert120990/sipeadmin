@@ -97,7 +97,7 @@ const Dashboard = () => {
     const expiredTotal = expiredPayments.reduce((sum, p) => sum + Number(p.monto), 0);
 
     return (
-        <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+        <div style={{ animation: 'fadeIn 0.5s ease-out' }}>
             <div style={{ marginBottom: '2rem' }}>
                 <h1 style={{ color: 'var(--primary)', marginBottom: '0.5rem' }}>Resumen Operativo</h1>
                 <p style={{ color: 'var(--text-muted)' }}>Bienvenido al panel de control administrativo de SIPE.</p>
