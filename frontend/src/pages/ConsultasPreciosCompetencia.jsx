@@ -9,10 +9,11 @@ import {
 import api from '../services/api';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import dgehmEstacionesList from '../data/dgehm_estaciones.json';
 
 const ConsultasPreciosCompetencia = () => {
@@ -40,6 +41,16 @@ const ConsultasPreciosCompetencia = () => {
         return d.toISOString().split('T')[0];
     });
     const [historialHasta, setHistorialHasta] = useState(() => new Date().toISOString().split('T')[0]);
+
+    // Report preview state
+    const [previewModalOpen, setPreviewModalOpen] = useState(false);
+    const [pdfSource, setPdfSource] = useState(null);
+    const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
+    const [totalPages, setTotalPages] = useState(1);
+    const [previewFileName, setPreviewFileName] = useState('');
+    const [previewTitle, setPreviewTitle] = useState('');
+    const [previewSubtitle, setPreviewSubtitle] = useState('');
+    const [previewBadge, setPreviewBadge] = useState('COMPETENCIA');
 
     // BI Analytics State
     const [biData, setBiData] = useState(null);
@@ -470,41 +481,163 @@ const ConsultasPreciosCompetencia = () => {
         }
     };
 
-    const exportToPDF = () => {
-        const doc = jsPDF({ orientation: 'landscape' });
+    const handlePreviewPDF = () => {
+        // Carta apaisado completo (Letter landscape: 279.4 x 215.9 mm)
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
+
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        let title = '';
+        let subtitle = '';
+        let fileName = '';
+        let badge = 'COMPETENCIA';
+
         if (activeTab === 'actuales') {
-            doc.text('Consulta de Precios de Competencia - Snapshot Actual', 14, 15);
-            const tableBody = filteredCurrentData.map(item => [
-                item.titulo, item.estacion, item.modificacion,
+            if (filteredCurrentData.length === 0) {
+                addToast('No hay datos actuales para exportar', 'warning');
+                return;
+            }
+            title = 'PRECIOS DE COMPETENCIA - MONITOREO ACTUAL';
+            subtitle = `Snapshot actual  |  Registros: ${filteredCurrentData.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`;
+            fileName = `Precios_Competencia_${new Date().toISOString().split('T')[0]}.pdf`;
+            badge = 'ACTUAL';
+
+            // Encabezado
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(30, 41, 59);
+            doc.text(title, 14, 15);
+
+            doc.setFontSize(8.5);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(100, 116, 139);
+            doc.text(subtitle, 14, 21);
+
+            const tableColumn = ['Estación', 'Competencia', 'Modificación', 'Super (SC)', 'Reg (SC)', 'Dies (SC)', 'Super (AS)', 'Reg (AS)', 'Dies (AS)'];
+            const tableRows = filteredCurrentData.map(item => [
+                item.titulo || '-',
+                item.estacion || '-',
+                item.modificacion || '-',
                 mc(item.super_c), mc(item.regular_c), mc(item.diesel_c),
                 mc(item.super_a), mc(item.regular_a), mc(item.diesel_a)
             ]);
-            doc.autoTable({
-                startY: 20,
-                head: [['Estación', 'Competencia', 'Modificación', 'Super (SC)', 'Reg (SC)', 'Dies (SC)', 'Super (AS)', 'Reg (AS)', 'Dies (AS)']],
-                body: tableBody,
-                theme: 'grid',
-                styles: { fontSize: 8 },
-                headStyles: { fillColor: [79, 70, 229] }
+
+            autoTable(doc, {
+                head: [tableColumn],
+                body: tableRows,
+                startY: 26,
+                theme: 'striped',
+                styles: { fontSize: 7.5, cellPadding: 2 },
+                columnStyles: {
+                    0: { fontStyle: 'bold' },
+                    3: { halign: 'right' },
+                    4: { halign: 'right' },
+                    5: { halign: 'right' },
+                    6: { halign: 'right' },
+                    7: { halign: 'right' },
+                    8: { halign: 'right' }
+                },
+                headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], halign: 'center' },
+                margin: { left: 14, right: 14, bottom: 15 },
+                didDrawPage: (dataHook) => {
+                    const pNum = dataHook.pageNumber;
+                    doc.setFontSize(7.5);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text(
+                        `Página ${pNum}`,
+                        pageWidth - 20,
+                        pageHeight - 8,
+                        { align: 'right' }
+                    );
+                }
             });
-            doc.save(`precios_competencia_${new Date().toISOString().split('T')[0]}.pdf`);
         } else if (activeTab === 'historial') {
-            doc.text(`Historial de Precios de Competencia (${historialDesde} al ${historialHasta})`, 14, 15);
-            const tableBody = filteredHistorialData.map(item => [
-                item.fecha_registro, item.estacion_propia || '-', item.estacion,
+            if (filteredHistorialData.length === 0) {
+                addToast('No hay datos de historial para exportar', 'warning');
+                return;
+            }
+            title = 'HISTORIAL DE PRECIOS DE COMPETENCIA';
+            subtitle = `Período: ${historialDesde} al ${historialHasta}  |  Registros: ${filteredHistorialData.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`;
+            fileName = `Historial_Competencia_${historialDesde}_al_${historialHasta}.pdf`;
+            badge = 'HISTORIAL';
+
+            // Encabezado
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(30, 41, 59);
+            doc.text(title, 14, 15);
+
+            doc.setFontSize(8.5);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(100, 116, 139);
+            doc.text(subtitle, 14, 21);
+
+            const tableColumn = ['Fecha', 'Estación Propia', 'Competencia', 'Super (SC)', 'Reg (SC)', 'Dies (SC)', 'Super (AS)', 'Reg (AS)', 'Dies (AS)'];
+            const tableRows = filteredHistorialData.map(item => [
+                item.fecha_registro || '-',
+                item.estacion_propia || '-',
+                item.estacion || '-',
                 mc(item.super_c), mc(item.regular_c), mc(item.diesel_c),
                 mc(item.super_a), mc(item.regular_a), mc(item.diesel_a)
             ]);
-            doc.autoTable({
-                startY: 20,
-                head: [['Fecha', 'Estación', 'Competencia', 'Super (SC)', 'Reg (SC)', 'Dies (SC)', 'Super (AS)', 'Reg (AS)', 'Dies (AS)']],
-                body: tableBody,
-                theme: 'grid',
-                styles: { fontSize: 8 },
-                headStyles: { fillColor: [79, 70, 229] }
+
+            autoTable(doc, {
+                head: [tableColumn],
+                body: tableRows,
+                startY: 26,
+                theme: 'striped',
+                styles: { fontSize: 7.5, cellPadding: 2 },
+                columnStyles: {
+                    0: { halign: 'center' },
+                    1: { fontStyle: 'bold' },
+                    3: { halign: 'right' },
+                    4: { halign: 'right' },
+                    5: { halign: 'right' },
+                    6: { halign: 'right' },
+                    7: { halign: 'right' },
+                    8: { halign: 'right' }
+                },
+                headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], halign: 'center' },
+                margin: { left: 14, right: 14, bottom: 15 },
+                didDrawPage: (dataHook) => {
+                    const pNum = dataHook.pageNumber;
+                    doc.setFontSize(7.5);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text(
+                        `Página ${pNum}`,
+                        pageWidth - 20,
+                        pageHeight - 8,
+                        { align: 'right' }
+                    );
+                }
             });
-            doc.save(`historial_competencia_${historialDesde}_al_${historialHasta}.pdf`);
+        } else {
+            return;
         }
+
+        const pagesCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pagesCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(`Página ${i} de ${pagesCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
+            doc.text('SIPEOFI - Sistema de Información de Estaciones', 14, pageHeight - 8);
+        }
+
+        const blob = doc.output('blob');
+        setPdfSource(blob);
+        setPreviewPdfDoc(doc);
+        setTotalPages(pagesCount);
+        setPreviewFileName(fileName);
+        setPreviewTitle(title);
+        setPreviewSubtitle(subtitle);
+        setPreviewBadge(badge);
+        setPreviewModalOpen(true);
     };
 
     return (
@@ -582,8 +715,8 @@ const ConsultasPreciosCompetencia = () => {
                             <button onClick={exportToExcel} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <Download size={17} /> Excel
                             </button>
-                            <button onClick={exportToPDF} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <Printer size={17} /> PDF
+                            <button onClick={handlePreviewPDF} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <Printer size={17} /> Vista Previa / PDF
                             </button>
                         </>
                     )}
@@ -1575,6 +1708,19 @@ const ConsultasPreciosCompetencia = () => {
                     </>
                 )}
             </Modal>
+
+            {/* Modal de Vista Previa de Reporte */}
+            <ReportPreviewModal
+                isOpen={previewModalOpen}
+                onClose={() => setPreviewModalOpen(false)}
+                pdfSource={pdfSource}
+                pdfDoc={previewPdfDoc}
+                title={previewTitle}
+                subtitle={previewSubtitle}
+                badge={previewBadge}
+                totalPages={totalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 };

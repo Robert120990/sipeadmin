@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     TrendingUp, Plus, DollarSign, Calendar, RefreshCw, 
-    Save, FileSpreadsheet, FileText, Trash2, CheckCircle2, 
+    Save, FileSpreadsheet, Printer, Trash2, CheckCircle2, 
     XCircle, AlertCircle, ArrowUpRight, ArrowDownRight, Layers, Sparkles
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -10,6 +10,7 @@ import autoTable from 'jspdf-autotable';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import { formatCurrency } from '../utils/loanCalculations';
 import { 
     calculateNPV, calculateIRR, calculatePayback, 
@@ -30,6 +31,13 @@ export default function FinanzasInversiones() {
     // Filtros de cartera
     const [filtroEmpresa, setFiltroEmpresa] = useState('');
     const [filtroEstado, setFiltroEstado] = useState('');
+
+    // Report preview state
+    const [previewModalOpen, setPreviewModalOpen] = useState(false);
+    const [pdfSource, setPdfSource] = useState(null);
+    const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
+    const [totalPages, setTotalPages] = useState(1);
+    const [previewFileName, setPreviewFileName] = useState('');
 
     // Estado del Simulador
     const [form, setForm] = useState({
@@ -379,26 +387,45 @@ export default function FinanzasInversiones() {
         addToast('Archivo Excel descargado', 'success');
     };
 
-    // Exportar Cartera a PDF
-    const exportToPDF = () => {
-        if (proyectos.length === 0) return;
-        const doc = new jsPDF('landscape');
-        doc.setFontSize(15);
-        doc.text('Cartera de Proyectos de Inversión y Análisis de Rentabilidad', 14, 15);
-        doc.setFontSize(9);
-        doc.text(`Fecha: ${new Date().toLocaleDateString()} | Total Proyectos: ${proyectos.length}`, 14, 22);
+    // Exportar Cartera a PDF con ReportPreviewModal
+    const handlePreviewPDF = () => {
+        if (proyectos.length === 0) {
+            addToast('No hay proyectos para exportar', 'warning');
+            return;
+        }
+
+        // Carta apaisado completo (Letter landscape: 279.4 x 215.9 mm)
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
+
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        // Encabezado
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(30, 41, 59);
+        doc.text('CARTERA DE PROYECTOS DE INVERSIÓN Y RENTABILIDAD', 14, 15);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Total Proyectos: ${proyectos.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`, 14, 21);
 
         const columns = ['Proyecto', 'Empresa', 'Categoría', 'Inversión', 'VPN', 'TIR', 'ROI', 'Payback', 'Estado'];
         const rows = proyectos.map(p => [
-            p.nombre_proyecto,
-            p.empresa_nombre,
-            p.categoria,
+            p.nombre_proyecto || '-',
+            p.empresa_nombre || '-',
+            p.categoria || '-',
             formatCurrency(p.inversion_inicial),
             formatCurrency(p.vpn_estimado),
             p.tir_estimada !== null ? `${p.tir_estimada}%` : 'N/A',
             `${p.roi_estimado}%`,
             `${Math.round(p.payback_meses / 12)}a ${Math.round(p.payback_meses % 12)}m`,
-            p.estado.toUpperCase()
+            (p.estado || '').toUpperCase()
         ]);
 
         autoTable(doc, {
@@ -406,12 +433,46 @@ export default function FinanzasInversiones() {
             body: rows,
             startY: 26,
             theme: 'striped',
-            styles: { fontSize: 8 },
-            headStyles: { fillColor: [30, 41, 59] }
+            styles: { fontSize: 7.5, cellPadding: 2 },
+            columnStyles: {
+                0: { fontStyle: 'bold' },
+                3: { halign: 'right' },
+                4: { halign: 'right' },
+                5: { halign: 'right' },
+                6: { halign: 'right' },
+                7: { halign: 'center' },
+                8: { halign: 'center' }
+            },
+            headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], halign: 'center' },
+            margin: { left: 14, right: 14, bottom: 15 },
+            didDrawPage: (dataHook) => {
+                const pNum = dataHook.pageNumber;
+                doc.setFontSize(7.5);
+                doc.setTextColor(148, 163, 184);
+                doc.text(
+                    `Página ${pNum}`,
+                    pageWidth - 20,
+                    pageHeight - 8,
+                    { align: 'right' }
+                );
+            }
         });
 
-        doc.save(`Cartera_Inversiones_${new Date().toISOString().split('T')[0]}.pdf`);
-        addToast('Archivo PDF descargado', 'success');
+        const pagesCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pagesCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(`Página ${i} de ${pagesCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
+            doc.text('SIPEOFI - Sistema de Información de Estaciones', 14, pageHeight - 8);
+        }
+
+        const blob = doc.output('blob');
+        setPdfSource(blob);
+        setPreviewPdfDoc(doc);
+        setTotalPages(pagesCount);
+        setPreviewFileName(`Cartera_Inversiones_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewModalOpen(true);
     };
 
     // Proyectos filtrados
@@ -1019,11 +1080,11 @@ export default function FinanzasInversiones() {
                             </button>
                             <button 
                                 className="btn btn-outline" 
-                                onClick={exportToPDF}
+                                onClick={handlePreviewPDF}
                                 disabled={proyectos.length === 0}
                                 style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
                             >
-                                <FileText size={16} /> PDF
+                                <Printer size={16} /> Vista Previa / PDF
                             </button>
                             <button 
                                 className="btn btn-primary"
@@ -1127,6 +1188,19 @@ export default function FinanzasInversiones() {
                     )}
                 </div>
             )}
+
+            {/* Modal de Vista Previa de Reporte */}
+            <ReportPreviewModal
+                isOpen={previewModalOpen}
+                onClose={() => setPreviewModalOpen(false)}
+                pdfSource={pdfSource}
+                pdfDoc={previewPdfDoc}
+                title="Cartera de Proyectos de Inversión"
+                subtitle={`Total Proyectos Registrados: ${proyectos.length}`}
+                badge="INVERSIONES"
+                totalPages={totalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 }

@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Landmark, Plus, Search, Edit2, Trash2, Eye, DollarSign, Calendar, TrendingDown, CheckCircle2, Clock, FileSpreadsheet, FileText, ArrowUpRight, Percent, RefreshCw, ShieldCheck, PiggyBank, Coins } from 'lucide-react';
+import { Landmark, Plus, Search, Edit2, Trash2, Eye, DollarSign, Calendar, TrendingDown, CheckCircle2, Clock, FileSpreadsheet, Printer, ArrowUpRight, Percent, RefreshCw, ShieldCheck, PiggyBank, Coins } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import api from '../services/api';
 import { calculatePMT, formatCurrency, generateAmortizationSchedule, calculateRemainingPayoffFromBalance, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, COMMISSION_TYPES, calculatePeriodInsurance, calculatePeriodSavings, calculateDisbursementCommission } from '../utils/loanCalculations';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
@@ -24,6 +25,13 @@ export default function FinanzasPrestamos() {
     const [filterEmpresa, setFilterEmpresa] = useState('');
     const [filterEstado, setFilterEstado] = useState('activo');
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Report preview state
+    const [previewModalOpen, setPreviewModalOpen] = useState(false);
+    const [pdfSource, setPdfSource] = useState(null);
+    const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
+    const [totalPages, setTotalPages] = useState(1);
+    const [previewFileName, setPreviewFileName] = useState('');
 
     // Modals
     const [showFormModal, setShowFormModal] = useState(false);
@@ -399,26 +407,45 @@ export default function FinanzasPrestamos() {
         addToast('Archivo Excel descargado', 'success');
     };
 
-    // Export loans table to PDF
-    const exportLoansPDF = () => {
-        if (filteredPrestamos.length === 0) return;
-        const doc = new jsPDF('landscape');
-        doc.setFontSize(15);
-        doc.text('Control de Préstamos y Deuda Financiera', 14, 15);
-        doc.setFontSize(9);
-        doc.text(`Fecha: ${new Date().toLocaleDateString()} | Saldo Deudor Total: ${formatCurrency(kpis.saldoTotal)}`, 14, 22);
+    // Export loans table to PDF con ReportPreviewModal
+    const handlePreviewLoansPDF = () => {
+        if (filteredPrestamos.length === 0) {
+            addToast('No hay préstamos para exportar', 'warning');
+            return;
+        }
+
+        // Carta apaisado completo (Letter landscape: 279.4 x 215.9 mm)
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
+
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        // Encabezado
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(30, 41, 59);
+        doc.text('CONTROL DE PRÉSTAMOS Y DEUDA FINANCIERA', 14, 15);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Saldo Deudor Total: ${formatCurrency(kpis.saldoTotal)}  |  Préstamos: ${filteredPrestamos.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`, 14, 21);
 
         const columns = ['Empresa', 'Banco', 'N° Préstamo', 'Monto Original', 'Tasa', 'Cuota', 'Amortizado', 'Saldo Actual', 'Estado'];
         const rows = filteredPrestamos.map(p => [
-            p.empresa_nombre,
+            p.empresa_nombre || '-',
             p.banco_nombre || 'N/A',
-            p.numero_prestamo,
+            p.numero_prestamo || '-',
             formatCurrency(p.monto_original),
             `${p.tasa_interes_anual}%`,
             formatCurrency(p.cuota_calculada),
             formatCurrency(p.total_capital_pagado),
             formatCurrency(p.saldo_actual),
-            p.estado.toUpperCase()
+            (p.estado || '').toUpperCase()
         ]);
 
         autoTable(doc, {
@@ -426,12 +453,46 @@ export default function FinanzasPrestamos() {
             body: rows,
             startY: 26,
             theme: 'striped',
-            styles: { fontSize: 8, cellPadding: 2 },
-            headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] }
+            styles: { fontSize: 7.5, cellPadding: 2 },
+            columnStyles: {
+                0: { fontStyle: 'bold' },
+                3: { halign: 'right' },
+                4: { halign: 'center' },
+                5: { halign: 'right' },
+                6: { halign: 'right' },
+                7: { halign: 'right', fontStyle: 'bold' },
+                8: { halign: 'center' }
+            },
+            headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255], halign: 'center' },
+            margin: { left: 14, right: 14, bottom: 15 },
+            didDrawPage: (dataHook) => {
+                const pNum = dataHook.pageNumber;
+                doc.setFontSize(7.5);
+                doc.setTextColor(148, 163, 184);
+                doc.text(
+                    `Página ${pNum}`,
+                    pageWidth - 20,
+                    pageHeight - 8,
+                    { align: 'right' }
+                );
+            }
         });
 
-        doc.save(`Prestamos_${new Date().toISOString().split('T')[0]}.pdf`);
-        addToast('Documento PDF descargado', 'success');
+        const pagesCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pagesCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(`Página ${i} de ${pagesCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
+            doc.text('SIPEOFI - Sistema de Información de Estaciones', 14, pageHeight - 8);
+        }
+
+        const blob = doc.output('blob');
+        setPdfSource(blob);
+        setPreviewPdfDoc(doc);
+        setTotalPages(pagesCount);
+        setPreviewFileName(`Prestamos_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewModalOpen(true);
     };
 
     return (
@@ -453,8 +514,8 @@ export default function FinanzasPrestamos() {
                     <button onClick={exportLoansExcel} disabled={filteredPrestamos.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <FileSpreadsheet size={18} /> Excel
                     </button>
-                    <button onClick={exportLoansPDF} disabled={filteredPrestamos.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <FileText size={18} /> PDF
+                    <button onClick={handlePreviewLoansPDF} disabled={filteredPrestamos.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Printer size={18} /> Vista Previa / PDF
                     </button>
                 </div>
             </div>
@@ -1445,6 +1506,19 @@ export default function FinanzasPrestamos() {
                     </div>
                 </form>
             </Modal>
+
+            {/* Modal de Vista Previa de Reporte */}
+            <ReportPreviewModal
+                isOpen={previewModalOpen}
+                onClose={() => setPreviewModalOpen(false)}
+                pdfSource={pdfSource}
+                pdfDoc={previewPdfDoc}
+                title="Control de Préstamos y Deuda Financiera"
+                subtitle={`Saldo Deudor Total: ${formatCurrency(kpis.saldoTotal)}`}
+                badge="PRÉSTAMOS"
+                totalPages={totalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 }

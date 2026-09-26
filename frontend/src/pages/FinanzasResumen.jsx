@@ -1,16 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, Landmark, DollarSign, Calendar, TrendingDown, Clock, AlertTriangle, FileSpreadsheet, FileText, CheckCircle2 } from 'lucide-react';
+import { BarChart3, Landmark, DollarSign, Calendar, TrendingDown, Clock, AlertTriangle, FileSpreadsheet, Printer, CheckCircle2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { useToast } from '../components/Toast';
 import api from '../services/api';
 import { formatCurrency } from '../utils/loanCalculations';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 
 export default function FinanzasResumen() {
     const { addToast } = useToast();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+
+    // Report preview state
+    const [previewModalOpen, setPreviewModalOpen] = useState(false);
+    const [pdfSource, setPdfSource] = useState(null);
+    const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
+    const [totalPages, setTotalPages] = useState(1);
+    const [previewFileName, setPreviewFileName] = useState('');
 
     const fetchResumen = async () => {
         setLoading(true);
@@ -48,17 +56,37 @@ export default function FinanzasResumen() {
         addToast('Archivo Excel descargado', 'success');
     };
 
-    // Export to PDF
-    const exportToPDF = () => {
-        if (!data) return;
-        const doc = new jsPDF();
-        doc.setFontSize(15);
-        doc.text('Resumen de Deuda y Compromisos Financieros', 14, 15);
-        doc.setFontSize(9);
-        doc.text(`Fecha: ${new Date().toLocaleDateString()} | Saldo Deudor Total: ${formatCurrency(data.kpi?.saldo_total_pendiente || 0)}`, 14, 22);
+    // Export to PDF con ReportPreviewModal
+    const handlePreviewPDF = () => {
+        const prestamos = data?.prestamos_activos || [];
+        if (!data || prestamos.length === 0) {
+            addToast('No hay préstamos para exportar', 'warning');
+            return;
+        }
+
+        // Carta vertical completo (Letter portrait: 215.9 x 279.4 mm)
+        const doc = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'letter'
+        });
+
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        // Encabezado
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(30, 41, 59);
+        doc.text('RESUMEN DE DEUDA Y COMPROMISOS FINANCIEROS', 14, 15);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Saldo Deudor Total: ${formatCurrency(data.kpi?.saldo_total_pendiente || 0)}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`, 14, 21);
 
         const columns = ['Préstamo', 'Empresa', 'Banco', 'Cuota', 'Saldo Pendiente'];
-        const rows = (data.prestamos_activos || []).map(p => [
+        const rows = prestamos.map(p => [
             p.numero_prestamo,
             p.empresa_nombre,
             p.banco_nombre || 'N/A',
@@ -69,14 +97,44 @@ export default function FinanzasResumen() {
         autoTable(doc, {
             head: [columns],
             body: rows,
-            startY: 28,
+            startY: 26,
             theme: 'striped',
-            styles: { fontSize: 8, cellPadding: 2 },
-            headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] }
+            styles: { fontSize: 8.5, cellPadding: 2.5 },
+            columnStyles: {
+                0: { fontStyle: 'bold' },
+                3: { halign: 'right' },
+                4: { halign: 'right', fontStyle: 'bold' }
+            },
+            headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] },
+            margin: { left: 14, right: 14, bottom: 15 },
+            didDrawPage: (dataHook) => {
+                const pNum = dataHook.pageNumber;
+                doc.setFontSize(7.5);
+                doc.setTextColor(148, 163, 184);
+                doc.text(
+                    `Página ${pNum}`,
+                    pageWidth - 20,
+                    pageHeight - 8,
+                    { align: 'right' }
+                );
+            }
         });
 
-        doc.save(`Resumen_Finanzas_${new Date().toISOString().split('T')[0]}.pdf`);
-        addToast('Documento PDF descargado', 'success');
+        const pagesCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pagesCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(`Página ${i} de ${pagesCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
+            doc.text('SIPEOFI - Sistema de Información de Estaciones', 14, pageHeight - 8);
+        }
+
+        const blob = doc.output('blob');
+        setPdfSource(blob);
+        setPreviewPdfDoc(doc);
+        setTotalPages(pagesCount);
+        setPreviewFileName(`Resumen_Finanzas_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewModalOpen(true);
     };
 
     if (loading) {
@@ -111,8 +169,8 @@ export default function FinanzasResumen() {
                     <button onClick={exportToExcel} disabled={prestamosActivos.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <FileSpreadsheet size={18} /> Excel
                     </button>
-                    <button onClick={exportToPDF} disabled={prestamosActivos.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <FileText size={18} /> PDF
+                    <button onClick={handlePreviewPDF} disabled={prestamosActivos.length === 0} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Printer size={18} /> Vista Previa / PDF
                     </button>
                 </div>
             </div>
@@ -262,6 +320,19 @@ export default function FinanzasResumen() {
                     </tbody>
                 </table>
             </div>
+
+            {/* Modal de Vista Previa de Reporte */}
+            <ReportPreviewModal
+                isOpen={previewModalOpen}
+                onClose={() => setPreviewModalOpen(false)}
+                pdfSource={pdfSource}
+                pdfDoc={previewPdfDoc}
+                title="Resumen de Deuda y Compromisos Financieros"
+                subtitle={`Total Deuda: ${formatCurrency(data?.kpi?.saldo_total_pendiente || 0)}`}
+                badge="FINANZAS"
+                totalPages={totalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Search, Plus, CheckCircle, Edit, Trash2, X, Save, Download, FileText as FileTextIcon, Sparkles, Send, MessageSquare } from 'lucide-react';
+import { Search, Plus, CheckCircle, Edit, Trash2, X, Save, Download, FileText as FileTextIcon, Printer, Sparkles, Send, MessageSquare } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -7,6 +7,7 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import { parseDateOnly, todayStr } from '../utils/date';
 
 export default function ControlRecordatorios() {
@@ -39,6 +40,13 @@ export default function ControlRecordatorios() {
     const [isPagoModalOpen, setIsPagoModalOpen] = useState(false);
     const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
     const [parentsList, setParentsList] = useState([]);
+    
+    // Report preview state
+    const [previewModalOpen, setPreviewModalOpen] = useState(false);
+    const [pdfSource, setPdfSource] = useState(null);
+    const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
+    const [totalPages, setTotalPages] = useState(1);
+    const [previewFileName, setPreviewFileName] = useState('');
     
     // Search Filters State
     const [searchFilters, setSearchFilters] = useState({
@@ -308,20 +316,94 @@ export default function ControlRecordatorios() {
         addToast('Excel Exportado', 'success');
     };
 
-    const exportToPDF = () => {
-        const doc = new jsPDF();
-        doc.text("Control de Pagos (Recordatorios)", 14, 15);
-        autoTable(doc, {
-            startY: 20,
-            head: [['Ubicación', 'Descripción', 'Vence', 'Obs', 'Monto', 'Método', 'Estado', 'Pág']],
-            body: recordatorios.map(r => [
-                r.ubicacion, r.descripcion, formatDate(r.vence), r.observacion,
-                mc(r.monto), r.forma_pago, r.estado, formatDate(r.fecha_cancelacion)
-            ]),
-            styles: { fontSize: 8 }
+    const handlePreviewPDF = () => {
+        if (recordatorios.length === 0) {
+            addToast('No hay datos para exportar', 'warning');
+            return;
+        }
+
+        // Carta apaisado completo (Letter landscape: 279.4 x 215.9 mm)
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
         });
-        doc.save("Control_de_Pagos.pdf");
-        addToast('PDF Exportado', 'success');
+
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        // Encabezado
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(30, 41, 59);
+        doc.text('CONTROL DE PAGOS Y RECORDATORIOS', 14, 15);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        const sub = selectedParent 
+            ? `Filtrado por: ${selectedParent.descripcion} (ID: ${selectedParent.id})  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`
+            : `Período: ${fechaDesde} al ${fechaHasta}  |  Estado: ${estadoFilter === 'P' ? 'Pendientes' : estadoFilter === 'C' ? 'Cancelados' : 'Todos'}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`;
+        doc.text(sub, 14, 21);
+
+        const tableColumn = ['Ubicación', 'Descripción', 'Vence', 'Observación', 'Monto', 'Método', 'Estado', 'Fecha Pago'];
+        const tableRows = recordatorios.map(r => [
+            r.ubicacion || '-',
+            r.descripcion || '-',
+            formatDate(r.vence),
+            r.observacion || '-',
+            mc(r.monto),
+            r.forma_pago || '-',
+            r.estado === 'P' ? 'PENDIENTE' : r.estado === 'C' ? 'PAGADO' : (r.estado || '-'),
+            formatDate(r.fecha_cancelacion)
+        ]);
+
+        autoTable(doc, {
+            head: [tableColumn],
+            body: tableRows,
+            startY: 26,
+            theme: 'striped',
+            styles: { fontSize: 8, cellPadding: 2 },
+            columnStyles: {
+                0: { cellWidth: 35 },
+                1: { cellWidth: 55 },
+                2: { halign: 'center', cellWidth: 22 },
+                3: { cellWidth: 45 },
+                4: { halign: 'right', fontStyle: 'bold', cellWidth: 25 },
+                5: { halign: 'center', cellWidth: 24 },
+                6: { halign: 'center', cellWidth: 22 },
+                7: { halign: 'center', cellWidth: 24 }
+            },
+            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], halign: 'center' },
+            margin: { left: 14, right: 14, bottom: 15 },
+            didDrawPage: (dataHook) => {
+                const pNum = dataHook.pageNumber;
+                doc.setFontSize(7.5);
+                doc.setTextColor(148, 163, 184);
+                doc.text(
+                    `Página ${pNum}`,
+                    pageWidth - 20,
+                    pageHeight - 8,
+                    { align: 'right' }
+                );
+            }
+        });
+
+        const pagesCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pagesCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(`Página ${i} de ${pagesCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
+            doc.text('SIPEOFI - Sistema de Información de Estaciones', 14, pageHeight - 8);
+        }
+
+        const blob = doc.output('blob');
+        setPdfSource(blob);
+        setPreviewPdfDoc(doc);
+        setTotalPages(pagesCount);
+        setPreviewFileName(`Control_de_Pagos_${todayStr()}.pdf`);
+        setPreviewModalOpen(true);
     };
 
     return (
@@ -373,8 +455,8 @@ export default function ControlRecordatorios() {
                     <button onClick={exportToExcel} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1rem' }}>
                         <Download size={18} /> EXCEL
                     </button>
-                    <button onClick={exportToPDF} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1rem' }}>
-                        <FileTextIcon size={18} /> PDF
+                    <button onClick={handlePreviewPDF} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1rem' }}>
+                        <Printer size={18} /> VISTA PREVIA / PDF
                     </button>
                 </div>
 
@@ -749,6 +831,19 @@ export default function ControlRecordatorios() {
                     </table>
                 </div>
             </Modal>
+
+            {/* Modal de Vista Previa de Reporte */}
+            <ReportPreviewModal
+                isOpen={previewModalOpen}
+                onClose={() => setPreviewModalOpen(false)}
+                pdfSource={pdfSource}
+                pdfDoc={previewPdfDoc}
+                title="Control de Pagos y Recordatorios"
+                subtitle={selectedParent ? `Filtrado por: ${selectedParent.descripcion}` : `Vencimiento: ${fechaDesde} al ${fechaHasta}`}
+                badge="PAGOS"
+                totalPages={totalPages}
+                fileName={previewFileName}
+            />
 
         </div>
     );

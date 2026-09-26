@@ -2,13 +2,14 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Wrench, Plus, Calendar, DollarSign, AlertTriangle, 
     CheckCircle2, Clock, Trash2, Edit2, FileSpreadsheet, 
-    FileText, ArrowRight, ShieldAlert, Cpu, RefreshCw
+    Printer, ArrowRight, ShieldAlert, Cpu, RefreshCw
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import api from '../services/api';
 import Modal from '../components/Modal';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { formatCurrency } from '../utils/loanCalculations';
@@ -27,6 +28,13 @@ export default function FinanzasPlanesMantenimiento() {
     const [filtroEmpresa, setFiltroEmpresa] = useState('');
     const [filtroEstado, setFiltroEstado] = useState('');
     const [filtroTipoGasto, setFiltroTipoGasto] = useState('');
+
+    // Report preview state
+    const [previewModalOpen, setPreviewModalOpen] = useState(false);
+    const [pdfSource, setPdfSource] = useState(null);
+    const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
+    const [totalPages, setTotalPages] = useState(1);
+    const [previewFileName, setPreviewFileName] = useState('');
 
     // Modal Crear / Editar Mantenimiento
     const [modalOpen, setModalOpen] = useState(false);
@@ -236,26 +244,45 @@ export default function FinanzasPlanesMantenimiento() {
         addToast('Archivo Excel descargado', 'success');
     };
 
-    // Exportar a PDF
-    const exportToPDF = () => {
-        if (mantenimientos.length === 0) return;
-        const doc = new jsPDF('landscape');
-        doc.setFontSize(15);
-        doc.text('Presupuesto y Planificación de Mantenimientos y CapEx', 14, 15);
-        doc.setFontSize(9);
-        doc.text(`Fecha: ${new Date().toLocaleDateString()} | Presupuesto Total: ${formatCurrency(kpis.totalPresupuesto)}`, 14, 22);
+    // Exportar a PDF con ReportPreviewModal
+    const handlePreviewPDF = () => {
+        if (mantenimientos.length === 0) {
+            addToast('No hay mantenimientos para exportar', 'warning');
+            return;
+        }
+
+        // Carta apaisado completo (Letter landscape: 279.4 x 215.9 mm)
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
+
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        // Encabezado
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(30, 41, 59);
+        doc.text('PLANES DE MANTENIMIENTO Y CAPEX OPERATIVO', 14, 15);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Presupuesto Total: ${formatCurrency(kpis.totalPresupuesto)}  |  Total Activos: ${mantenimientos.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`, 14, 21);
 
         const columns = ['Activo', 'Empresa', 'Tipo Activo', 'Costo', 'Tipo Gasto', 'Frecuencia', 'Fecha Prog.', 'Criticidad', 'Estado'];
         const rows = mantenimientos.map(m => [
-            m.nombre_activo,
-            m.empresa_nombre,
-            m.tipo_activo,
+            m.nombre_activo || '-',
+            m.empresa_nombre || '-',
+            m.tipo_activo || '-',
             formatCurrency(m.costo_estimado),
-            m.tipo_gasto.toUpperCase(),
-            m.frecuencia,
+            (m.tipo_gasto || '').toUpperCase(),
+            m.frecuencia || '-',
             m.fecha_programada ? m.fecha_programada.split('T')[0] : '',
-            m.criticidad.toUpperCase(),
-            m.estado.toUpperCase()
+            (m.criticidad || '').toUpperCase(),
+            (m.estado || '').toUpperCase()
         ]);
 
         autoTable(doc, {
@@ -263,12 +290,46 @@ export default function FinanzasPlanesMantenimiento() {
             body: rows,
             startY: 26,
             theme: 'striped',
-            styles: { fontSize: 8 },
-            headStyles: { fillColor: [30, 41, 59] }
+            styles: { fontSize: 7.5, cellPadding: 2 },
+            columnStyles: {
+                0: { fontStyle: 'bold' },
+                3: { halign: 'right' },
+                4: { halign: 'center' },
+                5: { halign: 'center' },
+                6: { halign: 'center' },
+                7: { halign: 'center' },
+                8: { halign: 'center' }
+            },
+            headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], halign: 'center' },
+            margin: { left: 14, right: 14, bottom: 15 },
+            didDrawPage: (dataHook) => {
+                const pNum = dataHook.pageNumber;
+                doc.setFontSize(7.5);
+                doc.setTextColor(148, 163, 184);
+                doc.text(
+                    `Página ${pNum}`,
+                    pageWidth - 20,
+                    pageHeight - 8,
+                    { align: 'right' }
+                );
+            }
         });
 
-        doc.save(`Planes_Mantenimiento_${new Date().toISOString().split('T')[0]}.pdf`);
-        addToast('Archivo PDF descargado', 'success');
+        const pagesCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pagesCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(`Página ${i} de ${pagesCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
+            doc.text('SIPEOFI - Sistema de Información de Estaciones', 14, pageHeight - 8);
+        }
+
+        const blob = doc.output('blob');
+        setPdfSource(blob);
+        setPreviewPdfDoc(doc);
+        setTotalPages(pagesCount);
+        setPreviewFileName(`Planes_Mantenimiento_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewModalOpen(true);
     };
 
     // Insignia de criticidad
@@ -426,11 +487,11 @@ export default function FinanzasPlanesMantenimiento() {
                                 </button>
                                 <button 
                                     className="btn btn-outline" 
-                                    onClick={exportToPDF}
+                                    onClick={handlePreviewPDF}
                                     disabled={mantenimientos.length === 0}
                                     style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
                                 >
-                                    <FileText size={16} /> PDF
+                                    <Printer size={16} /> Vista Previa / PDF
                                 </button>
                                 <button 
                                     className="btn btn-primary"
@@ -924,6 +985,19 @@ export default function FinanzasPlanesMantenimiento() {
                     </form>
                 </Modal>
             )}
+
+            {/* Modal de Vista Previa de Reporte */}
+            <ReportPreviewModal
+                isOpen={previewModalOpen}
+                onClose={() => setPreviewModalOpen(false)}
+                pdfSource={pdfSource}
+                pdfDoc={previewPdfDoc}
+                title="Planes de Mantenimiento y CapEx"
+                subtitle={`Presupuesto Total: ${formatCurrency(kpis.totalPresupuesto)}`}
+                badge="MANTENIMIENTO"
+                totalPages={totalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 }
