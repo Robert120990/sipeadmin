@@ -42,17 +42,19 @@ export default function ConfiguracionDb() {
     if (loading) return <div className="p-8 text-center text-muted">Cargando configuración...</div>;
 
     return (
-        <div style={{ maxWidth: '800px', padding: '2rem' }}>
-            <div style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <Database size={32} color="var(--primary)" />
-                <div>
-                    <h1 style={{ margin: 0, fontSize: '1.75rem' }}>Conexión Externa</h1>
-                    <p style={{ color: 'var(--text-muted)', margin: 0 }}>Conexión MySQL para operaciones y consultas consolidadas.</p>
+        <div style={{ maxWidth: '800px', width: '100%', margin: '0 auto' }}>
+            <div className="page-header" style={{ marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <Database size={24} color="var(--primary)" />
+                    <div>
+                        <h1 style={{ margin: 0, fontSize: '1.25rem' }}>Conexión Externa</h1>
+                        <p style={{ color: 'var(--text-muted)', margin: 0, fontSize: '0.8rem' }}>Conexión MySQL para operaciones y consultas consolidadas.</p>
+                    </div>
                 </div>
             </div>
 
-            <div className="card glass shadow-lg" style={{ padding: '2rem' }}>
-                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div className="card glass shadow-lg" style={{ padding: '1.25rem' }}>
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                     <div className="form-grid form-grid-2">
                         <div>
                             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500' }}>Host / IP</label>

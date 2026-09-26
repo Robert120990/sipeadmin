@@ -117,20 +117,41 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
 router.get('/ventas/lubricantes/:start/:end', authenticateToken, async (req, res) => {
     const { start, end } = req.params;
     try {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+            return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
+        }
         const externalDb = await getExternalDb();
-        const datesArray = []; let curr = new Date(start + 'T12:00:00');
-        while (curr <= new Date(end + 'T12:00:00')) { const day = String(curr.getDate()).padStart(2, '0'); const month = String(curr.getMonth() + 1).padStart(2, '0'); const year = curr.getFullYear(); datesArray.push(`${day}/${month}/${year}`); curr.setDate(curr.getDate() + 1); }
+        const datesArray = []; 
+        let curr = new Date(start + 'T12:00:00');
+        const endDate = new Date(end + 'T12:00:00');
+        while (curr <= endDate && datesArray.length < 366) { 
+            const day = String(curr.getDate()).padStart(2, '0'); 
+            const month = String(curr.getMonth() + 1).padStart(2, '0'); 
+            const year = curr.getFullYear(); 
+            datesArray.push(`${day}/${month}/${year}`); 
+            curr.setDate(curr.getDate() + 1); 
+        }
+        if (datesArray.length === 0) {
+            return res.json([]);
+        }
         const sql = `SELECT a.id_empresa, a.titulo, IFNULL(SUM(b.precio_total), 0.0) as monto FROM web_consolidado a LEFT JOIN inventario_lubricantes b ON a.id_empresa = b.id_empresa AND b.fecha_turno IN (?) WHERE a.grupo = 'ESTACION' GROUP BY id_empresa ORDER BY a.orden`;
         const [rows] = await externalDb.query(sql, [datesArray]);
         res.json(rows.map(r => ({ empresa: r.titulo, venta: Number(r.monto || 0) })));
-    } catch (error) { res.status(500).json({ message: 'Error fetching lubricantes' }); }
+    } catch (error) { 
+        console.error('Error fetching lubricantes:', error);
+        res.status(500).json({ message: 'Error fetching lubricantes' }); 
+    }
 });
 
 router.get('/ventas/resumen-cierre/:date', authenticateToken, async (req, res) => {
     const { date } = req.params;
     try {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
+        }
         const externalDb = await getExternalDb();
-        const parts = date.split('-'); const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+        const parts = date.split('-'); 
+        const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
         const sql = `
             SELECT x.titulo AS estacion,
                    (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS creditos,
@@ -154,18 +175,28 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, async (req, res) =
             const venta = Number(r.total_venta) + Number(r.lubricantes);
             return { empresa: r.estacion, credito: Number(r.creditos), cupones: Number(r.cupones), cheques: Number(r.cheques), tarjetas: Number(r.tarjetas), remesas: Number(r.remesas), gastos: Number(r.gastos), lubricantes: Number(r.lubricantes), anticipos: Number(r.anticipos), pagos: Number(r.pagos), descuentos: Number(r.descuentos), suma: Math.round(monto * 100) / 100, tot_venta: Math.round(venta * 100) / 100, diferencia: Math.round((monto - venta) * 100) / 100 };
         }));
-    } catch (error) { res.status(500).json({ message: 'Error fetching resumen' }); }
+    } catch (error) { 
+        console.error('Error fetching resumen:', error);
+        res.status(500).json({ message: 'Error fetching resumen' }); 
+    }
 });
 
 router.get('/ventas/precios-estacion/:date', authenticateToken, async (req, res) => {
     const { date } = req.params;
     try {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
+        }
         const externalDb = await getExternalDb();
-        const parts = date.split('-'); const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+        const parts = date.split('-'); 
+        const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
         const sql = `select a.id_empresa,a.titulo, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'A',c.precio,0.0),0.0)) as diesel_a,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'A',c.precio,0.0),0.0)) as regular_a,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'A',c.precio,0.0),0.0)) as super_a, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'F',c.precio,0.0),0.0)) as diesel_c,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'F',c.precio,0.0),0.0)) as regular_c,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'F',c.precio,0.0),0.0)) as super_c, sum(ifnull(if(b.clasificacion = 'I',c.precio,0.0),0.0)) as ion_diesel,sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'M',c.precio,0.0),0.0)) as master from web_consolidado a left join cfg_combustibles b on a.id_empresa = b.id_empresa left join ( SELECT a.id_empresa,a.id_producto, a.codigo_producto,a.nom_producto,precio FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa WHERE b.fecha_turno = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) GROUP BY codigo_producto,a.id_empresa order by id_empresa,codigo_producto) c on b.id_empresa = c.id_empresa and b.codigo = c.codigo_producto where a.grupo = 'ESTACION' group by id_empresa order by orden`;
         const [rows] = await externalDb.query(sql, [sysDate]);
         res.json(rows.map(r => ({ empresa: r.titulo, diesel_a: Number(r.diesel_a), regular_a: Number(r.regular_a), super_a: Number(r.super_a), diesel_c: Number(r.diesel_c), regular_c: Number(r.regular_c), super_c: Number(r.super_c), ion_diesel: Number(r.ion_diesel), master: Number(r.master) })));
-    } catch (error) { res.status(500).json({ message: 'Error fetching precios' }); }
+    } catch (error) { 
+        console.error('Error fetching precios:', error);
+        res.status(500).json({ message: 'Error fetching precios' }); 
+    }
 });
 
 router.get('/consultas/cumpleanos', authenticateToken, async (req, res) => {
