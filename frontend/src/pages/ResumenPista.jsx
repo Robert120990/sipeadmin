@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Search, FileSpreadsheet, FileText, ClipboardList } from 'lucide-react';
+import { Calendar, Search, FileSpreadsheet, Printer, ClipboardList } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import ReportPreviewModal from '../components/ReportPreviewModal';
 import api from '../services/api';
 import { todayStr } from '../utils/date';
 
@@ -16,6 +17,12 @@ export default function ResumenPista() {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(false);
     const { addToast } = useToast();
+
+    // ReportPreviewModal state
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [previewPdfBlob, setPreviewPdfBlob] = useState(null);
+    const [previewTotalPages, setPreviewTotalPages] = useState(1);
+    const [previewFileName, setPreviewFileName] = useState('Resumen_Pista.pdf');
 
     const fetchData = async (isManual = false) => {
         setLoading(true);
@@ -61,12 +68,16 @@ export default function ResumenPista() {
 
     const exportToPDF = () => {
         if (data.length === 0) return;
-        const doc = new jsPDF('landscape');
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
         
-        doc.setFontSize(16);
-        doc.text('Resumen de Pista - Consolidado de cortes', 14, 15);
-        doc.setFontSize(10);
-        doc.text(`Fecha: ${fecha}`, 14, 22);
+        doc.setFontSize(15);
+        doc.text('Resumen de Pista - Consolidado de Cortes', 14, 15);
+        doc.setFontSize(9);
+        doc.text(`Fecha del Corte: ${fecha} | Total Estaciones: ${data.length}`, 14, 21);
 
         const tableColumn = ["Sucursal", "Creditos", "Cupones", "Tarjetas", "Remesas", "Gastos", "Lubrica.", "Anticip.", "Pagos", "Descu.", "Suma", "Tot.Venta", "Dif."];
         const tableRows = data.map(row => [
@@ -88,14 +99,27 @@ export default function ResumenPista() {
         autoTable(doc, {
             head: [tableColumn],
             body: tableRows,
-            startY: 28,
+            startY: 26,
             theme: 'striped',
             styles: { fontSize: 7, cellPadding: 2 },
-            headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] }
+            headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] },
+            alternateRowStyles: { fillColor: [248, 250, 252] },
+            didDrawPage: (dPage) => {
+                const pageCount = doc.internal.getNumberOfPages();
+                doc.setFontSize(8);
+                doc.setTextColor(148, 163, 184);
+                doc.text(`Página ${dPage.pageNumber} de ${pageCount}`, doc.internal.pageSize.width - 14, doc.internal.pageSize.height - 8, { align: 'right' });
+                doc.text('SIPE Admin - Reporte de Resumen de Pista', 14, doc.internal.pageSize.height - 8);
+            }
         });
 
-        doc.save(`Resumen_Pista_${fecha}.pdf`);
-        addToast('Documento PDF descargado', 'success');
+        const blob = doc.output('blob');
+        const totalPages = doc.internal.getNumberOfPages();
+        const fileName = `Resumen_Pista_${fecha}.pdf`;
+        setPreviewPdfBlob(blob);
+        setPreviewTotalPages(totalPages);
+        setPreviewFileName(fileName);
+        setShowPreviewModal(true);
     };
 
     const RowCell = ({ val }) => (
@@ -120,8 +144,8 @@ export default function ResumenPista() {
                     <button onClick={exportToExcel} disabled={data.length === 0} className="btn-secondary" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <FileSpreadsheet size={18} /> Excel
                     </button>
-                    <button onClick={exportToPDF} disabled={data.length === 0} className="btn-secondary" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <FileText size={18} /> PDF
+                    <button onClick={exportToPDF} disabled={data.length === 0} className="btn-secondary" style={{ display: 'flex', gap: '0.45rem', alignItems: 'center' }} title="Vista previa e impresión en tamaño Carta">
+                        <Printer size={18} /> Vista Previa / PDF
                     </button>
                 </div>
             </div>
@@ -192,6 +216,17 @@ export default function ResumenPista() {
                         </tbody>
                     </table>
             </div>
+
+            <ReportPreviewModal
+                isOpen={showPreviewModal}
+                onClose={() => setShowPreviewModal(false)}
+                pdfSource={previewPdfBlob}
+                title="Resumen de Pista - Consolidado de Cortes"
+                subtitle={`Fecha: ${fecha} | Total Estaciones: ${data.length}`}
+                badge="CORTES"
+                totalPages={previewTotalPages}
+                fileName={previewFileName}
+            />
         </div>
     );
 }
