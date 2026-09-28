@@ -453,8 +453,312 @@ router.get('/ventas/resumen-mensual/:year/:month', authenticateToken, async (req
     }
 });
 
+const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompararParam) => {
+    const currentYear = new Date().getFullYear();
+    const anioPrincipal = parseInt(anioPrincipalParam || currentYear, 10);
+    const anioComparar = parseInt(anioCompararParam || (anioPrincipal - 1), 10);
+
+    if (isNaN(anioPrincipal) || isNaN(anioComparar) || anioPrincipal < 2000 || anioPrincipal > 2100 || anioComparar < 2000 || anioComparar > 2100) {
+        throw new Error('Años inválidos para el comparativo');
+    }
+
+    const strPrincipal = String(anioPrincipal);
+    const strComparar = String(anioComparar);
+
+    // 1. Obtener lista de estaciones activas (excluyendo 004 El Desvío)
+    const [stationRows] = await withRetry(() => externalDb.query(
+        "SELECT id_empresa, titulo, orden FROM web_consolidado WHERE grupo = 'ESTACION' AND id_empresa != '004' ORDER BY orden"
+    ));
+
+    const estaciones = (stationRows || []).map(s => ({
+        id_empresa: String(s.id_empresa),
+        nombre: getCleanStationName(String(s.id_empresa), s.titulo)
+    }));
+
+    // 2. Consultar combustibles para ambos años
+    const sqlCombustibles = `
+        SELECT 
+            RIGHT(ct.fecha_turno, 4) as anio,
+            CAST(SUBSTRING(ct.fecha_turno, 4, 2) AS UNSIGNED) AS mes,
+            ct_l.id_empresa,
+            IFNULL(SUM(IF(d.clasificacion = 'D', ct_l.total, 0.0)), 0.0) as diesel,
+            IFNULL(SUM(IF(d.clasificacion = 'R', ct_l.total, 0.0)), 0.0) as regular,
+            IFNULL(SUM(IF(d.clasificacion = 'S', ct_l.total, 0.0)), 0.0) as super,
+            IFNULL(SUM(IF(d.clasificacion = 'I', ct_l.total, 0.0)), 0.0) as ion,
+            IFNULL(SUM(ct_l.total), 0.0) as galonaje,
+            COALESCE(SUM(ct_l.monto), SUM(ct_l.total * ct_l.precio), 0.0) as venta_estacion
+        FROM cierre_turno ct
+        INNER JOIN cierre_turno_lecturas ct_l 
+            ON ct.id = ct_l.id_cierre_turno AND ct.id_empresa = ct_l.id_empresa
+        LEFT JOIN cfg_combustibles d 
+            ON ct_l.id_empresa = d.id_empresa AND ct_l.id_producto = d.id_producto
+        WHERE RIGHT(ct.fecha_turno, 4) IN (?, ?)
+          AND ct.id_empresa != '004'
+        GROUP BY anio, mes, ct_l.id_empresa
+        ORDER BY anio, mes, ct_l.id_empresa
+    `;
+    const [fuelRows] = await withRetry(() => externalDb.query(sqlCombustibles, [strPrincipal, strComparar]));
+
+    // 3. Consultar ventas de tienda para ambos años
+    const sqlTiendas = `
+        SELECT 
+            CAST(YEAR(fecha) AS CHAR) as anio,
+            MONTH(fecha) as mes,
+            id_empresa,
+            IFNULL(SUM(monto), 0.0) as venta_tienda
+        FROM ventas_tienda
+        WHERE YEAR(fecha) IN (?, ?) AND id_empresa != '004'
+        GROUP BY anio, mes, id_empresa
+        ORDER BY anio, mes, id_empresa
+    `;
+    const [tiendaRows] = await withRetry(() => externalDb.query(sqlTiendas, [anioPrincipal, anioComparar]));
+
+    // 4. Obtener años disponibles en la base de datos
+    let aniosDisponibles = [anioPrincipal, anioComparar];
+    try {
+        const [yearsRows] = await withRetry(() => externalDb.query(`
+            SELECT DISTINCT anio FROM (
+                SELECT DISTINCT RIGHT(fecha_turno, 4) as anio 
+                FROM cierre_turno 
+                WHERE fecha_turno IS NOT NULL AND LENGTH(fecha_turno) = 10
+                UNION
+                SELECT DISTINCT CAST(YEAR(fecha) AS CHAR) as anio 
+                FROM ventas_tienda 
+                WHERE fecha IS NOT NULL
+            ) t 
+            WHERE anio REGEXP '^[0-9]{4}$' AND anio >= '2020' AND anio <= '2030'
+            ORDER BY anio DESC
+        `));
+        if (yearsRows && yearsRows.length > 0) {
+            const set = new Set(yearsRows.map(r => parseInt(r.anio, 10)).filter(y => !isNaN(y)));
+            set.add(anioPrincipal);
+            set.add(anioComparar);
+            aniosDisponibles = Array.from(set).sort((a, b) => b - a);
+        }
+    } catch {
+        // Fallback a los años consultados si la subconsulta fallara
+    }
+
+    // 5. Nombres de meses
+    const mesesInfo = [
+        { mes: 1, nombre: 'Enero', mes_corto: 'Ene' },
+        { mes: 2, nombre: 'Febrero', mes_corto: 'Feb' },
+        { mes: 3, nombre: 'Marzo', mes_corto: 'Mar' },
+        { mes: 4, nombre: 'Abril', mes_corto: 'Abr' },
+        { mes: 5, nombre: 'Mayo', mes_corto: 'May' },
+        { mes: 6, nombre: 'Junio', mes_corto: 'Jun' },
+        { mes: 7, nombre: 'Julio', mes_corto: 'Jul' },
+        { mes: 8, nombre: 'Agosto', mes_corto: 'Ago' },
+        { mes: 9, nombre: 'Septiembre', mes_corto: 'Sep' },
+        { mes: 10, nombre: 'Octubre', mes_corto: 'Oct' },
+        { mes: 11, nombre: 'Noviembre', mes_corto: 'Nov' },
+        { mes: 12, nombre: 'Diciembre', mes_corto: 'Dic' }
+    ];
+
+    const emptyMetrics = () => ({
+        galonaje: 0,
+        venta_estacion: 0,
+        venta_tienda: 0,
+        venta_total: 0,
+        diesel: 0,
+        regular: 0,
+        super: 0,
+        ion: 0
+    });
+
+    const addMetrics = (target, src) => {
+        target.galonaje = Math.round((target.galonaje + (src.galonaje || 0)) * 100) / 100;
+        target.venta_estacion = Math.round((target.venta_estacion + (src.venta_estacion || 0)) * 100) / 100;
+        target.venta_tienda = Math.round((target.venta_tienda + (src.venta_tienda || 0)) * 100) / 100;
+        target.venta_total = Math.round((target.venta_total + (src.venta_total || 0)) * 100) / 100;
+        target.diesel = Math.round((target.diesel + (src.diesel || 0)) * 100) / 100;
+        target.regular = Math.round((target.regular + (src.regular || 0)) * 100) / 100;
+        target.super = Math.round((target.super + (src.super || 0)) * 100) / 100;
+        target.ion = Math.round((target.ion + (src.ion || 0)) * 100) / 100;
+    };
+
+    // Estructurar datos mensuales
+    const meses = mesesInfo.map(({ mes, nombre, mes_corto }) => {
+        const buildYearMonth = (targetYearStr) => {
+            const fuels = (fuelRows || []).filter(r => String(r.anio) === targetYearStr && Number(r.mes) === mes);
+            const stores = (tiendaRows || []).filter(r => String(r.anio) === targetYearStr && Number(r.mes) === mes);
+
+            const por_estacion = {};
+            const total = emptyMetrics();
+
+            estaciones.forEach(est => {
+                const f = fuels.find(r => String(r.id_empresa) === est.id_empresa);
+                const t = stores.find(r => String(r.id_empresa) === est.id_empresa);
+
+                const gal = f ? Math.round(Number(f.galonaje || 0) * 100) / 100 : 0;
+                const vEst = f ? Math.round(Number(f.venta_estacion || 0) * 100) / 100 : 0;
+                const vTda = t ? Math.round(Number(t.venta_tienda || 0) * 100) / 100 : 0;
+                const d = f ? Math.round(Number(f.diesel || 0) * 100) / 100 : 0;
+                const r = f ? Math.round(Number(f.regular || 0) * 100) / 100 : 0;
+                const s = f ? Math.round(Number(f.super || 0) * 100) / 100 : 0;
+                const i = f ? Math.round(Number(f.ion || 0) * 100) / 100 : 0;
+
+                const estMetrics = {
+                    galonaje: gal,
+                    venta_estacion: vEst,
+                    venta_tienda: vTda,
+                    venta_total: Math.round((vEst + vTda) * 100) / 100,
+                    diesel: d,
+                    regular: r,
+                    super: s,
+                    ion: i
+                };
+
+                por_estacion[est.id_empresa] = estMetrics;
+                addMetrics(total, estMetrics);
+            });
+
+            return { total, por_estacion };
+        };
+
+        const principal = buildYearMonth(strPrincipal);
+        const comparar = buildYearMonth(strComparar);
+
+        const diffGal = Math.round((principal.total.galonaje - comparar.total.galonaje) * 100) / 100;
+        const pctGal = comparar.total.galonaje > 0 ? Math.round(((diffGal / comparar.total.galonaje) * 100) * 10) / 10 : 0;
+        const diffVenta = Math.round((principal.total.venta_total - comparar.total.venta_total) * 100) / 100;
+        const pctVenta = comparar.total.venta_total > 0 ? Math.round(((diffVenta / comparar.total.venta_total) * 100) * 10) / 10 : 0;
+
+        return {
+            mes,
+            nombre,
+            mes_corto,
+            principal: {
+                ...principal.total,
+                por_estacion: principal.por_estacion
+            },
+            comparar: {
+                ...comparar.total,
+                por_estacion: comparar.por_estacion
+            },
+            diferencia: {
+                galonaje: diffGal,
+                galonaje_pct: pctGal,
+                venta_total: diffVenta,
+                venta_total_pct: pctVenta,
+                venta_estacion: Math.round((principal.total.venta_estacion - comparar.total.venta_estacion) * 100) / 100,
+                venta_tienda: Math.round((principal.total.venta_tienda - comparar.total.venta_tienda) * 100) / 100
+            }
+        };
+    });
+
+    // Totales Anuales
+    const calcYearTotal = (key) => {
+        const total = emptyMetrics();
+        const por_estacion = {};
+        estaciones.forEach(est => { por_estacion[est.id_empresa] = emptyMetrics(); });
+
+        meses.forEach(m => {
+            addMetrics(total, m[key]);
+            estaciones.forEach(est => {
+                if (m[key]?.por_estacion?.[est.id_empresa]) {
+                    addMetrics(por_estacion[est.id_empresa], m[key].por_estacion[est.id_empresa]);
+                }
+            });
+        });
+
+        return { ...total, por_estacion };
+    };
+
+    const totPrincipal = calcYearTotal('principal');
+    const totComparar = calcYearTotal('comparar');
+
+    const totDiffGal = Math.round((totPrincipal.galonaje - totComparar.galonaje) * 100) / 100;
+    const totPctGal = totComparar.galonaje > 0 ? Math.round(((totDiffGal / totComparar.galonaje) * 100) * 10) / 10 : 0;
+    const totDiffVenta = Math.round((totPrincipal.venta_total - totComparar.venta_total) * 100) / 100;
+    const totPctVenta = totComparar.venta_total > 0 ? Math.round(((totDiffVenta / totComparar.venta_total) * 100) * 10) / 10 : 0;
+
+    // Mes récord / pico
+    let picoPrincipalGal = { mes: 0, nombre: '', valor: 0 };
+    let picoPrincipalVenta = { mes: 0, nombre: '', valor: 0 };
+    let mesCorteYtd = 0;
+
+    meses.forEach(m => {
+        if (m.principal.galonaje > picoPrincipalGal.valor) {
+            picoPrincipalGal = { mes: m.mes, nombre: m.nombre, valor: m.principal.galonaje };
+        }
+        if (m.principal.venta_total > picoPrincipalVenta.valor) {
+            picoPrincipalVenta = { mes: m.mes, nombre: m.nombre, valor: m.principal.venta_total };
+        }
+        if (m.principal.galonaje > 0 || m.principal.venta_total > 0) {
+            if (m.mes > mesCorteYtd) mesCorteYtd = m.mes;
+        }
+    });
+
+    if (mesCorteYtd === 0) mesCorteYtd = 12;
+
+    // Cálculo YTD acumulado hasta el mes con ventas en año principal
+    const ytdPrincipal = emptyMetrics();
+    const ytdComparar = emptyMetrics();
+    meses.filter(m => m.mes <= mesCorteYtd).forEach(m => {
+        addMetrics(ytdPrincipal, m.principal);
+        addMetrics(ytdComparar, m.comparar);
+    });
+
+    const ytdDiffGal = Math.round((ytdPrincipal.galonaje - ytdComparar.galonaje) * 100) / 100;
+    const ytdPctGal = ytdComparar.galonaje > 0 ? Math.round(((ytdDiffGal / ytdComparar.galonaje) * 100) * 10) / 10 : 0;
+    const ytdDiffVenta = Math.round((ytdPrincipal.venta_total - ytdComparar.venta_total) * 100) / 100;
+    const ytdPctVenta = ytdComparar.venta_total > 0 ? Math.round(((ytdDiffVenta / ytdComparar.venta_total) * 100) * 10) / 10 : 0;
+
+    return {
+        anioPrincipal,
+        anioComparar,
+        aniosDisponibles,
+        estaciones,
+        meses,
+        totales: {
+            principal: totPrincipal,
+            comparar: totComparar,
+            diferencia: {
+                galonaje: totDiffGal,
+                galonaje_pct: totPctGal,
+                venta_total: totDiffVenta,
+                venta_total_pct: totPctVenta
+            },
+            picos: {
+                galonaje: picoPrincipalGal,
+                venta_total: picoPrincipalVenta
+            },
+            ytd: {
+                mes_corte: mesCorteYtd,
+                nombre_corte: mesesInfo[mesCorteYtd - 1]?.nombre || '',
+                principal: ytdPrincipal,
+                comparar: ytdComparar,
+                diferencia: {
+                    galonaje: ytdDiffGal,
+                    galonaje_pct: ytdPctGal,
+                    venta_total: ytdDiffVenta,
+                    venta_total_pct: ytdPctVenta
+                }
+            }
+        }
+    };
+};
+
+router.get('/ventas/comparativo-anual', authenticateToken, async (req, res) => {
+    try {
+        const { anioPrincipal, anioComparar, anio1, anio2, anio } = req.query;
+        const pYear = anioPrincipal || anio1 || anio || new Date().getFullYear();
+        const cYear = anioComparar || anio2 || (parseInt(pYear, 10) - 1);
+
+        const externalDb = await getExternalDb();
+        const data = await getComparativoAnualData(externalDb, pYear, cYear);
+        res.json(data);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar comparativo anual de ventas');
+    }
+});
+
 router.normalizeStationName = normalizeStationName;
 router.getResumenMensualData = getResumenMensualData;
+router.getComparativoAnualData = getComparativoAnualData;
+router.getCleanStationName = getCleanStationName;
+router.getCleanTiendaName = getCleanTiendaName;
 
 router.get('/ventas/lubricantes/:start/:end', authenticateToken, async (req, res) => {
     const { start, end } = req.params;

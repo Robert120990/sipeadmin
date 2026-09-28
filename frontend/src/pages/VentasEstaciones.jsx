@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
     Calendar, Search, FileSpreadsheet, Printer, 
     ChevronLeft, ChevronRight, Fuel, Store, DollarSign, 
-    Layers, TrendingUp 
+    Layers, TrendingUp, BarChart3, LineChart,
+    ArrowUpRight, ArrowDownRight, Sparkles, RefreshCw
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -10,6 +11,7 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import ReportPreviewModal from '../components/ReportPreviewModal';
+import Modal from '../components/Modal';
 
 export default function VentasEstaciones() {
     // --- ESTADO DIARIO ---
@@ -50,8 +52,112 @@ export default function VentasEstaciones() {
     const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
     const [totalPages, setTotalPages] = useState(1);
     const [previewFileName, setPreviewFileName] = useState('');
+
+    // --- ESTADO COMPARATIVO ANUAL ---
+    const [showComparativoModal, setShowComparativoModal] = useState(false);
+    const [comparativoData, setComparativoData] = useState(null);
+    const [loadingComparativo, setLoadingComparativo] = useState(false);
+    const [anioPrincipal, setAnioPrincipal] = useState(new Date().getFullYear());
+    const [anioComparar, setAnioComparar] = useState(new Date().getFullYear() - 1);
+    const [estacionFiltro, setEstacionFiltro] = useState('all'); // 'all' o id_empresa
+    const [metricaFiltro, setMetricaFiltro] = useState('galonaje'); // 'galonaje' | 'venta_total' | 'venta_estacion' | 'venta_tienda' | 'diesel' | 'regular' | 'super' | 'ion'
+    const [tipoGrafico, setTipoGrafico] = useState('barras'); // 'barras' | 'lineas'
+    const [chartHover, setChartHover] = useState(null); // mes index 0..11
     
     const { addToast } = useToast();
+
+    // --- CARGA DE DATOS COMPARATIVO ANUAL ---
+    const fetchComparativoData = async (pYear = anioPrincipal, cYear = anioComparar) => {
+        setLoadingComparativo(true);
+        try {
+            const res = await api.get('/ventas/comparativo-anual', {
+                params: { anioPrincipal: pYear, anioComparar: cYear }
+            });
+            setComparativoData(res.data);
+            if (res.data?.anioPrincipal) setAnioPrincipal(res.data.anioPrincipal);
+            if (res.data?.anioComparar) setAnioComparar(res.data.anioComparar);
+        } catch (error) {
+            addToast(error.response?.data?.message || 'Error al cargar comparativo anual', 'error');
+        } finally {
+            setLoadingComparativo(false);
+        }
+    };
+
+    const handleOpenComparativoModal = () => {
+        setShowComparativoModal(true);
+        if (!comparativoData) {
+            fetchComparativoData(anioPrincipal, anioComparar);
+        }
+    };
+
+    const isCurrencyMetric = metricaFiltro.startsWith('venta');
+    const formatMetricVal = (val) => isCurrencyMetric ? moneyFmt(val) : `${numFmt(val)} gal`;
+    const formatMetricShort = (val) => {
+        if (!val || val === 0) return '0';
+        if (val >= 1000000) return isCurrencyMetric ? `$${(val / 1000000).toFixed(2)}M` : `${(val / 1000000).toFixed(2)}M gal`;
+        if (val >= 1000) return isCurrencyMetric ? `$${(val / 1000).toFixed(1)}k` : `${(val / 1000).toFixed(1)}k gal`;
+        return isCurrencyMetric ? `$${Math.round(val).toLocaleString()}` : `${Math.round(val).toLocaleString()} gal`;
+    };
+
+    const getMetricaNombre = (m) => {
+        switch (m) {
+            case 'galonaje': return 'Galonaje Total Combustible';
+            case 'venta_total': return 'Venta Total Consolidada ($)';
+            case 'venta_estacion': return 'Venta Pista Combustible ($)';
+            case 'venta_tienda': return 'Venta Tienda E-Market ($)';
+            case 'diesel': return 'Diésel (Galones)';
+            case 'regular': return 'Regular (Galones)';
+            case 'super': return 'Súper (Galones)';
+            case 'ion': return 'Ion Diésel (Galones)';
+            default: return m;
+        }
+    };
+
+    const exportComparativoToExcel = () => {
+        if (!comparativoData) return;
+        const wb = XLSX.utils.book_new();
+        const estName = estacionFiltro === 'all' 
+            ? 'Todas las Estaciones (Consolidado)' 
+            : (comparativoData.estaciones?.find(e => e.id_empresa === estacionFiltro)?.nombre || estacionFiltro);
+
+        const rows = [
+            ['REPORTE COMPARATIVO ANUAL DE VENTAS POR ESTACIÓN'],
+            ['Estación:', estName],
+            ['Métrica Evaluada:', getMetricaNombre(metricaFiltro)],
+            ['Período:', `${anioPrincipal} vs ${anioComparar}`],
+            ['Fecha de Generación:', new Date().toLocaleDateString('es-SV')],
+            [''],
+            ['Mes', String(anioPrincipal), String(anioComparar), 'Diferencia Neta', '% Variación', 'Estado']
+        ];
+
+        comparativoData.meses.forEach(m => {
+            const v1 = estacionFiltro === 'all' ? (m.principal[metricaFiltro] || 0) : (m.principal.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+            const v2 = estacionFiltro === 'all' ? (m.comparar[metricaFiltro] || 0) : (m.comparar.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+            const d = Math.round((v1 - v2) * 100) / 100;
+            const pct = v2 > 0 ? `${((d / v2) * 100).toFixed(1)}%` : (v1 > 0 ? '+100.0%' : '0.0%');
+            const estado = v1 === 0 && v2 === 0 ? 'Sin registros' : (d >= 0 ? 'Superávit' : 'Déficit');
+            rows.push([m.nombre, v1, v2, d, pct, estado]);
+        });
+
+        rows.push(['']);
+        // Totales Anuales
+        let t1 = 0, t2 = 0;
+        if (estacionFiltro === 'all') {
+            t1 = comparativoData.totales.principal[metricaFiltro] || 0;
+            t2 = comparativoData.totales.comparar[metricaFiltro] || 0;
+        } else {
+            t1 = comparativoData.totales.principal.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0;
+            t2 = comparativoData.totales.comparar.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0;
+        }
+        const td = Math.round((t1 - t2) * 100) / 100;
+        const tpct = t2 > 0 ? `${((td / t2) * 100).toFixed(1)}%` : '0.0%';
+        rows.push(['TOTAL ANUAL', t1, t2, td, tpct, td >= 0 ? 'Crecimiento' : 'Descenso']);
+
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, 'Comparativo Anual');
+        XLSX.writeFile(wb, `Comparativo_Anual_${anioPrincipal}_vs_${anioComparar}_${estacionFiltro}.xlsx`);
+        addToast('Archivo Excel descargado exitosamente', 'success');
+    };
 
     const moneyFmt = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
     const numFmt = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
@@ -635,6 +741,26 @@ export default function VentasEstaciones() {
                     {/* Botones de Acción */}
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
                         <button 
+                            className="btn-primary" 
+                            onClick={handleOpenComparativoModal}
+                            style={{ 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                gap: '0.45rem', 
+                                height: '36px', 
+                                padding: '0 0.95rem', 
+                                fontSize: '0.825rem',
+                                background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                                border: 'none',
+                                color: '#fff',
+                                boxShadow: '0 2px 6px rgba(37, 99, 235, 0.25)',
+                                fontWeight: '600'
+                            }}
+                            title="Graficar y ver de forma dinámica el comportamiento mensual de cada estación"
+                        >
+                            <BarChart3 size={15} /> Gráfica Comparativa Anual
+                        </button>
+                        <button 
                             className="btn-secondary" 
                             onClick={exportMonthlyToExcel}
                             disabled={loadingMonthly || !monthlyData?.consolidado?.length}
@@ -1076,6 +1202,774 @@ export default function VentasEstaciones() {
                 totalPages={totalPages}
                 fileName={previewFileName}
             />
+
+            {/* ========================================================================= */}
+            {/* MODAL DE COMPARATIVO ANUAL DINÁMICO POR ESTACIÓN (GRÁFICA Y MES POR MES)  */}
+            {/* ========================================================================= */}
+            <Modal
+                open={showComparativoModal}
+                onClose={() => setShowComparativoModal(false)}
+                title={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: 'rgba(37, 99, 235, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#2563eb' }}>
+                            <BarChart3 size={20} />
+                        </div>
+                        <div>
+                            <span style={{ fontSize: '1.15rem', fontWeight: 'bold' }}>Comparativo Anual Dinámico de Ventas</span>
+                            <span style={{ marginLeft: '0.6rem', fontSize: '0.75rem', fontWeight: '600', padding: '0.18rem 0.55rem', borderRadius: '12px', background: 'rgba(37, 99, 235, 0.15)', color: '#2563eb' }}>
+                                {anioPrincipal} vs {anioComparar}
+                            </span>
+                        </div>
+                    </div>
+                }
+                size="xl"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            {estacionFiltro === 'all' 
+                                ? 'Mostrando consolidado general de todas las estaciones activas' 
+                                : `Filtrando exclusivamente: ${comparativoData?.estaciones?.find(e => e.id_empresa === estacionFiltro)?.nombre || estacionFiltro}`}
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button
+                                className="btn-secondary"
+                                onClick={exportComparativoToExcel}
+                                disabled={!comparativoData}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', height: '36px', fontSize: '0.8rem' }}
+                            >
+                                <FileSpreadsheet size={15} color="#22c55e" /> Descargar Excel
+                            </button>
+                            <button
+                                className="btn-primary"
+                                onClick={() => setShowComparativoModal(false)}
+                                style={{ height: '36px', padding: '0 1.25rem', fontSize: '0.8rem' }}
+                            >
+                                Cerrar
+                            </button>
+                        </div>
+                    </div>
+                }
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.25rem 0' }}>
+                    {/* Barra de Filtros y Controles del Modal */}
+                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', background: 'rgba(0,0,0,0.02)', border: '1px solid var(--border)' }}>
+                        {/* Selector de Estación */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Estación
+                            </label>
+                            <select
+                                value={estacionFiltro}
+                                onChange={e => setEstacionFiltro(e.target.value)}
+                                style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', minWidth: '190px' }}
+                            >
+                                <option value="all">Todas las Estaciones (Consolidado)</option>
+                                {(comparativoData?.estaciones || []).map(est => (
+                                    <option key={est.id_empresa} value={est.id_empresa}>
+                                        {est.nombre}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Selector de Métrica */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Métrica a Graficar
+                            </label>
+                            <select
+                                value={metricaFiltro}
+                                onChange={e => setMetricaFiltro(e.target.value)}
+                                style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', minWidth: '180px' }}
+                            >
+                                <option value="galonaje">Galonaje Total (Gal)</option>
+                                <option value="venta_total">Venta Total ($)</option>
+                                <option value="venta_estacion">Venta Pista Combustible ($)</option>
+                                <option value="venta_tienda">Venta Tienda E-Market ($)</option>
+                                <option value="diesel">Diésel (Gal)</option>
+                                <option value="regular">Regular (Gal)</option>
+                                <option value="super">Súper (Gal)</option>
+                                <option value="ion">Ion Diésel (Gal)</option>
+                            </select>
+                        </div>
+
+                        {/* Selector de Año Principal */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Año Base
+                            </label>
+                            <select
+                                value={anioPrincipal}
+                                onChange={e => {
+                                    const y = parseInt(e.target.value, 10);
+                                    setAnioPrincipal(y);
+                                    fetchComparativoData(y, anioComparar);
+                                }}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '95px' }}
+                            >
+                                {(comparativoData?.aniosDisponibles || [anioPrincipal]).map(y => (
+                                    <option key={y} value={y}>{y}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Selector de Año a Comparar */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Año a Comparar
+                            </label>
+                            <select
+                                value={anioComparar}
+                                onChange={e => {
+                                    const y = parseInt(e.target.value, 10);
+                                    setAnioComparar(y);
+                                    fetchComparativoData(anioPrincipal, y);
+                                }}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '95px' }}
+                            >
+                                {(comparativoData?.aniosDisponibles || [anioComparar]).map(y => (
+                                    <option key={y} value={y}>{y}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Botón Refrescar */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
+                            <button
+                                className="btn-secondary"
+                                onClick={() => fetchComparativoData(anioPrincipal, anioComparar)}
+                                disabled={loadingComparativo}
+                                style={{ height: '36px', padding: '0 0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem' }}
+                                title="Actualizar datos"
+                            >
+                                <RefreshCw size={14} className={loadingComparativo ? 'spin' : ''} /> Actualizar
+                            </button>
+                        </div>
+
+                        {/* Toggle de Tipo de Gráfico */}
+                        <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.3rem', alignItems: 'center', marginTop: 'auto' }}>
+                            <button
+                                onClick={() => setTipoGrafico('barras')}
+                                style={{
+                                    height: '36px',
+                                    padding: '0 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: 'var(--border-radius)',
+                                    border: '1px solid',
+                                    borderColor: tipoGrafico === 'barras' ? 'var(--primary, #3b82f6)' : 'var(--border)',
+                                    background: tipoGrafico === 'barras' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                    color: tipoGrafico === 'barras' ? 'var(--primary, #3b82f6)' : 'var(--text-muted)',
+                                    fontWeight: tipoGrafico === 'barras' ? 'bold' : 'normal',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem'
+                                }}
+                            >
+                                <BarChart3 size={15} /> Barras
+                            </button>
+                            <button
+                                onClick={() => setTipoGrafico('lineas')}
+                                style={{
+                                    height: '36px',
+                                    padding: '0 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: 'var(--border-radius)',
+                                    border: '1px solid',
+                                    borderColor: tipoGrafico === 'lineas' ? 'var(--primary, #3b82f6)' : 'var(--border)',
+                                    background: tipoGrafico === 'lineas' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                    color: tipoGrafico === 'lineas' ? 'var(--primary, #3b82f6)' : 'var(--text-muted)',
+                                    fontWeight: tipoGrafico === 'lineas' ? 'bold' : 'normal',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem'
+                                }}
+                            >
+                                <LineChart size={15} /> Líneas
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Estado de Carga */}
+                    {loadingComparativo && (
+                        <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                            <RefreshCw size={28} className="spin" color="var(--primary, #3b82f6)" />
+                            <span style={{ fontSize: '0.9rem' }}>Consultando información mensual y calculando métricas comparativas...</span>
+                        </div>
+                    )}
+
+                    {/* Contenido Principal si hay datos cargados */}
+                    {!loadingComparativo && comparativoData && (() => {
+                        // Extracción de datos según filtros activos
+                        const chartData = (comparativoData.meses || []).map((m, idx) => {
+                            let v1 = 0;
+                            let v2 = 0;
+                            if (estacionFiltro === 'all') {
+                                v1 = Number(m.principal?.[metricaFiltro] || 0);
+                                v2 = Number(m.comparar?.[metricaFiltro] || 0);
+                            } else {
+                                v1 = Number(m.principal?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+                                v2 = Number(m.comparar?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+                            }
+                            const diff = Math.round((v1 - v2) * 100) / 100;
+                            const pct = v2 > 0 ? Math.round(((diff / v2) * 100) * 10) / 10 : (v1 > 0 ? 100 : 0);
+                            return {
+                                mes: m.mes,
+                                nombre: m.nombre,
+                                mes_corto: m.mes_corto,
+                                val1: v1,
+                                val2: v2,
+                                diff,
+                                pct,
+                                idx
+                            };
+                        });
+
+                        // Totales Anuales
+                        let totVal1 = 0;
+                        let totVal2 = 0;
+                        if (estacionFiltro === 'all') {
+                            totVal1 = Number(comparativoData.totales?.principal?.[metricaFiltro] || 0);
+                            totVal2 = Number(comparativoData.totales?.comparar?.[metricaFiltro] || 0);
+                        } else {
+                            totVal1 = Number(comparativoData.totales?.principal?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+                            totVal2 = Number(comparativoData.totales?.comparar?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+                        }
+                        const totDiff = Math.round((totVal1 - totVal2) * 100) / 100;
+                        const totPct = totVal2 > 0 ? Math.round(((totDiff / totVal2) * 100) * 10) / 10 : 0;
+
+                        // YTD hasta el mes de corte
+                        const mesCorte = comparativoData.totales?.ytd?.mes_corte || 9;
+                        const nombreCorte = comparativoData.totales?.ytd?.nombre_corte || 'Septiembre';
+                        let ytdVal1 = 0;
+                        let ytdVal2 = 0;
+                        chartData.filter(d => d.mes <= mesCorte).forEach(d => {
+                            ytdVal1 += d.val1;
+                            ytdVal2 += d.val2;
+                        });
+                        ytdVal1 = Math.round(ytdVal1 * 100) / 100;
+                        ytdVal2 = Math.round(ytdVal2 * 100) / 100;
+                        const ytdDiff = Math.round((ytdVal1 - ytdVal2) * 100) / 100;
+                        const ytdPct = ytdVal2 > 0 ? Math.round(((ytdDiff / ytdVal2) * 100) * 10) / 10 : 0;
+
+                        // Mes Récord
+                        let peakMonth = { nombre: 'N/A', val1: 0 };
+                        chartData.forEach(d => {
+                            if (d.val1 > peakMonth.val1) {
+                                peakMonth = { nombre: d.nombre, val1: d.val1 };
+                            }
+                        });
+
+                        // Configuración del SVG
+                        const svgWidth = 880;
+                        const svgHeight = 250;
+                        const padLeft = 75;
+                        const padRight = 25;
+                        const padTop = 25;
+                        const padBottom = 40;
+                        const plotW = svgWidth - padLeft - padRight;
+                        const plotH = svgHeight - padTop - padBottom;
+
+                        const rawMax = Math.max(...chartData.map(d => Math.max(d.val1, d.val2)), 1);
+                        const magnitude = Math.pow(10, Math.floor(Math.log10(rawMax)));
+                        const normalized = rawMax / magnitude;
+                        const chartMax = Math.max(Math.ceil(normalized * 1.15) * magnitude, 10);
+
+                        const yGridLevels = [0, 0.333, 0.666, 1.0];
+                        const slotW = plotW / 12;
+                        const barW = 15;
+                        const barGap = 4;
+
+                        // Puntos para líneas
+                        const points1 = chartData.map((d, i) => {
+                            const cx = padLeft + (i + 0.5) * slotW;
+                            const cy = (padTop + plotH) - (d.val1 / chartMax) * plotH;
+                            return `${cx},${cy}`;
+                        }).join(' ');
+
+                        const points2 = chartData.map((d, i) => {
+                            const cx = padLeft + (i + 0.5) * slotW;
+                            const cy = (padTop + plotH) - (d.val2 / chartMax) * plotH;
+                            return `${cx},${cy}`;
+                        }).join(' ');
+
+                        return (
+                            <>
+                                {/* Tarjetas de Resumen KPI */}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.75rem' }}>
+                                    {/* KPI 1: Año Principal */}
+                                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', borderLeft: '3px solid #3b82f6' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: '600' }}>AÑO {anioPrincipal}</span>
+                                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6' }}></span>
+                                        </div>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--text)' }}>
+                                            {formatMetricShort(totVal1)}
+                                        </div>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            Total acumulado en el año
+                                        </span>
+                                    </div>
+
+                                    {/* KPI 2: Año Comparado */}
+                                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', borderLeft: '3px solid #10b981' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: '600' }}>AÑO {anioComparar}</span>
+                                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
+                                        </div>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--text)' }}>
+                                            {formatMetricShort(totVal2)}
+                                        </div>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            Total del año comparado
+                                        </span>
+                                    </div>
+
+                                    {/* KPI 3: Variación Neta */}
+                                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', borderLeft: `3px solid ${totDiff >= 0 ? '#22c55e' : '#ef4444'}` }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: '600' }}>VARIACIÓN TOTAL</span>
+                                            {totDiff >= 0 ? <ArrowUpRight size={15} color="#22c55e" /> : <ArrowDownRight size={15} color="#ef4444" />}
+                                        </div>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: totDiff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                            {totDiff >= 0 ? '+' : ''}{totPct}%
+                                        </div>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            {totDiff >= 0 ? '+' : ''}{formatMetricShort(totDiff)}
+                                        </span>
+                                    </div>
+
+                                    {/* KPI 4: Acumulado YTD */}
+                                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', borderLeft: '3px solid #8b5cf6' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: '600' }}>CORTE YTD ({nombreCorte.slice(0,3)})</span>
+                                            <span style={{ fontSize: '0.7rem', fontWeight: 'bold', padding: '0.1rem 0.35rem', borderRadius: '4px', background: ytdDiff >= 0 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: ytdDiff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                                {ytdPct >= 0 ? '+' : ''}{ytdPct}%
+                                            </span>
+                                        </div>
+                                        <div style={{ fontSize: '1.05rem', fontWeight: 'bold', color: 'var(--text)' }}>
+                                            {formatMetricShort(ytdVal1)} <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: 'var(--text-muted)' }}>vs {formatMetricShort(ytdVal2)}</span>
+                                        </div>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            Cálculo justo a mes transcurrido
+                                        </span>
+                                    </div>
+
+                                    {/* KPI 5: Mes Récord */}
+                                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', borderLeft: '3px solid #f59e0b' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: '600' }}>MES RÉCORD {anioPrincipal}</span>
+                                            <Sparkles size={14} color="#f59e0b" />
+                                        </div>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#f59e0b' }}>
+                                            {peakMonth.nombre}
+                                        </div>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            {formatMetricShort(peakMonth.val1)}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* Gráfico SVG Dinámico */}
+                                <div className="card glass" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                    {/* Cabecera del Gráfico con Leyenda */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                        <div>
+                                            <h4 style={{ margin: 0, fontSize: '0.925rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                {getMetricaNombre(metricaFiltro)}
+                                                <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: 'var(--text-muted)' }}>
+                                                    ({estacionFiltro === 'all' ? 'Todas las Estaciones' : comparativoData.estaciones?.find(e => e.id_empresa === estacionFiltro)?.nombre})
+                                                </span>
+                                            </h4>
+                                        </div>
+
+                                        {/* Leyenda */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.8rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                <span style={{ width: '12px', height: '12px', borderRadius: '3px', background: '#3b82f6' }}></span>
+                                                <span style={{ fontWeight: '600' }}>Año {anioPrincipal}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                <span style={{ width: '12px', height: '12px', borderRadius: '3px', background: '#10b981' }}></span>
+                                                <span style={{ fontWeight: '600' }}>Año {anioComparar}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Info Banner al pasar el cursor (Hover) */}
+                                    <div style={{ minHeight: '26px', padding: '0.3rem 0.6rem', borderRadius: '6px', background: chartHover !== null ? 'rgba(59, 130, 246, 0.1)' : 'transparent', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+                                        {chartHover !== null ? (
+                                            <>
+                                                <span style={{ fontWeight: 'bold', color: 'var(--text)' }}>
+                                                    Mes: {chartData[chartHover].nombre}
+                                                </span>
+                                                <span>
+                                                    <strong style={{ color: '#3b82f6' }}>{anioPrincipal}:</strong> {formatMetricVal(chartData[chartHover].val1)}
+                                                </span>
+                                                <span>
+                                                    <strong style={{ color: '#10b981' }}>{anioComparar}:</strong> {formatMetricVal(chartData[chartHover].val2)}
+                                                </span>
+                                                <span style={{ fontWeight: 'bold', color: chartData[chartHover].diff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                                    Variación: {chartData[chartHover].pct >= 0 ? '+' : ''}{chartData[chartHover].pct}% ({chartData[chartHover].diff >= 0 ? '+' : ''}{formatMetricVal(chartData[chartHover].diff)})
+                                                </span>
+                                            </>
+                                        ) : (
+                                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                                                Pasa el cursor sobre cualquier mes para ver los valores detallados y la variación exacta.
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {/* Contenedor SVG Responsivo */}
+                                    <div style={{ width: '100%', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+                                        <svg
+                                            viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+                                            style={{ width: '100%', minWidth: '700px', height: 'auto', display: 'block', overflow: 'visible' }}
+                                            onMouseLeave={() => setChartHover(null)}
+                                        >
+                                            <defs>
+                                                <linearGradient id="barBlueGrad" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="0%" stopColor="#3b82f6" />
+                                                    <stop offset="100%" stopColor="#1d4ed8" />
+                                                </linearGradient>
+                                                <linearGradient id="barGreenGrad" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="0%" stopColor="#10b981" />
+                                                    <stop offset="100%" stopColor="#059669" />
+                                                </linearGradient>
+                                            </defs>
+
+                                            {/* Líneas de cuadrícula horizontales y etiquetas de eje Y */}
+                                            {yGridLevels.map((pct, idx) => {
+                                                const yPos = padTop + (1 - pct) * plotH;
+                                                const valLevel = pct * chartMax;
+                                                return (
+                                                    <g key={idx}>
+                                                        <line
+                                                            x1={padLeft}
+                                                            y1={yPos}
+                                                            x2={svgWidth - padRight}
+                                                            y2={yPos}
+                                                            stroke={pct === 0 ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.06)'}
+                                                            strokeWidth={pct === 0 ? 1.5 : 1}
+                                                            strokeDasharray={pct === 0 ? 'none' : '4 4'}
+                                                        />
+                                                        <text
+                                                            x={padLeft - 8}
+                                                            y={yPos + 4}
+                                                            textAnchor="end"
+                                                            fontSize="10"
+                                                            fill="var(--text-muted)"
+                                                            fontWeight="500"
+                                                        >
+                                                            {formatMetricShort(valLevel)}
+                                                        </text>
+                                                    </g>
+                                                );
+                                            })}
+
+                                            {/* Columnas mensuales (Barras o Líneas) */}
+                                            {chartData.map((d, i) => {
+                                                const xc = padLeft + (i + 0.5) * slotW;
+                                                const isHovered = chartHover === i;
+
+                                                // Alturas
+                                                const h1 = (d.val1 / chartMax) * plotH;
+                                                const y1 = (padTop + plotH) - h1;
+                                                const h2 = (d.val2 / chartMax) * plotH;
+                                                const y2 = (padTop + plotH) - h2;
+
+                                                const x1 = xc - barW - (barGap / 2);
+                                                const x2 = xc + (barGap / 2);
+
+                                                return (
+                                                    <g key={i}>
+                                                        {/* Fondo de resalte al pasar el cursor */}
+                                                        {isHovered && (
+                                                            <rect
+                                                                x={padLeft + i * slotW}
+                                                                y={padTop}
+                                                                width={slotW}
+                                                                height={plotH}
+                                                                fill="rgba(59, 130, 246, 0.08)"
+                                                                rx="4"
+                                                            />
+                                                        )}
+
+                                                        {/* Renderizado en Modo Barras */}
+                                                        {tipoGrafico === 'barras' && (
+                                                            <>
+                                                                {/* Barra Año Principal (Azul) */}
+                                                                {d.val1 > 0 && (
+                                                                    <rect
+                                                                        x={x1}
+                                                                        y={y1}
+                                                                        width={barW}
+                                                                        height={Math.max(h1, 2)}
+                                                                        rx="3"
+                                                                        fill="url(#barBlueGrad)"
+                                                                        opacity={chartHover === null || isHovered ? 1 : 0.5}
+                                                                        style={{ transition: 'opacity 0.2s ease, height 0.3s ease' }}
+                                                                    />
+                                                                )}
+
+                                                                {/* Barra Año Comparado (Verde) */}
+                                                                {d.val2 > 0 && (
+                                                                    <rect
+                                                                        x={x2}
+                                                                        y={y2}
+                                                                        width={barW}
+                                                                        height={Math.max(h2, 2)}
+                                                                        rx="3"
+                                                                        fill="url(#barGreenGrad)"
+                                                                        opacity={chartHover === null || isHovered ? 1 : 0.5}
+                                                                        style={{ transition: 'opacity 0.2s ease, height 0.3s ease' }}
+                                                                    />
+                                                                )}
+                                                            </>
+                                                        )}
+
+                                                        {/* Etiqueta del Mes en el Eje X */}
+                                                        <text
+                                                            x={xc}
+                                                            y={svgHeight - 15}
+                                                            textAnchor="middle"
+                                                            fontSize="11"
+                                                            fill={isHovered ? 'var(--primary, #3b82f6)' : 'var(--text-color)'}
+                                                            fontWeight={isHovered ? 'bold' : 'normal'}
+                                                        >
+                                                            {d.mes_corto}
+                                                        </text>
+
+                                                        {/* Zona interactiva transparente para hover */}
+                                                        <rect
+                                                            x={padLeft + i * slotW}
+                                                            y={padTop}
+                                                            width={slotW}
+                                                            height={plotH + 25}
+                                                            fill="transparent"
+                                                            style={{ cursor: 'pointer' }}
+                                                            onMouseEnter={() => setChartHover(i)}
+                                                        />
+                                                    </g>
+                                                );
+                                            })}
+
+                                            {/* Renderizado en Modo Líneas */}
+                                            {tipoGrafico === 'lineas' && (
+                                                <>
+                                                    {/* Línea Año Principal (Azul) */}
+                                                    <polyline
+                                                        points={points1}
+                                                        fill="none"
+                                                        stroke="#3b82f6"
+                                                        strokeWidth="2.5"
+                                                        strokeLinecap="round"
+                                                        strokeLinejoin="round"
+                                                    />
+                                                    {/* Línea Año Comparado (Verde) */}
+                                                    <polyline
+                                                        points={points2}
+                                                        fill="none"
+                                                        stroke="#10b981"
+                                                        strokeWidth="2"
+                                                        strokeDasharray="5 3"
+                                                        strokeLinecap="round"
+                                                        strokeLinejoin="round"
+                                                    />
+
+                                                    {/* Puntos / Marcadores */}
+                                                    {chartData.map((d, i) => {
+                                                        const xc = padLeft + (i + 0.5) * slotW;
+                                                        const cy1 = (padTop + plotH) - (d.val1 / chartMax) * plotH;
+                                                        const cy2 = (padTop + plotH) - (d.val2 / chartMax) * plotH;
+                                                        const isHovered = chartHover === i;
+
+                                                        return (
+                                                            <g key={i}>
+                                                                {d.val1 > 0 && (
+                                                                    <circle
+                                                                        cx={xc}
+                                                                        cy={cy1}
+                                                                        r={isHovered ? 5 : 3.5}
+                                                                        fill="#3b82f6"
+                                                                        stroke="#fff"
+                                                                        strokeWidth="1.5"
+                                                                    />
+                                                                )}
+                                                                {d.val2 > 0 && (
+                                                                    <circle
+                                                                        cx={xc}
+                                                                        cy={cy2}
+                                                                        r={isHovered ? 4.5 : 3}
+                                                                        fill="#10b981"
+                                                                        stroke="#fff"
+                                                                        strokeWidth="1.5"
+                                                                    />
+                                                                )}
+                                                            </g>
+                                                        );
+                                                    })}
+                                                </>
+                                            )}
+                                        </svg>
+                                    </div>
+                                </div>
+
+                                {/* Tabla Detallada Mes por Mes */}
+                                <div className="card glass" style={{ padding: '0', display: 'flex', flexDirection: 'column' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1rem', borderBottom: '1px solid var(--border)' }}>
+                                        <h4 style={{ margin: 0, fontSize: '0.925rem', fontWeight: '600' }}>
+                                            Comportamiento Mensual Detallado (Enero a Diciembre)
+                                        </h4>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            {estacionFiltro === 'all' ? 'Consolidado General' : comparativoData.estaciones?.find(e => e.id_empresa === estacionFiltro)?.nombre}
+                                        </span>
+                                    </div>
+
+                                    <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '780px' }}>
+                                            <thead>
+                                                <tr style={{ background: 'rgba(0,0,0,0.03)', borderBottom: '1px solid var(--border)' }}>
+                                                    <th style={{ textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.74rem', textTransform: 'uppercase' }}>Mes</th>
+                                                    <th style={{ textAlign: 'right', padding: '0.65rem 1rem', fontSize: '0.74rem', textTransform: 'uppercase', color: '#3b82f6' }}>
+                                                        Año {anioPrincipal}
+                                                    </th>
+                                                    <th style={{ textAlign: 'right', padding: '0.65rem 1rem', fontSize: '0.74rem', textTransform: 'uppercase', color: '#10b981' }}>
+                                                        Año {anioComparar}
+                                                    </th>
+                                                    <th style={{ textAlign: 'right', padding: '0.65rem 1rem', fontSize: '0.74rem', textTransform: 'uppercase' }}>
+                                                        Diferencia Neta
+                                                    </th>
+                                                    <th style={{ textAlign: 'right', padding: '0.65rem 1rem', fontSize: '0.74rem', textTransform: 'uppercase' }}>
+                                                        % Variación
+                                                    </th>
+                                                    <th style={{ textAlign: 'center', padding: '0.65rem 1rem', fontSize: '0.74rem', textTransform: 'uppercase' }}>
+                                                        Comportamiento
+                                                    </th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {chartData.map((d, i) => {
+                                                    const isZeroBoth = d.val1 === 0 && d.val2 === 0;
+                                                    const isFuture = d.val1 === 0 && d.val2 > 0;
+                                                    return (
+                                                        <tr
+                                                            key={i}
+                                                            onMouseEnter={() => setChartHover(i)}
+                                                            onMouseLeave={() => setChartHover(null)}
+                                                            style={{
+                                                                borderBottom: '1px solid var(--border)',
+                                                                background: chartHover === i ? 'rgba(59, 130, 246, 0.08)' : (i % 2 === 0 ? 'transparent' : 'rgba(0,0,0,0.015)'),
+                                                                transition: 'background 0.15s ease'
+                                                            }}
+                                                        >
+                                                            <td style={{ padding: '0.55rem 1rem', fontWeight: '600' }}>
+                                                                {d.nombre}
+                                                            </td>
+                                                            <td style={{ padding: '0.55rem 1rem', textAlign: 'right', fontWeight: 'bold', color: d.val1 > 0 ? 'var(--text)' : 'var(--text-muted)' }}>
+                                                                {d.val1 > 0 ? formatMetricVal(d.val1) : '-'}
+                                                            </td>
+                                                            <td style={{ padding: '0.55rem 1rem', textAlign: 'right', color: d.val2 > 0 ? 'var(--text)' : 'var(--text-muted)' }}>
+                                                                {d.val2 > 0 ? formatMetricVal(d.val2) : '-'}
+                                                            </td>
+                                                            <td style={{ padding: '0.55rem 1rem', textAlign: 'right', fontWeight: '600', color: isZeroBoth ? 'var(--text-muted)' : (d.diff >= 0 ? '#22c55e' : '#ef4444') }}>
+                                                                {isZeroBoth ? '-' : `${d.diff >= 0 ? '+' : ''}${formatMetricVal(d.diff)}`}
+                                                            </td>
+                                                            <td style={{ padding: '0.55rem 1rem', textAlign: 'right' }}>
+                                                                {isZeroBoth ? (
+                                                                    <span style={{ color: 'var(--text-muted)' }}>-</span>
+                                                                ) : isFuture ? (
+                                                                    <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(148, 163, 184, 0.15)', color: 'var(--text-muted)' }}>
+                                                                        Pendiente
+                                                                    </span>
+                                                                ) : (
+                                                                    <span style={{
+                                                                        fontSize: '0.75rem',
+                                                                        fontWeight: 'bold',
+                                                                        padding: '0.15rem 0.5rem',
+                                                                        borderRadius: '4px',
+                                                                        background: d.diff >= 0 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                                                                        color: d.diff >= 0 ? '#22c55e' : '#ef4444'
+                                                                    }}>
+                                                                        {d.diff >= 0 ? '+' : ''}{d.pct}%
+                                                                    </span>
+                                                                )}
+                                                            </td>
+                                                            <td style={{ padding: '0.55rem 1rem', textAlign: 'center' }}>
+                                                                {isZeroBoth ? (
+                                                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Sin datos</span>
+                                                                ) : isFuture ? (
+                                                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>En curso / Pendiente</span>
+                                                                ) : d.diff >= 0 ? (
+                                                                    <span style={{ fontSize: '0.72rem', fontWeight: '600', color: '#22c55e', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                                                        <ArrowUpRight size={12} /> Crecimiento
+                                                                    </span>
+                                                                ) : (
+                                                                    <span style={{ fontSize: '0.72rem', fontWeight: '600', color: '#ef4444', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                                                        <ArrowDownRight size={12} /> Descenso
+                                                                    </span>
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                            <tfoot>
+                                                {/* Fila Total Anual */}
+                                                <tr style={{ background: 'rgba(0,0,0,0.04)', fontWeight: 'bold', borderTop: '2px solid var(--border)' }}>
+                                                    <td style={{ padding: '0.75rem 1rem' }}>TOTAL ANUAL</td>
+                                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'right', color: '#3b82f6', fontSize: '0.85rem' }}>
+                                                        {formatMetricVal(totVal1)}
+                                                    </td>
+                                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'right', color: '#10b981', fontSize: '0.85rem' }}>
+                                                        {formatMetricVal(totVal2)}
+                                                    </td>
+                                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'right', color: totDiff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                                        {totDiff >= 0 ? '+' : ''}{formatMetricVal(totDiff)}
+                                                    </td>
+                                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                                                        <span style={{ fontSize: '0.8rem', padding: '0.2rem 0.55rem', borderRadius: '4px', background: totDiff >= 0 ? 'rgba(34, 197, 94, 0.18)' : 'rgba(239, 68, 68, 0.18)', color: totDiff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                                            {totDiff >= 0 ? '+' : ''}{totPct}%
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', color: totDiff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                                        {totDiff >= 0 ? 'Superávit Anual' : 'Déficit Anual'}
+                                                    </td>
+                                                </tr>
+
+                                                {/* Fila Acumulado YTD */}
+                                                <tr style={{ background: 'rgba(59, 130, 246, 0.05)', fontWeight: 'bold', borderTop: '1px dashed var(--border)' }}>
+                                                    <td style={{ padding: '0.65rem 1rem', color: '#3b82f6' }}>
+                                                        ACUMULADO YTD (Ene - {nombreCorte})
+                                                    </td>
+                                                    <td style={{ padding: '0.65rem 1rem', textAlign: 'right', color: '#3b82f6' }}>
+                                                        {formatMetricVal(ytdVal1)}
+                                                    </td>
+                                                    <td style={{ padding: '0.65rem 1rem', textAlign: 'right', color: '#10b981' }}>
+                                                        {formatMetricVal(ytdVal2)}
+                                                    </td>
+                                                    <td style={{ padding: '0.65rem 1rem', textAlign: 'right', color: ytdDiff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                                        {ytdDiff >= 0 ? '+' : ''}{formatMetricVal(ytdDiff)}
+                                                    </td>
+                                                    <td style={{ padding: '0.65rem 1rem', textAlign: 'right' }}>
+                                                        <span style={{ fontSize: '0.8rem', padding: '0.2rem 0.55rem', borderRadius: '4px', background: ytdDiff >= 0 ? 'rgba(34, 197, 94, 0.18)' : 'rgba(239, 68, 68, 0.18)', color: ytdDiff >= 0 ? '#22c55e' : '#ef4444' }}>
+                                                            {ytdDiff >= 0 ? '+' : ''}{ytdPct}%
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '0.65rem 1rem', textAlign: 'center', color: '#3b82f6' }}>
+                                                        Comparación Justa YTD
+                                                    </td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                </div>
+                            </>
+                        );
+                    })()}
+                </div>
+            </Modal>
         </div>
     );
 }
