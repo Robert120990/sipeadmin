@@ -15,6 +15,25 @@ const MESES_MAYUS = [
 ];
 
 /**
+ * Helper para formatear fechas y horas en zona horaria de El Salvador (es-SV)
+ */
+const formatFechaHora = (dateVal) => {
+    if (!dateVal) return null;
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleString('es-SV', {
+        timeZone: 'America/El_Salvador',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    });
+};
+
+/**
  * Obtener lista de empresas registradas en Sipe Web SaaS con sus conteos de planillas
  */
 const getEmpresas = async () => {
@@ -88,7 +107,11 @@ const getPlanillasGrupos = async ({ companyId, anio, mes, quincena, page = 1, li
                ROUND(SUM(p.descuento_renta), 2) as total_renta,
                ROUND(SUM(GREATEST(0, p.total_deducciones - (p.descuento_isss + p.descuento_afp + p.descuento_renta))), 2) as total_otras_deducciones,
                ROUND(SUM(p.monto_recibir), 2) as total_neto,
-               MIN(p.estado) as estado_general
+               MIN(p.estado) as estado_general,
+               MAX(COALESCE(p.updated_at, p.created_at)) as ultima_modificacion_raw,
+               MIN(COALESCE(p.created_at, p.updated_at)) as fecha_creacion_raw,
+               SUM(CASE WHEN COALESCE(p.dias_trabajados, 15) < 15 THEN 1 ELSE 0 END) as total_con_faltas,
+               SUM(CASE WHEN p.monto_recibir < 0 OR p.sueldo_base <= 0 OR ABS((p.total_percepciones - p.total_deducciones) - p.monto_recibir) > 0.05 THEN 1 ELSE 0 END) as total_errores_calculo
         FROM ${TABLE} p
         ${where}
         GROUP BY p.periodo_anio, p.periodo_mes, p.quincena
@@ -98,8 +121,16 @@ const getPlanillasGrupos = async ({ companyId, anio, mes, quincena, page = 1, li
 
     const [rows] = await withRetry(() => db.query(dataSql, [...params, l, offset]));
 
+    const mappedRows = rows.map(r => ({
+        ...r,
+        ultima_modificacion: r.ultima_modificacion_raw,
+        ultima_modificacion_formato: formatFechaHora(r.ultima_modificacion_raw || r.fecha_creacion_raw),
+        fecha_creacion_formato: formatFechaHora(r.fecha_creacion_raw),
+        total_anomalias: Number(r.total_con_faltas || 0) + Number(r.total_errores_calculo || 0)
+    }));
+
     return {
-        data: rows,
+        data: mappedRows,
         total,
         page: p,
         totalPages: Math.ceil(total / l)
@@ -165,7 +196,7 @@ const getPlanillaDetalle = async ({ companyId, anio, mes, quincena, branchIds = 
     const [rows] = await withRetry(() => db.query(sql, params));
 
     if (rows.length === 0) {
-        return { empleados: [], totales: null };
+        return { empleados: [], totales: null, auditoria: null, periodo_anterior: null };
     }
 
     // Traer todos los detalles de rubros para estos empleados
@@ -184,10 +215,320 @@ const getPlanillaDetalle = async ({ companyId, anio, mes, quincena, branchIds = 
         detallesMap[d.planilla_id].push(d);
     });
 
-    const empleadosConDetalle = rows.map(emp => ({
-        ...emp,
-        rubros: detallesMap[emp.id] || []
-    }));
+    // Calcular período inmediato anterior (para comparativas y discrepancias)
+    const currentAnio = parseInt(anio, 10);
+    const currentMes = parseInt(mes, 10);
+    let prevAnio = currentAnio;
+    let prevMes = currentMes;
+    let prevQuincena = 'primera';
+    if (quincena === 'segunda') {
+        prevQuincena = 'primera';
+        prevMes = currentMes;
+        prevAnio = currentAnio;
+    } else {
+        prevQuincena = 'segunda';
+        if (currentMes === 1) {
+            prevMes = 12;
+            prevAnio = currentAnio - 1;
+        } else {
+            prevMes = currentMes - 1;
+            prevAnio = currentAnio;
+        }
+    }
+
+    // Consultar planillas del período anterior
+    const [prevRows] = await withRetry(() => db.query(`
+        SELECT p.id, p.empleado_id, p.sueldo_base, p.dias_trabajados, p.total_percepciones, p.total_deducciones, p.monto_recibir,
+               e.codigo as empleado_codigo, e.nombres as empleado_nombres, e.apellidos as empleado_apellidos
+        FROM ${TABLE} p
+        JOIN rh_empleados e ON p.empleado_id = e.id
+        WHERE p.company_id = ? AND p.periodo_anio = ? AND p.periodo_mes = ? AND p.quincena = ?
+    `, [companyId, prevAnio, prevMes, prevQuincena]));
+
+    const prevEmpsMap = {};
+    (prevRows || []).forEach(pr => {
+        prevEmpsMap[pr.empleado_id] = pr;
+    });
+
+    // Mapear cada empleado con desglose itemizado, jornadas, comparativa y alertas
+    const empleadosConDetalle = rows.map(emp => {
+        const rubros = detallesMap[emp.id] || [];
+
+        // 1. Desglose detallado de ingresos adicionales (Horas extras, comisiones, bonos, etc.)
+        const desglose_ingresos_extra = [];
+        // 2. Desglose detallado de deducciones (Préstamos, anticipos, FSV, Procuraduría, etc.)
+        const desglose_deducciones_detalle = [];
+
+        rubros.forEach(r => {
+            const val = parseFloat(r.valor_ingresado || 0);
+            const base = parseFloat(r.valor_base || 0);
+
+            if (r.operacion === 'sumar') {
+                if (r.codigo === '01') return; // Sueldo ordinario quincenal
+                if (val <= 0 && base <= 0) return; // Ignorar rubros con valor 0 y base 0
+
+                if (r.codigo === '08') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'horas_extras_diurnas',
+                        descripcion: 'Horas Extras Diurnas (Recargo 100%)',
+                        cantidad_base: base,
+                        unidad: 'horas',
+                        factor: 2.0,
+                        monto: val,
+                        detalle: base > 0 ? `${base} hrs extras diurnas laboradas` : 'Recargo diurno'
+                    });
+                } else if (r.codigo === '03') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'horas_extras_nocturnas',
+                        descripcion: 'Horas Extras Nocturnas (Recargo 150%)',
+                        cantidad_base: base,
+                        unidad: 'horas',
+                        factor: 2.5,
+                        monto: val,
+                        detalle: base > 0 ? `${base} hrs extras nocturnas laboradas` : 'Recargo nocturno'
+                    });
+                } else if (r.codigo === '05') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'horas_extras_valor',
+                        descripcion: 'Horas Extras en Valor',
+                        cantidad_base: base,
+                        unidad: 'valor',
+                        monto: val,
+                        detalle: 'Monto directo de horas extras asignado'
+                    });
+                } else if (r.codigo === '07') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'comisiones',
+                        descripcion: 'Comisión de Lubricante / Metas de Venta',
+                        cantidad_base: base,
+                        unidad: 'valor',
+                        monto: val,
+                        detalle: 'Comisión por ventas de lubricantes o metas operativas'
+                    });
+                } else if (r.codigo === '11') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'turnos_extras',
+                        descripcion: 'Turnos Extras Laborados',
+                        cantidad_base: base,
+                        unidad: 'dias',
+                        monto: val,
+                        detalle: base > 0 ? `${base} turno(s) extra(s) cubierto(s)` : 'Turno extra'
+                    });
+                } else if (r.codigo === '02') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'bonificaciones',
+                        descripcion: 'Bonificación / Incentivo',
+                        cantidad_base: base,
+                        unidad: 'valor',
+                        monto: val,
+                        detalle: 'Bono por desempeño o compensación extraordinaria'
+                    });
+                } else if (r.codigo === '04') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'vacaciones',
+                        descripcion: 'Vacaciones Anuales Pagadas',
+                        cantidad_base: base,
+                        unidad: 'valor',
+                        monto: val,
+                        detalle: 'Pago por descanso vacacional anual'
+                    });
+                } else if (r.codigo === '14') {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'dia_feriado',
+                        descripcion: 'Día Feriado / Asueto Laborado',
+                        cantidad_base: base,
+                        unidad: 'valor',
+                        monto: val,
+                        detalle: 'Compensación legal por laborar en día de asueto nacional'
+                    });
+                } else if (val > 0) {
+                    desglose_ingresos_extra.push({
+                        codigo: r.codigo,
+                        tipo: 'otro_ingreso',
+                        descripcion: r.descripcion || `Rubro ${r.codigo}`,
+                        cantidad_base: base,
+                        unidad: r.tipo_valor || 'valor',
+                        monto: val,
+                        detalle: 'Ingreso adicional registrado'
+                    });
+                }
+            } else if (r.operacion === 'restar') {
+                if (val <= 0) return; // Ignorar deducciones con valor 0
+
+                if (r.codigo === '09') {
+                    desglose_deducciones_detalle.push({
+                        codigo: r.codigo,
+                        tipo: 'prestamos',
+                        descripcion: 'Préstamo de Empresa (Cuota Periódica)',
+                        monto: val,
+                        detalle: 'Descuento de cuota por préstamo interno concedido'
+                    });
+                } else if (r.codigo === '06') {
+                    desglose_deducciones_detalle.push({
+                        codigo: r.codigo,
+                        tipo: 'anticipos',
+                        descripcion: 'Anticipo de Sueldo',
+                        monto: val,
+                        detalle: 'Descuento por adelanto de quincena'
+                    });
+                } else if (r.codigo === '10') {
+                    desglose_deducciones_detalle.push({
+                        codigo: r.codigo,
+                        tipo: 'procuraduria',
+                        descripcion: 'Pensión Alimenticia PGR / Procuraduría',
+                        monto: val,
+                        detalle: 'Retención judicial obligatoria por cuota alimenticia'
+                    });
+                } else if (r.codigo === '12') {
+                    desglose_deducciones_detalle.push({
+                        codigo: r.codigo,
+                        tipo: 'fsv',
+                        descripcion: 'Fondo Social para la Vivienda (FSV)',
+                        monto: val,
+                        detalle: 'Retención de cuota habitacional FSV'
+                    });
+                } else if (r.codigo === '13') {
+                    desglose_deducciones_detalle.push({
+                        codigo: r.codigo,
+                        tipo: 'llegadas_tarde',
+                        descripcion: 'Descuento por Tardanzas / Impuntualidad',
+                        monto: val,
+                        detalle: 'Descuento aplicado por minutos tarde acumulados'
+                    });
+                } else if (val > 0) {
+                    desglose_deducciones_detalle.push({
+                        codigo: r.codigo,
+                        tipo: 'otra_deduccion',
+                        descripcion: r.descripcion || `Deducción ${r.codigo}`,
+                        monto: val,
+                        detalle: 'Deducción o retención adicional'
+                    });
+                }
+            }
+        });
+
+        // 3. Resumen de jornada y ausencias
+        const diasTrabajados = parseFloat(emp.dias_trabajados !== null && emp.dias_trabajados !== undefined ? emp.dias_trabajados : 15);
+        const diasAusente = diasTrabajados < 15 ? (15 - diasTrabajados) : 0;
+        const sueldoBaseMensual = parseFloat(emp.sueldo_base || 0);
+        const descuentoAusencia = diasAusente > 0 ? parseFloat(((sueldoBaseMensual / 30) * diasAusente).toFixed(2)) : 0;
+        const info_jornada = {
+            dias_trabajados: diasTrabajados,
+            dias_ausente: diasAusente,
+            descuento_ausencia: descuentoAusencia,
+            tiene_ausencia: diasAusente > 0
+        };
+
+        // 4. Comparativa contra período anterior
+        const prevEmp = prevEmpsMap[emp.empleado_id];
+        let comparativa_previo = null;
+        if (!prevEmp) {
+            comparativa_previo = {
+                tenia_registro: false,
+                es_nuevo: true,
+                monto_recibir_previo: null,
+                variacion_monto: null,
+                variacion_pct: null,
+                tiene_variacion_abrupta: false
+            };
+        } else {
+            const prevNeto = parseFloat(prevEmp.monto_recibir || 0);
+            const currNeto = parseFloat(emp.monto_recibir || 0);
+            const diffNeto = parseFloat((currNeto - prevNeto).toFixed(2));
+            const pctNeto = prevNeto > 0 ? parseFloat(((diffNeto / prevNeto) * 100).toFixed(1)) : 0;
+            const esAbrupta = Math.abs(pctNeto) >= 20 && Math.abs(diffNeto) >= 40;
+            comparativa_previo = {
+                tenia_registro: true,
+                es_nuevo: false,
+                monto_recibir_previo: prevNeto,
+                variacion_monto: diffNeto,
+                variacion_pct: pctNeto,
+                tiene_variacion_abrupta: esAbrupta
+            };
+        }
+
+        // 5. Alertas de validación y discrepancias individuales
+        const alertas_empleado = [];
+        const empSueldo = parseFloat(emp.sueldo_base || 0);
+        const empNeto = parseFloat(emp.monto_recibir || 0);
+        const empDev = parseFloat(emp.total_percepciones || 0);
+        const empDed = parseFloat(emp.total_deducciones || 0);
+        const difMat = Math.abs((empDev - empDed) - empNeto);
+
+        if (empSueldo <= 0) {
+            alertas_empleado.push({
+                tipo: 'critica',
+                codigo: 'SUELDO_BASE_CERO',
+                titulo: 'Sueldo Base Inválido',
+                descripcion: 'El sueldo base asignado en Sipe Web es $0.00 o menor.'
+            });
+        }
+        if (empNeto < 0) {
+            alertas_empleado.push({
+                tipo: 'critica',
+                codigo: 'LIQUIDO_NEGATIVO',
+                titulo: 'Líquido Negativo',
+                descripcion: `El monto a recibir es negativo ($${empNeto.toFixed(2)}) debido a deducciones excesivas.`
+            });
+        }
+        if (difMat > 0.05) {
+            alertas_empleado.push({
+                tipo: 'critica',
+                codigo: 'DESCUADRE_MATEMATICO',
+                titulo: 'Descuadre Matemático',
+                descripcion: `Percepciones ($${empDev.toFixed(2)}) - Deducciones ($${empDed.toFixed(2)}) difiere del neto ($${empNeto.toFixed(2)}) por $${difMat.toFixed(2)}.`
+            });
+        }
+        if (diasTrabajados > 15) {
+            alertas_empleado.push({
+                tipo: 'advertencia',
+                codigo: 'DIAS_EXCESIVOS',
+                titulo: 'Días Exceden el Período',
+                descripcion: `Registra ${diasTrabajados} días trabajados (el estándar quincenal es 15 días).`
+            });
+        }
+        if (diasAusente > 0) {
+            alertas_empleado.push({
+                tipo: 'advertencia',
+                codigo: 'AUSENCIA_DIAS',
+                titulo: `Ausencia de ${diasAusente} día(s)`,
+                descripcion: `Faltó ${diasAusente} día(s) en la quincena. Descuento estimado de sueldo: -$${descuentoAusencia.toFixed(2)}.`
+            });
+        }
+        if (comparativa_previo.es_nuevo) {
+            alertas_empleado.push({
+                tipo: 'info',
+                codigo: 'NUEVO_INGRESO',
+                titulo: 'Nuevo en Planilla',
+                descripcion: 'Colaborador de nuevo ingreso; no figuraba en la quincena anterior.'
+            });
+        } else if (comparativa_previo.tiene_variacion_abrupta) {
+            alertas_empleado.push({
+                tipo: 'discrepancia',
+                codigo: 'VARIACION_ABRUPTA',
+                titulo: 'Variación Notoria de Sueldo',
+                descripcion: `Líquido varió ${comparativa_previo.variacion_monto > 0 ? '+' : ''}$${comparativa_previo.variacion_monto.toFixed(2)} (${comparativa_previo.variacion_pct > 0 ? '+' : ''}${comparativa_previo.variacion_pct}%) respecto a quincena previa.`
+            });
+        }
+
+        return {
+            ...emp,
+            rubros,
+            desglose_ingresos_extra,
+            desglose_deducciones_detalle,
+            info_jornada,
+            comparativa_previo,
+            alertas: alertas_empleado
+        };
+    });
 
     // Calcular totales resumidos
     const totales = {
@@ -204,7 +545,122 @@ const getPlanillaDetalle = async ({ companyId, anio, mes, quincena, branchIds = 
         estado_general: rows.some(r => r.estado !== 'pagada') ? 'pendiente' : 'pagada'
     };
 
-    return { empleados: empleadosConDetalle, totales };
+    // Fechas y horas de modificación de la planilla
+    const maxUpdated = rows.reduce((max, r) => {
+        const d = r.updated_at || r.created_at;
+        return !max || (d && new Date(d) > new Date(max)) ? d : max;
+    }, null);
+    const minCreated = rows.reduce((min, r) => {
+        const d = r.created_at || r.updated_at;
+        return !min || (d && new Date(d) < new Date(min)) ? d : min;
+    }, null);
+
+    // Comparativa global contra período anterior
+    const prevExiste = (prevRows && prevRows.length > 0);
+    const prevTotalNeto = prevExiste ? prevRows.reduce((acc, r) => acc + parseFloat(r.monto_recibir || 0), 0) : 0;
+    const diffGlobalNeto = prevExiste ? parseFloat((totales.total_neto - prevTotalNeto).toFixed(2)) : 0;
+    const pctGlobalNeto = (prevExiste && prevTotalNeto > 0) ? parseFloat(((diffGlobalNeto / prevTotalNeto) * 100).toFixed(1)) : 0;
+
+    const empleadosNuevosList = rows.filter(r => !prevEmpsMap[r.empleado_id]).map(r => ({
+        empleado_id: r.empleado_id,
+        codigo: r.empleado_codigo,
+        nombre: `${r.empleado_nombres} ${r.empleado_apellidos}`.trim(),
+        monto_recibir: parseFloat(r.monto_recibir || 0)
+    }));
+
+    const currentEmpIdsSet = new Set(rows.map(r => r.empleado_id));
+    const empleadosBajasList = (prevRows || []).filter(pr => !currentEmpIdsSet.has(pr.empleado_id)).map(pr => ({
+        empleado_id: pr.empleado_id,
+        codigo: pr.empleado_codigo,
+        nombre: `${pr.empleado_nombres} ${pr.empleado_apellidos}`.trim(),
+        monto_recibir_previo: parseFloat(pr.monto_recibir || 0)
+    }));
+
+    // Consolidar todas las alertas en un arreglo global
+    const todasLasAlertas = [];
+
+    if (prevExiste && Math.abs(pctGlobalNeto) >= 15 && Math.abs(diffGlobalNeto) >= 200) {
+        todasLasAlertas.push({
+            tipo: 'discrepancia',
+            codigo: 'DISCREPANCIA_NOMINA_GLOBAL',
+            titulo: 'Variación Global de Nómina Neta',
+            descripcion: `La nómina neta varió un ${pctGlobalNeto > 0 ? '+' : ''}${pctGlobalNeto}% (${diffGlobalNeto > 0 ? '+' : ''}$${diffGlobalNeto.toFixed(2)}) comparado con la quincena previa ($${prevTotalNeto.toFixed(2)})`,
+            empleado_codigo: null,
+            empleado_nombre: null
+        });
+    }
+
+    if (empleadosNuevosList.length > 0) {
+        todasLasAlertas.push({
+            tipo: 'info',
+            codigo: 'EMPLEADOS_NUEVOS_TOTAL',
+            titulo: `${empleadosNuevosList.length} Nuevo(s) Colaborador(es)`,
+            descripcion: `Se incorporaron a esta planilla: ${empleadosNuevosList.map(e => `${e.nombre} (${e.codigo})`).join(', ')}`,
+            empleado_codigo: null,
+            empleado_nombre: null
+        });
+    }
+
+    if (empleadosBajasList.length > 0) {
+        todasLasAlertas.push({
+            tipo: 'advertencia',
+            codigo: 'EMPLEADOS_BAJAS_TOTAL',
+            titulo: `${empleadosBajasList.length} Colaborador(es) ausente(s) respecto a quincena anterior`,
+            descripcion: `No figuran en la planilla actual: ${empleadosBajasList.map(e => `${e.nombre} (${e.codigo})`).join(', ')}`,
+            empleado_codigo: null,
+            empleado_nombre: null
+        });
+    }
+
+    // Agregar alertas de cada empleado
+    empleadosConDetalle.forEach(emp => {
+        (emp.alertas || []).forEach(a => {
+            todasLasAlertas.push({
+                tipo: a.tipo,
+                codigo: a.codigo,
+                titulo: a.titulo,
+                descripcion: a.descripcion,
+                empleado_codigo: emp.empleado_codigo,
+                empleado_nombre: `${emp.empleado_nombres} ${emp.empleado_apellidos}`.trim()
+            });
+        });
+    });
+
+    const totalAlertasCriticas = todasLasAlertas.filter(a => a.tipo === 'critica').length;
+    const totalAdvertencias = todasLasAlertas.filter(a => a.tipo === 'advertencia').length;
+    const totalDiscrepancias = todasLasAlertas.filter(a => a.tipo === 'discrepancia').length;
+
+    const auditoria = {
+        ultima_modificacion: maxUpdated || minCreated,
+        ultima_modificacion_formato: formatFechaHora(maxUpdated || minCreated),
+        fecha_creacion: minCreated,
+        fecha_creacion_formato: formatFechaHora(minCreated),
+        total_alertas_criticas: totalAlertasCriticas,
+        total_advertencias: totalAdvertencias,
+        total_discrepancias: totalDiscrepancias,
+        total_alertas: todasLasAlertas.length,
+        alertas: todasLasAlertas
+    };
+
+    const periodo_anterior = {
+        existe: prevExiste,
+        periodo_anio: prevAnio,
+        periodo_mes: prevMes,
+        quincena: prevQuincena,
+        total_empleados: prevRows ? prevRows.length : 0,
+        total_neto: prevTotalNeto,
+        variacion_neta_monto: diffGlobalNeto,
+        variacion_neta_pct: pctGlobalNeto,
+        empleados_nuevos: empleadosNuevosList,
+        empleados_bajas: empleadosBajasList
+    };
+
+    return {
+        empleados: empleadosConDetalle,
+        totales,
+        auditoria,
+        periodo_anterior
+    };
 };
 
 /**

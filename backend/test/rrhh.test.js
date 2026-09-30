@@ -264,5 +264,54 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         );
         assert.equal(planillasRevertidas[0]?.estado, 'pendiente', 'Estado debe regresar a pendiente al anular todos los pagos');
     });
+
+    test('getPlanillasGrupos debe calcular timestamp de última modificación y conteo de anomalías', async () => {
+        const resultado = await rhPlanillaService.getPlanillasGrupos({
+            companyId: 2,
+            anio: 2026
+        });
+
+        assert.ok(Array.isArray(resultado.data));
+        assert.ok(resultado.data.length > 0);
+        const grupo = resultado.data[0];
+        assert.ok(grupo.ultima_modificacion, 'Debe incluir fecha ISO de última modificación');
+        assert.ok(grupo.ultima_modificacion_formato, 'Debe incluir fecha formateada en es-SV');
+        assert.ok(typeof grupo.total_anomalias === 'number', 'total_anomalias debe ser numérico');
+    });
+
+    test('getPlanillaDetalle debe calcular auditoría, alertas comparativas y desglose por rubro', async () => {
+        const detalle = await rhPlanillaService.getPlanillaDetalle({
+            companyId: 2,
+            anio: 2026,
+            mes: 9,
+            quincena: 'segunda'
+        });
+
+        // Validar auditoría y timestamps
+        assert.ok(detalle.auditoria, 'Debe incluir objeto de auditoría');
+        assert.ok(detalle.auditoria.ultima_modificacion_formato, 'Auditoría debe tener fecha y hora formateada');
+        assert.ok(Array.isArray(detalle.auditoria.alertas), 'Auditoría debe tener arreglo de alertas');
+        assert.ok(typeof detalle.auditoria.total_alertas === 'number');
+
+        // Validar comparativa contra período anterior
+        assert.ok(detalle.periodo_anterior, 'Debe incluir objeto de período anterior');
+        assert.equal(detalle.periodo_anterior.existe, true);
+        assert.equal(detalle.periodo_anterior.quincena, 'primera');
+        assert.ok(Array.isArray(detalle.periodo_anterior.empleados_nuevos));
+
+        // Validar desglose de rubros en empleados
+        assert.ok(detalle.empleados.length > 0);
+        const empConExtras = detalle.empleados.find(e => e.desglose_ingresos_extra.length > 0);
+        assert.ok(empConExtras, 'Debe existir empleado con ingresos extra itemizados');
+        assert.ok(empConExtras.desglose_ingresos_extra[0].descripcion);
+        assert.ok(typeof empConExtras.desglose_ingresos_extra[0].monto === 'number');
+
+        // Validar información de jornada y ausencias
+        const empConAusencia = detalle.empleados.find(e => e.info_jornada.tiene_ausencia);
+        assert.ok(empConAusencia, 'Debe detectar empleado con días de ausencia (Yolanda Aracely)');
+        assert.equal(empConAusencia.info_jornada.dias_trabajados, 10);
+        assert.equal(empConAusencia.info_jornada.dias_ausente, 5);
+        assert.ok(empConAusencia.info_jornada.descuento_ausencia > 0);
+    });
 });
 

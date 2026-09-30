@@ -24,7 +24,10 @@ import {
     Check,
     Plus,
     Trash2,
-    Receipt
+    Receipt,
+    AlertTriangle,
+    TrendingUp,
+    TrendingDown
 } from 'lucide-react';
 import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
@@ -88,6 +91,7 @@ export default function PlanillasRRHH() {
     const [filtroBranchDetalle, setFiltroBranchDetalle] = useState('');
     const [filtroDeptoDetalle, setFiltroDeptoDetalle] = useState('');
     const [branchesAndDeptos, setBranchesAndDeptos] = useState({ branches: [], departamentos: [] });
+    const [mostrarAlertasDetalle, setMostrarAlertasDetalle] = useState(true);
 
     // Modal de Exportación Bancaria
     const [exportModalPeriodo, setExportModalPeriodo] = useState(null);
@@ -861,7 +865,13 @@ export default function PlanillasRRHH() {
                                 return (
                                     <tr key={`${item.periodo_anio}-${item.periodo_mes}-${item.quincena}`} style={rowStyle} className="hover-row">
                                         <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                                            {mesNom} {item.periodo_anio}
+                                            <div>{mesNom} {item.periodo_anio}</div>
+                                            {item.ultima_modificacion_formato && (
+                                                <div style={{ fontSize: '0.68rem', fontWeight: 500, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.2rem' }} title={`Última modificación en Sipe Web: ${item.ultima_modificacion_formato}`}>
+                                                    <Clock size={11} color="var(--primary)" />
+                                                    <span>Modif: {item.ultima_modificacion_formato}</span>
+                                                </div>
+                                            )}
                                         </td>
                                         <td style={{ padding: '0.5rem 0.65rem' }}>
                                             <span style={{
@@ -875,6 +885,24 @@ export default function PlanillasRRHH() {
                                             }}>
                                                 {item.quincena === 'primera' ? '1ra Quincena' : '2da Quincena'}
                                             </span>
+                                            {item.total_anomalias > 0 && (
+                                                <div style={{ marginTop: '0.2rem' }}>
+                                                    <span style={{
+                                                        fontSize: '0.67rem',
+                                                        fontWeight: 700,
+                                                        padding: '0.1rem 0.35rem',
+                                                        borderRadius: '4px',
+                                                        background: 'rgba(239, 68, 68, 0.12)',
+                                                        color: '#dc2626',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.2rem'
+                                                    }} title={`${item.total_anomalias} colaborador(es) con alertas de cálculo o ausencias registradas`}>
+                                                        <AlertTriangle size={10} />
+                                                        {item.total_anomalias} alerta(s)
+                                                    </span>
+                                                </div>
+                                            )}
                                         </td>
                                         <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, textAlign: 'center', color: 'var(--text-main)' }}>
                                             {item.total_empleados}
@@ -1056,9 +1084,64 @@ export default function PlanillasRRHH() {
                 size="xl"
             >
                 <div>
+                    {/* Barra de Fechas de Modificación y Estado Sipe Web */}
+                    <div style={{
+                        padding: '0.6rem 0.85rem',
+                        borderRadius: '8px',
+                        background: 'rgba(99, 102, 241, 0.05)',
+                        border: '1px solid rgba(99, 102, 241, 0.15)',
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        marginBottom: '0.75rem',
+                        fontSize: '0.78rem'
+                    }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', color: 'var(--text-main)' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <Clock size={15} color="var(--primary)" />
+                                <strong>Última Modificación:</strong>
+                                <span style={{ color: 'var(--primary)', fontWeight: 700 }}>
+                                    {detalleData?.auditoria?.ultima_modificacion_formato || selectedPeriodoDetalle?.ultima_modificacion_formato || 'N/A'}
+                                </span>
+                            </span>
+                            {detalleData?.auditoria?.fecha_creacion_formato && (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
+                                    <Calendar size={14} />
+                                    <span>Generada: {detalleData.auditoria.fecha_creacion_formato}</span>
+                                </span>
+                            )}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            {selectedPeriodoDetalle?.estado_general === 'pagada' ? (
+                                <button
+                                    type="button"
+                                    onClick={() => handleAbrirVerPagos(selectedPeriodoDetalle)}
+                                    style={{ fontSize: '0.74rem', fontWeight: 700, background: '#10b981', color: '#fff', padding: '0.25rem 0.65rem', borderRadius: '4px', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                    title="Ver detalle de formas de pago y movimientos en Bancos"
+                                >
+                                    <Receipt size={13} />
+                                    Planilla Pagada (Ver Pagos)
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => handleAbrirModalPago(selectedPeriodoDetalle)}
+                                    style={{ fontSize: '0.74rem', fontWeight: 700, background: '#2563eb', color: '#fff', padding: '0.25rem 0.65rem', borderRadius: '4px', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', boxShadow: '0 1px 2px rgba(37, 99, 235, 0.3)' }}
+                                    title="Registrar formas de pago y afectar cuentas bancarias"
+                                >
+                                    <CreditCard size={13} />
+                                    Pagar Planilla (Afectar Bancos)
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
                     {/* Alerta Modo Sólo Lectura */}
                     <div style={{
-                        padding: '0.65rem 0.85rem',
+                        padding: '0.55rem 0.85rem',
                         borderRadius: '8px',
                         background: 'rgba(245, 158, 11, 0.08)',
                         border: '1px solid rgba(245, 158, 11, 0.25)',
@@ -1066,38 +1149,189 @@ export default function PlanillasRRHH() {
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '0.75rem',
-                        marginBottom: '1rem',
-                        fontSize: '0.8rem',
+                        marginBottom: '0.75rem',
+                        fontSize: '0.78rem',
                         color: '#92400e'
                     }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <AlertCircle size={17} color="#d97706" />
+                            <AlertCircle size={16} color="#d97706" />
                             <span>
-                                <strong>Modo Sólo Lectura (Sipe Web SaaS):</strong> Los datos se presentan exactamente como fueron calculados. Para registrar novedades, agregar empleados o ajustar valores debe acceder directamente a la plataforma <a href="https://sys.sipesv.com/rh/planillas" target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: '#b45309', fontWeight: 600 }}>sys.sipesv.com</a>.
+                                <strong>Modo Sólo Lectura (Sipe Web SaaS):</strong> Para registrar novedades, agregar empleados o ajustar importes acceda directamente a la plataforma <a href="https://sys.sipesv.com/rh/planillas" target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: '#b45309', fontWeight: 600 }}>sys.sipesv.com</a>.
                             </span>
                         </div>
-                        {selectedPeriodoDetalle?.estado_general === 'pagada' ? (
-                            <button
-                                type="button"
-                                onClick={() => handleAbrirVerPagos(selectedPeriodoDetalle)}
-                                style={{ fontSize: '0.74rem', fontWeight: 700, background: '#10b981', color: '#fff', padding: '0.25rem 0.65rem', borderRadius: '4px', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
-                                title="Ver detalle de formas de pago y movimientos en Bancos"
-                            >
-                                <Receipt size={13} />
-                                Planilla Pagada (Ver Pagos)
-                            </button>
-                        ) : (
-                            <button
-                                type="button"
-                                onClick={() => handleAbrirModalPago(selectedPeriodoDetalle)}
-                                style={{ fontSize: '0.74rem', fontWeight: 700, background: '#2563eb', color: '#fff', padding: '0.25rem 0.65rem', borderRadius: '4px', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', boxShadow: '0 1px 2px rgba(37, 99, 235, 0.3)' }}
-                                title="Registrar formas de pago y afectar cuentas bancarias"
-                            >
-                                <CreditCard size={13} />
-                                Pagar Planilla (Afectar Bancos)
-                            </button>
-                        )}
                     </div>
+
+                    {/* Panel de Auditoría & Comparativa con Período Anterior */}
+                    {detalleData?.auditoria && (
+                        <div style={{
+                            marginBottom: '1rem',
+                            borderRadius: '8px',
+                            border: detalleData.auditoria.total_alertas_criticas > 0
+                                ? '1px solid rgba(239, 68, 68, 0.35)'
+                                : detalleData.auditoria.total_alertas > 0
+                                    ? '1px solid rgba(245, 158, 11, 0.35)'
+                                    : '1px solid rgba(16, 185, 129, 0.3)',
+                            background: detalleData.auditoria.total_alertas_criticas > 0
+                                ? 'rgba(239, 68, 68, 0.03)'
+                                : detalleData.auditoria.total_alertas > 0
+                                    ? 'rgba(245, 158, 11, 0.03)'
+                                    : 'rgba(16, 185, 129, 0.03)',
+                            overflow: 'hidden'
+                        }}>
+                            {/* Cabecera del Panel */}
+                            <div
+                                style={{
+                                    padding: '0.65rem 0.85rem',
+                                    display: 'flex',
+                                    flexWrap: 'wrap',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '0.75rem',
+                                    borderBottom: mostrarAlertasDetalle ? '1px solid rgba(0,0,0,0.06)' : 'none',
+                                    cursor: 'pointer'
+                                }}
+                                onClick={() => setMostrarAlertasDetalle(!mostrarAlertasDetalle)}
+                            >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    {detalleData.auditoria.total_alertas_criticas > 0 ? (
+                                        <AlertCircle size={18} color="#dc2626" />
+                                    ) : detalleData.auditoria.total_alertas > 0 ? (
+                                        <AlertTriangle size={18} color="#d97706" />
+                                    ) : (
+                                        <CheckCircle2 size={18} color="#059669" />
+                                    )}
+                                    <div>
+                                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                            Auditoría de Planilla & Comparativa con Período Previo
+                                        </span>
+                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            {detalleData.auditoria.total_alertas === 0
+                                                ? 'Planilla consistente: sin descuadres matemáticos ni variaciones anómalas.'
+                                                : `Se detectaron ${detalleData.auditoria.total_alertas} alertas / discrepancias en esta planilla.`
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    {detalleData.auditoria.total_alertas_criticas > 0 && (
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#dc2626' }}>
+                                            {detalleData.auditoria.total_alertas_criticas} Crítica(s)
+                                        </span>
+                                    )}
+                                    {detalleData.auditoria.total_advertencias > 0 && (
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.15)', color: '#b45309' }}>
+                                            {detalleData.auditoria.total_advertencias} Advertencia(s) / Ausencia(s)
+                                        </span>
+                                    )}
+                                    {detalleData.auditoria.total_discrepancias > 0 && (
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.15)', color: '#7c3aed' }}>
+                                            {detalleData.auditoria.total_discrepancias} Discrepancia(s) vs Quincena Previa
+                                        </span>
+                                    )}
+                                    <button
+                                        type="button"
+                                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.2rem', color: 'var(--text-muted)' }}
+                                    >
+                                        {mostrarAlertasDetalle ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Contenido desplegable */}
+                            {mostrarAlertasDetalle && (
+                                <div style={{ padding: '0.75rem 0.85rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                                    {/* Resumen Comparativo de Quincena */}
+                                    {detalleData.periodo_anterior && (
+                                        <div style={{
+                                            display: 'grid',
+                                            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                                            gap: '0.5rem',
+                                            background: '#fff',
+                                            padding: '0.65rem',
+                                            borderRadius: '6px',
+                                            border: '1px solid var(--border-color)',
+                                            fontSize: '0.75rem'
+                                        }}>
+                                            <div>
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Quincena Anterior:</span>
+                                                <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                                                    {detalleData.periodo_anterior.quincena === 'primera' ? '1ra Quincena' : '2da Quincena'} {MONTH_NAMES.find(m => m.value === detalleData.periodo_anterior.periodo_mes)?.label} {detalleData.periodo_anterior.periodo_anio}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Nómina Neta Anterior:</span>
+                                                <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                                                    {detalleData.periodo_anterior.existe ? formatMoney(detalleData.periodo_anterior.total_neto) : 'Sin datos previos'}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Variación Total Líquido:</span>
+                                                <div style={{
+                                                    fontWeight: 700,
+                                                    color: detalleData.periodo_anterior.variacion_neta_monto > 0 ? '#059669' : detalleData.periodo_anterior.variacion_neta_monto < 0 ? '#dc2626' : 'var(--text-main)'
+                                                }}>
+                                                    {detalleData.periodo_anterior.existe ? (
+                                                        <>
+                                                            {detalleData.periodo_anterior.variacion_neta_monto > 0 ? '+' : ''}
+                                                            {formatMoney(detalleData.periodo_anterior.variacion_neta_monto)} ({detalleData.periodo_anterior.variacion_neta_pct > 0 ? '+' : ''}{detalleData.periodo_anterior.variacion_neta_pct}%)
+                                                        </>
+                                                    ) : 'N/A'}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Nuevos / Ausentes:</span>
+                                                <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                                                    <span style={{ color: '#2563eb' }}>+{detalleData.periodo_anterior.empleados_nuevos?.length || 0} nuevos</span>
+                                                    {(detalleData.periodo_anterior.empleados_bajas?.length || 0) > 0 && (
+                                                        <span style={{ color: '#dc2626', marginLeft: '0.4rem' }}>-{detalleData.periodo_anterior.empleados_bajas.length} ausentes</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Lista de Alertas Identificadas */}
+                                    {detalleData.auditoria.alertas && detalleData.auditoria.alertas.length > 0 && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '180px', overflowY: 'auto' }}>
+                                            {detalleData.auditoria.alertas.map((a, idx) => {
+                                                const bg = a.tipo === 'critica' ? 'rgba(239, 68, 68, 0.08)' : a.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.08)' : a.tipo === 'discrepancia' ? 'rgba(139, 92, 246, 0.08)' : 'rgba(59, 130, 246, 0.08)';
+                                                const borderCol = a.tipo === 'critica' ? 'rgba(239, 68, 68, 0.3)' : a.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.3)' : a.tipo === 'discrepancia' ? 'rgba(139, 92, 246, 0.3)' : 'rgba(59, 130, 246, 0.3)';
+                                                const textCol = a.tipo === 'critica' ? '#b91c1c' : a.tipo === 'advertencia' ? '#92400e' : a.tipo === 'discrepancia' ? '#6d28d9' : '#1d4ed8';
+
+                                                return (
+                                                    <div key={idx} style={{
+                                                        padding: '0.4rem 0.65rem',
+                                                        borderRadius: '5px',
+                                                        background: bg,
+                                                        border: `1px solid ${borderCol}`,
+                                                        fontSize: '0.74rem',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'space-between',
+                                                        gap: '0.5rem',
+                                                        color: textCol
+                                                    }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                            {a.tipo === 'critica' ? <AlertCircle size={14} /> : a.tipo === 'advertencia' ? <AlertTriangle size={14} /> : <TrendingDown size={14} />}
+                                                            <span>
+                                                                <strong>{a.titulo}:</strong> {a.descripcion}
+                                                            </span>
+                                                        </div>
+                                                        {a.empleado_codigo && (
+                                                            <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.35rem', borderRadius: '3px', background: '#fff', whiteSpace: 'nowrap' }}>
+                                                                Emp. {a.empleado_codigo} {a.empleado_nombre ? `— ${a.empleado_nombre}` : ''}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* Resumen KPIs del Período */}
                     {detalleData?.totales && (
@@ -1253,7 +1487,24 @@ export default function PlanillasRRHH() {
                                                         {emp.empleado_codigo}
                                                     </td>
                                                     <td style={{ padding: '0.45rem 0.5rem', fontWeight: 600 }}>
-                                                        {emp.empleado_nombres} {emp.empleado_apellidos}
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                            <span style={{ color: 'var(--text-main)' }}>{emp.empleado_nombres} {emp.empleado_apellidos}</span>
+                                                            {emp.info_jornada?.tiene_ausencia && (
+                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.12)', color: '#dc2626', fontWeight: 700 }} title={`Faltó ${emp.info_jornada.dias_ausente} día(s). Descuento estimado: -${formatMoney(emp.info_jornada.descuento_ausencia)}`}>
+                                                                    ⚠️ Faltó {emp.info_jornada.dias_ausente}d
+                                                                </span>
+                                                            )}
+                                                            {emp.comparativa_previo?.es_nuevo && (
+                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.12)', color: '#2563eb', fontWeight: 700 }} title="Colaborador de nuevo ingreso respecto a quincena previa">
+                                                                    ⭐ Nuevo
+                                                                </span>
+                                                            )}
+                                                            {emp.comparativa_previo?.tiene_variacion_abrupta && (
+                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.12)', color: '#7c3aed', fontWeight: 700 }} title={`Variación notoria: ${emp.comparativa_previo.variacion_monto > 0 ? '+' : ''}${formatMoney(emp.comparativa_previo.variacion_monto)} (${emp.comparativa_previo.variacion_pct > 0 ? '+' : ''}${emp.comparativa_previo.variacion_pct}%) vs quincena previa`}>
+                                                                    📊 Var: {emp.comparativa_previo.variacion_pct > 0 ? '+' : ''}{emp.comparativa_previo.variacion_pct}%
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                         {emp.num_dui && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>DUI: {emp.num_dui}</div>}
                                                     </td>
                                                     <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-muted)' }}>
@@ -1264,7 +1515,13 @@ export default function PlanillasRRHH() {
                                                         {emp.cuenta_planillera || '—'}
                                                     </td>
                                                     <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
-                                                        {emp.dias_trabajados || 15}
+                                                        {emp.info_jornada?.tiene_ausencia ? (
+                                                            <span style={{ color: '#dc2626', fontWeight: 800 }} title={`Laboró ${emp.info_jornada.dias_trabajados} de 15 días (Faltó ${emp.info_jornada.dias_ausente} días)`}>
+                                                                {emp.info_jornada.dias_trabajados} / 15
+                                                            </span>
+                                                        ) : (
+                                                            <span>{emp.dias_trabajados || 15}</span>
+                                                        )}
                                                     </td>
                                                     <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
                                                         {formatMoney(emp.sueldo_base)}
@@ -1294,64 +1551,235 @@ export default function PlanillasRRHH() {
                                                     </td>
                                                 </tr>
 
-                                                {/* Fila expandida con desglose itemizado de percepciones y deducciones */}
+                                                {/* Fila expandida con desglose itemizado de jornada, ingresos extras, deducciones y comparativa */}
                                                 {isExpanded && (
-                                                    <tr style={{ background: 'rgba(99, 102, 241, 0.04)', borderBottom: '1px solid var(--border-color)' }}>
-                                                        <td colSpan={12} style={{ padding: '0.5rem 1.5rem 0.85rem' }}>
-                                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-                                                                {/* Percepciones */}
-                                                                <div style={{ background: '#fff', borderRadius: '6px', border: '1px solid var(--border-color)', padding: '0.65rem' }}>
-                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0284c7', textTransform: 'uppercase', marginBottom: '0.35rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.25rem' }}>
-                                                                        Desglose de Ingresos / Percepciones
+                                                    <tr style={{ background: 'rgba(99, 102, 241, 0.03)', borderBottom: '1px solid var(--border-color)' }}>
+                                                        <td colSpan={12} style={{ padding: '0.75rem 1.25rem 1rem' }}>
+                                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '0.75rem' }}>
+                                                                
+                                                                {/* 1. Tarjeta Jornada Laboral & Faltas */}
+                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-main)', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                                        <Clock size={13} color="var(--primary)" />
+                                                                        Jornada Laboral & Ausencias
                                                                     </div>
-                                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.74rem' }}>
+                                                                    <div style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                        <span>Días trabajados en la quincena:</span>
+                                                                        <strong style={{ color: emp.info_jornada?.tiene_ausencia ? '#dc2626' : '#059669' }}>
+                                                                            {emp.info_jornada?.dias_trabajados || emp.dias_trabajados || 15} / 15 días
+                                                                        </strong>
+                                                                    </div>
+                                                                    {emp.info_jornada?.tiene_ausencia ? (
+                                                                        <div style={{
+                                                                            background: 'rgba(239, 68, 68, 0.08)',
+                                                                            border: '1px solid rgba(239, 68, 68, 0.25)',
+                                                                            borderRadius: '6px',
+                                                                            padding: '0.45rem 0.6rem',
+                                                                            fontSize: '0.73rem',
+                                                                            color: '#b91c1c',
+                                                                            marginTop: '0.2rem'
+                                                                        }}>
+                                                                            <strong>⚠️ Ausencia detectada:</strong> Faltó {emp.info_jornada.dias_ausente} día(s).
+                                                                            <div style={{ marginTop: '0.15rem' }}>
+                                                                                Descuento estimado: <strong>-{formatMoney(emp.info_jornada.descuento_ausencia)}</strong>
+                                                                            </div>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div style={{
+                                                                            background: 'rgba(16, 185, 129, 0.08)',
+                                                                            border: '1px solid rgba(16, 185, 129, 0.2)',
+                                                                            borderRadius: '6px',
+                                                                            padding: '0.45rem 0.6rem',
+                                                                            fontSize: '0.73rem',
+                                                                            color: '#047857',
+                                                                            marginTop: '0.2rem'
+                                                                        }}>
+                                                                            ✓ Jornada quincenal regular completa (15 días sin ausencias).
+                                                                        </div>
+                                                                    )}
+                                                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 'auto', paddingTop: '0.25rem' }}>
+                                                                        Sueldo nominal: {formatMoney(emp.sueldo_base)} / mes ({formatMoney(parseFloat(emp.sueldo_base || 0) / 30)} / día)
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* 2. Tarjeta Ingresos Extras & Dinero Adicional */}
+                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0284c7', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                                            <TrendingUp size={13} color="#0284c7" />
+                                                                            Ingresos Extras & Horas Extras
+                                                                        </span>
+                                                                        <span>{formatMoney(emp.ingresos_adic)}</span>
+                                                                    </div>
+
+                                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.74rem' }}>
                                                                         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
                                                                             <span>Sueldo Quincenal Ordinario</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.sueldo_quincenal)}</span>
                                                                         </div>
-                                                                        {(emp.rubros || []).filter(r => r.operacion === 'sumar' && r.codigo !== '01').map(r => (
-                                                                            <div key={r.codigo} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
-                                                                                <span>{r.descripcion || r.codigo}</span>
-                                                                                <span style={{ fontWeight: 600 }}>{formatMoney(r.valor_ingresado)}</span>
+
+                                                                        {emp.desglose_ingresos_extra && emp.desglose_ingresos_extra.length > 0 ? (
+                                                                            emp.desglose_ingresos_extra.map((item, idx) => (
+                                                                                <div key={idx} style={{
+                                                                                    display: 'flex',
+                                                                                    flexDirection: 'column',
+                                                                                    background: 'rgba(2, 132, 199, 0.04)',
+                                                                                    border: '1px solid rgba(2, 132, 199, 0.15)',
+                                                                                    borderRadius: '5px',
+                                                                                    padding: '0.35rem 0.5rem',
+                                                                                    marginTop: '0.15rem'
+                                                                                }}>
+                                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                                                        <strong style={{ color: '#0369a1' }}>{item.descripcion}</strong>
+                                                                                        <span style={{ fontWeight: 700, color: '#0284c7' }}>{formatMoney(item.monto)}</span>
+                                                                                    </div>
+                                                                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                                                        {item.detalle}
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))
+                                                                        ) : (
+                                                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', padding: '0.25rem 0' }}>
+                                                                                Sin horas extras ni dinero adicional asignado.
                                                                             </div>
-                                                                        ))}
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #cbd5e1', paddingTop: '0.25rem', marginTop: '0.25rem', fontWeight: 700, color: '#0284c7' }}>
-                                                                            <span>Total Percepciones</span>
+                                                                        )}
+
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #cbd5e1', paddingTop: '0.3rem', marginTop: '0.2rem', fontWeight: 700, color: '#0284c7' }}>
+                                                                            <span>Total Devengado</span>
                                                                             <span>{formatMoney(emp.total_percepciones)}</span>
                                                                         </div>
                                                                     </div>
                                                                 </div>
 
-                                                                {/* Deducciones */}
-                                                                <div style={{ background: '#fff', borderRadius: '6px', border: '1px solid var(--border-color)', padding: '0.65rem' }}>
-                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#dc2626', textTransform: 'uppercase', marginBottom: '0.35rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.25rem' }}>
-                                                                        Desglose de Deducciones de Ley y Otras
+                                                                {/* 3. Tarjeta Deducciones, Préstamos y Descuentos */}
+                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#dc2626', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                                            <TrendingDown size={13} color="#dc2626" />
+                                                                            Deducciones & Préstamos
+                                                                        </span>
+                                                                        <span>{formatMoney(emp.total_deducciones)}</span>
                                                                     </div>
-                                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.74rem' }}>
+
+                                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.74rem' }}>
                                                                         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
-                                                                            <span>ISSS (Seguro Social)</span>
+                                                                            <span>ISSS (3%)</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.descuento_isss)}</span>
                                                                         </div>
                                                                         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
-                                                                            <span>AFP (Fondo de Pensiones)</span>
+                                                                            <span>AFP (7.25%)</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.descuento_afp)}</span>
                                                                         </div>
                                                                         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
-                                                                            <span>Impuesto sobre la Renta</span>
+                                                                            <span>Renta</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.descuento_renta)}</span>
                                                                         </div>
-                                                                        {(emp.rubros || []).filter(r => r.operacion === 'restar').map(r => (
-                                                                            <div key={r.codigo} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
-                                                                                <span>{r.descripcion || r.codigo}</span>
-                                                                                <span style={{ fontWeight: 600 }}>{formatMoney(r.valor_ingresado)}</span>
-                                                                            </div>
-                                                                        ))}
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #cbd5e1', paddingTop: '0.25rem', marginTop: '0.25rem', fontWeight: 700, color: '#dc2626' }}>
-                                                                            <span>Total Deducciones</span>
-                                                                            <span>{formatMoney(emp.total_deducciones)}</span>
+
+                                                                        {emp.desglose_deducciones_detalle && emp.desglose_deducciones_detalle.length > 0 ? (
+                                                                            emp.desglose_deducciones_detalle.map((item, idx) => (
+                                                                                <div key={idx} style={{
+                                                                                    display: 'flex',
+                                                                                    flexDirection: 'column',
+                                                                                    background: 'rgba(220, 38, 38, 0.04)',
+                                                                                    border: '1px solid rgba(220, 38, 38, 0.15)',
+                                                                                    borderRadius: '5px',
+                                                                                    padding: '0.35rem 0.5rem',
+                                                                                    marginTop: '0.15rem'
+                                                                                }}>
+                                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                                                        <strong style={{ color: '#991b1b' }}>{item.descripcion}</strong>
+                                                                                        <span style={{ fontWeight: 700, color: '#dc2626' }}>-{formatMoney(item.monto)}</span>
+                                                                                    </div>
+                                                                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                                                        {item.detalle}
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))
+                                                                        ) : null}
+
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #cbd5e1', paddingTop: '0.3rem', marginTop: '0.2rem', fontWeight: 700, color: '#dc2626' }}>
+                                                                            <span>Total Deducido</span>
+                                                                            <span>-{formatMoney(emp.total_deducciones)}</span>
                                                                         </div>
                                                                     </div>
                                                                 </div>
+
+                                                                {/* 4. Tarjeta Líquido & Comparativa vs Quincena Anterior */}
+                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#059669', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                                            <DollarSign size={13} color="#059669" />
+                                                                            Neto & Comparativa
+                                                                        </span>
+                                                                        <strong style={{ fontSize: '0.85rem' }}>{formatMoney(emp.monto_recibir)}</strong>
+                                                                    </div>
+
+                                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.74rem' }}>
+                                                                        {emp.comparativa_previo?.es_nuevo ? (
+                                                                            <div style={{
+                                                                                background: 'rgba(59, 130, 246, 0.08)',
+                                                                                border: '1px solid rgba(59, 130, 246, 0.25)',
+                                                                                borderRadius: '6px',
+                                                                                padding: '0.45rem 0.6rem',
+                                                                                color: '#1d4ed8'
+                                                                            }}>
+                                                                                <strong>⭐ Nuevo Colaborador:</strong> No figuraba en la quincena previa evaluada.
+                                                                            </div>
+                                                                        ) : emp.comparativa_previo?.tenia_registro ? (
+                                                                            <>
+                                                                                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                                                                                    <span>Líquido Quincena Previa:</span>
+                                                                                    <span style={{ fontWeight: 600 }}>{formatMoney(emp.comparativa_previo.monto_recibir_previo)}</span>
+                                                                                </div>
+                                                                                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                                    <span>Diferencia vs anterior:</span>
+                                                                                    <strong style={{
+                                                                                        color: emp.comparativa_previo.variacion_monto > 0 ? '#059669' : emp.comparativa_previo.variacion_monto < 0 ? '#dc2626' : 'var(--text-main)'
+                                                                                    }}>
+                                                                                        {emp.comparativa_previo.variacion_monto > 0 ? '+' : ''}
+                                                                                        {formatMoney(emp.comparativa_previo.variacion_monto)} ({emp.comparativa_previo.variacion_pct > 0 ? '+' : ''}{emp.comparativa_previo.variacion_pct}%)
+                                                                                    </strong>
+                                                                                </div>
+
+                                                                                {emp.comparativa_previo.tiene_variacion_abrupta && (
+                                                                                    <div style={{
+                                                                                        background: 'rgba(139, 92, 246, 0.08)',
+                                                                                        border: '1px solid rgba(139, 92, 246, 0.25)',
+                                                                                        borderRadius: '6px',
+                                                                                        padding: '0.4rem 0.55rem',
+                                                                                        fontSize: '0.72rem',
+                                                                                        color: '#6d28d9',
+                                                                                        marginTop: '0.2rem'
+                                                                                    }}>
+                                                                                        <strong>📊 Variación notoria:</strong> Variación superior al 20% en su salario líquido recibido respecto a la quincena anterior.
+                                                                                    </div>
+                                                                                )}
+                                                                            </>
+                                                                        ) : (
+                                                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                                                                Sin registro en el período previo.
+                                                                            </div>
+                                                                        )}
+
+                                                                        {emp.alertas && emp.alertas.length > 0 && (
+                                                                            <div style={{ marginTop: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                                                                {emp.alertas.map((al, aIdx) => (
+                                                                                    <div key={aIdx} style={{
+                                                                                        fontSize: '0.7rem',
+                                                                                        padding: '0.2rem 0.4rem',
+                                                                                        borderRadius: '4px',
+                                                                                        background: al.tipo === 'critica' ? '#fef2f2' : al.tipo === 'advertencia' ? '#fffbeb' : '#f5f3ff',
+                                                                                        color: al.tipo === 'critica' ? '#991b1b' : al.tipo === 'advertencia' ? '#92400e' : '#5b21b6',
+                                                                                        border: `1px solid ${al.tipo === 'critica' ? '#fecaca' : al.tipo === 'advertencia' ? '#fde68a' : '#ddd6fe'}`
+                                                                                    }}>
+                                                                                        <strong>{al.titulo}:</strong> {al.descripcion}
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+
                                                             </div>
                                                         </td>
                                                     </tr>
