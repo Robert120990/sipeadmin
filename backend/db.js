@@ -929,11 +929,11 @@ const initDB = async () => {
                 ('${currYear}-${currMonth}-16', '${currYear}-${currMonth}-30', 3.6800, 3.8500, 4.1800, 3.7800, 'Precios de Referencia Quincenal', 1)
             `);
 
-            // Seed orders from snapshot if empty
+            // Seed orders from snapshot if empty or only partial
             const [orderCount] = await pool.query('SELECT COUNT(*) as c FROM portal_pedidos');
-            if (orderCount[0].c === 0) {
+            if (orderCount[0].c < 50) {
                 const { seedInitialPortalOrders } = require('./services/energyLatamService');
-                await seedInitialPortalOrders();
+                await seedInitialPortalOrders(true);
             }
         } catch (e) {
             console.error('Migration portal_pedidos & combustible_precios:', e.message);

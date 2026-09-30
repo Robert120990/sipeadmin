@@ -461,7 +461,7 @@ async function ensurePortalTablesAndSeed(db) {
         `);
 
         const [cnt] = await db.query('SELECT COUNT(*) as c FROM portal_pedidos');
-        if (cnt[0].c === 0) {
+        if (cnt[0].c < 50) {
             await energyLatamService.seedInitialPortalOrders();
         }
     } catch(err) {

@@ -38,7 +38,21 @@ function normalizeEstado(status, caption, isOnHold) {
 }
 
 /**
- * Procesa y guarda un array de órdenes (ya sea de archivo o de la API de Salesforce)
+ * Normaliza el nombre y código de estación del grupo SIPE
+ */
+function normalizeEstacion(rawName) {
+    const s = String(rawName || '').toUpperCase();
+    if (s.includes('CHALCHUAPA')) return { id: '006', nombre: 'SHELL CHALCHUAPA' };
+    if (s.includes('MIRAFLORES')) return { id: '002', nombre: 'PUMA MIRAFLORES' };
+    if (s.includes('DESVIO') || s.includes('DESVÍO')) return { id: '004', nombre: 'PUMA EL DESVIO' };
+    if (s.includes('COSTA')) return { id: '008', nombre: 'PUMA COSTA DEL SOL' };
+    if (s.includes('LOMA') || s.includes('LIL') || s.includes('SAN MARTIN')) return { id: '014', nombre: 'PUMA LA LOMA' };
+    if (s.includes('14 AVENIDA') || s.includes('14TA') || s.includes('14A')) return { id: '015', nombre: 'SHELL 14 AVENIDA' };
+    return { id: null, nombre: String(rawName || 'Estación Puma / Shell').trim() };
+}
+
+/**
+ * Procesa y guarda un array de órdenes (combustibles a granel y empaquetados/lubricantes)
  */
 async function processAndSaveOrders(orders, userSummary = null) {
     const db = getDb();
@@ -50,41 +64,51 @@ async function processAndSaveOrders(orders, userSummary = null) {
             const orderNum = String(o.orderNumber || o.orderId || '').trim();
             if (!orderNum) continue;
 
-            const shipToName = o.shipto?.shipToName || o.accountDetails?.billingCity || 'Estación Puma / Shell';
+            const rawStation = o.shipto?.shipToName || o._accountMetadata?.stationName || o.accountDetails?.billingCity || 'Estación Puma / Shell';
+            const { id: idEstacion, nombre: estacionNombre } = normalizeEstacion(rawStation);
+
             const isOnHold = Boolean(o.DrawdownBlanketContractonHold || o.orderWithAlert);
             const estado = normalizeEstado(o.status || o.orderCustomerStatus, o.orderStatusCaption, isOnHold);
             const razonEstado = o.orderStatusCaption || (isOnHold ? 'Retenido para verificación administrativa/crédito' : (o.status || ''));
             const montoTotal = Number(String(o.totalAmount || item.totalAmount || 0).replace(/,/g, '')) || 0;
             const createdDate = o.createdDate ? new Date(o.createdDate) : new Date();
-            const requestedDate = o.requestedDelieveryDate ? o.requestedDelieveryDate.split('T')[0] : null;
+            const requestedDate = o.requestedDelieveryDate ? String(o.requestedDelieveryDate).split('T')[0] : null;
             const deliveryType = o.deliveryType || 'Ex-Rack';
-            const productCategory = o.orderProductCategory || (item.containsPackagedProducts ? 'Packaged' : 'Bulk');
             const paymentMethod = o.paymentMethod || 'Credit';
 
-            // Items y desgloses
+            // Items y desgloses de combustible o lubricantes
+            const isBulkOrder = String(o.orderProductCategory || '').toLowerCase() === 'bulk';
             const orderItems = item.productData?.orderItems || [];
             let galonesD = 0, galonesR = 0, galonesS = 0, galonesI = 0;
             let costoD = 0, costoR = 0, costoS = 0, costoI = 0;
 
-            orderItems.forEach(it => {
-                const name = (it.productName || '').toLowerCase();
-                const qty = Number(it.quantity || it.invoicedQuantity || 0);
-                const price = Number(it.pricePerUnit || 0);
+            if (isBulkOrder) {
+                orderItems.forEach(it => {
+                    const name = String(it.productName || '').toLowerCase();
+                    const qty = Number(it.quantity || it.invoicedQuantity || it.loadedquantity || 0);
+                    
+                    let unitPrice = Number(it.pricePerUnit || 0);
+                    if (unitPrice <= 0 && it.price && qty > 0) {
+                        unitPrice = Number(String(it.price).replace(/,/g, '')) / qty;
+                    }
 
-                if (name.includes('diesel') && !name.includes('ion')) {
-                    galonesD += qty;
-                    if (price > 0) costoD = price;
-                } else if (name.includes('regular')) {
-                    galonesR += qty;
-                    if (price > 0) costoR = price;
-                } else if (name.includes('super')) {
-                    galonesS += qty;
-                    if (price > 0) costoS = price;
-                } else if (name.includes('ion')) {
-                    galonesI += qty;
-                    if (price > 0) costoI = price;
-                }
-            });
+                    if (name.includes('ion')) {
+                        galonesI += qty;
+                        if (unitPrice > 0) costoI = unitPrice;
+                    } else if (name.includes('diesel') || name.includes('diésel')) {
+                        galonesD += qty;
+                        if (unitPrice > 0) costoD = unitPrice;
+                    } else if (name.includes('regular')) {
+                        galonesR += qty;
+                        if (unitPrice > 0) costoR = unitPrice;
+                    } else if (name.includes('premium') || name.includes('v-power') || name.includes('super') || name.includes('súper')) {
+                        galonesS += qty;
+                        if (unitPrice > 0) costoS = unitPrice;
+                    }
+                });
+            }
+
+            const productCategory = isBulkOrder ? 'Bulk' : 'Packaged';
 
             // Invoice details
             const inv = item.invoiceDetails?.[0] || {};
@@ -106,15 +130,6 @@ async function processAndSaveOrders(orders, userSummary = null) {
 
             const facturaPdf = inv.wAccPDFLink || null;
             const ordenPdf = item.orderAttachment?.[0]?.PdfLink || null;
-
-            // Intentar mapear id_estacion con base en el nombre
-            let idEstacion = null;
-            if (shipToName.toUpperCase().includes('CHALCHUAPA')) idEstacion = '006';
-            else if (shipToName.toUpperCase().includes('MIRAFLORES')) idEstacion = '002';
-            else if (shipToName.toUpperCase().includes('DESVIO')) idEstacion = '004';
-            else if (shipToName.toUpperCase().includes('COSTA')) idEstacion = '008';
-            else if (shipToName.toUpperCase().includes('SAN MARTIN') || shipToName.toUpperCase().includes('LOMA')) idEstacion = '014';
-            else if (shipToName.toUpperCase().includes('14 AVENIDA')) idEstacion = '015';
 
             await withRetry(() => db.query(`
                 INSERT INTO portal_pedidos (
@@ -156,7 +171,7 @@ async function processAndSaveOrders(orders, userSummary = null) {
                     raw_data_json = VALUES(raw_data_json),
                     sincronizado_at = NOW()
             `, [
-                orderNum, idEstacion, shipToName, createdDate, requestedDate,
+                orderNum, idEstacion, estacionNombre, createdDate, requestedDate,
                 deliveryType, productCategory, estado, o.status || '', razonEstado,
                 montoTotal, paymentMethod, costoD, costoR, costoS, costoI,
                 galonesD, galonesR, galonesS, galonesI,
@@ -188,7 +203,7 @@ async function processAndSaveOrders(orders, userSummary = null) {
                     ultima_sincronizacion = NOW(),
                     raw_user_json = VALUES(raw_user_json)
             `, [
-                userSummary.cuenta_nombre || 'RAUL RAFAEL SOSA CASTELLANOS',
+                userSummary.cuenta_nombre || 'corina sosah',
                 userSummary.cuenta_numero || '3409396',
                 userSummary.saldo_disponible || 633.00,
                 userSummary.limite_credito || 2000.00,
@@ -205,7 +220,7 @@ async function processAndSaveOrders(orders, userSummary = null) {
 }
 
 /**
- * Ejecuta el scraper headless en segundo plano para sincronizar el portal
+ * Ejecuta el scraper headless en segundo plano para sincronizar el portal para todas las cuentas
  */
 async function syncFromPortal(io = null, targetOrderNumber = null) {
     if (isSyncRunning) {
@@ -213,7 +228,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
     }
 
     isSyncRunning = true;
-    console.log(`[energyLatamService] Starting sync from Energy Latam Portal... ${targetOrderNumber ? `(target: ${targetOrderNumber})` : ''}`);
+    console.log(`[energyLatamService] Starting sync from Energy Latam Portal across ALL fuel & lube accounts... ${targetOrderNumber ? `(target: ${targetOrderNumber})` : ''}`);
 
     let browser = null;
     try {
@@ -225,32 +240,36 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
         const page = await browser.newPage();
         await page.setViewport({ width: 1400, height: 900 });
 
-        let capturedOrders = [];
+        let reqHeaders = null;
+        let reqUrl = null;
+        let initialDoGet = null;
 
         page.on('response', async res => {
             const url = res.url();
-            if (url.includes('/apex/execute')) {
+            if (url.includes('apex/execute')) {
                 try {
-                    const text = await res.text();
                     const req = res.request();
                     const post = JSON.parse(req.postData() || '{}');
-                    if (post.method === 'getOrderList') {
-                        const json = JSON.parse(text);
-                        const list = json?.returnValue?.orderList || [];
-                        if (list.length > 0) {
-                            capturedOrders = capturedOrders.concat(list);
-                        }
+                    if (post.method === 'doGet') {
+                        const text = await res.text();
+                        initialDoGet = JSON.parse(text);
                     }
-                } catch (err) {
-                    void err;
+                } catch (e) {
+                    // Ignore non-json or unparseable response
                 }
+            }
+        });
+
+        page.on('request', req => {
+            if (req.url().includes('apex/execute') && req.postData()?.includes('getOrderList')) {
+                reqHeaders = req.headers();
+                reqUrl = req.url();
             }
         });
 
         // 1. Iniciar sesión
         await page.goto(PORTAL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // Verificar si ya está logueado o requiere login
         if (page.url().includes('/login')) {
             const emailEl = await page.waitForSelector('>>> input[type="email"]', { timeout: 30000 });
             const passEl = await page.waitForSelector('>>> input[type="password"]', { timeout: 30000 });
@@ -262,12 +281,12 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
 
             for (let i = 0; i < 25; i++) {
                 await new Promise(r => setTimeout(r, 1000));
-                if (!page.url().includes('/login')) break;
+                if (!page.url().includes('/login') && reqHeaders && initialDoGet) break;
             }
-            await new Promise(r => setTimeout(r, 6000));
+            await new Promise(r => setTimeout(r, 4000));
         }
 
-        // 2. Extraer resumen de usuario del DOM si ya cargó
+        // 2. Extraer resumen de usuario del DOM
         /* global document */
         const domSummary = await page.evaluate(() => {
             const body = document.body.innerText;
@@ -284,37 +303,88 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
             };
         });
 
-        // 3. Hacer clic en "Órdenes anteriores" para disparar la carga de historial completo
-        await page.evaluate(() => {
-            function findDeep(root) {
-                const all = root.querySelectorAll('*');
-                for (const el of all) {
-                    if (el.innerText && el.innerText.trim().startsWith('Órdenes anteriores')) {
-                        el.click();
-                        return true;
-                    }
-                    if (el.shadowRoot) {
-                        const found = findDeep(el.shadowRoot);
-                        if (found) return true;
+        const csrfToken = reqHeaders?.['csrf-token'];
+        const dogetVal = typeof initialDoGet?.returnValue === 'string' ? JSON.parse(initialDoGet.returnValue) : initialDoGet?.returnValue;
+        const sellToList = dogetVal?.sellToList || [];
+
+        let capturedOrders = [];
+
+        if (csrfToken && reqUrl && sellToList.length > 0) {
+            console.log(`[energyLatamService] Querying ${sellToList.length} accounts in portal session...`);
+            const accountsToQuery = sellToList.map(s => {
+                const r = s.record || {};
+                return {
+                    id: r.Id,
+                    name: r.Name,
+                    stationName: r.EP_Account_Name_2__c || r.Name,
+                    accountNumber: r.AccountNumber
+                };
+            });
+
+            capturedOrders = await page.evaluate(async (url, csrf, accounts) => {
+                const list = [];
+                async function fetchForAccount(accId, type) {
+                    try {
+                        const body = {
+                            namespace: "",
+                            classname: "@udd/01pUd000000ss2J",
+                            method: "getOrderList",
+                            isContinuation: false,
+                            params: {
+                                params: {
+                                    offset: 0,
+                                    queryLimit: 50,
+                                    type: type,
+                                    sellToIdSelected: accId,
+                                    orderId: "all",
+                                    pageNum: 1,
+                                    queryContractStatus: "open_contracts",
+                                    rowsPerPage: 50,
+                                    time: Date.now()
+                                }
+                            },
+                            cacheable: false
+                        };
+
+                        const resp = await fetch(url, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json; charset=utf-8',
+                                'Accept': 'application/json, text/plain, */*',
+                                'csrf-token': csrf
+                            },
+                            body: JSON.stringify(body)
+                        });
+
+                        if (!resp.ok) return [];
+                        const json = await resp.json();
+                        return json?.returnValue?.orderList || [];
+                    } catch(e) {
+                        return [];
                     }
                 }
-                return false;
-            }
-            return findDeep(document);
-        });
 
-        await new Promise(r => setTimeout(r, 6000));
+                for (const acc of accounts) {
+                    const active = await fetchForAccount(acc.id, 'active');
+                    const past = await fetchForAccount(acc.id, 'past');
+                    for (const item of active.concat(past)) {
+                        if (item.objOrder) item.objOrder._accountMetadata = acc;
+                        list.push(item);
+                    }
+                }
+                return list;
+            }, reqUrl, csrfToken, accountsToQuery);
 
-        // 4. Procesar y guardar en BD
-        console.log(`[energyLatamService] Captured ${capturedOrders.length} orders from portal session.`);
-        
+            console.log(`[energyLatamService] Successfully fetched ${capturedOrders.length} orders directly from Salesforce API!`);
+        }
+
         // Si por alguna razón la sesión en vivo capturó pocas órdenes, combinar con snapshot
         if (capturedOrders.length === 0) {
             const snapshotFile = path.join(__dirname, '..', 'data', 'portal_orders_snapshot.json');
             if (fs.existsSync(snapshotFile)) {
                 try {
                     const fallbackData = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
-                    capturedOrders = fallbackData?.returnValue?.orderList || [];
+                    capturedOrders = fallbackData?.returnValue?.orderList || fallbackData?.orders || [];
                     console.log(`[energyLatamService] Loaded ${capturedOrders.length} orders from cached snapshot.`);
                 } catch (e) {
                     console.warn('Fallback snapshot read error:', e.message);
@@ -334,7 +404,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
 
         return {
             success: true,
-            message: `Sincronización completada. Se procesaron ${countSaved} órdenes del portal.`,
+            message: `Sincronización completada. Se procesaron ${countSaved} órdenes (combustibles y lubricantes).`,
             count: countSaved,
             summary: domSummary
         };
@@ -342,12 +412,12 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
     } catch (err) {
         console.error('[energyLatamService] Sync error:', err.message);
         
-        // Si falló la navegación (ej: red lenta), asegurar que los datos previos estén en la base de datos
+        // Cache fallback
         const snapshotFile = path.join(__dirname, '..', 'data', 'portal_orders_snapshot.json');
         if (fs.existsSync(snapshotFile)) {
             try {
                 const fallbackData = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
-                const list = fallbackData?.returnValue?.orderList || [];
+                const list = fallbackData?.returnValue?.orderList || fallbackData?.orders || [];
                 const saved = await processAndSaveOrders(list, {
                     saldo_disponible: 633,
                     limite_credito: 2000,
@@ -356,7 +426,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
                 });
                 return {
                     success: true,
-                    message: `Sincronización respaldada desde caché (${saved} órdenes procesadas). Error remoto: ${err.message}`,
+                    message: `Sincronización respaldada desde base de datos (${saved} órdenes procesadas). Error remoto: ${err.message}`,
                     count: saved
                 };
             } catch (e) {
@@ -378,24 +448,26 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
 }
 
 /**
- * Carga inicial rápida de datos de muestra/respaldo en la base de datos si la tabla está vacía
+ * Carga inicial rápida de datos de muestra/respaldo en la base de datos si la tabla está vacía o incompleta
  */
-async function seedInitialPortalOrders() {
+async function seedInitialPortalOrders(forceReload = false) {
     try {
         const db = getDb();
         const [rows] = await db.query('SELECT COUNT(*) as c FROM portal_pedidos');
-        if (rows[0].c === 0) {
-            console.log('[energyLatamService] Initializing portal_pedidos with portal baseline...');
+        // Si hay menos de 50 registros (ej. solo los 10 de Chalchuapa de la prueba anterior) o se fuerza recarga
+        if (rows[0].c < 50 || forceReload) {
+            console.log('[energyLatamService] Seeding portal_pedidos with complete portal snapshot (all stations & fuels)...');
             const snapshotFile = path.join(__dirname, '..', 'data', 'portal_orders_snapshot.json');
             if (fs.existsSync(snapshotFile)) {
                 const fallbackData = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
-                const list = fallbackData?.returnValue?.orderList || [];
+                const list = fallbackData?.returnValue?.orderList || fallbackData?.orders || [];
                 await processAndSaveOrders(list, {
                     saldo_disponible: 633,
                     limite_credito: 2000,
                     porcentaje_disponible: 32,
                     cuenta_nombre: 'corina sosah'
                 });
+                console.log(`[energyLatamService] Seed complete. Loaded ${list.length} orders.`);
             }
         }
     } catch(e) {
