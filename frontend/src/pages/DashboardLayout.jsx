@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase, Users as UsersIcon } from 'lucide-react';
+import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase, Users as UsersIcon, Palette } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import NotificationBell from '../components/NotificationBell';
@@ -27,6 +27,7 @@ import {
     ConfiguracionDb,
     ConfiguracionEmail,
     ConfiguracionContabilidad,
+    ConfiguracionTema,
     ConsultasCumpleanos,
     MovimientosBancarios,
     ConciliacionBancaria,
@@ -60,7 +61,7 @@ import { getStoredUser } from '../utils/auth';
 export default function DashboardLayout() {
     const navigate = useNavigate();
     const location = useLocation();
-    const { theme, toggleTheme } = useTheme();
+    const { theme, toggleTheme, openThemeModal } = useTheme();
     const { isMobile } = useViewport();
     
     // UI State
@@ -115,6 +116,7 @@ export default function DashboardLayout() {
 
     const user = getStoredUser();
     const hasPermission = (path) => {
+        if (path === '/dashboard/settings/theme') return true;
         if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
         if (user.permissions?.includes(path)) return true;
         if (path === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return true;
@@ -156,6 +158,7 @@ export default function DashboardLayout() {
         '/dashboard/settings/database': <ConfiguracionDb />,
         '/dashboard/settings/accounting': <ConfiguracionContabilidad />,
         '/dashboard/settings/email': <ConfiguracionEmail />,
+        '/dashboard/settings/theme': <ConfiguracionTema />,
         '/dashboard/permissions': <Permissions />,
         '/dashboard/bitacora': <Bitacora />,
         '/dashboard/finanzas/prestamos': <FinanzasPrestamos />,
@@ -603,9 +606,16 @@ export default function DashboardLayout() {
                     {!isCollapsed && <h2 style={{ margin: 0, fontSize: '1.25rem', overflow: 'hidden', whiteSpace: 'nowrap' }}>SIPE ADMIN</h2>}
                     <div style={{ display: 'flex', gap: '0.25rem' }}>
                         <button
+                            onClick={openThemeModal}
+                            style={{ background: 'var(--hover-bg)', border: 'none', color: 'var(--text-muted)', borderRadius: '8px', cursor: 'pointer', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Personalizar Tema y Apariencia"
+                        >
+                            <Palette size={20} />
+                        </button>
+                        <button
                             onClick={toggleTheme}
                             style={{ background: 'var(--hover-bg)', border: 'none', color: 'var(--text-muted)', borderRadius: '8px', cursor: 'pointer', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                            title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
+                            title={theme === 'dark' ? 'Modo claro rápido' : 'Modo oscuro rápido'}
                         >
                             {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
                         </button>
@@ -736,9 +746,13 @@ export default function DashboardLayout() {
                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
                             </div>
                         </div>
+                        <button className="sheet-item" onClick={() => { closeMore(); openThemeModal(); }}>
+                            <Palette size={18} />
+                            Tema y Apariencia
+                        </button>
                         <button className="sheet-item" onClick={toggleTheme}>
                             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-                            {theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
+                            {theme === 'dark' ? 'Modo claro rápido' : 'Modo oscuro rápido'}
                         </button>
                         <button className="sheet-item danger" onClick={handleLogout}>
                             <LogOut size={18} />

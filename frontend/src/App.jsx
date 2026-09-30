@@ -53,7 +53,8 @@ import {
     EstrategiaCreditos,
     Tareas,
     ConsultaCambiosGithub,
-    PlanillasRRHH
+    PlanillasRRHH,
+    ConfiguracionTema
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -67,6 +68,7 @@ const ProtectedRoute = ({ children }) => {
 
 const PermissionRoute = ({ pathKey, children }) => {
     const user = getStoredUser();
+    if (pathKey === '/dashboard/settings/theme') return children;
     if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return children;
     if (user.permissions?.includes(pathKey)) return children;
     if (pathKey === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return children;
@@ -137,6 +139,7 @@ function App() {
                                     <Route path="estrategia/mermas" element={<PermissionRoute pathKey="/dashboard/estrategia/mermas"><EstrategiaMermas /></PermissionRoute>} />
                                     <Route path="estrategia/rentabilidad" element={<PermissionRoute pathKey="/dashboard/estrategia/rentabilidad"><EstrategiaRentabilidad /></PermissionRoute>} />
                                     <Route path="estrategia/creditos" element={<PermissionRoute pathKey="/dashboard/estrategia/creditos"><EstrategiaCreditos /></PermissionRoute>} />
+                                    <Route path="settings/theme" element={<PermissionRoute pathKey="/dashboard/settings/theme"><ConfiguracionTema /></PermissionRoute>} />
                                     <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
                                     <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />
                                     <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />
