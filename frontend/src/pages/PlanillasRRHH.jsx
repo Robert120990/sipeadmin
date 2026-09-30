@@ -619,7 +619,7 @@ export default function PlanillasRRHH() {
                         <Users size={22} />
                     </div>
                     <div>
-                        <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                        <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text)' }}>
                             Recursos Humanos — Planillas
                         </h1>
                         <p style={{ fontSize: '0.8rem', margin: 0, color: 'var(--text-muted)' }}>
@@ -637,10 +637,10 @@ export default function PlanillasRRHH() {
                         padding: '0.3rem 0.65rem',
                         borderRadius: '20px',
                         background: 'rgba(16, 185, 129, 0.12)',
-                        color: '#059669',
+                        color: 'var(--success)',
                         fontWeight: 600
                     }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--success)' }} />
                         Sipe Web DB Conectada
                     </span>
                 </div>
@@ -667,8 +667,8 @@ export default function PlanillasRRHH() {
                                 padding: '0 0.75rem',
                                 borderRadius: '8px',
                                 border: '1px solid var(--border-color)',
-                                background: 'var(--card-bg, #fff)',
-                                color: 'var(--text-main)',
+                                background: 'var(--card-bg)',
+                                color: 'var(--text)',
                                 outline: 'none'
                             }}
                         >
@@ -696,8 +696,8 @@ export default function PlanillasRRHH() {
                                 padding: '0 0.5rem',
                                 borderRadius: '8px',
                                 border: '1px solid var(--border-color)',
-                                background: 'var(--card-bg, #fff)',
-                                color: 'var(--text-main)'
+                                background: 'var(--card-bg)',
+                                color: 'var(--text)'
                             }}
                         >
                             {YEARS.map(y => (
@@ -721,8 +721,8 @@ export default function PlanillasRRHH() {
                                 padding: '0 0.5rem',
                                 borderRadius: '8px',
                                 border: '1px solid var(--border-color)',
-                                background: 'var(--card-bg, #fff)',
-                                color: 'var(--text-main)'
+                                background: 'var(--card-bg)',
+                                color: 'var(--text)'
                             }}
                         >
                             <option value="">Todos los meses</option>
@@ -747,8 +747,8 @@ export default function PlanillasRRHH() {
                                 padding: '0 0.5rem',
                                 borderRadius: '8px',
                                 border: '1px solid var(--border-color)',
-                                background: 'var(--card-bg, #fff)',
-                                color: 'var(--text-main)'
+                                background: 'var(--card-bg)',
+                                color: 'var(--text)'
                             }}
                         >
                             <option value="">Todas</option>
@@ -812,7 +812,7 @@ export default function PlanillasRRHH() {
             <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
                 <table style={{ width: '100%', minWidth: '1050px', borderCollapse: 'collapse', textAlign: 'left' }}>
                     <thead>
-                        <tr style={{ background: 'rgba(0,0,0,0.03)', borderBottom: '1px solid var(--border-color)' }}>
+                        <tr style={{ background: 'var(--hover-bg)', borderBottom: '1px solid var(--border-color)' }}>
                             <th style={{ padding: '0.55rem 0.65rem', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Período</th>
                             <th style={{ padding: '0.55rem 0.65rem', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Quincena</th>
                             <th style={{ padding: '0.55rem 0.65rem', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', textAlign: 'center' }}># Emp</th>
@@ -839,7 +839,7 @@ export default function PlanillasRRHH() {
                             <tr>
                                 <td colSpan={13} style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-                                        <AlertCircle size={28} color="#94a3b8" />
+                                        <AlertCircle size={28} color="var(--text-muted)" />
                                         <span>No se encontraron planillas para los filtros seleccionados en esta empresa.</span>
                                     </div>
                                 </td>
@@ -858,13 +858,12 @@ export default function PlanillasRRHH() {
                                 } : {
                                     borderBottom: '1px solid var(--border-color)',
                                     opacity: 0.65, // Color más tenue solicitado explícitamente
-                                    background: 'rgba(241, 245, 249, 0.4)',
                                     transition: 'background-color 0.15s ease'
                                 };
 
                                 return (
                                     <tr key={`${item.periodo_anio}-${item.periodo_mes}-${item.quincena}`} style={rowStyle} className="hover-row">
-                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)' }}>
                                             <div>{mesNom} {item.periodo_anio}</div>
                                             {item.ultima_modificacion_formato && (
                                                 <div style={{ fontSize: '0.68rem', fontWeight: 500, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.2rem' }} title={`Última modificación en Sipe Web: ${item.ultima_modificacion_formato}`}>
@@ -880,8 +879,8 @@ export default function PlanillasRRHH() {
                                                 textTransform: 'uppercase',
                                                 padding: '0.15rem 0.45rem',
                                                 borderRadius: '4px',
-                                                background: item.quincena === 'primera' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(139, 92, 246, 0.1)',
-                                                color: item.quincena === 'primera' ? '#2563eb' : '#7c3aed'
+                                                background: item.quincena === 'primera' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(139, 92, 246, 0.12)',
+                                                color: item.quincena === 'primera' ? 'var(--primary)' : '#a78bfa'
                                             }}>
                                                 {item.quincena === 'primera' ? '1ra Quincena' : '2da Quincena'}
                                             </span>
@@ -892,8 +891,8 @@ export default function PlanillasRRHH() {
                                                         fontWeight: 700,
                                                         padding: '0.1rem 0.35rem',
                                                         borderRadius: '4px',
-                                                        background: 'rgba(239, 68, 68, 0.12)',
-                                                        color: '#dc2626',
+                                                        background: 'rgba(239, 68, 68, 0.15)',
+                                                        color: 'var(--danger)',
                                                         display: 'inline-flex',
                                                         alignItems: 'center',
                                                         gap: '0.2rem'
@@ -904,16 +903,16 @@ export default function PlanillasRRHH() {
                                                 </div>
                                             )}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, textAlign: 'center', color: 'var(--text-main)' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, textAlign: 'center', color: 'var(--text)' }}>
                                             {item.total_empleados}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', textAlign: 'right', color: 'var(--text-main)' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', textAlign: 'right', color: 'var(--text)' }}>
                                             {formatMoney(item.total_sueldos_quincenal)}
                                         </td>
                                         <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', textAlign: 'right', color: 'var(--text-muted)' }}>
                                             {formatMoney(item.total_ingresos_adic)}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, textAlign: 'right', color: '#0284c7' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, textAlign: 'right', color: 'var(--primary)' }}>
                                             {formatMoney(item.total_percepciones)}
                                         </td>
                                         <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.78rem', textAlign: 'right', color: 'var(--text-muted)' }}>
@@ -925,10 +924,10 @@ export default function PlanillasRRHH() {
                                         <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.78rem', textAlign: 'right', color: 'var(--text-muted)' }}>
                                             {formatMoney(item.total_renta)}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, textAlign: 'right', color: '#dc2626' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.8rem', fontWeight: 700, textAlign: 'right', color: 'var(--danger)' }}>
                                             {formatMoney(item.total_deducciones)}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.85rem', fontWeight: 800, textAlign: 'right', color: '#059669' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.85rem', fontWeight: 800, textAlign: 'right', color: 'var(--success)' }}>
                                             {formatMoney(item.total_neto)}
                                         </td>
                                         <td style={{ padding: '0.5rem 0.65rem', textAlign: 'center' }}>
@@ -942,7 +941,7 @@ export default function PlanillasRRHH() {
                                                     padding: '0.2rem 0.55rem',
                                                     borderRadius: '12px',
                                                     background: 'rgba(16, 185, 129, 0.15)',
-                                                    color: '#047857'
+                                                    color: 'var(--success)'
                                                 }}>
                                                     <CheckCircle2 size={13} />
                                                     Pagada
@@ -957,7 +956,7 @@ export default function PlanillasRRHH() {
                                                     padding: '0.2rem 0.55rem',
                                                     borderRadius: '12px',
                                                     background: 'rgba(245, 158, 11, 0.15)',
-                                                    color: '#b45309'
+                                                    color: 'var(--warning)'
                                                 }} title="Planilla pendiente de pago. Presiona 'Pagar' para registrar formas de pago y afectar Bancos.">
                                                     <Clock size={13} />
                                                     Pendiente de Pago
@@ -981,7 +980,7 @@ export default function PlanillasRRHH() {
                                                             fontWeight: 700,
                                                             borderRadius: '6px',
                                                             background: 'rgba(16, 185, 129, 0.12)',
-                                                            color: '#047857',
+                                                            color: 'var(--success)',
                                                             border: '1px solid rgba(16, 185, 129, 0.3)',
                                                             cursor: 'pointer'
                                                         }}
@@ -1003,11 +1002,7 @@ export default function PlanillasRRHH() {
                                                             fontSize: '0.75rem',
                                                             fontWeight: 700,
                                                             borderRadius: '6px',
-                                                            background: '#2563eb',
-                                                            color: '#ffffff',
-                                                            border: 'none',
-                                                            cursor: 'pointer',
-                                                            boxShadow: '0 1px 2px rgba(37, 99, 235, 0.2)'
+                                                            cursor: 'pointer'
                                                         }}
                                                         title="Registrar formas de pago y afectar cuentas en Bancos (conciliable)"
                                                     >
@@ -1098,7 +1093,7 @@ export default function PlanillasRRHH() {
                         marginBottom: '0.75rem',
                         fontSize: '0.78rem'
                     }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', color: 'var(--text-main)' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', color: 'var(--text)' }}>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                                 <Clock size={15} color="var(--primary)" />
                                 <strong>Última Modificación:</strong>
@@ -1151,12 +1146,12 @@ export default function PlanillasRRHH() {
                         gap: '0.75rem',
                         marginBottom: '0.75rem',
                         fontSize: '0.78rem',
-                        color: '#92400e'
+                        color: 'var(--text)'
                     }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <AlertCircle size={16} color="#d97706" />
+                            <AlertCircle size={16} color="var(--warning)" />
                             <span>
-                                <strong>Modo Sólo Lectura (Sipe Web SaaS):</strong> Para registrar novedades, agregar empleados o ajustar importes acceda directamente a la plataforma <a href="https://sys.sipesv.com/rh/planillas" target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: '#b45309', fontWeight: 600 }}>sys.sipesv.com</a>.
+                                <strong>Modo Sólo Lectura (Sipe Web SaaS):</strong> Para registrar novedades, agregar empleados o ajustar importes acceda directamente a la plataforma <a href="https://sys.sipesv.com/rh/planillas" target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: 'var(--primary)', fontWeight: 600 }}>sys.sipesv.com</a>.
                             </span>
                         </div>
                     </div>
@@ -1187,21 +1182,21 @@ export default function PlanillasRRHH() {
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
                                     gap: '0.75rem',
-                                    borderBottom: mostrarAlertasDetalle ? '1px solid rgba(0,0,0,0.06)' : 'none',
+                                    borderBottom: mostrarAlertasDetalle ? '1px solid var(--border-color)' : 'none',
                                     cursor: 'pointer'
                                 }}
                                 onClick={() => setMostrarAlertasDetalle(!mostrarAlertasDetalle)}
                             >
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                     {detalleData.auditoria.total_alertas_criticas > 0 ? (
-                                        <AlertCircle size={18} color="#dc2626" />
+                                        <AlertCircle size={18} color="var(--danger)" />
                                     ) : detalleData.auditoria.total_alertas > 0 ? (
-                                        <AlertTriangle size={18} color="#d97706" />
+                                        <AlertTriangle size={18} color="var(--warning)" />
                                     ) : (
-                                        <CheckCircle2 size={18} color="#059669" />
+                                        <CheckCircle2 size={18} color="var(--success)" />
                                     )}
                                     <div>
-                                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text)' }}>
                                             Auditoría de Planilla & Comparativa con Período Previo
                                         </span>
                                         <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
@@ -1215,17 +1210,17 @@ export default function PlanillasRRHH() {
 
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                     {detalleData.auditoria.total_alertas_criticas > 0 && (
-                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#dc2626' }}>
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
                                             {detalleData.auditoria.total_alertas_criticas} Crítica(s)
                                         </span>
                                     )}
                                     {detalleData.auditoria.total_advertencias > 0 && (
-                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.15)', color: '#b45309' }}>
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
                                             {detalleData.auditoria.total_advertencias} Advertencia(s) / Ausencia(s)
                                         </span>
                                     )}
                                     {detalleData.auditoria.total_discrepancias > 0 && (
-                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.15)', color: '#7c3aed' }}>
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' }}>
                                             {detalleData.auditoria.total_discrepancias} Discrepancia(s) vs Quincena Previa
                                         </span>
                                     )}
@@ -1247,7 +1242,7 @@ export default function PlanillasRRHH() {
                                             display: 'grid',
                                             gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
                                             gap: '0.5rem',
-                                            background: '#fff',
+                                            background: 'var(--card-bg)',
                                             padding: '0.65rem',
                                             borderRadius: '6px',
                                             border: '1px solid var(--border-color)',
@@ -1255,13 +1250,13 @@ export default function PlanillasRRHH() {
                                         }}>
                                             <div>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Quincena Anterior:</span>
-                                                <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                                                <div style={{ fontWeight: 700, color: 'var(--text)' }}>
                                                     {detalleData.periodo_anterior.quincena === 'primera' ? '1ra Quincena' : '2da Quincena'} {MONTH_NAMES.find(m => m.value === detalleData.periodo_anterior.periodo_mes)?.label} {detalleData.periodo_anterior.periodo_anio}
                                                 </div>
                                             </div>
                                             <div>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Nómina Neta Anterior:</span>
-                                                <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                                                <div style={{ fontWeight: 700, color: 'var(--text)' }}>
                                                     {detalleData.periodo_anterior.existe ? formatMoney(detalleData.periodo_anterior.total_neto) : 'Sin datos previos'}
                                                 </div>
                                             </div>
@@ -1269,7 +1264,7 @@ export default function PlanillasRRHH() {
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Variación Total Líquido:</span>
                                                 <div style={{
                                                     fontWeight: 700,
-                                                    color: detalleData.periodo_anterior.variacion_neta_monto > 0 ? '#059669' : detalleData.periodo_anterior.variacion_neta_monto < 0 ? '#dc2626' : 'var(--text-main)'
+                                                    color: detalleData.periodo_anterior.variacion_neta_monto > 0 ? '#10b981' : detalleData.periodo_anterior.variacion_neta_monto < 0 ? '#ef4444' : 'var(--text)'
                                                 }}>
                                                     {detalleData.periodo_anterior.existe ? (
                                                         <>
@@ -1281,10 +1276,10 @@ export default function PlanillasRRHH() {
                                             </div>
                                             <div>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Nuevos / Ausentes:</span>
-                                                <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
-                                                    <span style={{ color: '#2563eb' }}>+{detalleData.periodo_anterior.empleados_nuevos?.length || 0} nuevos</span>
+                                                <div style={{ fontWeight: 600, color: 'var(--text)' }}>
+                                                    <span style={{ color: 'var(--primary)' }}>+{detalleData.periodo_anterior.empleados_nuevos?.length || 0} nuevos</span>
                                                     {(detalleData.periodo_anterior.empleados_bajas?.length || 0) > 0 && (
-                                                        <span style={{ color: '#dc2626', marginLeft: '0.4rem' }}>-{detalleData.periodo_anterior.empleados_bajas.length} ausentes</span>
+                                                        <span style={{ color: '#ef4444', marginLeft: '0.4rem' }}>-{detalleData.periodo_anterior.empleados_bajas.length} ausentes</span>
                                                     )}
                                                 </div>
                                             </div>
@@ -1295,9 +1290,9 @@ export default function PlanillasRRHH() {
                                     {detalleData.auditoria.alertas && detalleData.auditoria.alertas.length > 0 && (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '180px', overflowY: 'auto' }}>
                                             {detalleData.auditoria.alertas.map((a, idx) => {
-                                                const bg = a.tipo === 'critica' ? 'rgba(239, 68, 68, 0.08)' : a.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.08)' : a.tipo === 'discrepancia' ? 'rgba(139, 92, 246, 0.08)' : 'rgba(59, 130, 246, 0.08)';
-                                                const borderCol = a.tipo === 'critica' ? 'rgba(239, 68, 68, 0.3)' : a.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.3)' : a.tipo === 'discrepancia' ? 'rgba(139, 92, 246, 0.3)' : 'rgba(59, 130, 246, 0.3)';
-                                                const textCol = a.tipo === 'critica' ? '#b91c1c' : a.tipo === 'advertencia' ? '#92400e' : a.tipo === 'discrepancia' ? '#6d28d9' : '#1d4ed8';
+                                                const bg = a.tipo === 'critica' ? 'rgba(239, 68, 68, 0.12)' : a.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.12)' : a.tipo === 'discrepancia' ? 'rgba(139, 92, 246, 0.12)' : 'rgba(59, 130, 246, 0.12)';
+                                                const borderCol = a.tipo === 'critica' ? 'rgba(239, 68, 68, 0.35)' : a.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.35)' : a.tipo === 'discrepancia' ? 'rgba(139, 92, 246, 0.35)' : 'rgba(59, 130, 246, 0.35)';
+                                                const textCol = a.tipo === 'critica' ? '#ef4444' : a.tipo === 'advertencia' ? '#f59e0b' : a.tipo === 'discrepancia' ? '#a78bfa' : 'var(--primary)';
 
                                                 return (
                                                     <div key={idx} style={{
@@ -1319,7 +1314,7 @@ export default function PlanillasRRHH() {
                                                             </span>
                                                         </div>
                                                         {a.empleado_codigo && (
-                                                            <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.35rem', borderRadius: '3px', background: '#fff', whiteSpace: 'nowrap' }}>
+                                                            <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text)', whiteSpace: 'nowrap' }}>
                                                                 Emp. {a.empleado_codigo} {a.empleado_nombre ? `— ${a.empleado_nombre}` : ''}
                                                             </span>
                                                         )}
@@ -1338,7 +1333,7 @@ export default function PlanillasRRHH() {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
                             <div className="card glass" style={{ padding: '0.75rem 1rem' }}>
                                 <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Total Empleados</span>
-                                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '0.2rem' }}>
+                                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text)', marginTop: '0.2rem' }}>
                                     {detalleData.totales.total_empleados}
                                 </div>
                             </div>
@@ -1380,8 +1375,8 @@ export default function PlanillasRRHH() {
                                     paddingRight: '0.75rem',
                                     borderRadius: '6px',
                                     border: '1px solid var(--border-color)',
-                                    background: 'var(--card-bg, #fff)',
-                                    color: 'var(--text-main)'
+                                    background: 'var(--card-bg)',
+                                    color: 'var(--text)'
                                 }}
                             />
                         </div>
@@ -1390,7 +1385,7 @@ export default function PlanillasRRHH() {
                             <select
                                 value={filtroBranchDetalle}
                                 onChange={(e) => setFiltroBranchDetalle(e.target.value)}
-                                style={{ height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}
+                                style={{ height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'var(--text)' }}
                             >
                                 <option value="">Todas las sucursales</option>
                                 {branchesAndDeptos.branches.map(b => (
@@ -1403,7 +1398,7 @@ export default function PlanillasRRHH() {
                             <select
                                 value={filtroDeptoDetalle}
                                 onChange={(e) => setFiltroDeptoDetalle(e.target.value)}
-                                style={{ height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}
+                                style={{ height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'var(--text)' }}
                             >
                                 <option value="">Todos los departamentos</option>
                                 {branchesAndDeptos.departamentos.map(d => (
@@ -1419,7 +1414,7 @@ export default function PlanillasRRHH() {
                                 className="btn btn-secondary"
                                 style={{ height: '36px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
                             >
-                                <FileText size={15} color="#0284c7" />
+                                <FileText size={15} color="var(--primary)" />
                                 <span>Planilla PDF</span>
                             </button>
                             <button
@@ -1428,7 +1423,7 @@ export default function PlanillasRRHH() {
                                 className="btn btn-secondary"
                                 style={{ height: '36px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
                             >
-                                <ScrollText size={15} color="#7c3aed" />
+                                <ScrollText size={15} color="#a78bfa" />
                                 <span>Recibos PDF</span>
                             </button>
                         </div>
@@ -1436,21 +1431,21 @@ export default function PlanillasRRHH() {
 
                     {/* Tabla de Empleados en el Detalle */}
                     <div className="table-responsive" style={{ maxHeight: '480px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
-                        <table style={{ width: '100%', minWidth: '1000px', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                        <table style={{ width: '100%', minWidth: '1080px', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                             <thead>
-                                <tr style={{ background: 'rgba(0,0,0,0.03)', borderBottom: '1px solid var(--border-color)', position: 'sticky', top: 0, zIndex: 1 }}>
-                                    <th style={{ padding: '0.45rem 0.5rem', width: '32px' }}></th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)' }}>CÓDIGO</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)' }}>EMPLEADO</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)' }}>CARGO / DEPTO</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)' }}>CUENTA BANCARIA</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>DÍAS</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right' }}>S. BASE</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right' }}>S. QUINC.</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: '#0284c7', textAlign: 'right' }}>DEVENGADO</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: '#dc2626', textAlign: 'right' }}>DEDUCCIONES</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: '#059669', textAlign: 'right' }}>NETO A RECIBIR</th>
-                                    <th style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>RECIBO</th>
+                                <tr style={{ background: 'var(--card-bg)', borderBottom: '1px solid var(--border-color)', position: 'sticky', top: 0, zIndex: 10 }}>
+                                    <th style={{ padding: '0.5rem', width: '36px', textAlign: 'center', background: 'var(--card-bg)' }}></th>
+                                    <th style={{ padding: '0.5rem', width: '90px', minWidth: '90px', fontWeight: 700, color: 'var(--text-muted)', background: 'var(--card-bg)' }}>CÓDIGO</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '220px', fontWeight: 700, color: 'var(--text-muted)', background: 'var(--card-bg)' }}>EMPLEADO</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '140px', fontWeight: 700, color: 'var(--text-muted)', background: 'var(--card-bg)' }}>CARGO / DEPTO</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '130px', fontWeight: 700, color: 'var(--text-muted)', background: 'var(--card-bg)' }}>CUENTA BANCARIA</th>
+                                    <th style={{ padding: '0.5rem', width: '60px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', background: 'var(--card-bg)' }}>DÍAS</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '80px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right', background: 'var(--card-bg)' }}>S. BASE</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '80px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right', background: 'var(--card-bg)' }}>S. QUINC.</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '85px', fontWeight: 700, color: 'var(--primary)', textAlign: 'right', background: 'var(--card-bg)' }}>DEVENGADO</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '85px', fontWeight: 700, color: 'var(--danger)', textAlign: 'right', background: 'var(--card-bg)' }}>DEDUCCIONES</th>
+                                    <th style={{ padding: '0.5rem', minWidth: '95px', fontWeight: 700, color: 'var(--success)', textAlign: 'right', background: 'var(--card-bg)' }}>NETO A RECIBIR</th>
+                                    <th style={{ padding: '0.5rem', width: '55px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', background: 'var(--card-bg)' }}>RECIBO</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1475,7 +1470,7 @@ export default function PlanillasRRHH() {
                                                     onClick={() => setExpandedEmpId(isExpanded ? null : emp.id)}
                                                     style={{
                                                         borderBottom: isExpanded ? 'none' : '1px solid var(--border-color)',
-                                                        background: isExpanded ? 'rgba(99, 102, 241, 0.04)' : 'transparent',
+                                                        background: isExpanded ? 'var(--hover-bg)' : 'transparent',
                                                         cursor: 'pointer'
                                                     }}
                                                     className="hover-row"
@@ -1483,24 +1478,24 @@ export default function PlanillasRRHH() {
                                                     <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                         {isExpanded ? <ChevronUp size={15} color="var(--primary)" /> : <ChevronDown size={15} color="var(--text-muted)" />}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', fontWeight: 700, color: 'var(--text)' }}>
                                                         {emp.empleado_codigo}
                                                     </td>
                                                     <td style={{ padding: '0.45rem 0.5rem', fontWeight: 600 }}>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                                            <span style={{ color: 'var(--text-main)' }}>{emp.empleado_nombres} {emp.empleado_apellidos}</span>
+                                                            <span style={{ color: 'var(--text)' }}>{emp.empleado_nombres} {emp.empleado_apellidos}</span>
                                                             {emp.info_jornada?.tiene_ausencia && (
-                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.12)', color: '#dc2626', fontWeight: 700 }} title={`Faltó ${emp.info_jornada.dias_ausente} día(s). Descuento estimado: -${formatMoney(emp.info_jornada.descuento_ausencia)}`}>
+                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', fontWeight: 700 }} title={`Faltó ${emp.info_jornada.dias_ausente} día(s). Descuento estimado: -${formatMoney(emp.info_jornada.descuento_ausencia)}`}>
                                                                     ⚠️ Faltó {emp.info_jornada.dias_ausente}d
                                                                 </span>
                                                             )}
                                                             {emp.comparativa_previo?.es_nuevo && (
-                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.12)', color: '#2563eb', fontWeight: 700 }} title="Colaborador de nuevo ingreso respecto a quincena previa">
+                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', fontWeight: 700 }} title="Colaborador de nuevo ingreso respecto a quincena previa">
                                                                     ⭐ Nuevo
                                                                 </span>
                                                             )}
                                                             {emp.comparativa_previo?.tiene_variacion_abrupta && (
-                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.12)', color: '#7c3aed', fontWeight: 700 }} title={`Variación notoria: ${emp.comparativa_previo.variacion_monto > 0 ? '+' : ''}${formatMoney(emp.comparativa_previo.variacion_monto)} (${emp.comparativa_previo.variacion_pct > 0 ? '+' : ''}${emp.comparativa_previo.variacion_pct}%) vs quincena previa`}>
+                                                                <span style={{ fontSize: '0.67rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', fontWeight: 700 }} title={`Variación notoria: ${emp.comparativa_previo.variacion_monto > 0 ? '+' : ''}${formatMoney(emp.comparativa_previo.variacion_monto)} (${emp.comparativa_previo.variacion_pct > 0 ? '+' : ''}${emp.comparativa_previo.variacion_pct}%) vs quincena previa`}>
                                                                     📊 Var: {emp.comparativa_previo.variacion_pct > 0 ? '+' : ''}{emp.comparativa_previo.variacion_pct}%
                                                                 </span>
                                                             )}
@@ -1511,31 +1506,31 @@ export default function PlanillasRRHH() {
                                                         {emp.cargo_nombre || '—'}
                                                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{emp.departamento_nombre || emp.branch_nombre || '—'}</div>
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace', fontSize: '0.76rem', color: 'var(--text)' }}>
                                                         {emp.cuenta_planillera || '—'}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', color: 'var(--text)' }}>
                                                         {emp.info_jornada?.tiene_ausencia ? (
-                                                            <span style={{ color: '#dc2626', fontWeight: 800 }} title={`Laboró ${emp.info_jornada.dias_trabajados} de 15 días (Faltó ${emp.info_jornada.dias_ausente} días)`}>
+                                                            <span style={{ color: '#ef4444', fontWeight: 800 }} title={`Laboró ${emp.info_jornada.dias_trabajados} de 15 días (Faltó ${emp.info_jornada.dias_ausente} días)`}>
                                                                 {emp.info_jornada.dias_trabajados} / 15
                                                             </span>
                                                         ) : (
                                                             <span>{emp.dias_trabajados || 15}</span>
                                                         )}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: 'var(--text)' }}>
                                                         {formatMoney(emp.sueldo_base)}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: 'var(--text)' }}>
                                                         {formatMoney(emp.sueldo_quincenal)}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 700, color: '#0284c7' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 700, color: 'var(--primary)' }}>
                                                         {formatMoney(emp.total_percepciones)}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 700, color: '#dc2626' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 700, color: 'var(--danger)' }}>
                                                         {formatMoney(emp.total_deducciones)}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 800, color: '#059669' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 800, color: 'var(--success)' }}>
                                                         {formatMoney(emp.monto_recibir)}
                                                     </td>
                                                     <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
@@ -1543,7 +1538,7 @@ export default function PlanillasRRHH() {
                                                             type="button"
                                                             onClick={() => handleVerReciboIndividual(emp)}
                                                             className="icon-btn"
-                                                            style={{ padding: '0.25rem', borderRadius: '4px', color: '#7c3aed' }}
+                                                            style={{ padding: '0.25rem', borderRadius: '4px', color: '#a78bfa' }}
                                                             title="Ver e Imprimir Recibo Individual de Pago"
                                                         >
                                                             <ScrollText size={16} />
@@ -1553,30 +1548,30 @@ export default function PlanillasRRHH() {
 
                                                 {/* Fila expandida con desglose itemizado de jornada, ingresos extras, deducciones y comparativa */}
                                                 {isExpanded && (
-                                                    <tr style={{ background: 'rgba(99, 102, 241, 0.03)', borderBottom: '1px solid var(--border-color)' }}>
+                                                    <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
                                                         <td colSpan={12} style={{ padding: '0.75rem 1.25rem 1rem' }}>
                                                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '0.75rem' }}>
                                                                 
                                                                 {/* 1. Tarjeta Jornada Laboral & Faltas */}
-                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-main)', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                                <div style={{ background: 'var(--card-bg)', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)', textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                                                                         <Clock size={13} color="var(--primary)" />
                                                                         Jornada Laboral & Ausencias
                                                                     </div>
-                                                                    <div style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                    <div style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
                                                                         <span>Días trabajados en la quincena:</span>
-                                                                        <strong style={{ color: emp.info_jornada?.tiene_ausencia ? '#dc2626' : '#059669' }}>
+                                                                        <strong style={{ color: emp.info_jornada?.tiene_ausencia ? '#ef4444' : '#10b981' }}>
                                                                             {emp.info_jornada?.dias_trabajados || emp.dias_trabajados || 15} / 15 días
                                                                         </strong>
                                                                     </div>
                                                                     {emp.info_jornada?.tiene_ausencia ? (
                                                                         <div style={{
-                                                                            background: 'rgba(239, 68, 68, 0.08)',
-                                                                            border: '1px solid rgba(239, 68, 68, 0.25)',
+                                                                            background: 'rgba(239, 68, 68, 0.12)',
+                                                                            border: '1px solid rgba(239, 68, 68, 0.3)',
                                                                             borderRadius: '6px',
                                                                             padding: '0.45rem 0.6rem',
                                                                             fontSize: '0.73rem',
-                                                                            color: '#b91c1c',
+                                                                            color: '#ef4444',
                                                                             marginTop: '0.2rem'
                                                                         }}>
                                                                             <strong>⚠️ Ausencia detectada:</strong> Faltó {emp.info_jornada.dias_ausente} día(s).
@@ -1586,12 +1581,12 @@ export default function PlanillasRRHH() {
                                                                         </div>
                                                                     ) : (
                                                                         <div style={{
-                                                                            background: 'rgba(16, 185, 129, 0.08)',
-                                                                            border: '1px solid rgba(16, 185, 129, 0.2)',
+                                                                            background: 'rgba(16, 185, 129, 0.12)',
+                                                                            border: '1px solid rgba(16, 185, 129, 0.3)',
                                                                             borderRadius: '6px',
                                                                             padding: '0.45rem 0.6rem',
                                                                             fontSize: '0.73rem',
-                                                                            color: '#047857',
+                                                                            color: '#10b981',
                                                                             marginTop: '0.2rem'
                                                                         }}>
                                                                             ✓ Jornada quincenal regular completa (15 días sin ausencias).
@@ -1603,17 +1598,17 @@ export default function PlanillasRRHH() {
                                                                 </div>
 
                                                                 {/* 2. Tarjeta Ingresos Extras & Dinero Adicional */}
-                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0284c7', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                <div style={{ background: 'var(--card-bg)', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                                                            <TrendingUp size={13} color="#0284c7" />
+                                                                            <TrendingUp size={13} color="var(--primary)" />
                                                                             Ingresos Extras & Horas Extras
                                                                         </span>
                                                                         <span>{formatMoney(emp.ingresos_adic)}</span>
                                                                     </div>
 
                                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.74rem' }}>
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
                                                                             <span>Sueldo Quincenal Ordinario</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.sueldo_quincenal)}</span>
                                                                         </div>
@@ -1623,15 +1618,15 @@ export default function PlanillasRRHH() {
                                                                                 <div key={idx} style={{
                                                                                     display: 'flex',
                                                                                     flexDirection: 'column',
-                                                                                    background: 'rgba(2, 132, 199, 0.04)',
-                                                                                    border: '1px solid rgba(2, 132, 199, 0.15)',
+                                                                                    background: 'rgba(56, 189, 248, 0.08)',
+                                                                                    border: '1px solid rgba(56, 189, 248, 0.25)',
                                                                                     borderRadius: '5px',
                                                                                     padding: '0.35rem 0.5rem',
                                                                                     marginTop: '0.15rem'
                                                                                 }}>
                                                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                                        <strong style={{ color: '#0369a1' }}>{item.descripcion}</strong>
-                                                                                        <span style={{ fontWeight: 700, color: '#0284c7' }}>{formatMoney(item.monto)}</span>
+                                                                                        <strong style={{ color: 'var(--text)' }}>{item.descripcion}</strong>
+                                                                                        <span style={{ fontWeight: 700, color: 'var(--primary)' }}>{formatMoney(item.monto)}</span>
                                                                                     </div>
                                                                                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                                                                                         {item.detalle}
@@ -1644,7 +1639,7 @@ export default function PlanillasRRHH() {
                                                                             </div>
                                                                         )}
 
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #cbd5e1', paddingTop: '0.3rem', marginTop: '0.2rem', fontWeight: 700, color: '#0284c7' }}>
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border-color)', paddingTop: '0.3rem', marginTop: '0.2rem', fontWeight: 700, color: 'var(--primary)' }}>
                                                                             <span>Total Devengado</span>
                                                                             <span>{formatMoney(emp.total_percepciones)}</span>
                                                                         </div>
@@ -1652,25 +1647,25 @@ export default function PlanillasRRHH() {
                                                                 </div>
 
                                                                 {/* 3. Tarjeta Deducciones, Préstamos y Descuentos */}
-                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#dc2626', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                <div style={{ background: 'var(--card-bg)', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--danger)', textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                                                            <TrendingDown size={13} color="#dc2626" />
+                                                                            <TrendingDown size={13} color="var(--danger)" />
                                                                             Deducciones & Préstamos
                                                                         </span>
                                                                         <span>{formatMoney(emp.total_deducciones)}</span>
                                                                     </div>
 
                                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.74rem' }}>
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
                                                                             <span>ISSS (3%)</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.descuento_isss)}</span>
                                                                         </div>
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
                                                                             <span>AFP (7.25%)</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.descuento_afp)}</span>
                                                                         </div>
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
                                                                             <span>Renta</span>
                                                                             <span style={{ fontWeight: 600 }}>{formatMoney(emp.descuento_renta)}</span>
                                                                         </div>
@@ -1680,15 +1675,15 @@ export default function PlanillasRRHH() {
                                                                                 <div key={idx} style={{
                                                                                     display: 'flex',
                                                                                     flexDirection: 'column',
-                                                                                    background: 'rgba(220, 38, 38, 0.04)',
-                                                                                    border: '1px solid rgba(220, 38, 38, 0.15)',
+                                                                                    background: 'rgba(239, 68, 68, 0.08)',
+                                                                                    border: '1px solid rgba(239, 68, 68, 0.25)',
                                                                                     borderRadius: '5px',
                                                                                     padding: '0.35rem 0.5rem',
                                                                                     marginTop: '0.15rem'
                                                                                 }}>
                                                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                                        <strong style={{ color: '#991b1b' }}>{item.descripcion}</strong>
-                                                                                        <span style={{ fontWeight: 700, color: '#dc2626' }}>-{formatMoney(item.monto)}</span>
+                                                                                        <strong style={{ color: 'var(--text)' }}>{item.descripcion}</strong>
+                                                                                        <span style={{ fontWeight: 700, color: 'var(--danger)' }}>-{formatMoney(item.monto)}</span>
                                                                                     </div>
                                                                                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                                                                                         {item.detalle}
@@ -1697,7 +1692,7 @@ export default function PlanillasRRHH() {
                                                                             ))
                                                                         ) : null}
 
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #cbd5e1', paddingTop: '0.3rem', marginTop: '0.2rem', fontWeight: 700, color: '#dc2626' }}>
+                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border-color)', paddingTop: '0.3rem', marginTop: '0.2rem', fontWeight: 700, color: 'var(--danger)' }}>
                                                                             <span>Total Deducido</span>
                                                                             <span>-{formatMoney(emp.total_deducciones)}</span>
                                                                         </div>
@@ -1705,10 +1700,10 @@ export default function PlanillasRRHH() {
                                                                 </div>
 
                                                                 {/* 4. Tarjeta Líquido & Comparativa vs Quincena Anterior */}
-                                                                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#059669', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                <div style={{ background: 'var(--card-bg)', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--success)', textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                                                            <DollarSign size={13} color="#059669" />
+                                                                            <DollarSign size={13} color="var(--success)" />
                                                                             Neto & Comparativa
                                                                         </span>
                                                                         <strong style={{ fontSize: '0.85rem' }}>{formatMoney(emp.monto_recibir)}</strong>
@@ -1717,11 +1712,11 @@ export default function PlanillasRRHH() {
                                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.74rem' }}>
                                                                         {emp.comparativa_previo?.es_nuevo ? (
                                                                             <div style={{
-                                                                                background: 'rgba(59, 130, 246, 0.08)',
-                                                                                border: '1px solid rgba(59, 130, 246, 0.25)',
+                                                                                background: 'rgba(59, 130, 246, 0.12)',
+                                                                                border: '1px solid rgba(59, 130, 246, 0.3)',
                                                                                 borderRadius: '6px',
                                                                                 padding: '0.45rem 0.6rem',
-                                                                                color: '#1d4ed8'
+                                                                                color: 'var(--primary)'
                                                                             }}>
                                                                                 <strong>⭐ Nuevo Colaborador:</strong> No figuraba en la quincena previa evaluada.
                                                                             </div>
@@ -1729,12 +1724,12 @@ export default function PlanillasRRHH() {
                                                                             <>
                                                                                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
                                                                                     <span>Líquido Quincena Previa:</span>
-                                                                                    <span style={{ fontWeight: 600 }}>{formatMoney(emp.comparativa_previo.monto_recibir_previo)}</span>
+                                                                                    <span style={{ fontWeight: 600, color: 'var(--text)' }}>{formatMoney(emp.comparativa_previo.monto_recibir_previo)}</span>
                                                                                 </div>
-                                                                                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)' }}>
+                                                                                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text)' }}>
                                                                                     <span>Diferencia vs anterior:</span>
                                                                                     <strong style={{
-                                                                                        color: emp.comparativa_previo.variacion_monto > 0 ? '#059669' : emp.comparativa_previo.variacion_monto < 0 ? '#dc2626' : 'var(--text-main)'
+                                                                                        color: emp.comparativa_previo.variacion_monto > 0 ? '#10b981' : emp.comparativa_previo.variacion_monto < 0 ? '#ef4444' : 'var(--text)'
                                                                                     }}>
                                                                                         {emp.comparativa_previo.variacion_monto > 0 ? '+' : ''}
                                                                                         {formatMoney(emp.comparativa_previo.variacion_monto)} ({emp.comparativa_previo.variacion_pct > 0 ? '+' : ''}{emp.comparativa_previo.variacion_pct}%)
@@ -1743,12 +1738,12 @@ export default function PlanillasRRHH() {
 
                                                                                 {emp.comparativa_previo.tiene_variacion_abrupta && (
                                                                                     <div style={{
-                                                                                        background: 'rgba(139, 92, 246, 0.08)',
-                                                                                        border: '1px solid rgba(139, 92, 246, 0.25)',
+                                                                                        background: 'rgba(139, 92, 246, 0.12)',
+                                                                                        border: '1px solid rgba(139, 92, 246, 0.3)',
                                                                                         borderRadius: '6px',
                                                                                         padding: '0.4rem 0.55rem',
                                                                                         fontSize: '0.72rem',
-                                                                                        color: '#6d28d9',
+                                                                                        color: '#a78bfa',
                                                                                         marginTop: '0.2rem'
                                                                                     }}>
                                                                                         <strong>📊 Variación notoria:</strong> Variación superior al 20% en su salario líquido recibido respecto a la quincena anterior.
@@ -1766,11 +1761,11 @@ export default function PlanillasRRHH() {
                                                                                 {emp.alertas.map((al, aIdx) => (
                                                                                     <div key={aIdx} style={{
                                                                                         fontSize: '0.7rem',
-                                                                                        padding: '0.2rem 0.4rem',
+                                                                                        padding: '0.25rem 0.45rem',
                                                                                         borderRadius: '4px',
-                                                                                        background: al.tipo === 'critica' ? '#fef2f2' : al.tipo === 'advertencia' ? '#fffbeb' : '#f5f3ff',
-                                                                                        color: al.tipo === 'critica' ? '#991b1b' : al.tipo === 'advertencia' ? '#92400e' : '#5b21b6',
-                                                                                        border: `1px solid ${al.tipo === 'critica' ? '#fecaca' : al.tipo === 'advertencia' ? '#fde68a' : '#ddd6fe'}`
+                                                                                        background: al.tipo === 'critica' ? 'rgba(239, 68, 68, 0.15)' : al.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(139, 92, 246, 0.15)',
+                                                                                        color: al.tipo === 'critica' ? '#ef4444' : al.tipo === 'advertencia' ? '#f59e0b' : '#a78bfa',
+                                                                                        border: `1px solid ${al.tipo === 'critica' ? 'rgba(239, 68, 68, 0.35)' : al.tipo === 'advertencia' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(139, 92, 246, 0.35)'}`
                                                                                     }}>
                                                                                         <strong>{al.titulo}:</strong> {al.descripcion}
                                                                                     </div>
@@ -1805,17 +1800,14 @@ export default function PlanillasRRHH() {
                         <button
                             type="button"
                             onClick={() => setExportModalPeriodo(null)}
+                            className="btn-secondary"
                             style={{
                                 height: '36px',
                                 padding: '0 1rem',
                                 fontSize: '0.825rem',
                                 fontWeight: 600,
                                 borderRadius: '6px',
-                                background: 'rgba(255, 255, 255, 0.08)',
-                                color: '#f1f5f9',
-                                border: '1px solid rgba(255, 255, 255, 0.2)',
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease'
+                                cursor: 'pointer'
                             }}
                         >
                             Cancelar
@@ -1824,22 +1816,18 @@ export default function PlanillasRRHH() {
                             type="button"
                             onClick={handleDescargarBancario}
                             disabled={exportingBancario}
+                            className="btn-primary"
                             style={{
                                 height: '36px',
                                 padding: '0 1.25rem',
                                 fontSize: '0.825rem',
                                 fontWeight: 700,
                                 borderRadius: '6px',
-                                background: '#2563eb',
-                                color: '#ffffff',
-                                border: 'none',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '0.45rem',
                                 cursor: exportingBancario ? 'not-allowed' : 'pointer',
-                                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)',
-                                opacity: exportingBancario ? 0.7 : 1,
-                                transition: 'all 0.15s ease'
+                                opacity: exportingBancario ? 0.7 : 1
                             }}
                         >
                             <Download size={15} />
@@ -1876,17 +1864,17 @@ export default function PlanillasRRHH() {
                                     textAlign: 'left',
                                     cursor: 'pointer',
                                     transition: 'all 0.2s ease',
-                                    border: formatoBancario === 'csv' ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
-                                    background: formatoBancario === 'csv' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(255, 255, 255, 0.04)',
-                                    boxShadow: formatoBancario === 'csv' ? '0 0 10px rgba(59, 130, 246, 0.3)' : 'none'
+                                    border: formatoBancario === 'csv' ? '2px solid var(--primary)' : '1px solid var(--border-color)',
+                                    background: formatoBancario === 'csv' ? 'rgba(59, 130, 246, 0.12)' : 'var(--card-bg)',
+                                    boxShadow: formatoBancario === 'csv' ? '0 0 10px rgba(59, 130, 246, 0.25)' : 'none'
                                 }}
                             >
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.4rem' }}>
                                     <div style={{
                                         padding: '0.4rem',
                                         borderRadius: '6px',
-                                        background: formatoBancario === 'csv' ? '#2563eb' : 'rgba(255, 255, 255, 0.08)',
-                                        color: formatoBancario === 'csv' ? '#ffffff' : '#94a3b8',
+                                        background: formatoBancario === 'csv' ? 'var(--primary)' : 'var(--hover-bg)',
+                                        color: formatoBancario === 'csv' ? 'var(--primary-text, #ffffff)' : 'var(--text-muted)',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center'
@@ -1894,13 +1882,13 @@ export default function PlanillasRRHH() {
                                         <FileSpreadsheet size={16} />
                                     </div>
                                     {formatoBancario === 'csv' && (
-                                        <Check size={16} style={{ color: '#60a5fa' }} />
+                                        <Check size={16} style={{ color: 'var(--primary)' }} />
                                     )}
                                 </div>
-                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: '#f8fafc' }}>
+                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: 'var(--text)' }}>
                                     Solo CSV (.csv)
                                 </span>
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem', lineHeight: 1.25 }}>
                                     Para Excel u hojas de cálculo
                                 </span>
                             </button>
@@ -1918,17 +1906,17 @@ export default function PlanillasRRHH() {
                                     textAlign: 'left',
                                     cursor: 'pointer',
                                     transition: 'all 0.2s ease',
-                                    border: formatoBancario === 'txt' ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
-                                    background: formatoBancario === 'txt' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(255, 255, 255, 0.04)',
-                                    boxShadow: formatoBancario === 'txt' ? '0 0 10px rgba(59, 130, 246, 0.3)' : 'none'
+                                    border: formatoBancario === 'txt' ? '2px solid var(--primary)' : '1px solid var(--border-color)',
+                                    background: formatoBancario === 'txt' ? 'rgba(59, 130, 246, 0.12)' : 'var(--card-bg)',
+                                    boxShadow: formatoBancario === 'txt' ? '0 0 10px rgba(59, 130, 246, 0.25)' : 'none'
                                 }}
                             >
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.4rem' }}>
                                     <div style={{
                                         padding: '0.4rem',
                                         borderRadius: '6px',
-                                        background: formatoBancario === 'txt' ? '#2563eb' : 'rgba(255, 255, 255, 0.08)',
-                                        color: formatoBancario === 'txt' ? '#ffffff' : '#94a3b8',
+                                        background: formatoBancario === 'txt' ? 'var(--primary)' : 'var(--hover-bg)',
+                                        color: formatoBancario === 'txt' ? 'var(--primary-text, #ffffff)' : 'var(--text-muted)',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center'
@@ -1936,13 +1924,13 @@ export default function PlanillasRRHH() {
                                         <FileText size={16} />
                                     </div>
                                     {formatoBancario === 'txt' && (
-                                        <Check size={16} style={{ color: '#60a5fa' }} />
+                                        <Check size={16} style={{ color: 'var(--primary)' }} />
                                     )}
                                 </div>
-                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: '#f8fafc' }}>
+                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: 'var(--text)' }}>
                                     Solo TXT (.txt)
                                 </span>
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem', lineHeight: 1.25 }}>
                                     Texto plano banca en línea
                                 </span>
                             </button>
@@ -1960,17 +1948,17 @@ export default function PlanillasRRHH() {
                                     textAlign: 'left',
                                     cursor: 'pointer',
                                     transition: 'all 0.2s ease',
-                                    border: formatoBancario === 'ambos' ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
-                                    background: formatoBancario === 'ambos' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(255, 255, 255, 0.04)',
-                                    boxShadow: formatoBancario === 'ambos' ? '0 0 10px rgba(59, 130, 246, 0.3)' : 'none'
+                                    border: formatoBancario === 'ambos' ? '2px solid var(--primary)' : '1px solid var(--border-color)',
+                                    background: formatoBancario === 'ambos' ? 'rgba(59, 130, 246, 0.12)' : 'var(--card-bg)',
+                                    boxShadow: formatoBancario === 'ambos' ? '0 0 10px rgba(59, 130, 246, 0.25)' : 'none'
                                 }}
                             >
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.4rem' }}>
                                     <div style={{
                                         padding: '0.4rem',
                                         borderRadius: '6px',
-                                        background: formatoBancario === 'ambos' ? '#2563eb' : 'rgba(255, 255, 255, 0.08)',
-                                        color: formatoBancario === 'ambos' ? '#ffffff' : '#94a3b8',
+                                        background: formatoBancario === 'ambos' ? 'var(--primary)' : 'var(--hover-bg)',
+                                        color: formatoBancario === 'ambos' ? 'var(--primary-text, #ffffff)' : 'var(--text-muted)',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center'
@@ -1978,18 +1966,18 @@ export default function PlanillasRRHH() {
                                         <Files size={16} />
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                        <span style={{ fontSize: '0.62rem', fontWeight: 800, padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.25)', color: '#34d399', textTransform: 'uppercase' }}>
+                                        <span style={{ fontSize: '0.62rem', fontWeight: 800, padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.2)', color: 'var(--success)', textTransform: 'uppercase' }}>
                                             Recomendado
                                         </span>
                                         {formatoBancario === 'ambos' && (
-                                            <Check size={16} style={{ color: '#60a5fa' }} />
+                                            <Check size={16} style={{ color: 'var(--primary)' }} />
                                         )}
                                     </div>
                                 </div>
-                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: '#f8fafc' }}>
+                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: 'var(--text)' }}>
                                     Ambos (.csv + .txt)
                                 </span>
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem', lineHeight: 1.25 }}>
                                     Descarga simultánea de ambos
                                 </span>
                             </button>
@@ -2004,7 +1992,7 @@ export default function PlanillasRRHH() {
                             <select
                                 value={exportBranchId}
                                 onChange={(e) => setExportBranchId(e.target.value)}
-                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.15)', background: 'var(--card-bg, #1e293b)', color: '#f8fafc' }}
+                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'var(--text)' }}
                             >
                                 <option value="">Todas las sucursales</option>
                                 {branchesAndDeptos.branches.map(b => (
@@ -2022,7 +2010,7 @@ export default function PlanillasRRHH() {
                             <select
                                 value={exportDeptoId}
                                 onChange={(e) => setExportDeptoId(e.target.value)}
-                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.15)', background: 'var(--card-bg, #1e293b)', color: '#f8fafc' }}
+                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'var(--text)' }}
                             >
                                 <option value="">Todos los departamentos</option>
                                 {branchesAndDeptos.departamentos.map(d => (
@@ -2045,12 +2033,12 @@ export default function PlanillasRRHH() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', fontSize: '0.85rem' }}>
                             <span>Total Planilla: <strong>{formatMoney(pagoModalPeriodo?.total_neto)}</strong></span>
                             <span>Total a Dispersar: <strong style={{
-                                color: Math.abs(pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0) - parseFloat(pagoModalPeriodo?.total_neto || 0)) < 0.05 ? '#059669' : '#dc2626'
+                                color: Math.abs(pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0) - parseFloat(pagoModalPeriodo?.total_neto || 0)) < 0.05 ? 'var(--success)' : 'var(--danger)'
                             }}>
                                 {formatMoney(pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0))}
                             </strong></span>
                             {Math.abs(pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0) - parseFloat(pagoModalPeriodo?.total_neto || 0)) >= 0.05 && (
-                                <span style={{ fontSize: '0.78rem', color: '#dc2626', fontWeight: 600 }}>
+                                <span style={{ fontSize: '0.78rem', color: 'var(--danger)', fontWeight: 600 }}>
                                     (Diferencia: {formatMoney(parseFloat(pagoModalPeriodo?.total_neto || 0) - pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0))})
                                 </span>
                             )}
@@ -2077,8 +2065,8 @@ export default function PlanillasRRHH() {
                                     display: 'inline-flex',
                                     alignItems: 'center',
                                     gap: '0.4rem',
-                                    background: '#059669',
-                                    borderColor: '#059669',
+                                    background: 'var(--success)',
+                                    borderColor: 'var(--success)',
                                     cursor: 'pointer'
                                 }}
                             >
@@ -2103,15 +2091,15 @@ export default function PlanillasRRHH() {
                         gap: '0.75rem'
                     }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                            <Info size={18} color="#2563eb" />
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-main)' }}>
+                            <Info size={18} color="var(--primary)" />
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text)' }}>
                                 <strong>Afectación Bancaria Automática:</strong> Al confirmar, se insertarán cargos en las cuentas seleccionadas con <code>fecha_aplicado = NULL</code> para que sean <strong>conciliables en el módulo de Bancos &gt; Conciliación Bancaria</strong>. La planilla pasará a estado <strong>Pagada</strong>.
                             </div>
                         </div>
                         <div style={{
                             padding: '0.3rem 0.65rem',
                             borderRadius: '6px',
-                            background: '#059669',
+                            background: 'var(--success)',
                             color: '#ffffff',
                             fontWeight: 800,
                             fontSize: '0.9rem'
@@ -2161,7 +2149,7 @@ export default function PlanillasRRHH() {
                                             padding: '0.85rem',
                                             borderRadius: '8px',
                                             border: '1px solid var(--border-color)',
-                                            background: 'var(--card-bg, #fff)'
+                                            background: 'var(--card-bg)'
                                         }}
                                     >
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
@@ -2173,7 +2161,7 @@ export default function PlanillasRRHH() {
                                                     type="button"
                                                     onClick={() => handleRemovePagoRow(idx)}
                                                     className="icon-btn"
-                                                    style={{ padding: '0.25rem', color: '#dc2626' }}
+                                                    style={{ padding: '0.25rem', color: 'var(--danger)' }}
                                                     title="Eliminar esta forma de pago"
                                                 >
                                                     <Trash2 size={15} />
@@ -2197,8 +2185,8 @@ export default function PlanillasRRHH() {
                                                         padding: '0 0.5rem',
                                                         borderRadius: '6px',
                                                         border: '1px solid var(--border-color)',
-                                                        background: 'var(--card-bg, #fff)',
-                                                        color: 'var(--text-main)',
+                                                        background: 'var(--card-bg)',
+                                                        color: 'var(--text)',
                                                         fontWeight: 500
                                                     }}
                                                 >
@@ -2226,8 +2214,8 @@ export default function PlanillasRRHH() {
                                                         padding: '0 0.5rem',
                                                         borderRadius: '6px',
                                                         border: '1px solid var(--border-color)',
-                                                        background: 'var(--card-bg, #fff)',
-                                                        color: 'var(--text-main)'
+                                                        background: 'var(--card-bg)',
+                                                        color: 'var(--text)'
                                                     }}
                                                 >
                                                     <option value="Transferencia">Transferencia Bancaria (TR)</option>
@@ -2253,11 +2241,11 @@ export default function PlanillasRRHH() {
                                                         height: '36px',
                                                         fontSize: '0.85rem',
                                                         fontWeight: 700,
-                                                        color: '#059669',
+                                                        color: 'var(--success)',
                                                         padding: '0 0.5rem',
                                                         borderRadius: '6px',
                                                         border: '1px solid var(--border-color)',
-                                                        background: 'var(--card-bg, #fff)'
+                                                        background: 'var(--card-bg)'
                                                     }}
                                                 />
                                             </div>
@@ -2279,8 +2267,8 @@ export default function PlanillasRRHH() {
                                                         padding: '0 0.5rem',
                                                         borderRadius: '6px',
                                                         border: '1px solid var(--border-color)',
-                                                        background: 'var(--card-bg, #fff)',
-                                                        color: 'var(--text-main)'
+                                                        background: 'var(--card-bg)',
+                                                        color: 'var(--text)'
                                                     }}
                                                 />
                                             </div>
@@ -2301,8 +2289,8 @@ export default function PlanillasRRHH() {
                                                         padding: '0 0.5rem',
                                                         borderRadius: '6px',
                                                         border: '1px solid var(--border-color)',
-                                                        background: 'var(--card-bg, #fff)',
-                                                        color: 'var(--text-main)'
+                                                        background: 'var(--card-bg)',
+                                                        color: 'var(--text)'
                                                     }}
                                                 />
                                             </div>
@@ -2341,7 +2329,7 @@ export default function PlanillasRRHH() {
                         background: 'rgba(16, 185, 129, 0.08)',
                         border: '1px solid rgba(16, 185, 129, 0.25)',
                         fontSize: '0.8rem',
-                        color: '#047857',
+                        color: 'var(--success)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
@@ -2371,7 +2359,7 @@ export default function PlanillasRRHH() {
                         <div className="table-responsive" style={{ border: '1px solid var(--border-color)', borderRadius: '6px' }}>
                             <table style={{ width: '100%', minWidth: '650px', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>
-                                    <tr style={{ background: 'rgba(0,0,0,0.03)', borderBottom: '1px solid var(--border-color)' }}>
+                                    <tr style={{ background: 'var(--hover-bg)', borderBottom: '1px solid var(--border-color)' }}>
                                         <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha Pago</th>
                                         <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Cuenta Bancaria</th>
                                         <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Forma Pago</th>
@@ -2390,10 +2378,10 @@ export default function PlanillasRRHH() {
                                         };
                                         return (
                                             <tr key={p.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem', whiteSpace: 'nowrap', color: 'var(--text)' }}>
                                                     {p.fecha_pago ? String(p.fecha_pago).slice(0, 10) : ''}
                                                 </td>
-                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 600 }}>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)' }}>
                                                     {formatCuentaLabel(ctaObj)}
                                                 </td>
                                                 <td style={{ padding: '0.5rem', fontSize: '0.8rem' }}>
@@ -2403,7 +2391,7 @@ export default function PlanillasRRHH() {
                                                         fontSize: '0.72rem',
                                                         fontWeight: 600,
                                                         background: 'rgba(59, 130, 246, 0.1)',
-                                                        color: '#2563eb'
+                                                        color: 'var(--primary)'
                                                     }}>
                                                         {p.forma_pago}
                                                     </span>
@@ -2411,7 +2399,7 @@ export default function PlanillasRRHH() {
                                                 <td style={{ padding: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                                     {p.documento || 'Sin doc'}
                                                 </td>
-                                                <td style={{ padding: '0.5rem', fontSize: '0.825rem', fontWeight: 700, textAlign: 'right', color: '#059669' }}>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.825rem', fontWeight: 700, textAlign: 'right', color: 'var(--success)' }}>
                                                     {formatMoney(p.monto)}
                                                 </td>
                                                 <td style={{ padding: '0.5rem', textAlign: 'center' }}>
@@ -2422,7 +2410,7 @@ export default function PlanillasRRHH() {
                                                             padding: '0.15rem 0.45rem',
                                                             borderRadius: '4px',
                                                             background: 'rgba(16, 185, 129, 0.15)',
-                                                            color: '#047857'
+                                                            color: 'var(--success)'
                                                         }} title={`Conciliado el ${p.fecha_aplicado}`}>
                                                             Conciliado ({p.fecha_aplicado ? String(p.fecha_aplicado).slice(0, 10) : ''})
                                                         </span>
@@ -2433,7 +2421,7 @@ export default function PlanillasRRHH() {
                                                             padding: '0.15rem 0.45rem',
                                                             borderRadius: '4px',
                                                             background: 'rgba(245, 158, 11, 0.15)',
-                                                            color: '#b45309'
+                                                            color: 'var(--warning)'
                                                         }} title="Disponible en Conciliación Bancaria para ser conciliado">
                                                             Pendiente de Conciliar
                                                         </span>
@@ -2447,7 +2435,7 @@ export default function PlanillasRRHH() {
                                                         className="icon-btn"
                                                         style={{
                                                             padding: '0.3rem',
-                                                            color: p.es_conciliado ? '#cbd5e1' : '#dc2626',
+                                                            color: p.es_conciliado ? 'var(--text-muted)' : 'var(--danger)',
                                                             cursor: p.es_conciliado ? 'not-allowed' : 'pointer'
                                                         }}
                                                         title={p.es_conciliado ? 'No se puede anular porque ya fue conciliado en Bancos' : 'Anular pago y eliminar movimiento bancario'}

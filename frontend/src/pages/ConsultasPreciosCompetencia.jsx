@@ -851,7 +851,7 @@ const ConsultasPreciosCompetencia = () => {
                                     borderRadius: '6px',
                                     border: '1px solid var(--border)',
                                     backgroundColor: serviceFilter === 'ALL' ? 'rgba(255,255,255,0.1)' : 'transparent',
-                                    color: serviceFilter === 'ALL' ? 'var(--text-main)' : 'var(--text-muted)',
+                                    color: serviceFilter === 'ALL' ? 'var(--text)' : 'var(--text-muted)',
                                     cursor: 'pointer'
                                 }}
                             >
@@ -1638,7 +1638,7 @@ const ConsultasPreciosCompetencia = () => {
                             }}
                         >
                             <Upload size={44} style={{ color: 'var(--primary)', opacity: 0.8, marginBottom: '0.75rem' }} />
-                            <h4 style={{ margin: 0, color: 'var(--text-main)', fontSize: '1rem' }}>
+                            <h4 style={{ margin: 0, color: 'var(--text)', fontSize: '1rem' }}>
                                 Paso 2: Arrastra o selecciona el archivo CSV descargado
                             </h4>
                             <p style={{ margin: '0.4rem 0 1.25rem 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>

@@ -171,7 +171,7 @@ export default function ReportPreviewModal({
         >
             <div
                 style={{
-                    backgroundColor: '#ffffff',
+                    backgroundColor: 'var(--card-bg)',
                     width: '95vw',
                     maxWidth: '1440px',
                     height: '92vh',
@@ -180,15 +180,15 @@ export default function ReportPreviewModal({
                     display: 'flex',
                     flexDirection: 'column',
                     overflow: 'hidden',
-                    border: '1px solid rgba(255, 255, 255, 0.2)'
+                    border: '1px solid var(--modal-border)'
                 }}
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
                 <div
                     style={{
-                        backgroundColor: '#ffffff',
-                        borderBottom: '1px solid #e5e7eb',
+                        backgroundColor: 'var(--card-bg)',
+                        borderBottom: '1px solid var(--border-color)',
                         padding: '0.65rem 1.25rem',
                         display: 'flex',
                         alignItems: 'center',
@@ -204,11 +204,11 @@ export default function ReportPreviewModal({
                                 width: '40px',
                                 height: '40px',
                                 borderRadius: '10px',
-                                backgroundColor: '#4f46e5',
+                                backgroundColor: 'var(--primary)',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                color: '#ffffff',
+                                color: 'var(--primary-text, #ffffff)',
                                 flexShrink: 0
                             }}
                         >
@@ -216,14 +216,14 @@ export default function ReportPreviewModal({
                         </div>
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                                <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#111827', lineHeight: 1.2 }}>
+                                <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>
                                     {title}
                                 </h2>
                                 {badge && (
                                     <span
                                         style={{
-                                            backgroundColor: '#e0e7ff',
-                                            color: '#4338ca',
+                                            backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                                            color: 'var(--primary)',
                                             padding: '0.15rem 0.55rem',
                                             borderRadius: '9999px',
                                             fontSize: '0.72rem',
@@ -237,7 +237,7 @@ export default function ReportPreviewModal({
                                 )}
                             </div>
                             {subtitle && (
-                                <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.8rem', color: '#6b7280', lineHeight: 1.2 }}>
+                                <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.2 }}>
                                     {subtitle}
                                 </p>
                             )}
@@ -251,8 +251,8 @@ export default function ReportPreviewModal({
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: '0.35rem',
-                                backgroundColor: '#f9fafb',
-                                border: '1px solid #e5e7eb',
+                                backgroundColor: 'var(--bg-secondary)',
+                                border: '1px solid var(--border-color)',
                                 borderRadius: '8px',
                                 padding: '0.2rem 0.5rem'
                             }}
@@ -269,13 +269,14 @@ export default function ReportPreviewModal({
                                     padding: '0.25rem',
                                     display: 'flex',
                                     alignItems: 'center',
-                                    color: currentPage <= 1 ? '#d1d5db' : '#374151',
+                                    color: currentPage <= 1 ? 'var(--text-muted)' : 'var(--text)',
+                                    opacity: currentPage <= 1 ? 0.4 : 1,
                                     borderRadius: '4px'
                                 }}
                             >
                                 <ChevronLeft size={18} />
                             </button>
-                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6b7280', letterSpacing: '0.04em' }}>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
                                 PÁG.
                             </span>
                             <input
@@ -288,16 +289,16 @@ export default function ReportPreviewModal({
                                     width: '42px',
                                     height: '26px',
                                     textAlign: 'center',
-                                    border: '1px solid #d1d5db',
+                                    border: '1px solid var(--border-color)',
                                     borderRadius: '4px',
                                     fontSize: '0.825rem',
                                     fontWeight: 600,
                                     padding: 0,
-                                    backgroundColor: '#ffffff',
-                                    color: '#111827'
+                                    backgroundColor: 'var(--card-bg)',
+                                    color: 'var(--text)'
                                 }}
                             />
-                            <span style={{ fontSize: '0.825rem', color: '#9ca3af', fontWeight: 600 }}>
+                            <span style={{ fontSize: '0.825rem', color: 'var(--text-muted)', fontWeight: 600 }}>
                                 / {totalPages}
                             </span>
                             <button
@@ -312,7 +313,8 @@ export default function ReportPreviewModal({
                                     padding: '0.25rem',
                                     display: 'flex',
                                     alignItems: 'center',
-                                    color: currentPage >= totalPages ? '#d1d5db' : '#374151',
+                                    color: currentPage >= totalPages ? 'var(--text-muted)' : 'var(--text)',
+                                    opacity: currentPage >= totalPages ? 0.4 : 1,
                                     borderRadius: '4px'
                                 }}
                             >
@@ -327,6 +329,7 @@ export default function ReportPreviewModal({
                             type="button"
                             onClick={handleDownload}
                             title="Descargar documento PDF"
+                            className="btn-secondary"
                             style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
@@ -334,13 +337,9 @@ export default function ReportPreviewModal({
                                 height: '34px',
                                 padding: '0 0.85rem',
                                 borderRadius: '8px',
-                                border: '1px solid #d1d5db',
-                                backgroundColor: '#ffffff',
-                                color: '#374151',
                                 fontSize: '0.825rem',
                                 fontWeight: 600,
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease'
+                                cursor: 'pointer'
                             }}
                         >
                             <Download size={15} />
@@ -351,6 +350,7 @@ export default function ReportPreviewModal({
                             type="button"
                             onClick={handlePrint}
                             title="Imprimir documento"
+                            className="btn-secondary"
                             style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
@@ -358,13 +358,9 @@ export default function ReportPreviewModal({
                                 height: '34px',
                                 padding: '0 0.85rem',
                                 borderRadius: '8px',
-                                border: '1px solid #d1d5db',
-                                backgroundColor: '#ffffff',
-                                color: '#374151',
                                 fontSize: '0.825rem',
                                 fontWeight: 600,
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease'
+                                cursor: 'pointer'
                             }}
                         >
                             <Printer size={15} />
@@ -378,7 +374,7 @@ export default function ReportPreviewModal({
                             style={{
                                 background: 'none',
                                 border: 'none',
-                                color: '#6b7280',
+                                color: 'var(--text-muted)',
                                 cursor: 'pointer',
                                 padding: '0.4rem',
                                 display: 'flex',
@@ -396,7 +392,7 @@ export default function ReportPreviewModal({
                             style={{
                                 background: 'none',
                                 border: 'none',
-                                color: '#6b7280',
+                                color: 'var(--text-muted)',
                                 cursor: 'pointer',
                                 padding: '0.4rem',
                                 display: 'flex',
@@ -426,7 +422,7 @@ export default function ReportPreviewModal({
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 height: '100%',
-                                color: '#9ca3af'
+                                color: 'var(--text-muted)'
                             }}
                         >
                             <FileText size={48} style={{ opacity: 0.5, marginBottom: '0.5rem' }} />
@@ -438,8 +434,8 @@ export default function ReportPreviewModal({
                 {/* Footer */}
                 <div
                     style={{
-                        backgroundColor: '#ffffff',
-                        borderTop: '1px solid #e5e7eb',
+                        backgroundColor: 'var(--card-bg)',
+                        borderTop: '1px solid var(--border-color)',
                         padding: '0.55rem 1.25rem',
                         display: 'flex',
                         alignItems: 'center',
@@ -448,31 +444,29 @@ export default function ReportPreviewModal({
                         flexWrap: 'wrap'
                     }}
                 >
-                    <span style={{ color: '#6b7280', fontSize: '0.8rem' }}>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                         {footerInfo}
                     </span>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <span style={{ fontSize: '0.75rem', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <kbd style={{ padding: '0.1rem 0.35rem', backgroundColor: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '4px', fontSize: '0.7rem' }}>←</kbd>
-                            <kbd style={{ padding: '0.1rem 0.35rem', backgroundColor: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '4px', fontSize: '0.7rem' }}>→</kbd>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <kbd style={{ padding: '0.1rem 0.35rem', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '0.7rem', color: 'var(--text)' }}>←</kbd>
+                            <kbd style={{ padding: '0.1rem 0.35rem', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '0.7rem', color: 'var(--text)' }}>→</kbd>
                             <span>para cambiar página</span>
                         </span>
 
-                        <span style={{ fontSize: '0.75rem', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <kbd style={{ padding: '0.1rem 0.35rem', backgroundColor: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '4px', fontSize: '0.7rem' }}>ESC</kbd>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <kbd style={{ padding: '0.1rem 0.35rem', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '0.7rem', color: 'var(--text)' }}>ESC</kbd>
                             <span>para salir</span>
                         </span>
 
                         <button
                             type="button"
                             onClick={onClose}
+                            className="btn-secondary"
                             style={{
                                 padding: '0.35rem 0.95rem',
                                 borderRadius: '6px',
-                                border: '1px solid #d1d5db',
-                                backgroundColor: '#ffffff',
-                                color: '#374151',
                                 fontSize: '0.825rem',
                                 fontWeight: 600,
                                 cursor: 'pointer'

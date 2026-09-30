@@ -20,6 +20,8 @@
   --border-color: var(--border);
   --bg-card: #1e293b;
   --bg-secondary: #0f172a;
+  --text-main: var(--text);
+  --text-secondary: var(--text-muted);
   color-scheme: dark;
 }
 
