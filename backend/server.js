@@ -142,6 +142,7 @@ const inteligenciaRoutes = require('./routes/inteligencia');
 const tasksRoutes = require('./routes/tasks');
 const notificationsRoutes = require('./routes/notifications');
 const githubChangesRoutes = require('./routes/githubChanges').router;
+const rrhhRoutes = require('./routes/rrhh');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
@@ -151,6 +152,7 @@ app.use('/api/seguridad/cambios-github', githubChangesRoutes);
 app.use('/api/bancos/conciliacion', conciliacionRoutes);
 app.use('/api/bancos', bancosRoutes);
 app.use('/api/finanzas', finanzasRoutes);
+app.use('/api/rrhh', rrhhRoutes);
 app.use('/api/inteligencia', inteligenciaRoutes);
 app.use('/api', catalogosRoutes); // Carriers, Tankers
 app.use('/api', operacionesRoutes); // Dashboard, Operaciones

@@ -77,6 +77,10 @@ export const finanzasMenu = [
     { name: 'Resumen y Vencimientos', path: '/dashboard/finanzas/resumen', icon: BarChart3 },
 ];
 
+export const rrhhMenu = [
+    { name: 'Planillas', path: '/dashboard/rrhh/planillas', icon: Users },
+];
+
 export const securityItems = [
     { name: 'Usuarios', path: '/dashboard/users', icon: Users },
     { name: 'Permisos', path: '/dashboard/permissions', icon: Shield },
@@ -101,6 +105,7 @@ export const allNavCategories = [
     { title: 'Bancos', items: bancosMenu },
     { title: 'Bancos - Reportes', items: bancosReportes },
     { title: 'Finanzas', items: finanzasMenu },
+    { title: 'Recursos Humanos', items: rrhhMenu },
     { title: 'Operaciones', items: operacionesMenu },
     { title: 'Consultas - Estaciones', items: consultasEstaciones },
     { title: 'Consultas - Otras', items: consultasOtras },

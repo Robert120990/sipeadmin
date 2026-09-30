@@ -52,7 +52,8 @@ import {
     EstrategiaRentabilidad,
     EstrategiaCreditos,
     Tareas,
-    ConsultaCambiosGithub
+    ConsultaCambiosGithub,
+    PlanillasRRHH
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -129,6 +130,7 @@ function App() {
                                     <Route path="finanzas/planes-mantenimiento" element={<PermissionRoute pathKey="/dashboard/finanzas/planes-mantenimiento"><FinanzasPlanesMantenimiento /></PermissionRoute>} />
                                     <Route path="finanzas/asesor" element={<PermissionRoute pathKey="/dashboard/finanzas/asesor"><FinanzasAsesor /></PermissionRoute>} />
                                     <Route path="finanzas/resumen" element={<PermissionRoute pathKey="/dashboard/finanzas/resumen"><FinanzasResumen /></PermissionRoute>} />
+                                    <Route path="rrhh/planillas" element={<PermissionRoute pathKey="/dashboard/rrhh/planillas"><PlanillasRRHH /></PermissionRoute>} />
                                     <Route path="estrategia/torre-control" element={<PermissionRoute pathKey="/dashboard/estrategia/torre-control"><EstrategiaTorreControl /></PermissionRoute>} />
                                     <Route path="estrategia/combustible" element={<PermissionRoute pathKey="/dashboard/estrategia/combustible"><EstrategiaCombustible /></PermissionRoute>} />
                                     <Route path="estrategia/flujo-caja" element={<PermissionRoute pathKey="/dashboard/estrategia/flujo-caja"><EstrategiaFlujoCaja /></PermissionRoute>} />

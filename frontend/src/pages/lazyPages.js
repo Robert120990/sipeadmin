@@ -43,3 +43,4 @@ export const EstrategiaRentabilidad = lazy(() => import('./EstrategiaRentabilida
 export const EstrategiaCreditos = lazy(() => import('./EstrategiaCreditos'));
 export const Tareas = lazy(() => import('./Tareas'));
 export const ConsultaCambiosGithub = lazy(() => import('./ConsultaCambiosGithub'));
+export const PlanillasRRHH = lazy(() => import('./PlanillasRRHH'));

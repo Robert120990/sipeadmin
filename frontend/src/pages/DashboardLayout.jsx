@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase } from 'lucide-react';
+import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase, Users as UsersIcon } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import NotificationBell from '../components/NotificationBell';
-import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
+import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, rrhhMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering (Code-split with lazy)
 import LoadingFallback from '../components/LoadingFallback';
@@ -51,7 +51,8 @@ import {
     EstrategiaRentabilidad,
     EstrategiaCreditos,
     Tareas,
-    ConsultaCambiosGithub
+    ConsultaCambiosGithub,
+    PlanillasRRHH
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -75,6 +76,7 @@ export default function DashboardLayout() {
         bancos: false,
         bancosReportes: false,
         finanzas: false,
+        rrhh: false,
         configuracion: false
     });
 
@@ -162,6 +164,7 @@ export default function DashboardLayout() {
         '/dashboard/finanzas/planes-mantenimiento': <FinanzasPlanesMantenimiento />,
         '/dashboard/finanzas/asesor': <FinanzasAsesor />,
         '/dashboard/finanzas/resumen': <FinanzasResumen />,
+        '/dashboard/rrhh/planillas': <PlanillasRRHH />,
         '/dashboard/estrategia/torre-control': <EstrategiaTorreControl />,
         '/dashboard/estrategia/combustible': <EstrategiaCombustible />,
         '/dashboard/estrategia/flujo-caja': <EstrategiaFlujoCaja />,
@@ -181,6 +184,7 @@ export default function DashboardLayout() {
             ...bancosMenu, 
             ...bancosReportes,
             ...finanzasMenu,
+            ...rrhhMenu,
             ...consultasItemsRoot, 
             ...consultasEstaciones, 
             ...consultasOtras, 
@@ -344,6 +348,7 @@ export default function DashboardLayout() {
     const filteredBancosMenu = getFiltered(bancosMenu);
     const filteredBancosReportes = getFiltered(bancosReportes);
     const filteredFinanzasMenu = getFiltered(finanzasMenu);
+    const filteredRrhhMenu = getFiltered(rrhhMenu);
     const filteredEstaciones = getFiltered(consultasEstaciones);
     const filteredOtras = getFiltered(consultasOtras);
     const filteredSecurity = getFiltered(securityItems);
@@ -478,6 +483,19 @@ export default function DashboardLayout() {
                             {!isCollapsed && (openMenus.finanzas ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
                         </button>
                         {openMenus.finanzas && !isCollapsed && filteredFinanzasMenu.map(item => renderNavItem(item, true))}
+                    </div>
+                )}
+
+                {filteredRrhhMenu.length > 0 && (
+                    <div>
+                        <button className="nav-item" onClick={() => toggleMenu('rrhh')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
+                                <UsersIcon size={20} />
+                                {!isCollapsed && <span>Recursos Humanos</span>}
+                            </div>
+                            {!isCollapsed && (openMenus.rrhh ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
+                        </button>
+                        {openMenus.rrhh && !isCollapsed && filteredRrhhMenu.map(item => renderNavItem(item, true))}
                     </div>
                 )}
 
