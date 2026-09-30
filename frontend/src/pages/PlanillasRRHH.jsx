@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import axios from 'axios';
+import api from '../services/api';
 import {
     Users,
     Building2,
@@ -102,7 +102,7 @@ export default function PlanillasRRHH() {
         const fetchEmpresas = async () => {
             setLoadingEmpresas(true);
             try {
-                const res = await axios.get('/api/rrhh/empresas');
+                const res = await api.get('/rrhh/empresas');
                 const list = res.data || [];
                 setEmpresas(list);
                 if (list.length > 0) {
@@ -112,7 +112,7 @@ export default function PlanillasRRHH() {
                 }
             } catch (err) {
                 console.error('Error cargando empresas:', err);
-                addToast('Error al cargar catálogo de empresas de Sipe Web', 'error');
+                addToast(err.response?.data?.message || 'Error al cargar catálogo de empresas de Sipe Web', 'error');
             } finally {
                 setLoadingEmpresas(false);
             }
@@ -125,7 +125,7 @@ export default function PlanillasRRHH() {
         if (!selectedCompanyId) return;
         const fetchFiltros = async () => {
             try {
-                const res = await axios.get('/api/rrhh/filtros', { params: { company_id: selectedCompanyId } });
+                const res = await api.get('/rrhh/filtros', { params: { company_id: selectedCompanyId } });
                 setBranchesAndDeptos(res.data || { branches: [], departamentos: [] });
             } catch (err) {
                 console.error('Error cargando filtros:', err);
@@ -147,7 +147,7 @@ export default function PlanillasRRHH() {
                 page,
                 limit: 15
             };
-            const res = await axios.get('/api/rrhh/planillas/grupos', { params });
+            const res = await api.get('/rrhh/planillas/grupos', { params });
             setPlanillasGrupos(res.data.data || []);
             setPagination({
                 page: res.data.page || 1,
@@ -156,7 +156,7 @@ export default function PlanillasRRHH() {
             });
         } catch (err) {
             console.error('Error cargando planillas:', err);
-            addToast('Error al consultar planillas de la empresa', 'error');
+            addToast(err.response?.data?.message || 'Error al consultar planillas de la empresa', 'error');
         } finally {
             setLoadingGrupos(false);
         }
@@ -184,7 +184,7 @@ export default function PlanillasRRHH() {
         setLoadingDetalle(true);
 
         try {
-            const res = await axios.get('/api/rrhh/planillas/detalle', {
+            const res = await api.get('/rrhh/planillas/detalle', {
                 params: {
                     company_id: selectedCompanyId,
                     anio: periodo.periodo_anio,
@@ -195,7 +195,7 @@ export default function PlanillasRRHH() {
             setDetalleData(res.data);
         } catch (err) {
             console.error('Error cargando detalle:', err);
-            addToast('Error al cargar detalle de planilla', 'error');
+            addToast(err.response?.data?.message || 'Error al cargar detalle de planilla', 'error');
         } finally {
             setLoadingDetalle(false);
         }
@@ -225,7 +225,7 @@ export default function PlanillasRRHH() {
             const mesNombre = MONTH_NAMES.find(m => m.value === periodo.periodo_mes)?.label || periodo.periodo_mes;
             const qNombre = periodo.quincena === 'primera' ? '1ra Quincena' : '2da Quincena';
 
-            const res = await axios.get('/api/rrhh/export/pdf', {
+            const res = await api.get('/rrhh/export/pdf', {
                 params: {
                     company_id: selectedCompanyId,
                     anio: periodo.periodo_anio,
@@ -244,7 +244,7 @@ export default function PlanillasRRHH() {
             setPreviewModalOpen(true);
         } catch (err) {
             console.error('Error generando PDF oficial:', err);
-            addToast('Error al generar vista previa de planilla oficial', 'error');
+            addToast(err.response?.data?.message || 'Error al generar vista previa de planilla oficial', 'error');
         } finally {
             setLoadingPdf(false);
         }
@@ -257,7 +257,7 @@ export default function PlanillasRRHH() {
             const mesNombre = MONTH_NAMES.find(m => m.value === periodo.periodo_mes)?.label || periodo.periodo_mes;
             const qNombre = periodo.quincena === 'primera' ? '1ra Quincena' : '2da Quincena';
 
-            const res = await axios.get('/api/rrhh/export/recibos', {
+            const res = await api.get('/rrhh/export/recibos', {
                 params: {
                     company_id: selectedCompanyId,
                     anio: periodo.periodo_anio,
@@ -276,7 +276,7 @@ export default function PlanillasRRHH() {
             setPreviewModalOpen(true);
         } catch (err) {
             console.error('Error generando recibos masivos:', err);
-            addToast('Error al generar vista previa de recibos masivos', 'error');
+            addToast(err.response?.data?.message || 'Error al generar vista previa de recibos masivos', 'error');
         } finally {
             setLoadingPdf(false);
         }
@@ -286,7 +286,7 @@ export default function PlanillasRRHH() {
     const handleVerReciboIndividual = async (emp) => {
         setLoadingPdf(true);
         try {
-            const res = await axios.get(`/api/rrhh/export/recibo/${emp.id}`, {
+            const res = await api.get(`/rrhh/export/recibo/${emp.id}`, {
                 params: { company_id: selectedCompanyId },
                 responseType: 'blob'
             });
@@ -300,7 +300,7 @@ export default function PlanillasRRHH() {
             setPreviewModalOpen(true);
         } catch (err) {
             console.error('Error generando recibo individual:', err);
-            addToast('Error al generar recibo individual', 'error');
+            addToast(err.response?.data?.message || 'Error al generar recibo individual', 'error');
         } finally {
             setLoadingPdf(false);
         }
@@ -333,7 +333,7 @@ export default function PlanillasRRHH() {
                 setTimeout(() => window.URL.revokeObjectURL(url), 1000);
             };
 
-            const res = await axios.get('/api/rrhh/export/bancario', { params });
+            const res = await api.get('/rrhh/export/bancario', { params });
             const data = res.data;
 
             if (formatoBancario === 'csv' || formatoBancario === 'ambos') {

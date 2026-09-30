@@ -732,6 +732,15 @@ const initDB = async () => {
                     await pool.query("INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", [adminRole.id, p.id]);
                 }
             }
+
+            // Asignar permisos de RRHH a todos los roles existentes
+            const [allRoles] = await pool.query("SELECT id FROM roles");
+            const [rrhhPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('/dashboard/rrhh/planillas', 'view_rrhh_planillas')");
+            for (const r of allRoles) {
+                for (const p of rrhhPerms) {
+                    await pool.query("INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", [r.id, p.id]);
+                }
+            }
         } catch (e) {
             console.error('Migration bancos & estrategia & seguridad & rrhh permissions:', e.message);
         }
