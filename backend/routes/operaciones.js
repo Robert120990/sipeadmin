@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getExternalDb } = require('../db');
+const { getDb, getExternalDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const energyLatamService = require('../services/energyLatamService');
 
 // --- Dashboard / Vencimientos ---
 router.get('/dashboard/vencimientos', authenticateToken, async (req, res) => {
@@ -362,6 +363,384 @@ router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, r
         await externalDb.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id = ?", [req.params.id]);
         res.json({ success: true, message: 'Recordatorio Eliminado!' });
     } catch (error) { sendSafeError(res, error, 'Error al eliminar vencimiento'); }
+});
+
+// --- PORTAL ENERGY-LATAM / PUMA ORDERS & BANK INTEGRATION ---
+
+// 1. Obtener listado de pedidos del portal
+router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const { estacion, estado, tipo_producto, estado_pago, desde, hasta, search } = req.query;
+
+        let query = `
+            SELECT p.*,
+                   cb.numero as cuenta_numero, cb.nombre as cuenta_nombre, b.descripcion as banco_nombre,
+                   m.documento as mov_documento, m.fecha_aplicado as mov_fecha_aplicado,
+                   IF(m.fecha_aplicado IS NOT NULL, 1, 0) as es_conciliado
+            FROM portal_pedidos p
+            LEFT JOIN cuentas_bancarias cb ON p.cuenta_bancaria_id = cb.id
+            LEFT JOIN bancos b ON cb.banco_id = b.id
+            LEFT JOIN movimientos_bancarios m ON p.movimiento_bancario_id = m.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (estacion) {
+            query += " AND (p.id_estacion = ? OR p.estacion_nombre LIKE ?)";
+            params.push(estacion, `%${estacion}%`);
+        }
+        if (estado) {
+            query += " AND p.estado = ?";
+            params.push(estado);
+        }
+        if (tipo_producto) {
+            query += " AND p.tipo_producto = ?";
+            params.push(tipo_producto);
+        }
+        if (estado_pago) {
+            query += " AND p.estado_pago = ?";
+            params.push(estado_pago);
+        }
+        if (desde && hasta) {
+            query += " AND DATE(p.fecha_pedido) BETWEEN ? AND ?";
+            params.push(desde, hasta);
+        }
+        if (search) {
+            query += " AND (p.numero_orden LIKE ? OR p.factura_numero LIKE ? OR p.estacion_nombre LIKE ? OR p.razon_estado LIKE ?)";
+            const s = `%${search}%`;
+            params.push(s, s, s, s);
+        }
+
+        query += " ORDER BY p.fecha_pedido DESC LIMIT 200";
+
+        const [rows] = await withRetry(() => db.query(query, params));
+        res.json(rows);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener pedidos del portal');
+    }
+});
+
+// 2. Resumen de cuenta del portal (saldo disponible, crédito, etc.)
+router.get('/operaciones/portal/resumen-cuenta', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const [rows] = await withRetry(() => db.query("SELECT * FROM portal_resumen_cuenta ORDER BY id DESC LIMIT 1"));
+        if (rows.length > 0) {
+            res.json(rows[0]);
+        } else {
+            res.json({
+                saldo_disponible: 633.00,
+                limite_credito: 2000.00,
+                porcentaje_disponible: 32.00,
+                cuenta_nombre: 'corina sosah',
+                cuenta_numero: '3409396'
+            });
+        }
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener resumen de cuenta');
+    }
+});
+
+// 3. Sincronizar todo desde el portal Energy Latam
+router.post('/operaciones/portal/sincronizar', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const io = req.app.get('io');
+        const result = await energyLatamService.syncFromPortal(io);
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al sincronizar con el portal Energy Latam');
+    }
+});
+
+// 4. Actualizar pedido individual
+router.post('/operaciones/portal/actualizar-pedido/:numero_orden', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const { numero_orden } = req.params;
+        const io = req.app.get('io');
+        const result = await energyLatamService.syncFromPortal(io, numero_orden);
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar pedido individual');
+    }
+});
+
+// 5. Vincular pedido con pago y alistarlo para conciliación bancaria
+router.post('/operaciones/portal/vincular-pago', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const {
+            numero_orden,
+            cuenta_bancaria_id,
+            tipo_pago,
+            referencia_pago,
+            fecha_pago,
+            monto_pagado,
+            observaciones,
+            alistar_conciliacion
+        } = req.body;
+
+        if (!numero_orden) return res.status(400).json({ message: 'Se requiere el número de orden' });
+        if (!cuenta_bancaria_id) return res.status(400).json({ message: 'Se requiere seleccionar la cuenta bancaria' });
+        if (!fecha_pago) return res.status(400).json({ message: 'Se requiere la fecha de pago' });
+        if (!monto_pagado || Number(monto_pagado) <= 0) return res.status(400).json({ message: 'El monto de pago debe ser mayor a 0' });
+
+        const db = getDb();
+        const [ordRows] = await db.query('SELECT * FROM portal_pedidos WHERE numero_orden = ?', [numero_orden]);
+        if (ordRows.length === 0) return res.status(404).json({ message: 'Pedido no encontrado' });
+        const orden = ordRows[0];
+
+        const [ctaRows] = await db.query('SELECT c.*, b.descripcion as banco_nombre FROM cuentas_bancarias c LEFT JOIN bancos b ON c.banco_id = b.id WHERE c.id = ?', [cuenta_bancaria_id]);
+        if (ctaRows.length === 0) return res.status(404).json({ message: 'Cuenta bancaria no encontrada' });
+        const cta = ctaRows[0];
+
+        let movimientoId = orden.movimiento_bancario_id;
+
+        // Si se solicita alistar para conciliación bancaria, crear o actualizar el registro en movimientos_bancarios
+        if (alistar_conciliacion) {
+            let tipoRemesaCode = (tipo_pago || '').toUpperCase().includes('CHEQ') ? 'CH' : 'TR';
+            const [remesas] = await db.query('SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1', [cta.empresa_id, tipoRemesaCode]);
+            const tipoRemesaId = remesas[0]?.id || null;
+
+            const docRef = referencia_pago || orden.factura_numero || orden.numero_orden;
+            const concepto = `Pago Pedido Combustible #${orden.numero_orden} - ${orden.estacion_nombre || 'Puma'}${observaciones ? ' (' + observaciones + ')' : ''}`;
+
+            if (movimientoId) {
+                await db.query(`
+                    UPDATE movimientos_bancarios SET
+                        cuenta_bancaria_id = ?,
+                        fecha = ?,
+                        documento = ?,
+                        concepto = ?,
+                        monto = ?,
+                        cargo = ?,
+                        tipo_remesa_id = ?
+                    WHERE id = ?
+                `, [cta.id, fecha_pago, docRef, concepto, monto_pagado, monto_pagado, tipoRemesaId, movimientoId]);
+            } else {
+                const [movResult] = await db.query(`
+                    INSERT INTO movimientos_bancarios (
+                        empresa_id, cuenta_bancaria_id, fecha, documento, concepto,
+                        monto, cargo, abono, tipo_remesa_id, num_partida, es_contabilizado
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, 0)
+                `, [cta.empresa_id, cta.id, fecha_pago, docRef, concepto, monto_pagado, monto_pagado, tipoRemesaId]);
+                movimientoId = movResult.insertId;
+            }
+        }
+
+        const montoTotal = Number(orden.monto_total || 0);
+        const montoPag = Number(monto_pagado || 0);
+        const nuevoEstadoPago = montoPag >= montoTotal ? 'PAGADO' : 'PARCIAL';
+
+        await db.query(`
+            UPDATE portal_pedidos SET
+                cuenta_bancaria_id = ?,
+                movimiento_bancario_id = ?,
+                tipo_pago = ?,
+                referencia_pago = ?,
+                fecha_pago = ?,
+                monto_pagado = ?,
+                observaciones_pago = ?,
+                estado_pago = ?,
+                listo_conciliacion = ?
+            WHERE numero_orden = ?
+        `, [
+            cta.id,
+            movimientoId,
+            tipo_pago || 'Transferencia',
+            referencia_pago || null,
+            fecha_pago,
+            montoPag,
+            observaciones || null,
+            nuevoEstadoPago,
+            alistar_conciliacion ? 1 : 0,
+            numero_orden
+        ]);
+
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('portal_pedidos_updated', { numero_orden, estado_pago: nuevoEstadoPago });
+            io.emit('movimientos_updated', { cuenta_id: cta.id });
+        }
+
+        res.json({
+            success: true,
+            message: 'Pago vinculado exitosamente y alistado para conciliación bancaria',
+            movimiento_bancario_id: movimientoId,
+            estado_pago: nuevoEstadoPago
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al vincular pago con pedido');
+    }
+});
+
+// 6. Desvincular pago de un pedido
+router.post('/operaciones/portal/desvincular-pago', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const { numero_orden } = req.body;
+        const db = getDb();
+        const [ordRows] = await db.query('SELECT * FROM portal_pedidos WHERE numero_orden = ?', [numero_orden]);
+        if (ordRows.length === 0) return res.status(404).json({ message: 'Pedido no encontrado' });
+        const orden = ordRows[0];
+
+        if (orden.movimiento_bancario_id) {
+            const [movRows] = await db.query('SELECT fecha_aplicado FROM movimientos_bancarios WHERE id = ?', [orden.movimiento_bancario_id]);
+            if (movRows.length > 0 && movRows[0].fecha_aplicado) {
+                return res.status(400).json({ message: 'El movimiento bancario ya fue conciliado. Desconcilie primero en Conciliación Bancaria antes de desvincular.' });
+            }
+            await db.query('DELETE FROM movimientos_bancarios WHERE id = ?', [orden.movimiento_bancario_id]);
+        }
+
+        await db.query(`
+            UPDATE portal_pedidos SET
+                cuenta_bancaria_id = NULL,
+                movimiento_bancario_id = NULL,
+                cheque_id = NULL,
+                referencia_pago = NULL,
+                fecha_pago = NULL,
+                monto_pagado = 0,
+                observaciones_pago = NULL,
+                estado_pago = 'PENDIENTE',
+                listo_conciliacion = 0
+            WHERE numero_orden = ?
+        `, [numero_orden]);
+
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('portal_pedidos_updated', { numero_orden, estado_pago: 'PENDIENTE' });
+            io.emit('movimientos_updated', {});
+        }
+
+        res.json({ success: true, message: 'Pago desvinculado del pedido' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al desvincular pago');
+    }
+});
+
+// 7. Precios quincenales de combustibles
+router.get('/operaciones/portal/precios-combustible', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const [rows] = await withRetry(() => db.query("SELECT * FROM combustible_precios_quincenales ORDER BY periodo_inicio DESC LIMIT 24"));
+        res.json(rows);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener precios de combustible');
+    }
+});
+
+// 8. Guardar nuevo precio o actualización quincenal de combustible
+router.post('/operaciones/portal/guardar-precios-combustible', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const {
+            periodo_inicio,
+            periodo_fin,
+            precio_diesel,
+            precio_regular,
+            precio_super,
+            precio_ion,
+            variacion_diesel,
+            variacion_regular,
+            variacion_super,
+            variacion_ion,
+            fuente,
+            aplicar_a_pedidos_pendientes
+        } = req.body;
+
+        if (!periodo_inicio || !periodo_fin) {
+            return res.status(400).json({ message: 'Se requiere fecha de inicio y fin de la quincena' });
+        }
+
+        const db = getDb();
+        await db.query(`
+            INSERT INTO combustible_precios_quincenales (
+                periodo_inicio, periodo_fin, precio_diesel, precio_regular, precio_super, precio_ion,
+                variacion_diesel, variacion_regular, variacion_super, variacion_ion, fuente, activo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON DUPLICATE KEY UPDATE
+                precio_diesel = VALUES(precio_diesel),
+                precio_regular = VALUES(precio_regular),
+                precio_super = VALUES(precio_super),
+                precio_ion = VALUES(precio_ion),
+                variacion_diesel = VALUES(variacion_diesel),
+                variacion_regular = VALUES(variacion_regular),
+                variacion_super = VALUES(variacion_super),
+                variacion_ion = VALUES(variacion_ion),
+                fuente = VALUES(fuente),
+                activo = 1
+        `, [
+            periodo_inicio, periodo_fin,
+            Number(precio_diesel || 0), Number(precio_regular || 0), Number(precio_super || 0), Number(precio_ion || 0),
+            Number(variacion_diesel || 0), Number(variacion_regular || 0), Number(variacion_super || 0), Number(variacion_ion || 0),
+            fuente || 'Ajuste Quincenal Oficial'
+        ]);
+
+        if (aplicar_a_pedidos_pendientes) {
+            await db.query(`
+                UPDATE portal_pedidos SET
+                    costo_diesel = IF(galones_diesel > 0, ?, costo_diesel),
+                    costo_regular = IF(galones_regular > 0, ?, costo_regular),
+                    costo_super = IF(galones_super > 0, ?, costo_super),
+                    costo_ion = IF(galones_ion > 0, ?, costo_ion),
+                    monto_total = IF(tipo_producto = 'Bulk', 
+                        (galones_diesel * ?) + (galones_regular * ?) + (galones_super * ?) + (galones_ion * ?),
+                        monto_total
+                    )
+                WHERE estado IN ('PENDIENTE', 'RETENIDO', 'LIBERADO', 'EN_PROCESO')
+            `, [
+                Number(precio_diesel), Number(precio_regular), Number(precio_super), Number(precio_ion),
+                Number(precio_diesel), Number(precio_regular), Number(precio_super), Number(precio_ion)
+            ]);
+        }
+
+        const io = req.app.get('io');
+        if (io) io.emit('combustible_precios_updated', {});
+
+        res.json({ success: true, message: 'Precios quincenales guardados y actualizados exitosamente' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al guardar precios de combustible');
+    }
+});
+
+// 9. Ajustar costos aplicados por pedido
+router.post('/operaciones/portal/ajustar-costos-pedido', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const { numero_orden, costo_diesel, costo_regular, costo_super, costo_ion } = req.body;
+        if (!numero_orden) return res.status(400).json({ message: 'Se requiere el número de orden' });
+
+        const db = getDb();
+        const [rows] = await db.query('SELECT * FROM portal_pedidos WHERE numero_orden = ?', [numero_orden]);
+        if (rows.length === 0) return res.status(404).json({ message: 'Pedido no encontrado' });
+        const p = rows[0];
+
+        const cD = Number(costo_diesel !== undefined ? costo_diesel : p.costo_diesel);
+        const cR = Number(costo_regular !== undefined ? costo_regular : p.costo_regular);
+        const cS = Number(costo_super !== undefined ? costo_super : p.costo_super);
+        const cI = Number(costo_ion !== undefined ? costo_ion : p.costo_ion);
+
+        let nuevoTotal = Number(p.monto_total);
+        if (p.tipo_producto === 'Bulk' && (p.galones_diesel > 0 || p.galones_regular > 0 || p.galones_super > 0 || p.galones_ion > 0)) {
+            nuevoTotal = (Number(p.galones_diesel || 0) * cD) +
+                         (Number(p.galones_regular || 0) * cR) +
+                         (Number(p.galones_super || 0) * cS) +
+                         (Number(p.galones_ion || 0) * cI);
+        }
+
+        await db.query(`
+            UPDATE portal_pedidos SET
+                costo_diesel = ?,
+                costo_regular = ?,
+                costo_super = ?,
+                costo_ion = ?,
+                monto_total = ?
+            WHERE numero_orden = ?
+        `, [cD, cR, cS, cI, nuevoTotal, numero_orden]);
+
+        const io = req.app.get('io');
+        if (io) io.emit('portal_pedidos_updated', { numero_orden });
+
+        res.json({ success: true, message: 'Costos de combustible ajustados para el pedido', nuevo_total: nuevoTotal });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al ajustar costos del pedido');
+    }
 });
 
 module.exports = router;

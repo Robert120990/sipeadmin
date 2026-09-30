@@ -665,6 +665,7 @@ const initDB = async () => {
                     ['/dashboard/operaciones/tareas', 'Acceso a Asignación y Gestión de Tareas'],
                     ['manage_tasks', 'Permite crear, asignar y eliminar tareas'],
                     ['/dashboard/operaciones/pedidos', 'Acceso a Pedidos de Combustible'],
+                    ['manage_pedidos', 'Permite gestionar pedidos de combustible y sincronización'],
                     ['/dashboard/operaciones/recordatorios', 'Acceso a Control de Recordatorios y Pagos'],
                     ['manage_recordatorios', 'Permite crear, editar, pagar y anular recordatorios']
                 ];

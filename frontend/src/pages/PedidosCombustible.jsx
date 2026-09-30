@@ -1,85 +1,77 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Truck, CheckCircle, Save, XCircle, Search, Calendar, CheckSquare, PlusSquare } from 'lucide-react';
+import {
+    Truck, CheckCircle, XCircle, RefreshCw, AlertTriangle, ExternalLink,
+    CreditCard, DollarSign, FileText, CheckCircle2, Clock, Scale, Eye,
+    TrendingUp, TrendingDown, Layers, ChevronRight, Filter, Sliders, CheckSquare, Plus
+} from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import api from '../services/api';
 import { socket } from '../services/socket';
 import { todayStr } from '../utils/date';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
 export default function PedidosCombustible() {
     const { addToast } = useToast();
     const { confirm } = useConfirm();
-    
+
     const fmtDateArray = (dStr) => {
         if (!dStr) return '';
-        // If it's a timestamp
         if (dStr.includes('T')) dStr = dStr.split('T')[0];
         const parts = dStr.split('-');
         if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
         return dStr;
     };
 
+    const numFmt = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
+    const numFmt4 = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(val || 0);
+    const pctFmt = (val) => new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2 }).format(val || 0);
+
+    // Active Tab Navigation
+    const [activeTab, setActiveTab] = useState('portal'); // Default to portal as requested
+
     // Master Data
     const [estaciones, setEstaciones] = useState([]);
     const [transportistas, setTransportistas] = useState([]);
     const [pipas, setPipas] = useState([]);
+    const [cuentasBancarias, setCuentasBancarias] = useState([]);
     const [fechaServidor, setFechaServidor] = useState(null);
 
-    // Selections
+    // Operational Programados Data
     const [selectedEstacion, setSelectedEstacion] = useState('');
     const [fechaConsulta, setFechaConsulta] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    
-    // Formulario Agregar Pedido - se inicializa despues de obtener fecha servidor
     const [fechaPedido, setFechaPedido] = useState('');
     const [previsualizar, setPrevisualizar] = useState(true);
     const [selectedTransporte, setSelectedTransporte] = useState('');
     const [selectedPipa, setSelectedPipa] = useState('');
-    
     const [pedidoTemp, setPedidoTemp] = useState({ id: null });
-
-    const [comp, setComp] = useState({
-        D: { val: 0 },
-        R: { val: 0 },
-        S: { val: 0 },
-        I: { val: 0 }
-    });
-
-    const totalPipa = Number(comp.D.val) + Number(comp.R.val) + Number(comp.S.val) + Number(comp.I.val);
-
-    const pipasWithCap = useMemo(() => pipas.map(p => {
-        let comps = [];
-        try { comps = typeof p.compartments === 'string' ? JSON.parse(p.compartments) : p.compartments; } catch(e){}
-        const totalCap = (comps || []).reduce((acc, curr) => {
-            if (curr.separations) {
-                return acc + curr.separations.reduce((sSum, s) => sSum + Number(s.capacity || 0), 0);
-            }
-            return acc + Number(curr.capacity || 0);
-        }, 0);
-        return { ...p, totalCapacity: totalCap, parsedCompartments: comps };
-    }), [pipas]);
-
-    const recommendedPipa = useMemo(() => {
-        if (totalPipa <= 0) return null;
-        let best = pipasWithCap.find(p => p.totalCapacity === totalPipa);
-        if (best) return best;
-        const valid = pipasWithCap.filter(p => p.totalCapacity >= totalPipa);
-        if (valid.length > 0) {
-            valid.sort((a,b) => a.totalCapacity - b.totalCapacity);
-            return valid[0];
-        }
-        if (pipasWithCap.length > 0) {
-            const sorted = [...pipasWithCap].sort((a,b) => b.totalCapacity - a.totalCapacity);
-            return sorted[0];
-        }
-        return null;
-    }, [totalPipa, pipasWithCap]);
-
-    // Operational Data
+    const [comp, setComp] = useState({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
     const [inventario, setInventario] = useState([]);
     const [promedios, setPromedios] = useState({ D: 0, R: 0, S: 0, I: 0 });
     const [programados, setProgramados] = useState([]);
+
+    // Portal Orders State
+    const [portalOrders, setPortalOrders] = useState([]);
+    const [portalResumen, setPortalResumen] = useState({
+        saldo_disponible: 633,
+        limite_credito: 2000,
+        porcentaje_disponible: 32,
+        cuenta_nombre: 'corina sosah',
+        cuenta_numero: '3409396',
+        ultima_sincronizacion: null
+    });
+    const [preciosCombustible, setPreciosCombustible] = useState([]);
+    const [isSyncingPortal, setIsSyncingPortal] = useState(false);
+    const [syncingOrderNum, setSyncingOrderNum] = useState(null);
+
+    // Portal Filters
+    const [filterEstacion, setFilterEstacion] = useState('');
+    const [filterEstado, setFilterEstado] = useState('');
+    const [filterTipo, setFilterTipo] = useState('');
+    const [filterEstadoPago, setFilterEstadoPago] = useState('');
+    const [filterSearch, setFilterSearch] = useState('');
 
     // Modals
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -87,18 +79,106 @@ export default function PedidosCombustible() {
         numero_pedido: '', forma_pago: '', costo_d: 0, costo_r: 0, costo_s: 0, costo_i: 0
     });
 
-    const numFmt = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
-    const pctFmt = (val) => new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2 }).format(val || 0);
+    const [showVincularPagoModal, setShowVincularPagoModal] = useState(false);
+    const [pagoForm, setPagoForm] = useState({
+        numero_orden: '',
+        monto_total: 0,
+        estacion_nombre: '',
+        cuenta_bancaria_id: '',
+        tipo_pago: 'Transferencia',
+        referencia_pago: '',
+        fecha_pago: todayStr(),
+        monto_pagado: 0,
+        observaciones: '',
+        alistar_conciliacion: true,
+        es_conciliado: 0
+    });
 
-    // 1. Initial Load Master Data y fecha servidor
+    const [showAjustarCostosModal, setShowAjustarCostosModal] = useState(false);
+    const [costosForm, setCostosForm] = useState({
+        numero_orden: '',
+        estacion_nombre: '',
+        costo_diesel: 0,
+        costo_regular: 0,
+        costo_super: 0,
+        costo_ion: 0,
+        galones_diesel: 0,
+        galones_regular: 0,
+        galones_super: 0,
+        galones_ion: 0,
+        monto_total: 0
+    });
+
+    const [showDetalleModal, setShowDetalleModal] = useState(false);
+    const [selectedOrderDetalle, setSelectedOrderDetalle] = useState(null);
+
+    const [showNuevoPrecioModal, setShowNuevoPrecioModal] = useState(false);
+    const [precioForm, setPrecioForm] = useState({
+        periodo_inicio: '',
+        periodo_fin: '',
+        precio_diesel: 3.68,
+        precio_regular: 3.85,
+        precio_super: 4.18,
+        precio_ion: 3.78,
+        variacion_diesel: 0,
+        variacion_regular: 0,
+        variacion_super: 0,
+        variacion_ion: 0,
+        fuente: 'Portal Energy-Latam / DGEHM',
+        aplicar_a_pedidos_pendientes: true
+    });
+
+    // 1. Initial Load Master Data, Portal Orders, Accounts & Prices
+    const fetchPortalOrders = async () => {
+        try {
+            const params = {};
+            if (filterEstacion) params.estacion = filterEstacion;
+            if (filterEstado) params.estado = filterEstado;
+            if (filterTipo) params.tipo_producto = filterTipo;
+            if (filterEstadoPago) params.estado_pago = filterEstadoPago;
+            if (filterSearch) params.search = filterSearch;
+
+            const res = await api.get('/operaciones/portal/pedidos', { params });
+            setPortalOrders(res.data || []);
+        } catch (e) {
+            console.error('Error fetching portal orders:', e);
+        }
+    };
+
+    const fetchPortalResumen = async () => {
+        try {
+            const res = await api.get('/operaciones/portal/resumen-cuenta');
+            if (res.data) setPortalResumen(res.data);
+        } catch (e) {
+            console.error('Error fetching portal resumen:', e);
+        }
+    };
+
+    const fetchPreciosCombustible = async () => {
+        try {
+            const res = await api.get('/operaciones/portal/precios-combustible');
+            setPreciosCombustible(res.data || []);
+        } catch (e) {
+            console.error('Error fetching precios combustible:', e);
+        }
+    };
+
+    const fetchCuentas = async () => {
+        try {
+            const res = await api.get('/bancos/cuentas');
+            const sorted = sortCuentas(res.data || []);
+            setCuentasBancarias(sorted);
+        } catch (e) {
+            console.error('Error fetching bank accounts:', e);
+        }
+    };
+
     useEffect(() => {
         const fetchMaster = async () => {
             try {
-                // Stations from web_consolidado
                 const resCon = await api.get('/operaciones/estaciones');
                 setEstaciones(resCon.data || []);
-                
-                // Transportistas & Pipas from local MySQL Core
+
                 const resT = await api.get('/carriers');
                 setTransportistas(resT.data || []);
 
@@ -106,7 +186,6 @@ export default function PedidosCombustible() {
                 setPipas(resP.data || []);
 
                 let fechaHoy = todayStr();
-                
                 const addDay = (str) => {
                     const [y, m, d] = str.split('-').map(Number);
                     const dt = new Date(y, m - 1, d + 1);
@@ -131,39 +210,254 @@ export default function PedidosCombustible() {
                     setFechaConsulta(fechaHoy);
                     setFechaPedido(addDay(fechaHoy));
                 }
-            } catch (e) { addToast("Error cargando catálogos maestros", "error"); }
+            } catch (e) {
+                addToast("Error cargando catálogos maestros", "error");
+            }
         };
-        
+
         fetchMaster();
+        fetchPortalOrders();
+        fetchPortalResumen();
+        fetchPreciosCombustible();
+        fetchCuentas();
 
-        const handleUpdate = () => {
-            fetchMaster();
+        // Socket listeners for real-time synchronization
+        const handlePortalUpdate = () => {
+            fetchPortalOrders();
+            fetchPortalResumen();
         };
 
-        socket.on('carriers_updated', handleUpdate);
-        socket.on('tankers_updated', handleUpdate);
+        const handlePreciosUpdate = () => {
+            fetchPreciosCombustible();
+            fetchPortalOrders();
+        };
+
+        socket.on('portal_pedidos_updated', handlePortalUpdate);
+        socket.on('combustible_precios_updated', handlePreciosUpdate);
+        socket.on('carriers_updated', fetchMaster);
+        socket.on('tankers_updated', fetchMaster);
 
         return () => {
-            socket.off('carriers_updated', handleUpdate);
-            socket.off('tankers_updated', handleUpdate);
+            socket.off('portal_pedidos_updated', handlePortalUpdate);
+            socket.off('combustible_precios_updated', handlePreciosUpdate);
+            socket.off('carriers_updated', fetchMaster);
+            socket.off('tankers_updated', fetchMaster);
         };
     }, []);
 
-    // 3. Fetch Operational Data when Estacion changes
+    // Trigger filters change
+    useEffect(() => {
+        fetchPortalOrders();
+    }, [filterEstacion, filterEstado, filterTipo, filterEstadoPago, filterSearch]);
+
+    // Live sync from portal button
+    const handleSyncPortal = async () => {
+        setIsSyncingPortal(true);
+        addToast('Sincronizando con Portal Energy-Latam en segundo plano...', 'info');
+        try {
+            const res = await api.post('/operaciones/portal/sincronizar');
+            if (res.data?.success) {
+                addToast(res.data.message || 'Sincronización completada con éxito', 'success');
+                fetchPortalOrders();
+                fetchPortalResumen();
+            } else {
+                addToast(res.data?.message || 'Error en sincronización', 'warning');
+            }
+        } catch (e) {
+            addToast(e.response?.data?.message || 'Error al conectar con el sincronizador del portal', 'error');
+        } finally {
+            setIsSyncingPortal(false);
+        }
+    };
+
+    // Sync individual order
+    const handleSyncSingleOrder = async (orderNum) => {
+        setSyncingOrderNum(orderNum);
+        addToast(`Actualizando orden #${orderNum} desde el portal...`, 'info');
+        try {
+            const res = await api.post(`/operaciones/portal/actualizar-pedido/${orderNum}`);
+            if (res.data?.success) {
+                addToast(`Orden #${orderNum} actualizada`, 'success');
+                fetchPortalOrders();
+            } else {
+                addToast(res.data?.message || 'Error actualizando orden', 'warning');
+            }
+        } catch (e) {
+            addToast('Error al actualizar la orden', 'error');
+        } finally {
+            setSyncingOrderNum(null);
+        }
+    };
+
+    // Modal: Vincular Pago & Conciliación
+    const openVincularPago = (order) => {
+        const montoRestante = Number(order.factura_saldo_pendiente || order.monto_total || 0);
+        setPagoForm({
+            numero_orden: order.numero_orden,
+            monto_total: Number(order.monto_total || 0),
+            estacion_nombre: order.estacion_nombre,
+            cuenta_bancaria_id: order.cuenta_bancaria_id || (cuentasBancarias[0]?.corr || ''),
+            tipo_pago: order.tipo_pago || 'Transferencia',
+            referencia_pago: order.referencia_pago || order.factura_numero || order.numero_orden,
+            fecha_pago: order.fecha_pago ? order.fecha_pago.split('T')[0] : todayStr(),
+            monto_pagado: order.monto_pagado > 0 ? Number(order.monto_pagado) : montoRestante,
+            observaciones: order.observaciones_pago || '',
+            alistar_conciliacion: true,
+            es_conciliado: order.es_conciliado || 0,
+            movimiento_bancario_id: order.movimiento_bancario_id || null
+        });
+        setShowVincularPagoModal(true);
+    };
+
+    const handleGuardarPago = async () => {
+        if (!pagoForm.cuenta_bancaria_id) return addToast('Seleccione una cuenta bancaria', 'warning');
+        if (!pagoForm.fecha_pago) return addToast('Seleccione la fecha de pago', 'warning');
+        if (!pagoForm.monto_pagado || Number(pagoForm.monto_pagado) <= 0) return addToast('Ingrese un monto válido', 'warning');
+
+        try {
+            const res = await api.post('/operaciones/portal/vincular-pago', pagoForm);
+            if (res.data?.success) {
+                addToast('Pago vinculado y alistado para conciliación bancaria exitosamente', 'success');
+                setShowVincularPagoModal(false);
+                fetchPortalOrders();
+            }
+        } catch (e) {
+            addToast(e.response?.data?.message || 'Error al vincular pago', 'error');
+        }
+    };
+
+    const handleDesvincularPago = async (orderNum) => {
+        if (!await confirm(`¿Está seguro de desvincular el pago de la orden #${orderNum}? Esto eliminará el movimiento bancario pendiente de conciliar.`, { variant: 'danger' })) return;
+        try {
+            const res = await api.post('/operaciones/portal/desvincular-pago', { numero_orden: orderNum });
+            if (res.data?.success) {
+                addToast('Pago desvinculado del pedido', 'success');
+                setShowVincularPagoModal(false);
+                fetchPortalOrders();
+            }
+        } catch (e) {
+            addToast(e.response?.data?.message || 'Error al desvincular pago', 'error');
+        }
+    };
+
+    // Modal: Ajustar Costos Quincenales
+    const openAjustarCostos = (order) => {
+        setCostosForm({
+            numero_orden: order.numero_orden,
+            estacion_nombre: order.estacion_nombre,
+            costo_diesel: Number(order.costo_diesel || 0),
+            costo_regular: Number(order.costo_regular || 0),
+            costo_super: Number(order.costo_super || 0),
+            costo_ion: Number(order.costo_ion || 0),
+            galones_diesel: Number(order.galones_diesel || 0),
+            galones_regular: Number(order.galones_regular || 0),
+            galones_super: Number(order.galones_super || 0),
+            galones_ion: Number(order.galones_ion || 0),
+            monto_total: Number(order.monto_total || 0),
+            tipo_producto: order.tipo_producto
+        });
+        setShowAjustarCostosModal(true);
+    };
+
+    const nuevoTotalCalculado = useMemo(() => {
+        if (costosForm.tipo_producto !== 'Bulk') return costosForm.monto_total;
+        const total = (Number(costosForm.galones_diesel || 0) * Number(costosForm.costo_diesel || 0)) +
+                      (Number(costosForm.galones_regular || 0) * Number(costosForm.costo_regular || 0)) +
+                      (Number(costosForm.galones_super || 0) * Number(costosForm.costo_super || 0)) +
+                      (Number(costosForm.galones_ion || 0) * Number(costosForm.costo_ion || 0));
+        return total > 0 ? total : costosForm.monto_total;
+    }, [costosForm]);
+
+    const handleGuardarCostos = async () => {
+        try {
+            const res = await api.post('/operaciones/portal/ajustar-costos-pedido', {
+                numero_orden: costosForm.numero_orden,
+                costo_diesel: costosForm.costo_diesel,
+                costo_regular: costosForm.costo_regular,
+                costo_super: costosForm.costo_super,
+                costo_ion: costosForm.costo_ion
+            });
+            if (res.data?.success) {
+                addToast('Costos de combustible actualizados para el pedido', 'success');
+                setShowAjustarCostosModal(false);
+                fetchPortalOrders();
+            }
+        } catch (e) {
+            addToast(e.response?.data?.message || 'Error ajustando costos', 'error');
+        }
+    };
+
+    // Modal: Ver Detalle de Orden
+    const openDetalle = (order) => {
+        let items = [];
+        try {
+            items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
+        } catch (e) {
+            items = [];
+        }
+        setSelectedOrderDetalle({ ...order, parsedItems: items });
+        setShowDetalleModal(true);
+    };
+
+    // Modal: Guardar Precios Quincenales
+    const handleGuardarPreciosQuincena = async () => {
+        if (!precioForm.periodo_inicio || !precioForm.periodo_fin) {
+            return addToast('Seleccione el rango de fechas de la quincena', 'warning');
+        }
+        try {
+            const res = await api.post('/operaciones/portal/guardar-precios-combustible', precioForm);
+            if (res.data?.success) {
+                addToast('Precios quincenales guardados exitosamente', 'success');
+                setShowNuevoPrecioModal(false);
+                fetchPreciosCombustible();
+                fetchPortalOrders();
+            }
+        } catch (e) {
+            addToast(e.response?.data?.message || 'Error guardando precios', 'error');
+        }
+    };
+
+    // Operational Tank Forecast Calculations (Tab 1)
+    const pipasWithCap = useMemo(() => pipas.map(p => {
+        let comps = [];
+        try { comps = typeof p.compartments === 'string' ? JSON.parse(p.compartments) : p.compartments; } catch(e){}
+        const totalCap = (comps || []).reduce((acc, curr) => {
+            if (curr.separations) {
+                return acc + curr.separations.reduce((sSum, s) => sSum + Number(s.capacity || 0), 0);
+            }
+            return acc + Number(curr.capacity || 0);
+        }, 0);
+        return { ...p, totalCapacity: totalCap, parsedCompartments: comps };
+    }), [pipas]);
+
+    const totalPipa = Number(comp.D.val) + Number(comp.R.val) + Number(comp.S.val) + Number(comp.I.val);
+
+    const recommendedPipa = useMemo(() => {
+        if (totalPipa <= 0) return null;
+        let best = pipasWithCap.find(p => p.totalCapacity === totalPipa);
+        if (best) return best;
+        const valid = pipasWithCap.filter(p => p.totalCapacity >= totalPipa);
+        if (valid.length > 0) {
+            valid.sort((a,b) => a.totalCapacity - b.totalCapacity);
+            return valid[0];
+        }
+        if (pipasWithCap.length > 0) {
+            const sorted = [...pipasWithCap].sort((a,b) => b.totalCapacity - a.totalCapacity);
+            return sorted[0];
+        }
+        return null;
+    }, [totalPipa, pipasWithCap]);
+
     const fetchOperationalData = async (est) => {
-        if (!est) return;
-        if (!fechaConsulta) return;
+        if (!est || !fechaConsulta) return;
         setIsLoading(true);
         try {
-            // Inventario Tanques
             const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${fechaConsulta}`);
             setInventario(resT.data.inventario || []);
 
-            // Promedios
             const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${fechaConsulta}`);
             setPromedios(resP.data || { D: 0, R: 0, S: 0, I: 0 });
 
-            // Programados
             const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${fechaConsulta}`);
             setProgramados(resProg.data || []);
         } catch (error) {
@@ -173,11 +467,11 @@ export default function PedidosCombustible() {
         }
     };
 
-    useEffect(() => { fetchOperationalData(selectedEstacion); }, [selectedEstacion]);
+    useEffect(() => {
+        if (selectedEstacion) fetchOperationalData(selectedEstacion);
+    }, [selectedEstacion, fechaConsulta]);
 
-    // Derived Matrix Computations
     const matrix = useMemo(() => {
-        // sum of explicitly pending programados
         const sumProg = { D: 0, R: 0, S: 0, I: 0 };
         programados.forEach(p => {
             sumProg.D += Number(p.diesel || 0);
@@ -187,17 +481,17 @@ export default function PedidosCombustible() {
         });
 
         const getInvObj = (tipo) => inventario.find(i => i.tipo_combustible === tipo) || { capacidad: 0, reserva: 0, lectura: 0 };
-        
+
         const buildCol = (tipo) => {
             const tk = getInvObj(tipo);
             const cap = Number(tk.capacidad);
             const res = Number(tk.reserva);
             const invActual = Number(tk.lectura);
             const prom = Number(promedios[tipo] || 0);
-            
+
             let prog = sumProg[tipo];
-            if (previsualizar) prog += Number(comp[tipo].val); // Add form input to forecasting
-            
+            if (previsualizar) prog += Number(comp[tipo].val);
+
             let durDias = 0;
             if (prom > 0) durDias = (invActual + prog - res) / prom;
 
@@ -220,19 +514,14 @@ export default function PedidosCombustible() {
             };
         };
 
-        return {
-            D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I')
-        };
+        return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I') };
     }, [inventario, promedios, programados, previsualizar, comp, fechaConsulta]);
 
     const limpiarFormulario = () => {
         setFechaPedido(fechaServidor || '');
         setSelectedTransporte('');
         setSelectedPipa('');
-        setComp({
-            D: { val: 0 }, R: { val: 0 },
-            S: { val: 0 }, I: { val: 0 }
-        });
+        setComp({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
         setPrevisualizar(true);
         setPedidoTemp({ id: null });
     };
@@ -241,34 +530,25 @@ export default function PedidosCombustible() {
         if (!selectedTransporte) return addToast('Por favor seleccione un Transportista primero', 'warning');
         if (!matrix || !pipasWithCap.length) return addToast('Faltan datos maestros de pipas o matriz', 'error');
 
-        // maxFill is the absolute physical limit we can cram into the underground tanks.
-        // We only consider types where capacity > 0 (meaning the station has that fuel)
         const activeTypes = ['D', 'R', 'S', 'I'].filter(type => matrix[type].capacidad > 0);
-        
         const maxFill = {};
         activeTypes.forEach(type => {
             maxFill[type] = matrix[type].capacidad - matrix[type].inventario - matrix[type].programado;
         });
 
-        // Enforce physical constraints
         const needsRefill = activeTypes.some(type => maxFill[type] > 500);
         if (!needsRefill) {
             return addToast('Los tanques ya están a máxima capacidad proyectada.', 'info');
         }
 
         const totalMax = activeTypes.reduce((acc, type) => acc + Math.max(0, maxFill[type]), 0);
-        
-        // Filter pipas only for the SELECTED carrier
         let carrierPipas = pipasWithCap.filter(p => p.carrier_id === Number(selectedTransporte));
         if (!carrierPipas.length) return addToast('Este transportista no tiene pipas registradas', 'error');
 
-        // Find pipas that fit the totalMax, prioritize the largest valid one
         let validPipas = carrierPipas.filter(p => p.totalCapacity <= (totalMax + 100)).sort((a,b) => b.totalCapacity - a.totalCapacity);
-        
         let bestPipa = validPipas.length > 0 ? validPipas[0] : [...carrierPipas].sort((a,b) => a.totalCapacity - b.totalCapacity)[0];
 
         let alloc = { D: 0, R: 0, S: 0, I: 0 };
-        // Clone and sort compartments largest to smallest to fill knapsack
         let compartments = [...bestPipa.parsedCompartments].sort((a,b) => Number(b.capacity) - Number(a.capacity));
 
         compartments.forEach(c => {
@@ -294,42 +574,17 @@ export default function PedidosCombustible() {
                     }
                 });
                 if (!mostCriticalType) {
-                   mostCriticalType = activeTypes.reduce((a, b) => matrix[a].duracionDias < matrix[b].duracionDias ? a : b);
+                    mostCriticalType = activeTypes.reduce((a, b) => matrix[a].duracionDias < matrix[b].duracionDias ? a : b);
                 }
                 alloc[mostCriticalType] += cap;
             }
         });
 
         setSelectedPipa(bestPipa.id);
-        setComp({
-            D: { val: alloc.D },
-            R: { val: alloc.R },
-            S: { val: alloc.S },
-            I: { val: alloc.I }
-        });
-        
+        setComp({ D: { val: alloc.D }, R: { val: alloc.R }, S: { val: alloc.S }, I: { val: alloc.I } });
         addToast(`Sugerencia Aplicada: Pipa [${bestPipa.code}] de ${bestPipa.totalCapacity} Galones.`, 'success');
-
-        // SUGGEST DATE: Find the fuel that runs out SOONEST
-        let minDate = '';
-        let minVal = 9999;
-        activeTypes.forEach(type => {
-            if (matrix[type].promedio > 0 && matrix[type].duracionDias < minVal) {
-                minVal = matrix[type].duracionDias;
-                minDate = matrix[type].duracionFecha;
-            }
-        });
-
-        if (minDate) {
-            // If the out-of-stock date is today or earlier, suggest today. 
-            // Otherwise suggest the out-of-stock date (or 1 day before for safety)
-            // Let's suggest the exact date it hits reserve so the fuel arrives justo a tiempo.
-            setFechaPedido(minDate);
-            addToast(`Fecha Sugerida: ${fmtDateArray(minDate)} (Agotamiento Crítico)`, 'info');
-        }
     };
 
-    // Safe Number Parsing helper
     const parseNum = (val) => {
         const n = Number(val);
         return isNaN(n) ? 0 : n;
@@ -342,7 +597,7 @@ export default function PedidosCombustible() {
                 id_pedido: pedidoTemp.id,
                 id_estacion: selectedEstacion,
                 fecha: fechaPedido,
-                id_transportista: selectedTransporte, // Local Carriers ID
+                id_transportista: selectedTransporte,
                 diesel: parseNum(comp.D.val), regular: parseNum(comp.R.val), super: parseNum(comp.S.val), iondiesel: parseNum(comp.I.val),
                 id_calibracion_diesel: selectedPipa || null, id_calibracion_regular: null,
                 id_calibracion_super: null, id_calibracion_ion: null
@@ -362,25 +617,6 @@ export default function PedidosCombustible() {
         } catch (e) {
             addToast(e.response?.data?.message || "Error al anular", "error");
         }
-    };
-
-    const loadPedidoToForm = (row) => {
-        setPedidoTemp({ id: row.id_pedido });
-        setFechaPedido(row.fecha ? row.fecha.split('T')[0] : '');
-        setSelectedTransporte(row.id_transportista || '');
-        setSelectedPipa(row.id_calibracion_diesel || ''); // Reverse mapping Pipa to legacy diesel calibration field
-        setComp({
-            D: { val: row.diesel },
-            R: { val: row.regular },
-            S: { val: row.super },
-            I: { val: row.iondiesel }
-        });
-        setPrevisualizar(false);
-    };
-
-    const triggerConfirm = (row) => {
-        setPedidoTemp({ id: row.id_pedido });
-        setShowConfirmModal(true);
     };
 
     const executeConfirmTransaction = async () => {
@@ -403,309 +639,1207 @@ export default function PedidosCombustible() {
         }
     };
 
-    const getSelectedPipaData = () => pipas.find(p => p.id === Number(selectedPipa));
-    const renderCompartments = () => {
-        const pData = getSelectedPipaData();
-        if (!pData || !pData.compartments) return null;
-        let comps = [];
-        try { comps = typeof pData.compartments === 'string' ? JSON.parse(pData.compartments) : pData.compartments; } catch(e){}
-        if (!comps.length) return null;
-        
+    const renderEstadoBadge = (estado, razon) => {
+        const est = (estado || '').toUpperCase();
+        if (est === 'RETENIDO') {
+            return (
+                <span className="badge" title={razon || 'Retenido'} style={{ background: '#ef4444', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                    <AlertTriangle size={12} /> RETENIDO
+                </span>
+            );
+        }
+        if (est === 'LIBERADO') {
+            return (
+                <span className="badge" title={razon || 'Liberado'} style={{ background: '#10b981', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                    <CheckCircle size={12} /> LIBERADO
+                </span>
+            );
+        }
+        if (est === 'FACTURADO') {
+            return (
+                <span className="badge" title={razon || 'Facturado'} style={{ background: '#2563eb', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                    <FileText size={12} /> FACTURADO
+                </span>
+            );
+        }
         return (
-            <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem', flexWrap: 'wrap', padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>
-                <span style={{ fontSize:'0.7rem', fontWeight:'bold', width:'100%', marginBottom:'0.2rem', color:'var(--primary)' }}>COMPARTIMIENTOS PIPA ({comps.length}):</span>
-                {comps.map((c, i) => {
-                    const cCap = c.separations ? c.separations.reduce((acc, s) => acc + Number(s.capacity || 0), 0) : Number(c.capacity || 0);
-                    return (
-                        <div key={i} style={{ border: '1px solid var(--border)', background: 'var(--bg-active)', padding: '0.25rem 0.6rem', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.2rem' }}>
-                                <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>C{i+1}</span>
-                                <b>{numFmt(cCap)}</b>
-                            </div>
-                            {c.separations && (
-                                <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap' }}>
-                                    {c.separations.map((s, si) => (
-                                        <span key={si} style={{ fontSize: '0.6rem', background: 'rgba(255,255,255,0.05)', padding: '1px 3px', borderRadius: '2px' }}>
-                                            {numFmt(s.capacity)}
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    );
-                })}
-            </div>
+            <span className="badge" title={razon || estado} style={{ background: '#f59e0b', color: '#fff', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                {estado || 'EN PROCESO'}
+            </span>
         );
     };
 
-    const RenderPipaRecommendation = () => {
-        if (totalPipa <= 0 || !recommendedPipa) return null;
-        
-        const isCurrentOk = selectedPipa && Number(selectedPipa) === recommendedPipa.id;
+    const renderPagoBadge = (estadoPago, esConciliado) => {
+        const ep = (estadoPago || '').toUpperCase();
+        if (esConciliado) {
+            return (
+                <span className="badge" style={{ background: '#059669', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                    <CheckCircle2 size={12} /> CONCILIADO
+                </span>
+            );
+        }
+        if (ep === 'PAGADO') {
+            return (
+                <span className="badge" style={{ background: '#0284c7', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                    <CreditCard size={12} /> PAGADO
+                </span>
+            );
+        }
+        if (ep === 'PARCIAL') {
+            return (
+                <span className="badge" style={{ background: '#d97706', color: '#fff', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                    PARCIAL
+                </span>
+            );
+        }
         return (
-            <div style={{ marginTop: '0.5rem', marginBottom: '1rem', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem',
-                background: isCurrentOk ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                color: isCurrentOk ? '#10b981' : '#ef4444', border: `1px solid ${isCurrentOk ? '#10b981' : '#ef4444'}`
-            }}>
-                {isCurrentOk ? (
-                    <>✓ La Pipa seleccionada cubre dinámicamente tu solicitud.</>
-                ) : (
-                    <>⚠️ Sugerencia de Eficiencia: Selecciona la Pipa [{recommendedPipa.code}] (Capacidad Fija: {numFmt(recommendedPipa.totalCapacity)})</>
-                )}
-            </div>
+            <span className="badge" style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                PENDIENTE
+            </span>
         );
     };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
-                <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '1.2rem', margin: 0 }}>
-                    <Truck size={24} color="var(--primary)" /> Pedidos de Combustible
-                </h1>
-                
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div style={{ background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                        DATOS AL DIA: {fmtDateArray(fechaConsulta)}
-                    </div>
+            {/* Header Principal */}
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                <div>
+                    <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.25rem', margin: 0, fontWeight: 'bold' }}>
+                        <Truck size={22} color="var(--primary)" /> Operaciones: Pedidos de Combustible
+                    </h1>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Gestión de pedidos programados por estación, integración en vivo con portal de mayorista, costos quincenales y conciliación bancaria
+                    </span>
                 </div>
-            </div>
 
-            {/* Top Toolbar */}
-            <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '200px' }}>
-                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>ESTACION</label>
-                    <select value={selectedEstacion} onChange={e => setSelectedEstacion(e.target.value)} disabled={isLoading}
-                        style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', width: '100%' }}>
-                        <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Estación --</option>
-                        {estaciones.map(e => <option key={e.id_empresa} value={e.id_empresa} style={{ background: '#1e293b', color: 'white' }}>{e.titulo}</option>)}
-                    </select>
-                </div>
-                {isLoading && <span style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div className="spinner" style={{ width: '16px', height: '16px', border: '2px solid var(--primary)', borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-                    Sincronizando Módulos...
-                </span>}
-            </div>
-
-            <div className="pedidos-grid" style={{ display: 'grid', gap: '1rem', alignItems: 'start', opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-                {/* Panel Izquierdo: Formulario */}
-                <div className="card glass" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem' }}>
-                    <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', borderBottom: '1px solid var(--primary)', paddingBottom: '0.5rem' }}>OPERACIONES PARA AGREGAR PEDIDO</h3>
-                    
-                    <button onClick={autoSuggestPedido} className="btn-success" style={{ width: '100%', margin: '0.5rem 0', padding: '0.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', backgroundColor: '#10b981', color: '#fff' }}>
-                        <CheckSquare size={18} /> Sugerir Pedido (IA)
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                        onClick={handleSyncPortal}
+                        disabled={isSyncingPortal}
+                        className="btn-primary"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.825rem', height: '36px', padding: '0 1rem', fontWeight: 'bold', background: '#2563eb' }}
+                        title="Sincronizar pedidos, estados y precios con portal Energy-Latam"
+                    >
+                        <RefreshCw size={15} className={isSyncingPortal ? 'spin' : ''} />
+                        {isSyncingPortal ? 'Sincronizando Portal...' : 'Actualizar Portal'}
                     </button>
-                    
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>FECHA</span>
-                        <input type="date" value={fechaPedido} onChange={e => setFechaPedido(e.target.value)} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px' }} />
-                        <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                            <input type="checkbox" checked={previsualizar} onChange={e => setPrevisualizar(e.target.checked)} /> PREVISUALIZAR
-                        </label>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>TRANSPORTE</span>
-                        <select value={selectedTransporte} onChange={e => {setSelectedTransporte(e.target.value); setSelectedPipa('');}} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px' }}>
-                            <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione --</option>
-                            {transportistas.map(t => <option key={t.id} value={t.id} style={{ background: '#1e293b', color: 'white' }}>[{t.code}] {t.description}</option>)}
-                        </select>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>PIPA</span>
-                        <select value={selectedPipa} onChange={e => setSelectedPipa(e.target.value)} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px' }} disabled={!selectedTransporte}>
-                            <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Pipa --</option>
-                            {pipas.filter(p => !selectedTransporte || p.carrier_id === Number(selectedTransporte)).map(p => (
-                                <option key={p.id} value={p.id} style={{ background: '#1e293b', color: 'white' }}>{p.code}</option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {renderCompartments()}
-
-                    {/* Inline InputSets to prevent Unmount/Remount Focus Loss */}
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>DIESEL</span>
-                        <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>REGULAR</span>
-                        <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>SUPER</span>
-                        <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>IONDIESEL</span>
-                        <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                            style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)' }} />
-                    </div>
-
-                    <RenderPipaRecommendation />
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', borderTop: '2px solid var(--border)', paddingTop: '1rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-color)' }}>TOTAL PIPA</span>
-                            <input type="text" readOnly value={numFmt(totalPipa)} style={{ flex: 1, maxWidth: '180px', textAlign: 'right', padding: '0.35rem', fontSize: '1rem', fontWeight: 'bold', background: 'var(--bg-active)', color: 'var(--primary)', border: '1px solid var(--border)', borderRadius: '4px' }} />
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
-                            <button className="btn-primary" onClick={handleGuardarPedido} style={{ fontSize: '0.7rem', padding: '0.4rem 0.5rem' }}>
-                                AGREGAR PEDIDO
-                            </button>
-                            <button className="btn-secondary" onClick={limpiarFormulario} style={{ fontSize: '0.7rem', padding: '0.4rem 0.5rem' }}>
-                                CANCELAR
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Panel Derecho: Matriz de Resultados */}
-                <div className="card glass table-responsive" style={{ padding: 0, overflowX: 'auto' }}>
-                    <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', background: 'rgba(37,99,235,0.1)', padding: '0.5rem' }}>RESUMEN DE DATOS OPERACIONALES</h3>
-                    <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '550px' }}>
-                        <thead>
-                            <tr style={{ background: 'var(--bg-color)' }}>
-                                <th style={{ padding: '0.5rem', textAlign: 'left' }}>METRICA</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>DIESEL</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>REGULAR</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>SUPER</th>
-                                <th style={{ padding: '0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>IONDIESEL</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>CAPACIDAD MAXIMA</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
-                            </tr>
-                            <tr>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>FUERA DE VENTA</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.reserva)}</td>
-                            </tr>
-                            <tr>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>INVENTARIO ACTUAL</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
-                            </tr>
-                            <tr>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>VENTA PROMEDIO</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
-                            </tr>
-                            <tr style={{ background: 'rgba(37,99,235,0.05)' }}>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}>PEDIDOS PROGRAMADOS</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.programado)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.programado)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.programado)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.programado)}</td>
-                            </tr>
-                            <tr>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN DIAS</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}><b>{matrix.D.duracionDias.toFixed(1)}</b></td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}><b>{matrix.R.duracionDias.toFixed(1)}</b></td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}><b>{matrix.S.duracionDias.toFixed(1)}</b></td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}><b>{matrix.I.duracionDias.toFixed(1)}</b></td>
-                            </tr>
-                            <tr>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN FECHA</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.D.duracionFecha)}<br/>{matrix.D.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.R.duracionFecha)}<br/>{matrix.R.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.S.duracionFecha)}<br/>{matrix.S.duracionDiaNom}</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontSize: '0.7rem' }}>{fmtDateArray(matrix.I.duracionFecha)}<br/>{matrix.I.duracionDiaNom}</td>
-                            </tr>
-                            <tr style={{ background: 'rgba(16,185,129,0.1)' }}>
-                                <td style={{ padding: '0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL DE TANQUES</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{pctFmt(matrix.D.nivelTanque)}</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.R.nivelTanque)}</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.S.nivelTanque)}</td>
-                                <td style={{ textAlign: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.I.nivelTanque)}</td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
             </div>
 
-            {/* Tablas Inferiores */}
-            <div className="card glass table-responsive" style={{ padding: 0, opacity: isLoading ? 0.5 : 1, pointerEvents: isLoading ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-                <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', background: 'var(--bg-active)', padding: '0.5rem', borderBottom: '1px solid var(--border)' }}>PEDIDOS PROGRAMADOS POR ESTACION</h3>
-                <div style={{ overflowX: 'auto', padding: '0.5rem' }}>
-                    <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '600px' }}>
-                        <thead>
-                            <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg-color)' }}>
-                                <th style={{ textAlign: 'left', padding: '0.5rem' }}>FECHA</th>
-                                <th style={{ textAlign: 'left', padding: '0.5rem' }}>ORDEN_T</th>
-                                <th style={{ textAlign: 'right', padding: '0.5rem' }}>DIESEL</th>
-                                <th style={{ textAlign: 'right', padding: '0.5rem' }}>REGULAR</th>
-                                <th style={{ textAlign: 'right', padding: '0.5rem' }}>SUPER</th>
-                                <th style={{ textAlign: 'right', padding: '0.5rem' }}>ION</th>
-                                <th style={{ textAlign: 'center', padding: '0.5rem' }}>ACCION</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {programados.map(p => (
-                                <tr key={p.id_pedido} style={{ borderBottom: '1px solid var(--border)' }} onDoubleClick={() => loadPedidoToForm(p)}>
-                                    <td style={{ padding: '0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
-                                    <td style={{ padding: '0.5rem', color: 'var(--primary)' }}><b>{p.numero || p.id_pedido}</b></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.super)}</td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'right' }}>{numFmt(p.iondiesel)}</td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center', display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-                                        <button onClick={() => triggerConfirm(p)} className="btn-primary" style={{ padding: '3px 10px', fontSize: '0.65rem' }}>CONFIRMAR</button>
-                                        <button onClick={() => handleEliminarPedido(p.id_pedido)} className="btn-secondary" style={{ padding: '3px 10px', fontSize: '0.65rem', color: '#ef4444', borderColor: '#ef4444' }}>ANULAR</button>
-                                    </td>
+            {/* Account Status / KPI Banner */}
+            <div className="card glass" style={{ padding: '0.85rem 1.25rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', alignItems: 'center', borderLeft: '4px solid var(--primary)' }}>
+                <div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>Cuenta Portal Puma</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: 'var(--text)' }}>{portalResumen.cuenta_nombre || 'RAUL SOSA CASTELLANOS'}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>ID #{portalResumen.cuenta_numero || '3409396'}</div>
+                </div>
+
+                <div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>Fondos Disponibles</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#10b981' }}>${numFmt(portalResumen.saldo_disponible)}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{portalResumen.porcentaje_disponible || 32}% línea libre</div>
+                </div>
+
+                <div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>Límite de Crédito</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--primary)' }}>${numFmt(portalResumen.limite_credito)}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Condición: 30 Días Crédito</div>
+                </div>
+
+                <div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>Última Sincronización</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <Clock size={14} color="var(--primary)" />
+                        {portalResumen.ultima_sincronizacion ? fmtDateArray(portalResumen.ultima_sincronizacion) : 'Hoy (Activo)'}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#10b981' }}>Enlace seguro backend activo</div>
+                </div>
+            </div>
+
+            {/* Navigation Tabs */}
+            <div style={{ display: 'flex', gap: '0.35rem', borderBottom: '2px solid var(--border)', paddingBottom: '0.2rem', flexWrap: 'wrap' }}>
+                <button
+                    onClick={() => setActiveTab('portal')}
+                    style={{
+                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
+                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
+                        background: activeTab === 'portal' ? 'var(--primary)' : 'transparent',
+                        color: activeTab === 'portal' ? '#fff' : 'var(--text-muted)'
+                    }}
+                >
+                    <Layers size={16} /> Portal Energy-Latam / Pedidos ({portalOrders.length})
+                </button>
+
+                <button
+                    onClick={() => setActiveTab('programados')}
+                    style={{
+                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
+                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
+                        background: activeTab === 'programados' ? 'var(--primary)' : 'transparent',
+                        color: activeTab === 'programados' ? '#fff' : 'var(--text-muted)'
+                    }}
+                >
+                    <Truck size={16} /> Pedidos Programados & Despacho
+                </button>
+
+                <button
+                    onClick={() => setActiveTab('precios')}
+                    style={{
+                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
+                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
+                        background: activeTab === 'precios' ? 'var(--primary)' : 'transparent',
+                        color: activeTab === 'precios' ? '#fff' : 'var(--text-muted)'
+                    }}
+                >
+                    <Sliders size={16} /> Precios Quincenales de Combustible
+                </button>
+
+                <button
+                    onClick={() => setActiveTab('conciliacion')}
+                    style={{
+                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
+                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
+                        background: activeTab === 'conciliacion' ? 'var(--primary)' : 'transparent',
+                        color: activeTab === 'conciliacion' ? '#fff' : 'var(--text-muted)'
+                    }}
+                >
+                    <Scale size={16} /> Control de Pagos & Conciliación Bancaria
+                </button>
+            </div>
+
+            {/* TAB 1: PORTAL ENERGY-LATAM ORDERS */}
+            {activeTab === 'portal' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    {/* Filters Toolbar */}
+                    <div className="card glass" style={{ padding: '0.85rem 1.15rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '160px', flex: 1 }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Estación:</label>
+                            <select
+                                value={filterEstacion}
+                                onChange={e => setFilterEstacion(e.target.value)}
+                                style={{ flex: 1, height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                            >
+                                <option value="">-- Todas las Estaciones --</option>
+                                {estaciones.map(e => (
+                                    <option key={e.id_empresa} value={e.titulo}>{e.titulo}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '130px' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Estado:</label>
+                            <select
+                                value={filterEstado}
+                                onChange={e => setFilterEstado(e.target.value)}
+                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                            >
+                                <option value="">Todos</option>
+                                <option value="RETENIDO">RETENIDO</option>
+                                <option value="LIBERADO">LIBERADO</option>
+                                <option value="FACTURADO">FACTURADO</option>
+                                <option value="EN_PROCESO">EN PROCESO</option>
+                                <option value="CANCELADO">CANCELADO</option>
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '120px' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Tipo:</label>
+                            <select
+                                value={filterTipo}
+                                onChange={e => setFilterTipo(e.target.value)}
+                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                            >
+                                <option value="">Todos</option>
+                                <option value="Bulk">Bulk (Combustible)</option>
+                                <option value="Packaged">Packaged (Lubricantes)</option>
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '130px' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Pago:</label>
+                            <select
+                                value={filterEstadoPago}
+                                onChange={e => setFilterEstadoPago(e.target.value)}
+                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                            >
+                                <option value="">Todos</option>
+                                <option value="PENDIENTE">PENDIENTE</option>
+                                <option value="PAGADO">PAGADO</option>
+                                <option value="CONCILIADO">CONCILIADO</option>
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '180px', flex: 1 }}>
+                            <input
+                                type="text"
+                                placeholder="Buscar por # orden, factura, estación..."
+                                value={filterSearch}
+                                onChange={e => setFilterSearch(e.target.value)}
+                                style={{ width: '100%', height: '36px', fontSize: '0.8rem', padding: '0 0.75rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                            />
+                        </div>
+
+                        {(filterEstacion || filterEstado || filterTipo || filterEstadoPago || filterSearch) && (
+                            <button
+                                onClick={() => {
+                                    setFilterEstacion('');
+                                    setFilterEstado('');
+                                    setFilterTipo('');
+                                    setFilterEstadoPago('');
+                                    setFilterSearch('');
+                                }}
+                                className="btn-secondary"
+                                style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.75rem' }}
+                            >
+                                Limpiar
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Orders Table */}
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '1100px' }}>
+                            <thead>
+                                <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ORDEN PORTAL</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>FECHA SOLICITUD</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ESTACIÓN DESTINO</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>PRODUCTO / COSTOS</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>TOTAL ($)</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ESTADO PORTAL</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>RAZÓN DEL ESTADO</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>PAGO & CONCILIACIÓN</th>
+                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ACCIONES</th>
                                 </tr>
-                            ))}
-                            {programados.length === 0 && (
-                                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>No hay pedidos programados</td></tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+                            </thead>
+                            <tbody>
+                                {portalOrders.map(o => (
+                                    <tr key={o.id || o.numero_orden} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        {/* Orden # */}
+                                        <td style={{ padding: '0.5rem 0.6rem' }}>
+                                            <div style={{ fontWeight: 'bold', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                #{o.numero_orden}
+                                            </div>
+                                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                {o.tipo_producto || 'Bulk'} • {o.tipo_entrega || 'Ex-Rack'}
+                                            </div>
+                                            {o.factura_numero && (
+                                                <div style={{ fontSize: '0.68rem', color: '#2563eb', fontWeight: 'bold' }}>
+                                                    Fac: {o.factura_numero}
+                                                </div>
+                                            )}
+                                        </td>
 
-            {/* Modal Confirmacion */}
+                                        {/* Fecha */}
+                                        <td style={{ padding: '0.5rem 0.6rem', whiteSpace: 'nowrap' }}>
+                                            <div style={{ fontWeight: 'bold' }}>{fmtDateArray(o.fecha_pedido)}</div>
+                                            {o.fecha_solicitada && (
+                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                    Entrega: {fmtDateArray(o.fecha_solicitada)}
+                                                </div>
+                                            )}
+                                        </td>
+
+                                        {/* Estacion */}
+                                        <td style={{ padding: '0.5rem 0.6rem' }}>
+                                            <span style={{ fontWeight: 'bold' }}>{o.estacion_nombre}</span>
+                                            {o.id_estacion && (
+                                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>
+                                                    Estación #{o.id_estacion}
+                                                </span>
+                                            )}
+                                        </td>
+
+                                        {/* Producto / Costos */}
+                                        <td style={{ padding: '0.5rem 0.6rem' }}>
+                                            {o.tipo_producto === 'Bulk' || (o.galones_diesel > 0 || o.galones_regular > 0 || o.galones_super > 0 || o.galones_ion > 0) ? (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', fontSize: '0.72rem' }}>
+                                                    {o.galones_diesel > 0 && <span><b>Diesel:</b> {numFmt(o.galones_diesel)} gal @ ${numFmt4(o.costo_diesel)}</span>}
+                                                    {o.galones_regular > 0 && <span><b>Regular:</b> {numFmt(o.galones_regular)} gal @ ${numFmt4(o.costo_regular)}</span>}
+                                                    {o.galones_super > 0 && <span><b>Super:</b> {numFmt(o.galones_super)} gal @ ${numFmt4(o.costo_super)}</span>}
+                                                    {o.galones_ion > 0 && <span><b>IonDiesel:</b> {numFmt(o.galones_ion)} gal @ ${numFmt4(o.costo_ion)}</span>}
+                                                    {o.costo_diesel > 0 && (!o.galones_diesel && !o.galones_regular) && (
+                                                        <span style={{ color: 'var(--text-muted)' }}>Costos: D ${numFmt4(o.costo_diesel)} | R ${numFmt4(o.costo_regular)} | S ${numFmt4(o.costo_super)}</span>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div style={{ fontSize: '0.72rem' }}>
+                                                    <span style={{ fontWeight: 'bold' }}>Lubricantes / Packaged</span>
+                                                    <button onClick={() => openDetalle(o)} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0, marginLeft: '0.3rem', textDecoration: 'underline' }}>
+                                                        ver items
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </td>
+
+                                        {/* Total */}
+                                        <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                            ${numFmt(o.monto_total)}
+                                            {o.factura_saldo_pendiente > 0 && (
+                                                <div style={{ fontSize: '0.68rem', color: '#ef4444' }}>
+                                                    Saldo: ${numFmt(o.factura_saldo_pendiente)}
+                                                </div>
+                                            )}
+                                        </td>
+
+                                        {/* Estado Portal */}
+                                        <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center' }}>
+                                            {renderEstadoBadge(o.estado, o.razon_estado)}
+                                        </td>
+
+                                        {/* Razón Estado */}
+                                        <td style={{ padding: '0.5rem 0.6rem', maxWidth: '240px' }}>
+                                            <div style={{ fontSize: '0.72rem', color: o.estado === 'RETENIDO' ? '#ef4444' : 'var(--text-muted)', fontWeight: o.estado === 'RETENIDO' ? 'bold' : 'normal' }}>
+                                                {o.razon_estado || (o.estado === 'RETENIDO' ? 'Retenido por verificación de límite de crédito' : 'Procesado conforme')}
+                                            </div>
+                                        </td>
+
+                                        {/* Pago & Conciliación */}
+                                        <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center' }}>
+                                            {renderPagoBadge(o.estado_pago, o.es_conciliado)}
+                                            {o.cuenta_numero && (
+                                                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                                    {o.banco_nombre} ({o.cuenta_numero})
+                                                </div>
+                                            )}
+                                        </td>
+
+                                        {/* Acciones */}
+                                        <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center' }}>
+                                            <div style={{ display: 'inline-flex', gap: '0.3rem', alignItems: 'center' }}>
+                                                <button
+                                                    onClick={() => handleSyncSingleOrder(o.numero_orden)}
+                                                    disabled={syncingOrderNum === o.numero_orden}
+                                                    className="btn-secondary"
+                                                    style={{ padding: '3px 7px', fontSize: '0.7rem' }}
+                                                    title="Actualizar estado de esta orden desde el portal"
+                                                >
+                                                    <RefreshCw size={12} className={syncingOrderNum === o.numero_orden ? 'spin' : ''} />
+                                                </button>
+
+                                                <button
+                                                    onClick={() => openVincularPago(o)}
+                                                    className="btn-primary"
+                                                    style={{ padding: '3px 8px', fontSize: '0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: o.estado_pago === 'PAGADO' ? '#059669' : '#2563eb' }}
+                                                    title="Vincular pago a cuenta bancaria y alistar para conciliación"
+                                                >
+                                                    <CreditCard size={12} /> {o.estado_pago === 'PAGADO' ? 'Pago' : 'Pagar'}
+                                                </button>
+
+                                                <button
+                                                    onClick={() => openAjustarCostos(o)}
+                                                    className="btn-secondary"
+                                                    style={{ padding: '3px 7px', fontSize: '0.7rem' }}
+                                                    title="Ajustar costos de combustible de la quincena"
+                                                >
+                                                    <Sliders size={12} />
+                                                </button>
+
+                                                <button
+                                                    onClick={() => openDetalle(o)}
+                                                    className="btn-secondary"
+                                                    style={{ padding: '3px 7px', fontSize: '0.7rem' }}
+                                                    title="Ver detalle completo de la orden"
+                                                >
+                                                    <Eye size={12} />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+
+                                {portalOrders.length === 0 && (
+                                    <tr>
+                                        <td colSpan="9" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                            No se encontraron pedidos en el portal con los filtros aplicados.
+                                            <div style={{ marginTop: '0.5rem' }}>
+                                                <button onClick={handleSyncPortal} className="btn-primary" style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }}>
+                                                    Sincronizar ahora con el portal
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* TAB 2: PEDIDOS PROGRAMADOS & DESPACHO (MATRIZ EXISTENTE) */}
+            {activeTab === 'programados' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Top Toolbar */}
+                    <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '220px' }}>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>ESTACION</label>
+                            <select value={selectedEstacion} onChange={e => setSelectedEstacion(e.target.value)} disabled={isLoading}
+                                style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', width: '100%', height: '36px' }}>
+                                <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Estación --</option>
+                                {estaciones.map(e => <option key={e.id_empresa} value={e.id_empresa} style={{ background: '#1e293b', color: 'white' }}>{e.titulo}</option>)}
+                            </select>
+                        </div>
+
+                        <div style={{ background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                            DATOS AL DIA: {fmtDateArray(fechaConsulta)}
+                        </div>
+
+                        {isLoading && <span style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div className="spinner" style={{ width: '16px', height: '16px', border: '2px solid var(--primary)', borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                            Sincronizando Módulos...
+                        </span>}
+                    </div>
+
+                    <div className="pedidos-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1rem', alignItems: 'start', opacity: isLoading ? 0.5 : 1 }}>
+                        {/* Formulario */}
+                        <div className="card glass" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem' }}>
+                            <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', borderBottom: '1px solid var(--primary)', paddingBottom: '0.5rem' }}>
+                                OPERACIONES PARA AGREGAR PEDIDO
+                            </h3>
+
+                            <button onClick={autoSuggestPedido} className="btn-success" style={{ width: '100%', margin: '0.5rem 0', padding: '0.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', backgroundColor: '#10b981', color: '#fff' }}>
+                                <CheckSquare size={18} /> Sugerir Pedido (IA)
+                            </button>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>FECHA</span>
+                                <input type="date" value={fechaPedido} onChange={e => setFechaPedido(e.target.value)} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }} />
+                                <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <input type="checkbox" checked={previsualizar} onChange={e => setPrevisualizar(e.target.checked)} /> PREVISUALIZAR
+                                </label>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>TRANSPORTE</span>
+                                <select value={selectedTransporte} onChange={e => {setSelectedTransporte(e.target.value); setSelectedPipa('');}} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}>
+                                    <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione --</option>
+                                    {transportistas.map(t => <option key={t.id} value={t.id} style={{ background: '#1e293b', color: 'white' }}>[{t.code}] {t.description}</option>)}
+                                </select>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>PIPA</span>
+                                <select value={selectedPipa} onChange={e => setSelectedPipa(e.target.value)} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }} disabled={!selectedTransporte}>
+                                    <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Pipa --</option>
+                                    {pipas.filter(p => !selectedTransporte || p.carrier_id === Number(selectedTransporte)).map(p => (
+                                        <option key={p.id} value={p.id} style={{ background: '#1e293b', color: 'white' }}>{p.code}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Inputs por Combustible */}
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>DIESEL</span>
+                                <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>REGULAR</span>
+                                <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>SUPER</span>
+                                <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>IONDIESEL</span>
+                                <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem', borderTop: '2px solid var(--border)', paddingTop: '0.75rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>TOTAL PIPA</span>
+                                    <input type="text" readOnly value={numFmt(totalPipa)} style={{ flex: 1, maxWidth: '160px', textAlign: 'right', padding: '0.35rem', fontSize: '1rem', fontWeight: 'bold', background: 'var(--bg-active)', color: 'var(--primary)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }} />
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
+                                    <button className="btn-primary" onClick={handleGuardarPedido} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem' }}>
+                                        AGREGAR PEDIDO
+                                    </button>
+                                    <button className="btn-secondary" onClick={limpiarFormulario} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem' }}>
+                                        CANCELAR
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Matriz de Resultados Operacionales */}
+                        <div className="card glass table-responsive" style={{ padding: 0 }}>
+                            <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--primary)', textAlign: 'center', background: 'rgba(37,99,235,0.1)', padding: '0.5rem', fontWeight: 'bold' }}>
+                                RESUMEN DE DATOS OPERACIONALES ({estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Seleccione Estación'})
+                            </h3>
+                            <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '450px' }}>
+                                <thead>
+                                    <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>METRICA</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>DIESEL</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>REGULAR</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>SUPER</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>ION</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>CAPACIDAD</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.capacidad)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>INVENTARIO</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.inventario)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>VENTA PROMEDIO</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.promedio)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
+                                    </tr>
+                                    <tr style={{ background: 'rgba(37,99,235,0.05)' }}>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}>PROGRAMADOS</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.programado)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.programado)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.programado)}</td>
+                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.programado)}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION DIAS</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{matrix.D.duracionDias.toFixed(1)}</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{matrix.R.duracionDias.toFixed(1)}</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{matrix.S.duracionDias.toFixed(1)}</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{matrix.I.duracionDias.toFixed(1)}</td>
+                                    </tr>
+                                    <tr style={{ background: 'rgba(16,185,129,0.08)' }}>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL TANQUE</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{pctFmt(matrix.D.nivelTanque)}</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.R.nivelTanque)}</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.S.nivelTanque)}</td>
+                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.I.nivelTanque)}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Tabla de Programados */}
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', background: 'var(--bg-active)', padding: '0.5rem 1rem', borderBottom: '1px solid var(--border)' }}>
+                            PEDIDOS PROGRAMADOS POR ESTACION ({programados.length})
+                        </h3>
+                        <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '600px' }}>
+                            <thead>
+                                <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg-color)' }}>
+                                    <th style={{ textAlign: 'left', padding: '0.45rem 0.5rem' }}>FECHA</th>
+                                    <th style={{ textAlign: 'left', padding: '0.45rem 0.5rem' }}>ORDEN_T</th>
+                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>DIESEL</th>
+                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>REGULAR</th>
+                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>SUPER</th>
+                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>ION</th>
+                                    <th style={{ textAlign: 'center', padding: '0.45rem 0.5rem' }}>ACCION</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {programados.map(p => (
+                                    <tr key={p.id_pedido} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>{p.numero || p.id_pedido}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.super)}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.iondiesel)}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', display: 'flex', gap: '0.35rem', justifyContent: 'center' }}>
+                                            <button onClick={() => { setPedidoTemp({ id: p.id_pedido }); setShowConfirmModal(true); }} className="btn-primary" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>CONFIRMAR</button>
+                                            <button onClick={() => handleEliminarPedido(p.id_pedido)} className="btn-secondary" style={{ padding: '3px 8px', fontSize: '0.68rem', color: '#ef4444' }}>ANULAR</button>
+                                        </td>
+                                    </tr>
+                                ))}
+                                {programados.length === 0 && (
+                                    <tr><td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>No hay pedidos programados para la estación y fecha seleccionada.</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* TAB 3: CONTROL QUINCENAL DE PRECIOS DE COMBUSTIBLE */}
+            {activeTab === 'precios' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div className="card glass" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div>
+                            <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <Sliders size={18} color="var(--primary)" /> Precios y Costos Oficiales por Quincena
+                            </h3>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                Los precios de combustibles cambian usualmente cada 15 días (alzas y bajas de referencia mayorista). Puede registrar la nueva quincena y sincronizar los pedidos pendientes.
+                            </span>
+                        </div>
+
+                        <button
+                            onClick={() => {
+                                const today = new Date();
+                                const dStr = todayStr();
+                                setPrecioForm({
+                                    periodo_inicio: dStr,
+                                    periodo_fin: dStr,
+                                    precio_diesel: preciosCombustible[0]?.precio_diesel || 3.68,
+                                    precio_regular: preciosCombustible[0]?.precio_regular || 3.85,
+                                    precio_super: preciosCombustible[0]?.precio_super || 4.18,
+                                    precio_ion: preciosCombustible[0]?.precio_ion || 3.78,
+                                    variacion_diesel: 0,
+                                    variacion_regular: 0,
+                                    variacion_super: 0,
+                                    variacion_ion: 0,
+                                    fuente: 'Ajuste Quincenal Mayorista',
+                                    aplicar_a_pedidos_pendientes: true
+                                });
+                                setShowNuevoPrecioModal(true);
+                            }}
+                            className="btn-primary"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', height: '36px', padding: '0 1rem' }}
+                        >
+                            <Plus size={16} /> Registrar Nueva Quincena
+                        </button>
+                    </div>
+
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '800px' }}>
+                            <thead>
+                                <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>PERÍODO QUINCENAL</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>DIESEL ($/GAL)</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>REGULAR ($/GAL)</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>SUPER ($/GAL)</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>ION DIESEL ($/GAL)</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>FUENTE</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>ESTADO</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {preciosCombustible.map((p, idx) => (
+                                    <tr key={p.id || idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '0.5rem 0.75rem', fontWeight: 'bold' }}>
+                                            {fmtDateArray(p.periodo_inicio)} al {fmtDateArray(p.periodo_fin)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 'bold' }}>
+                                            ${numFmt4(p.precio_diesel)}
+                                            {p.variacion_diesel !== 0 && (
+                                                <span style={{ fontSize: '0.68rem', display: 'block', color: p.variacion_diesel > 0 ? '#ef4444' : '#10b981' }}>
+                                                    {p.variacion_diesel > 0 ? `+${numFmt4(p.variacion_diesel)}` : numFmt4(p.variacion_diesel)}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 'bold' }}>
+                                            ${numFmt4(p.precio_regular)}
+                                            {p.variacion_regular !== 0 && (
+                                                <span style={{ fontSize: '0.68rem', display: 'block', color: p.variacion_regular > 0 ? '#ef4444' : '#10b981' }}>
+                                                    {p.variacion_regular > 0 ? `+${numFmt4(p.variacion_regular)}` : numFmt4(p.variacion_regular)}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 'bold' }}>
+                                            ${numFmt4(p.precio_super)}
+                                            {p.variacion_super !== 0 && (
+                                                <span style={{ fontSize: '0.68rem', display: 'block', color: p.variacion_super > 0 ? '#ef4444' : '#10b981' }}>
+                                                    {p.variacion_super > 0 ? `+${numFmt4(p.variacion_super)}` : numFmt4(p.variacion_super)}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 'bold' }}>
+                                            ${numFmt4(p.precio_ion)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            {p.fuente || 'Oficial'}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }}>
+                                            {p.activo ? (
+                                                <span className="badge" style={{ background: '#10b981', color: '#fff', padding: '0.2rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                                                    VIGENTE
+                                                </span>
+                                            ) : (
+                                                <span className="badge" style={{ background: 'var(--border)', color: 'var(--text-muted)', padding: '0.2rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem' }}>
+                                                    HISTÓRICO
+                                                </span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* TAB 4: CONTROL DE PAGOS Y CONCILIACION BANCARIA */}
+            {activeTab === 'conciliacion' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div className="card glass" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div>
+                            <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <Scale size={18} color="var(--primary)" /> Control de Pagos de Combustible y Conciliación Bancaria
+                            </h3>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                Todos los pedidos pagados que han sido alistados para la Conciliación Bancaria generan automáticamente su débito en la cuenta bancaria seleccionada.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '950px' }}>
+                            <thead>
+                                <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>ORDEN PORTAL</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>ESTACIÓN</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>CUENTA BANCARIA</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>DOC / REFERENCIA</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>FECHA PAGO</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>MONTO PAGADO</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>ESTADO CONCILIACIÓN</th>
+                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>ACCIONES</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {portalOrders.filter(o => o.estado_pago === 'PAGADO' || o.estado_pago === 'PARCIAL' || o.listo_conciliacion).map(o => (
+                                    <tr key={o.id || o.numero_orden} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '0.5rem 0.75rem', fontWeight: 'bold', color: 'var(--primary)' }}>
+                                            #{o.numero_orden}
+                                            {o.factura_numero && <div style={{ fontSize: '0.7rem', color: '#2563eb' }}>Fac: {o.factura_numero}</div>}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem' }}>{o.estacion_nombre}</td>
+                                        <td style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem' }}>
+                                            {o.cuenta_numero ? (
+                                                <span><b>{o.banco_nombre}</b> {o.cuenta_nombre} - ({o.cuenta_numero})</span>
+                                            ) : (
+                                                <span style={{ color: 'var(--text-muted)' }}>Sin cuenta asignada</span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', fontWeight: 'bold' }}>{o.referencia_pago || o.mov_documento || '-'}</td>
+                                        <td style={{ padding: '0.5rem 0.75rem' }}>{fmtDateArray(o.fecha_pago)}</td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#10b981' }}>
+                                            ${numFmt(o.monto_pagado || o.monto_total)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }}>
+                                            {o.es_conciliado ? (
+                                                <span className="badge" style={{ background: '#059669', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                                                    <CheckCircle2 size={12} /> CONCILIADO ({fmtDateArray(o.mov_fecha_aplicado)})
+                                                </span>
+                                            ) : (
+                                                <span className="badge" style={{ background: '#f59e0b', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
+                                                    <Clock size={12} /> LISTO EN BANCO (PENDIENTE MATCH)
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }}>
+                                            <div style={{ display: 'inline-flex', gap: '0.35rem' }}>
+                                                <button
+                                                    onClick={() => openVincularPago(o)}
+                                                    className="btn-secondary"
+                                                    style={{ padding: '3px 8px', fontSize: '0.7rem' }}
+                                                >
+                                                    Editar Pago
+                                                </button>
+                                                {!o.es_conciliado && (
+                                                    <button
+                                                        onClick={() => handleDesvincularPago(o.numero_orden)}
+                                                        className="btn-secondary"
+                                                        style={{ padding: '3px 8px', fontSize: '0.7rem', color: '#ef4444' }}
+                                                    >
+                                                        Desvincular
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+
+                                {portalOrders.filter(o => o.estado_pago === 'PAGADO' || o.estado_pago === 'PARCIAL' || o.listo_conciliacion).length === 0 && (
+                                    <tr>
+                                        <td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                            No hay pagos registrados para órdenes de combustible. Puede vincular un pago desde la pestaña de Órdenes del Portal.
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL 1: VINCULAR PAGO & CONCILIACIÓN BANCARIA */}
+            <Modal open={showVincularPagoModal} onClose={() => setShowVincularPagoModal(false)} title={`Vincular Pago - Orden #${pagoForm.numero_orden}`}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ padding: '0.75rem', background: 'rgba(37,99,235,0.08)', borderRadius: '6px', borderLeft: '4px solid #2563eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Estación: <b>{pagoForm.estacion_nombre}</b></div>
+                            <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Monto de la Orden: ${numFmt(pagoForm.monto_total)}</div>
+                        </div>
+                        {pagoForm.es_conciliado ? (
+                            <span className="badge" style={{ background: '#059669', color: '#fff', padding: '0.25rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' }}>
+                                ✓ CONCILIADO EN BANCO
+                            </span>
+                        ) : null}
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>Cuenta Bancaria (Obligatorio)</label>
+                        <select
+                            value={pagoForm.cuenta_bancaria_id}
+                            onChange={e => setPagoForm({ ...pagoForm, cuenta_bancaria_id: e.target.value })}
+                            style={{ padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', height: '38px', fontSize: '0.825rem' }}
+                        >
+                            <option value="">-- Seleccione Cuenta Bancaria --</option>
+                            {cuentasBancarias.map(c => (
+                                <option key={c.corr || c.id} value={c.corr || c.id}>
+                                    {formatCuentaLabel(c)}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>Tipo de Pago</label>
+                            <select
+                                value={pagoForm.tipo_pago}
+                                onChange={e => setPagoForm({ ...pagoForm, tipo_pago: e.target.value })}
+                                style={{ padding: '0.45rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', height: '38px', fontSize: '0.825rem' }}
+                            >
+                                <option value="Transferencia">Transferencia Bancaria (TR)</option>
+                                <option value="Cheque">Cheque (CH)</option>
+                                <option value="Cargo en Cuenta">Cargo en Cuenta / Débito (NC)</option>
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>Referencia / # Documento</label>
+                            <input
+                                type="text"
+                                placeholder="Ej: TR-89218 o # Factura"
+                                value={pagoForm.referencia_pago}
+                                onChange={e => setPagoForm({ ...pagoForm, referencia_pago: e.target.value })}
+                                style={{ padding: '0.45rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', height: '38px', fontSize: '0.825rem' }}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>Fecha de Pago</label>
+                            <input
+                                type="date"
+                                value={pagoForm.fecha_pago}
+                                onChange={e => setPagoForm({ ...pagoForm, fecha_pago: e.target.value })}
+                                style={{ padding: '0.45rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', height: '38px', fontSize: '0.825rem' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>Monto a Pagar ($)</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                value={pagoForm.monto_pagado}
+                                onChange={e => setPagoForm({ ...pagoForm, monto_pagado: e.target.value })}
+                                style={{ padding: '0.45rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', height: '38px', fontSize: '0.825rem', textAlign: 'right', fontWeight: 'bold' }}
+                            />
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>Observaciones</label>
+                        <input
+                            type="text"
+                            placeholder="Comentario o nota de pago..."
+                            value={pagoForm.observaciones}
+                            onChange={e => setPagoForm({ ...pagoForm, observaciones: e.target.value })}
+                            style={{ padding: '0.45rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', height: '38px', fontSize: '0.825rem' }}
+                        />
+                    </div>
+
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer', padding: '0.5rem', background: 'var(--bg-active)', borderRadius: '4px' }}>
+                        <input
+                            type="checkbox"
+                            checked={pagoForm.alistar_conciliacion}
+                            onChange={e => setPagoForm({ ...pagoForm, alistar_conciliacion: e.target.checked })}
+                            style={{ width: '16px', height: '16px' }}
+                        />
+                        <span><b>Alistar para Conciliación Bancaria:</b> Genera el movimiento bancario oficial (débito/salida) para conciliar con el extracto bancario.</span>
+                    </label>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button className="btn-secondary" onClick={() => setShowVincularPagoModal(false)}>Cancelar</button>
+                        <button className="btn-primary" onClick={handleGuardarPago}>Guardar y Vincular Pago</button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* MODAL 2: AJUSTAR COSTOS QUINCENALES DEL PEDIDO */}
+            <Modal open={showAjustarCostosModal} onClose={() => setShowAjustarCostosModal(false)} title={`Ajustar Costos de Combustible - Orden #${costosForm.numero_orden}`}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Si el combustible varió de precio en la quincena respecto al costo predeterminado, ingrese los nuevos costos unitarios para recalcular los importes del pedido:
+                    </div>
+
+                    <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Costo Diesel ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={costosForm.costo_diesel}
+                                onChange={e => setCostosForm({ ...costosForm, costo_diesel: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                            {costosForm.galones_diesel > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Volumen: {numFmt(costosForm.galones_diesel)} gal</span>}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Costo Regular ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={costosForm.costo_regular}
+                                onChange={e => setCostosForm({ ...costosForm, costo_regular: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                            {costosForm.galones_regular > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Volumen: {numFmt(costosForm.galones_regular)} gal</span>}
+                        </div>
+                    </div>
+
+                    <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Costo Super ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={costosForm.costo_super}
+                                onChange={e => setCostosForm({ ...costosForm, costo_super: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                            {costosForm.galones_super > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Volumen: {numFmt(costosForm.galones_super)} gal</span>}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Costo IonDiesel ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={costosForm.costo_ion}
+                                onChange={e => setCostosForm({ ...costosForm, costo_ion: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                            {costosForm.galones_ion > 0 && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Volumen: {numFmt(costosForm.galones_ion)} gal</span>}
+                        </div>
+                    </div>
+
+                    <div style={{ padding: '0.75rem', background: 'rgba(16,185,129,0.08)', borderRadius: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid rgba(16,185,129,0.3)' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Nuevo Total Recalculado:</span>
+                        <span style={{ fontSize: '1.15rem', fontWeight: 'bold', color: '#10b981' }}>${numFmt(nuevoTotalCalculado)}</span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button className="btn-secondary" onClick={() => setShowAjustarCostosModal(false)}>Cancelar</button>
+                        <button className="btn-primary" onClick={handleGuardarCostos}>Aplicar Nuevos Costos</button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* MODAL 3: REGISTRAR NUEVA QUINCENA DE PRECIOS */}
+            <Modal open={showNuevoPrecioModal} onClose={() => setShowNuevoPrecioModal(false)} title="Registrar Ajuste Quincenal de Combustible">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Desde (Inicio Quincena)</label>
+                            <input
+                                type="date"
+                                value={precioForm.periodo_inicio}
+                                onChange={e => setPrecioForm({ ...precioForm, periodo_inicio: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Hasta (Fin Quincena)</label>
+                            <input
+                                type="date"
+                                value={precioForm.periodo_fin}
+                                onChange={e => setPrecioForm({ ...precioForm, periodo_fin: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Precio Diesel ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={precioForm.precio_diesel}
+                                onChange={e => setPrecioForm({ ...precioForm, precio_diesel: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Precio Regular ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={precioForm.precio_regular}
+                                onChange={e => setPrecioForm({ ...precioForm, precio_regular: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Precio Super ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={precioForm.precio_super}
+                                onChange={e => setPrecioForm({ ...precioForm, precio_super: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Precio IonDiesel ($/Gal)</label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={precioForm.precio_ion}
+                                onChange={e => setPrecioForm({ ...precioForm, precio_ion: e.target.value })}
+                                style={{ padding: '0.4rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                            />
+                        </div>
+                    </div>
+
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer', padding: '0.5rem', background: 'var(--bg-active)', borderRadius: '4px' }}>
+                        <input
+                            type="checkbox"
+                            checked={precioForm.aplicar_a_pedidos_pendientes}
+                            onChange={e => setPrecioForm({ ...precioForm, aplicar_a_pedidos_pendientes: e.target.checked })}
+                            style={{ width: '16px', height: '16px' }}
+                        />
+                        <span>Actualizar automáticamente los pedidos pendientes con estos nuevos precios quincenales.</span>
+                    </label>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button className="btn-secondary" onClick={() => setShowNuevoPrecioModal(false)}>Cancelar</button>
+                        <button className="btn-primary" onClick={handleGuardarPreciosQuincena}>Guardar Precios</button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* MODAL 4: DETALLE COMPLETO DE ORDEN */}
+            <Modal open={showDetalleModal} onClose={() => setShowDetalleModal(false)} title={`Detalle de Orden #${selectedOrderDetalle?.numero_orden || ''}`}>
+                {selectedOrderDetalle && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', padding: '0.75rem', background: 'var(--bg-active)', borderRadius: '6px' }}>
+                            <div>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Estación Destino</span>
+                                <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{selectedOrderDetalle.estacion_nombre}</div>
+                            </div>
+                            <div>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Fecha Pedido</span>
+                                <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{fmtDateArray(selectedOrderDetalle.fecha_pedido)}</div>
+                            </div>
+                            <div>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Estado</span>
+                                <div>{renderEstadoBadge(selectedOrderDetalle.estado, selectedOrderDetalle.razon_estado)}</div>
+                            </div>
+                            <div>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Monto Total</span>
+                                <div style={{ fontSize: '1rem', fontWeight: 'bold', color: 'var(--primary)' }}>${numFmt(selectedOrderDetalle.monto_total)}</div>
+                            </div>
+                        </div>
+
+                        {selectedOrderDetalle.razon_estado && (
+                            <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(239,68,68,0.08)', borderRadius: '6px', borderLeft: '4px solid #ef4444' }}>
+                                <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#ef4444' }}>Motivo / Razón del Estado en Portal:</div>
+                                <div style={{ fontSize: '0.825rem', color: 'var(--text)' }}>{selectedOrderDetalle.razon_estado}</div>
+                            </div>
+                        )}
+
+                        <h4 style={{ margin: '0.5rem 0 0.25rem 0', fontSize: '0.85rem' }}>Desglose de Ítems / Productos</h4>
+                        <div className="table-responsive" style={{ maxHeight: '250px', overflowY: 'auto' }}>
+                            <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                        <th style={{ padding: '0.4rem', textAlign: 'left' }}>PRODUCTO</th>
+                                        <th style={{ padding: '0.4rem', textAlign: 'right' }}>CANTIDAD</th>
+                                        <th style={{ padding: '0.4rem', textAlign: 'right' }}>PRECIO UNIT.</th>
+                                        <th style={{ padding: '0.4rem', textAlign: 'right' }}>IMPUESTO</th>
+                                        <th style={{ padding: '0.4rem', textAlign: 'right' }}>TOTAL</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(selectedOrderDetalle.parsedItems || []).map((it, idx) => (
+                                        <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                                            <td style={{ padding: '0.4rem' }}>{it.productName || it.productCode || 'Ítem'}</td>
+                                            <td style={{ padding: '0.4rem', textAlign: 'right' }}>{numFmt(it.quantity || it.invoicedQuantity)}</td>
+                                            <td style={{ padding: '0.4rem', textAlign: 'right' }}>${numFmt4(it.pricePerUnit)}</td>
+                                            <td style={{ padding: '0.4rem', textAlign: 'right' }}>${numFmt(it.totalTaxPerItem || it.totalTax)}</td>
+                                            <td style={{ padding: '0.4rem', textAlign: 'right', fontWeight: 'bold' }}>${numFmt(it.totalPrice || it.totalAmountItem)}</td>
+                                        </tr>
+                                    ))}
+                                    {(!selectedOrderDetalle.parsedItems || selectedOrderDetalle.parsedItems.length === 0) && (
+                                        <tr>
+                                            <td colSpan="5" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                Sin desglose individual de ítems (Orden a granel de combustible).
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                            <button className="btn-secondary" onClick={() => setShowDetalleModal(false)}>Cerrar</button>
+                        </div>
+                    </div>
+                )}
+            </Modal>
+
+            {/* MODAL 5: CONFIRMAR PEDIDO PROGRAMADO LOCAL */}
             <Modal open={showConfirmModal} onClose={() => setShowConfirmModal(false)} title="Confirmar Transacción">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>NÚMERO DE PEDIDO</label>
-                        <input type="text" placeholder="Ingrese número de pedido" value={confirmData.numero_pedido} onChange={e=>setConfirmData({...confirmData, numero_pedido: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
+                        <input type="text" placeholder="Ingrese número de pedido" value={confirmData.numero_pedido} onChange={e=>setConfirmData({...confirmData, numero_pedido: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }} />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>FORMA DE PAGO</label>
-                        <input type="text" placeholder="Ej. CREDITO, EFECTIVO, CHEQUE..." value={confirmData.forma_pago} onChange={e=>setConfirmData({...confirmData, forma_pago: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }} />
+                        <input type="text" placeholder="Ej. CREDITO, EFECTIVO, CHEQUE..." value={confirmData.forma_pago} onChange={e=>setConfirmData({...confirmData, forma_pago: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }} />
                     </div>
                     <div className="form-grid form-grid-2">
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
                             <label style={{ fontSize: '0.7rem' }}>Costo D</label>
-                            <input type="number" step="0.01" value={confirmData.costo_d} onChange={e=>setConfirmData({...confirmData, costo_d: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                            <input type="number" step="0.01" value={confirmData.costo_d} onChange={e=>setConfirmData({...confirmData, costo_d: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }}/>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
                             <label style={{ fontSize: '0.7rem' }}>Costo R</label>
-                            <input type="number" step="0.01" value={confirmData.costo_r} onChange={e=>setConfirmData({...confirmData, costo_r: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                            <input type="number" step="0.01" value={confirmData.costo_r} onChange={e=>setConfirmData({...confirmData, costo_r: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }}/>
                         </div>
                     </div>
                     <div className="form-grid form-grid-2">
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
                             <label style={{ fontSize: '0.7rem' }}>Costo S</label>
-                            <input type="number" step="0.01" value={confirmData.costo_s} onChange={e=>setConfirmData({...confirmData, costo_s: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                            <input type="number" step="0.01" value={confirmData.costo_s} onChange={e=>setConfirmData({...confirmData, costo_s: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }}/>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
                             <label style={{ fontSize: '0.7rem' }}>Costo Ion</label>
-                            <input type="number" step="0.01" value={confirmData.costo_i} onChange={e=>setConfirmData({...confirmData, costo_i: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px' }}/>
+                            <input type="number" step="0.01" value={confirmData.costo_i} onChange={e=>setConfirmData({...confirmData, costo_i: e.target.value})} onWheel={e => e.target.blur()} style={{ padding:'0.35rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }}/>
                         </div>
                     </div>
 
