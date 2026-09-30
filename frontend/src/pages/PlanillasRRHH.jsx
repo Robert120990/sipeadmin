@@ -19,7 +19,9 @@ import {
     DollarSign,
     Info,
     CreditCard,
-    Layers
+    Layers,
+    Files,
+    Check
 } from 'lucide-react';
 import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
@@ -334,23 +336,36 @@ export default function PlanillasRRHH() {
             };
 
             const res = await api.get('/rrhh/export/bancario', { params });
-            const data = res.data;
+            const data = res.data || {};
 
-            if (formatoBancario === 'csv' || formatoBancario === 'ambos') {
-                triggerDownload(data.csv, `${data.fileNameBase}.csv`, 'text/csv;charset=utf-8');
+            // Compatibilidad robusta: si vino como string directo o como objeto JSON
+            const csvContent = typeof data === 'string' ? data : (data.csv || '');
+            const txtContent = typeof data === 'string' ? data : (data.txt || '');
+            const fileNameBase = data.fileNameBase || `PLANILLAS_${currentEmpresa?.nombre_comercial || 'EMPRESA'}_${exportModalPeriodo.periodo_anio}_${String(exportModalPeriodo.periodo_mes).padStart(2, '0')}_${exportModalPeriodo.quincena}`;
+
+            let downloadedCount = 0;
+
+            if ((formatoBancario === 'csv' || formatoBancario === 'ambos') && csvContent) {
+                triggerDownload(csvContent, `${fileNameBase}.csv`, 'text/csv;charset=utf-8');
+                downloadedCount++;
             }
 
-            if (formatoBancario === 'txt' || formatoBancario === 'ambos') {
+            if ((formatoBancario === 'txt' || formatoBancario === 'ambos') && txtContent) {
                 if (formatoBancario === 'ambos') {
                     setTimeout(() => {
-                        triggerDownload(data.txt, `${data.fileNameBase}.txt`, 'text/plain;charset=utf-8');
+                        triggerDownload(txtContent, `${fileNameBase}.txt`, 'text/plain;charset=utf-8');
                     }, 250);
                 } else {
-                    triggerDownload(data.txt, `${data.fileNameBase}.txt`, 'text/plain;charset=utf-8');
+                    triggerDownload(txtContent, `${fileNameBase}.txt`, 'text/plain;charset=utf-8');
                 }
+                downloadedCount++;
             }
 
-            addToast('Archivo bancario generado y descargado exitosamente', 'success');
+            if (downloadedCount > 0) {
+                addToast('Archivo(s) bancario(s) generado(s) y descargado(s) exitosamente', 'success');
+            } else {
+                addToast('No se generaron registros para los filtros seleccionados', 'warning');
+            }
             setExportModalPeriodo(null);
         } catch (err) {
             console.error('Error exportando bancario:', err);
@@ -1065,85 +1080,197 @@ export default function PlanillasRRHH() {
                 title="Exportar Archivo para Pago Bancario"
                 size="md"
                 footer={(
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', alignItems: 'center' }}>
                         <button
                             type="button"
-                            className="btn btn-secondary"
                             onClick={() => setExportModalPeriodo(null)}
-                            style={{ height: '36px', fontSize: '0.825rem' }}
+                            style={{
+                                height: '36px',
+                                padding: '0 1rem',
+                                fontSize: '0.825rem',
+                                fontWeight: 600,
+                                borderRadius: '6px',
+                                background: 'rgba(255, 255, 255, 0.08)',
+                                color: '#f1f5f9',
+                                border: '1px solid rgba(255, 255, 255, 0.2)',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                            }}
                         >
                             Cancelar
                         </button>
                         <button
                             type="button"
-                            className="btn btn-primary"
                             onClick={handleDescargarBancario}
                             disabled={exportingBancario}
-                            style={{ height: '36px', fontSize: '0.825rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                            style={{
+                                height: '36px',
+                                padding: '0 1.25rem',
+                                fontSize: '0.825rem',
+                                fontWeight: 700,
+                                borderRadius: '6px',
+                                background: '#2563eb',
+                                color: '#ffffff',
+                                border: 'none',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.45rem',
+                                cursor: exportingBancario ? 'not-allowed' : 'pointer',
+                                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)',
+                                opacity: exportingBancario ? 0.7 : 1,
+                                transition: 'all 0.15s ease'
+                            }}
                         >
                             <Download size={15} />
-                            <span>{exportingBancario ? 'Generando...' : 'Descargar Archivo'}</span>
+                            <span>
+                                {exportingBancario 
+                                    ? 'Generando...' 
+                                    : (formatoBancario === 'ambos' ? 'Descargar CSV + TXT' : (formatoBancario === 'txt' ? 'Descargar TXT' : 'Descargar CSV'))
+                                }
+                            </span>
                         </button>
                     </div>
                 )}
             >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-                    <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)', margin: 0 }}>
-                        Genera el archivo estándar con las cuentas bancarias planilleras y el monto neto a pagar por cada empleado para cargar en la banca electrónica.
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+                        Genera los archivos para carga masiva bancaria con las cuentas planilleras y el monto neto a pagar por cada empleado para el período seleccionado.
                     </p>
 
                     <div>
-                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.45rem', letterSpacing: '0.03em' }}>
                             Formato de Salida
                         </label>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.65rem' }}>
+                            {/* 1. Solo CSV */}
                             <button
                                 type="button"
                                 onClick={() => setFormatoBancario('csv')}
                                 style={{
-                                    padding: '0.5rem',
-                                    borderRadius: '6px',
-                                    border: `1px solid ${formatoBancario === 'csv' ? 'var(--primary)' : 'var(--border-color)'}`,
-                                    background: formatoBancario === 'csv' ? 'rgba(99, 102, 241, 0.08)' : '#fff',
-                                    color: formatoBancario === 'csv' ? 'var(--primary)' : 'var(--text-main)',
-                                    fontWeight: 600,
-                                    fontSize: '0.78rem',
-                                    cursor: 'pointer'
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'flex-start',
+                                    padding: '0.75rem',
+                                    borderRadius: '8px',
+                                    textAlign: 'left',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    border: formatoBancario === 'csv' ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+                                    background: formatoBancario === 'csv' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                                    boxShadow: formatoBancario === 'csv' ? '0 0 10px rgba(59, 130, 246, 0.3)' : 'none'
                                 }}
                             >
-                                CSV (Excel)
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.4rem' }}>
+                                    <div style={{
+                                        padding: '0.4rem',
+                                        borderRadius: '6px',
+                                        background: formatoBancario === 'csv' ? '#2563eb' : 'rgba(255, 255, 255, 0.08)',
+                                        color: formatoBancario === 'csv' ? '#ffffff' : '#94a3b8',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                    }}>
+                                        <FileSpreadsheet size={16} />
+                                    </div>
+                                    {formatoBancario === 'csv' && (
+                                        <Check size={16} style={{ color: '#60a5fa' }} />
+                                    )}
+                                </div>
+                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: '#f8fafc' }}>
+                                    Solo CSV (.csv)
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                                    Para Excel u hojas de cálculo
+                                </span>
                             </button>
+
+                            {/* 2. Solo TXT */}
                             <button
                                 type="button"
                                 onClick={() => setFormatoBancario('txt')}
                                 style={{
-                                    padding: '0.5rem',
-                                    borderRadius: '6px',
-                                    border: `1px solid ${formatoBancario === 'txt' ? 'var(--primary)' : 'var(--border-color)'}`,
-                                    background: formatoBancario === 'txt' ? 'rgba(99, 102, 241, 0.08)' : '#fff',
-                                    color: formatoBancario === 'txt' ? 'var(--primary)' : 'var(--text-main)',
-                                    fontWeight: 600,
-                                    fontSize: '0.78rem',
-                                    cursor: 'pointer'
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'flex-start',
+                                    padding: '0.75rem',
+                                    borderRadius: '8px',
+                                    textAlign: 'left',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    border: formatoBancario === 'txt' ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+                                    background: formatoBancario === 'txt' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                                    boxShadow: formatoBancario === 'txt' ? '0 0 10px rgba(59, 130, 246, 0.3)' : 'none'
                                 }}
                             >
-                                TXT (Tabulado)
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.4rem' }}>
+                                    <div style={{
+                                        padding: '0.4rem',
+                                        borderRadius: '6px',
+                                        background: formatoBancario === 'txt' ? '#2563eb' : 'rgba(255, 255, 255, 0.08)',
+                                        color: formatoBancario === 'txt' ? '#ffffff' : '#94a3b8',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                    }}>
+                                        <FileText size={16} />
+                                    </div>
+                                    {formatoBancario === 'txt' && (
+                                        <Check size={16} style={{ color: '#60a5fa' }} />
+                                    )}
+                                </div>
+                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: '#f8fafc' }}>
+                                    Solo TXT (.txt)
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                                    Texto plano banca en línea
+                                </span>
                             </button>
+
+                            {/* 3. Ambos */}
                             <button
                                 type="button"
                                 onClick={() => setFormatoBancario('ambos')}
                                 style={{
-                                    padding: '0.5rem',
-                                    borderRadius: '6px',
-                                    border: `1px solid ${formatoBancario === 'ambos' ? 'var(--primary)' : 'var(--border-color)'}`,
-                                    background: formatoBancario === 'ambos' ? 'rgba(99, 102, 241, 0.08)' : '#fff',
-                                    color: formatoBancario === 'ambos' ? 'var(--primary)' : 'var(--text-main)',
-                                    fontWeight: 600,
-                                    fontSize: '0.78rem',
-                                    cursor: 'pointer'
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'flex-start',
+                                    padding: '0.75rem',
+                                    borderRadius: '8px',
+                                    textAlign: 'left',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    border: formatoBancario === 'ambos' ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+                                    background: formatoBancario === 'ambos' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                                    boxShadow: formatoBancario === 'ambos' ? '0 0 10px rgba(59, 130, 246, 0.3)' : 'none'
                                 }}
                             >
-                                Ambos (.csv y .txt)
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.4rem' }}>
+                                    <div style={{
+                                        padding: '0.4rem',
+                                        borderRadius: '6px',
+                                        background: formatoBancario === 'ambos' ? '#2563eb' : 'rgba(255, 255, 255, 0.08)',
+                                        color: formatoBancario === 'ambos' ? '#ffffff' : '#94a3b8',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                    }}>
+                                        <Files size={16} />
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <span style={{ fontSize: '0.62rem', fontWeight: 800, padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.25)', color: '#34d399', textTransform: 'uppercase' }}>
+                                            Recomendado
+                                        </span>
+                                        {formatoBancario === 'ambos' && (
+                                            <Check size={16} style={{ color: '#60a5fa' }} />
+                                        )}
+                                    </div>
+                                </div>
+                                <span style={{ fontWeight: 700, fontSize: '0.825rem', color: '#f8fafc' }}>
+                                    Ambos (.csv + .txt)
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                                    Descarga simultánea de ambos
+                                </span>
                             </button>
                         </div>
                     </div>
@@ -1156,7 +1283,7 @@ export default function PlanillasRRHH() {
                             <select
                                 value={exportBranchId}
                                 onChange={(e) => setExportBranchId(e.target.value)}
-                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}
+                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.15)', background: 'var(--card-bg, #1e293b)', color: '#f8fafc' }}
                             >
                                 <option value="">Todas las sucursales</option>
                                 {branchesAndDeptos.branches.map(b => (
@@ -1174,7 +1301,7 @@ export default function PlanillasRRHH() {
                             <select
                                 value={exportDeptoId}
                                 onChange={(e) => setExportDeptoId(e.target.value)}
-                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}
+                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.5rem', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.15)', background: 'var(--card-bg, #1e293b)', color: '#f8fafc' }}
                             >
                                 <option value="">Todos los departamentos</option>
                                 {branchesAndDeptos.departamentos.map(d => (

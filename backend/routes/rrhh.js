@@ -114,19 +114,7 @@ router.get('/export/bancario', authenticateToken, requirePermission(PERMISSION_R
             formato
         });
 
-        // Si se solicita descarga directa de archivo específico
-        if (formato === 'csv') {
-            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="${data.fileNameBase}.csv"`);
-            return res.send(data.csv);
-        }
-        if (formato === 'txt') {
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="${data.fileNameBase}.txt"`);
-            return res.send(data.txt);
-        }
-
-        // Si es formato ambos o solicitud ajax, retornar JSON con ambos contenidos
+        // Retornar JSON completo para procesamiento dinámico en el frontend
         res.json(data);
     } catch (error) {
         sendSafeError(res, error, 'Error al exportar formato bancario');
