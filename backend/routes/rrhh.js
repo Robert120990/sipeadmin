@@ -211,4 +211,83 @@ router.get('/export/recibo/:id', authenticateToken, requirePermission(PERMISSION
     }
 });
 
+/**
+ * 9. Obtener catálogo de cuentas bancarias y formas de pago disponibles
+ */
+router.get('/cuentas-bancarias', authenticateToken, requirePermission(PERMISSION_REQUIRED), async (req, res) => {
+    try {
+        const { company_id } = req.query;
+        const resultado = await rhPlanillaService.getCuentasBancariasParaPago(company_id);
+        res.json(resultado);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar cuentas bancarias');
+    }
+});
+
+/**
+ * 10. Consultar formas de pago registradas para un período de planilla
+ */
+router.get('/planillas/pagos', authenticateToken, requirePermission(PERMISSION_REQUIRED), async (req, res) => {
+    try {
+        const { company_id, anio, mes, quincena } = req.query;
+        if (!company_id || !anio || !mes || !quincena) {
+            return res.status(400).json({ message: 'Parámetros company_id, anio, mes y quincena requeridos' });
+        }
+
+        const pagos = await rhPlanillaService.getPagosPlanilla({
+            companyId: company_id,
+            anio: parseInt(anio, 10),
+            mes: parseInt(mes, 10),
+            quincena
+        });
+        res.json(pagos);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar pagos de la planilla');
+    }
+});
+
+/**
+ * 11. Registrar formas de pago de planilla y generar movimientos bancarios (conciliables)
+ */
+router.post('/planillas/pagar', authenticateToken, requirePermission(PERMISSION_REQUIRED), async (req, res) => {
+    try {
+        const { company_id, anio, mes, quincena, pagos } = req.body;
+        if (!company_id || !anio || !mes || !quincena || !Array.isArray(pagos) || pagos.length === 0) {
+            return res.status(400).json({ message: 'Parámetros requeridos incompletos o lista de pagos vacía' });
+        }
+
+        const resultado = await rhPlanillaService.registrarPagoPlanilla({
+            companyId: company_id,
+            anio: parseInt(anio, 10),
+            mes: parseInt(mes, 10),
+            quincena,
+            pagos,
+            userId: req.user?.id,
+            io: req.io
+        });
+
+        res.status(201).json(resultado);
+    } catch (error) {
+        sendSafeError(res, error, error.message || 'Error al registrar el pago de la planilla');
+    }
+});
+
+/**
+ * 12. Anular un pago de planilla registrado y revertir movimiento bancario
+ */
+router.delete('/planillas/pagos/:id', authenticateToken, requirePermission(PERMISSION_REQUIRED), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const resultado = await rhPlanillaService.anularPagoPlanilla({
+            pagoId: id,
+            userId: req.user?.id,
+            io: req.io
+        });
+
+        res.json(resultado);
+    } catch (error) {
+        sendSafeError(res, error, error.message || 'Error al anular el pago de la planilla');
+    }
+});
+
 module.exports = router;

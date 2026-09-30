@@ -21,11 +21,16 @@ import {
     CreditCard,
     Layers,
     Files,
-    Check
+    Check,
+    Plus,
+    Trash2,
+    Receipt
 } from 'lucide-react';
 import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
+import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../components/Toast';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
 const MONTH_NAMES = [
     { value: 1, label: 'Enero' },
@@ -56,6 +61,7 @@ const formatMoney = (val) => {
 };
 
 export default function PlanillasRRHH() {
+    const { confirm } = useConfirm();
     const { addToast } = useToast();
 
     // Estado principal
@@ -98,6 +104,19 @@ export default function PlanillasRRHH() {
     const [previewFileName, setPreviewFileName] = useState('');
     const [previewBadge, setPreviewBadge] = useState('');
     const [loadingPdf, setLoadingPdf] = useState(false);
+
+    // Modal de Registro de Pago de Planilla (Afecta Bancos y Conciliación)
+    const [pagoModalPeriodo, setPagoModalPeriodo] = useState(null);
+    const [cuentasBancarias, setCuentasBancarias] = useState([]);
+    const [loadingCuentasPago, setLoadingCuentasPago] = useState(false);
+    const [pagoRows, setPagoRows] = useState([]);
+    const [savingPago, setSavingPago] = useState(false);
+
+    // Modal de Ver Pagos Registrados
+    const [verPagosModalPeriodo, setVerPagosModalPeriodo] = useState(null);
+    const [pagosRegistrados, setPagosRegistrados] = useState([]);
+    const [loadingPagosRegistrados, setLoadingPagosRegistrados] = useState(false);
+    const [anulandoPagoId, setAnulandoPagoId] = useState(null);
 
     // 1. Cargar lista de empresas desde backend
     useEffect(() => {
@@ -372,6 +391,218 @@ export default function PlanillasRRHH() {
             addToast(err.response?.data?.message || 'Error al exportar archivo bancario', 'error');
         } finally {
             setExportingBancario(false);
+        }
+    };
+
+    // ── GESTIÓN DE FORMAS DE PAGO Y AFECTACIÓN BANCARIA ──
+
+    // Abrir modal para registrar pago
+    const handleAbrirModalPago = async (periodo) => {
+        setPagoModalPeriodo(periodo);
+        setLoadingCuentasPago(true);
+        try {
+            const res = await api.get('/rrhh/cuentas-bancarias', {
+                params: { company_id: selectedCompanyId }
+            });
+            const cuentas = res.data?.cuentas || [];
+            setCuentasBancarias(cuentas);
+
+            // Pre-seleccionar cuenta sugerida o primera disponible
+            const cuentaSugerida = cuentas.find(c => c.es_sugerida) || cuentas[0];
+            const primerCuentaId = cuentaSugerida ? cuentaSugerida.id : '';
+
+            // Inicializar fila con el monto neto total de la planilla
+            setPagoRows([
+                {
+                    tempId: Date.now(),
+                    cuenta_bancaria_id: primerCuentaId,
+                    forma_pago: 'Transferencia',
+                    tipo_remesa_codigo: 'TR',
+                    documento: '',
+                    monto: Number(periodo.total_neto || 0).toFixed(2),
+                    fecha_pago: new Date().toISOString().split('T')[0],
+                    concepto: ''
+                }
+            ]);
+        } catch (err) {
+            console.error('Error cargando cuentas bancarias:', err);
+            addToast('Error al cargar catálogo de cuentas bancarias', 'error');
+        } finally {
+            setLoadingCuentasPago(false);
+        }
+    };
+
+    // Agregar nueva fila de forma de pago
+    const handleAddPagoRow = () => {
+        if (!pagoModalPeriodo) return;
+        const totalActual = pagoRows.reduce((acc, r) => acc + (parseFloat(r.monto) || 0), 0);
+        const netoTotal = parseFloat(pagoModalPeriodo.total_neto || 0);
+        const restante = Math.max(0, netoTotal - totalActual);
+
+        const cuentaSugerida = cuentasBancarias.find(c => c.es_sugerida) || cuentasBancarias[0];
+        setPagoRows(prev => [
+            ...prev,
+            {
+                tempId: Date.now() + Math.random(),
+                cuenta_bancaria_id: cuentaSugerida ? cuentaSugerida.id : '',
+                forma_pago: 'Transferencia',
+                tipo_remesa_codigo: 'TR',
+                documento: '',
+                monto: restante > 0 ? restante.toFixed(2) : '',
+                fecha_pago: new Date().toISOString().split('T')[0],
+                concepto: ''
+            }
+        ]);
+    };
+
+    // Eliminar fila de forma de pago
+    const handleRemovePagoRow = (index) => {
+        if (pagoRows.length <= 1) return;
+        setPagoRows(prev => prev.filter((_, i) => i !== index));
+    };
+
+    // Modificar campo de una fila
+    const handlePagoRowChange = (index, field, value) => {
+        setPagoRows(prev => {
+            const next = [...prev];
+            next[index] = { ...next[index], [field]: value };
+            if (field === 'forma_pago') {
+                if (value.toLowerCase().includes('cheque')) next[index].tipo_remesa_codigo = 'CH';
+                else if (value.toLowerCase().includes('cargo') || value.toLowerCase().includes('debito')) next[index].tipo_remesa_codigo = 'NC';
+                else next[index].tipo_remesa_codigo = 'TR';
+            }
+            return next;
+        });
+    };
+
+    // Guardar pago
+    const handleSubmitPago = async () => {
+        if (!pagoModalPeriodo) return;
+
+        // Validaciones
+        for (let i = 0; i < pagoRows.length; i++) {
+            const r = pagoRows[i];
+            if (!r.cuenta_bancaria_id) {
+                addToast(`Fila ${i + 1}: Debe seleccionar una cuenta bancaria`, 'warning');
+                return;
+            }
+            const m = parseFloat(r.monto);
+            if (isNaN(m) || m <= 0) {
+                addToast(`Fila ${i + 1}: Ingrese un monto mayor a cero`, 'warning');
+                return;
+            }
+            if (!r.fecha_pago) {
+                addToast(`Fila ${i + 1}: Ingrese la fecha de pago`, 'warning');
+                return;
+            }
+        }
+
+        const totalPagos = pagoRows.reduce((acc, r) => acc + (parseFloat(r.monto) || 0), 0);
+        const netoPlanilla = parseFloat(pagoModalPeriodo.total_neto || 0);
+
+        if (Math.abs(totalPagos - netoPlanilla) > 0.05) {
+            const proced = await confirm(
+                `Atención: La suma de formas de pago (${formatMoney(totalPagos)}) difiere del neto total de la planilla (${formatMoney(netoPlanilla)}). ¿Deseas continuar con el registro de todas formas?`,
+                { variant: 'warning' }
+            );
+            if (!proced) return;
+        }
+
+        const confirmed = await confirm(
+            `¿Confirmas registrar el pago de la planilla por un total de ${formatMoney(totalPagos)} afectando ${pagoRows.length} movimiento(s) en Bancos? Estos movimientos quedarán disponibles para conciliación bancaria futura.`,
+            { variant: 'primary' }
+        );
+        if (!confirmed) return;
+
+        setSavingPago(true);
+        try {
+            const payload = {
+                company_id: parseInt(selectedCompanyId, 10),
+                anio: pagoModalPeriodo.periodo_anio,
+                mes: pagoModalPeriodo.periodo_mes,
+                quincena: pagoModalPeriodo.quincena,
+                pagos: pagoRows.map(r => ({
+                    cuenta_bancaria_id: r.cuenta_bancaria_id,
+                    forma_pago: r.forma_pago,
+                    tipo_remesa_codigo: r.tipo_remesa_codigo,
+                    documento: r.documento,
+                    monto: parseFloat(r.monto),
+                    fecha_pago: r.fecha_pago,
+                    concepto: r.concepto
+                }))
+            };
+
+            const res = await api.post('/rrhh/planillas/pagar', payload);
+            addToast(res.data?.message || 'Pago registrado exitosamente en Bancos', 'success');
+            setPagoModalPeriodo(null);
+            fetchGrupos(pagination.page);
+        } catch (err) {
+            console.error('Error registrando pago:', err);
+            addToast(err.response?.data?.message || 'Error al registrar el pago de la planilla', 'error');
+        } finally {
+            setSavingPago(false);
+        }
+    };
+
+    // Abrir modal para ver pagos
+    const handleAbrirVerPagos = async (periodo) => {
+        setVerPagosModalPeriodo(periodo);
+        setLoadingPagosRegistrados(true);
+        try {
+            const res = await api.get('/rrhh/planillas/pagos', {
+                params: {
+                    company_id: selectedCompanyId,
+                    anio: periodo.periodo_anio,
+                    mes: periodo.periodo_mes,
+                    quincena: periodo.quincena
+                }
+            });
+            setPagosRegistrados(res.data || []);
+        } catch (err) {
+            console.error('Error cargando pagos:', err);
+            addToast('Error al consultar los pagos registrados', 'error');
+        } finally {
+            setLoadingPagosRegistrados(false);
+        }
+    };
+
+    // Anular un pago registrado
+    const handleAnularPago = async (pago) => {
+        if (pago.es_conciliado) {
+            addToast(`No es posible anular este pago porque el movimiento ya fue conciliado en Bancos (${pago.fecha_aplicado}). Debe desconciliarlo primero en Bancos > Conciliación Bancaria.`, 'warning');
+            return;
+        }
+
+        const confirmed = await confirm(
+            `¿Estás seguro de anular este pago por ${formatMoney(pago.monto)}? Se eliminará el movimiento bancario (#${pago.movimiento_bancario_id || pago.id}) asociado en Bancos.`,
+            { variant: 'danger' }
+        );
+        if (!confirmed) return;
+
+        setAnulandoPagoId(pago.id);
+        try {
+            const res = await api.delete(`/rrhh/planillas/pagos/${pago.id}`);
+            addToast(res.data?.message || 'Pago anulado correctamente', 'success');
+            // Refrescar lista de pagos
+            const resPagos = await api.get('/rrhh/planillas/pagos', {
+                params: {
+                    company_id: selectedCompanyId,
+                    anio: verPagosModalPeriodo.periodo_anio,
+                    mes: verPagosModalPeriodo.periodo_mes,
+                    quincena: verPagosModalPeriodo.quincena
+                }
+            });
+            const nuevosPagos = resPagos.data || [];
+            setPagosRegistrados(nuevosPagos);
+            if (nuevosPagos.length === 0) {
+                setVerPagosModalPeriodo(null);
+            }
+            fetchGrupos(pagination.page);
+        } catch (err) {
+            console.error('Error anulando pago:', err);
+            addToast(err.response?.data?.message || 'Error al anular el pago', 'error');
+        } finally {
+            setAnulandoPagoId(null);
         }
     };
 
@@ -686,7 +917,7 @@ export default function PlanillasRRHH() {
                                                     color: '#047857'
                                                 }}>
                                                     <CheckCircle2 size={13} />
-                                                    Lista para pagar
+                                                    Pagada
                                                 </span>
                                             ) : (
                                                 <span style={{
@@ -699,14 +930,64 @@ export default function PlanillasRRHH() {
                                                     borderRadius: '12px',
                                                     background: 'rgba(245, 158, 11, 0.15)',
                                                     color: '#b45309'
-                                                }} title="La planilla aún está abierta en Sipe Web. No está lista para pago hasta su cierre.">
+                                                }} title="Planilla pendiente de pago. Presiona 'Pagar' para registrar formas de pago y afectar Bancos.">
                                                     <Clock size={13} />
-                                                    Abierta · No lista para pagar
+                                                    Pendiente de Pago
                                                 </span>
                                             )}
                                         </td>
                                         <td style={{ padding: '0.5rem 0.65rem', textAlign: 'center' }}>
                                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                {/* Botón Pagar Planilla o Ver Pagos según corresponda */}
+                                                {isCerrada ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleAbrirVerPagos(item)}
+                                                        className="btn-secondary"
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.3rem',
+                                                            padding: '0.28rem 0.55rem',
+                                                            fontSize: '0.75rem',
+                                                            fontWeight: 700,
+                                                            borderRadius: '6px',
+                                                            background: 'rgba(16, 185, 129, 0.12)',
+                                                            color: '#047857',
+                                                            border: '1px solid rgba(16, 185, 129, 0.3)',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                        title="Ver formas de pago registradas y movimientos en Bancos"
+                                                    >
+                                                        <Receipt size={14} />
+                                                        <span>Ver Pago</span>
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleAbrirModalPago(item)}
+                                                        className="btn-primary"
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.3rem',
+                                                            padding: '0.28rem 0.65rem',
+                                                            fontSize: '0.75rem',
+                                                            fontWeight: 700,
+                                                            borderRadius: '6px',
+                                                            background: '#2563eb',
+                                                            color: '#ffffff',
+                                                            border: 'none',
+                                                            cursor: 'pointer',
+                                                            boxShadow: '0 1px 2px rgba(37, 99, 235, 0.2)'
+                                                        }}
+                                                        title="Registrar formas de pago y afectar cuentas en Bancos (conciliable)"
+                                                    >
+                                                        <CreditCard size={14} />
+                                                        <span>Pagar</span>
+                                                    </button>
+                                                )}
+
                                                 {/* Icono Ojo: Ver Detalles de Planilla (Modo Sólo Lectura) */}
                                                 <button
                                                     type="button"
@@ -796,13 +1077,25 @@ export default function PlanillasRRHH() {
                             </span>
                         </div>
                         {selectedPeriodoDetalle?.estado_general === 'pagada' ? (
-                            <span style={{ fontSize: '0.72rem', fontWeight: 700, background: '#10b981', color: '#fff', padding: '0.2rem 0.5rem', borderRadius: '4px', whiteSpace: 'nowrap' }}>
-                                Planilla Cerrada
-                            </span>
+                            <button
+                                type="button"
+                                onClick={() => handleAbrirVerPagos(selectedPeriodoDetalle)}
+                                style={{ fontSize: '0.74rem', fontWeight: 700, background: '#10b981', color: '#fff', padding: '0.25rem 0.65rem', borderRadius: '4px', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                title="Ver detalle de formas de pago y movimientos en Bancos"
+                            >
+                                <Receipt size={13} />
+                                Planilla Pagada (Ver Pagos)
+                            </button>
                         ) : (
-                            <span style={{ fontSize: '0.72rem', fontWeight: 700, background: '#f59e0b', color: '#fff', padding: '0.2rem 0.5rem', borderRadius: '4px', whiteSpace: 'nowrap' }}>
-                                Planilla Abierta
-                            </span>
+                            <button
+                                type="button"
+                                onClick={() => handleAbrirModalPago(selectedPeriodoDetalle)}
+                                style={{ fontSize: '0.74rem', fontWeight: 700, background: '#2563eb', color: '#fff', padding: '0.25rem 0.65rem', borderRadius: '4px', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', boxShadow: '0 1px 2px rgba(37, 99, 235, 0.3)' }}
+                                title="Registrar formas de pago y afectar cuentas bancarias"
+                            >
+                                <CreditCard size={13} />
+                                Pagar Planilla (Afectar Bancos)
+                            </button>
                         )}
                     </div>
 
@@ -1308,6 +1601,437 @@ export default function PlanillasRRHH() {
                                     <option key={d.id} value={d.id}>{d.descripcion}</option>
                                 ))}
                             </select>
+                        </div>
+                    )}
+                </div>
+            </Modal>
+
+            {/* Modal: Registrar Pago de Planilla (Afectación Bancaria y Conciliación) */}
+            <Modal
+                isOpen={Boolean(pagoModalPeriodo)}
+                onClose={() => !savingPago && setPagoModalPeriodo(null)}
+                title={`Registrar Pago de Planilla — ${MONTH_NAMES.find(m => m.value === pagoModalPeriodo?.periodo_mes)?.label || ''} ${pagoModalPeriodo?.periodo_anio} (${pagoModalPeriodo?.quincena === 'primera' ? '1ra Quincena' : '2da Quincena'})`}
+                size="xl"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', fontSize: '0.85rem' }}>
+                            <span>Total Planilla: <strong>{formatMoney(pagoModalPeriodo?.total_neto)}</strong></span>
+                            <span>Total a Dispersar: <strong style={{
+                                color: Math.abs(pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0) - parseFloat(pagoModalPeriodo?.total_neto || 0)) < 0.05 ? '#059669' : '#dc2626'
+                            }}>
+                                {formatMoney(pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0))}
+                            </strong></span>
+                            {Math.abs(pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0) - parseFloat(pagoModalPeriodo?.total_neto || 0)) >= 0.05 && (
+                                <span style={{ fontSize: '0.78rem', color: '#dc2626', fontWeight: 600 }}>
+                                    (Diferencia: {formatMoney(parseFloat(pagoModalPeriodo?.total_neto || 0) - pagoRows.reduce((a, b) => a + (parseFloat(b.monto) || 0), 0))})
+                                </span>
+                            )}
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button
+                                type="button"
+                                disabled={savingPago}
+                                onClick={() => setPagoModalPeriodo(null)}
+                                className="btn-secondary"
+                                style={{ height: '36px', padding: '0 1rem', fontSize: '0.825rem' }}
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="button"
+                                disabled={savingPago || loadingCuentasPago || pagoRows.length === 0}
+                                onClick={handleSubmitPago}
+                                className="btn-primary"
+                                style={{
+                                    height: '36px',
+                                    padding: '0 1.25rem',
+                                    fontSize: '0.825rem',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    background: '#059669',
+                                    borderColor: '#059669',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                <CreditCard size={15} />
+                                {savingPago ? 'Procesando Pago...' : 'Confirmar y Aplicar en Bancos'}
+                            </button>
+                        </div>
+                    </div>
+                }
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Tarjeta Informativa Superior */}
+                    <div style={{
+                        padding: '0.75rem 1rem',
+                        borderRadius: '8px',
+                        background: 'rgba(59, 130, 246, 0.08)',
+                        border: '1px solid rgba(59, 130, 246, 0.25)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '0.75rem'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                            <Info size={18} color="#2563eb" />
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-main)' }}>
+                                <strong>Afectación Bancaria Automática:</strong> Al confirmar, se insertarán cargos en las cuentas seleccionadas con <code>fecha_aplicado = NULL</code> para que sean <strong>conciliables en el módulo de Bancos &gt; Conciliación Bancaria</strong>. La planilla pasará a estado <strong>Pagada</strong>.
+                            </div>
+                        </div>
+                        <div style={{
+                            padding: '0.3rem 0.65rem',
+                            borderRadius: '6px',
+                            background: '#059669',
+                            color: '#ffffff',
+                            fontWeight: 800,
+                            fontSize: '0.9rem'
+                        }}>
+                            Total Neto: {formatMoney(pagoModalPeriodo?.total_neto)}
+                        </div>
+                    </div>
+
+                    {/* Formas de Pago Dinámicas */}
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                            <label style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                                Formas de Pago y Cuentas de Origen ({pagoRows.length})
+                            </label>
+                            <button
+                                type="button"
+                                onClick={handleAddPagoRow}
+                                className="btn-secondary"
+                                style={{
+                                    height: '32px',
+                                    padding: '0 0.75rem',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 600,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    color: 'var(--primary)',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                <Plus size={14} />
+                                Agregar otra forma de pago
+                            </button>
+                        </div>
+
+                        {loadingCuentasPago ? (
+                            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                Cargando catálogo de cuentas bancarias...
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                {pagoRows.map((row, idx) => (
+                                    <div
+                                        key={row.tempId || idx}
+                                        className="card glass"
+                                        style={{
+                                            padding: '0.85rem',
+                                            borderRadius: '8px',
+                                            border: '1px solid var(--border-color)',
+                                            background: 'var(--card-bg, #fff)'
+                                        }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase' }}>
+                                                Forma de Pago #{idx + 1}
+                                            </span>
+                                            {pagoRows.length > 1 && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemovePagoRow(idx)}
+                                                    className="icon-btn"
+                                                    style={{ padding: '0.25rem', color: '#dc2626' }}
+                                                    title="Eliminar esta forma de pago"
+                                                >
+                                                    <Trash2 size={15} />
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
+                                            {/* Selector de Cuenta Bancaria con formatCuentaLabel y sortCuentas */}
+                                            <div style={{ gridColumn: 'span 2' }}>
+                                                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                    Cuenta Bancaria (Dispersora) *
+                                                </label>
+                                                <select
+                                                    value={row.cuenta_bancaria_id}
+                                                    onChange={(e) => handlePagoRowChange(idx, 'cuenta_bancaria_id', parseInt(e.target.value, 10))}
+                                                    style={{
+                                                        width: '100%',
+                                                        height: '36px',
+                                                        fontSize: '0.825rem',
+                                                        padding: '0 0.5rem',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border-color)',
+                                                        background: 'var(--card-bg, #fff)',
+                                                        color: 'var(--text-main)',
+                                                        fontWeight: 500
+                                                    }}
+                                                >
+                                                    <option value="">-- Seleccionar Cuenta Bancaria --</option>
+                                                    {sortCuentas(cuentasBancarias).map(c => (
+                                                        <option key={c.id} value={c.id}>
+                                                            {formatCuentaLabel(c)} {c.es_sugerida ? '⭐ (Empresa Seleccionada)' : ''}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Método de Pago */}
+                                            <div>
+                                                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                    Forma de Pago *
+                                                </label>
+                                                <select
+                                                    value={row.forma_pago}
+                                                    onChange={(e) => handlePagoRowChange(idx, 'forma_pago', e.target.value)}
+                                                    style={{
+                                                        width: '100%',
+                                                        height: '36px',
+                                                        fontSize: '0.825rem',
+                                                        padding: '0 0.5rem',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border-color)',
+                                                        background: 'var(--card-bg, #fff)',
+                                                        color: 'var(--text-main)'
+                                                    }}
+                                                >
+                                                    <option value="Transferencia">Transferencia Bancaria (TR)</option>
+                                                    <option value="Cheque">Cheque (CH)</option>
+                                                    <option value="Nota de Cargo">Nota de Cargo / Débito (NC)</option>
+                                                </select>
+                                            </div>
+
+                                            {/* Monto a Pagar */}
+                                            <div>
+                                                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                    Monto a Desembolsar ($) *
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min="0.01"
+                                                    value={row.monto}
+                                                    onChange={(e) => handlePagoRowChange(idx, 'monto', e.target.value)}
+                                                    placeholder="0.00"
+                                                    style={{
+                                                        width: '100%',
+                                                        height: '36px',
+                                                        fontSize: '0.85rem',
+                                                        fontWeight: 700,
+                                                        color: '#059669',
+                                                        padding: '0 0.5rem',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border-color)',
+                                                        background: 'var(--card-bg, #fff)'
+                                                    }}
+                                                />
+                                            </div>
+
+                                            {/* Referencia o Documento */}
+                                            <div>
+                                                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                    Referencia / Comprobante / # Cheque
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={row.documento}
+                                                    onChange={(e) => handlePagoRowChange(idx, 'documento', e.target.value)}
+                                                    placeholder="Ej: TR-009124 o Chq #4812"
+                                                    style={{
+                                                        width: '100%',
+                                                        height: '36px',
+                                                        fontSize: '0.825rem',
+                                                        padding: '0 0.5rem',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border-color)',
+                                                        background: 'var(--card-bg, #fff)',
+                                                        color: 'var(--text-main)'
+                                                    }}
+                                                />
+                                            </div>
+
+                                            {/* Fecha de Pago */}
+                                            <div>
+                                                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                    Fecha de Pago *
+                                                </label>
+                                                <input
+                                                    type="date"
+                                                    value={row.fecha_pago}
+                                                    onChange={(e) => handlePagoRowChange(idx, 'fecha_pago', e.target.value)}
+                                                    style={{
+                                                        width: '100%',
+                                                        height: '36px',
+                                                        fontSize: '0.825rem',
+                                                        padding: '0 0.5rem',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border-color)',
+                                                        background: 'var(--card-bg, #fff)',
+                                                        color: 'var(--text-main)'
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Modal: Ver Formas de Pago Registradas (con estado de Conciliación Bancaria) */}
+            <Modal
+                isOpen={Boolean(verPagosModalPeriodo)}
+                onClose={() => setVerPagosModalPeriodo(null)}
+                title={`Formas de Pago Registradas — ${MONTH_NAMES.find(m => m.value === verPagosModalPeriodo?.periodo_mes)?.label || ''} ${verPagosModalPeriodo?.periodo_anio} (${verPagosModalPeriodo?.quincena === 'primera' ? '1ra Quincena' : '2da Quincena'})`}
+                size="lg"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+                        <button
+                            type="button"
+                            onClick={() => setVerPagosModalPeriodo(null)}
+                            className="btn-secondary"
+                            style={{ height: '36px', padding: '0 1.25rem', fontSize: '0.825rem' }}
+                        >
+                            Cerrar
+                        </button>
+                    </div>
+                }
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div style={{
+                        padding: '0.65rem 0.85rem',
+                        borderRadius: '6px',
+                        background: 'rgba(16, 185, 129, 0.08)',
+                        border: '1px solid rgba(16, 185, 129, 0.25)',
+                        fontSize: '0.8rem',
+                        color: '#047857',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '0.5rem'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <CheckCircle2 size={16} />
+                            <span>
+                                Esta planilla fue marcada como pagada. A continuación se detallan los movimientos bancarios generados.
+                            </span>
+                        </div>
+                        <div style={{ fontWeight: 800 }}>
+                            Total Neto: {formatMoney(verPagosModalPeriodo?.total_neto)}
+                        </div>
+                    </div>
+
+                    {loadingPagosRegistrados ? (
+                        <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            Cargando pagos registrados...
+                        </div>
+                    ) : pagosRegistrados.length === 0 ? (
+                        <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            No se encontraron registros de pago asociados a este período.
+                        </div>
+                    ) : (
+                        <div className="table-responsive" style={{ border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                            <table style={{ width: '100%', minWidth: '650px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <thead>
+                                    <tr style={{ background: 'rgba(0,0,0,0.03)', borderBottom: '1px solid var(--border-color)' }}>
+                                        <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha Pago</th>
+                                        <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Cuenta Bancaria</th>
+                                        <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Forma Pago</th>
+                                        <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Referencia</th>
+                                        <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', textAlign: 'right' }}>Monto</th>
+                                        <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', textAlign: 'center' }}>Conciliación Bancaria</th>
+                                        <th style={{ padding: '0.5rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', textAlign: 'center' }}>Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {pagosRegistrados.map((p) => {
+                                        const ctaObj = {
+                                            banco_nombre: p.banco_nombre,
+                                            nombre: p.cuenta_nombre,
+                                            numero: p.numero_cuenta
+                                        };
+                                        return (
+                                            <tr key={p.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                                                    {p.fecha_pago ? String(p.fecha_pago).slice(0, 10) : ''}
+                                                </td>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 600 }}>
+                                                    {formatCuentaLabel(ctaObj)}
+                                                </td>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem' }}>
+                                                    <span style={{
+                                                        padding: '0.15rem 0.45rem',
+                                                        borderRadius: '4px',
+                                                        fontSize: '0.72rem',
+                                                        fontWeight: 600,
+                                                        background: 'rgba(59, 130, 246, 0.1)',
+                                                        color: '#2563eb'
+                                                    }}>
+                                                        {p.forma_pago}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                                    {p.documento || 'Sin doc'}
+                                                </td>
+                                                <td style={{ padding: '0.5rem', fontSize: '0.825rem', fontWeight: 700, textAlign: 'right', color: '#059669' }}>
+                                                    {formatMoney(p.monto)}
+                                                </td>
+                                                <td style={{ padding: '0.5rem', textAlign: 'center' }}>
+                                                    {p.es_conciliado ? (
+                                                        <span style={{
+                                                            fontSize: '0.72rem',
+                                                            fontWeight: 700,
+                                                            padding: '0.15rem 0.45rem',
+                                                            borderRadius: '4px',
+                                                            background: 'rgba(16, 185, 129, 0.15)',
+                                                            color: '#047857'
+                                                        }} title={`Conciliado el ${p.fecha_aplicado}`}>
+                                                            Conciliado ({p.fecha_aplicado ? String(p.fecha_aplicado).slice(0, 10) : ''})
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{
+                                                            fontSize: '0.72rem',
+                                                            fontWeight: 600,
+                                                            padding: '0.15rem 0.45rem',
+                                                            borderRadius: '4px',
+                                                            background: 'rgba(245, 158, 11, 0.15)',
+                                                            color: '#b45309'
+                                                        }} title="Disponible en Conciliación Bancaria para ser conciliado">
+                                                            Pendiente de Conciliar
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '0.5rem', textAlign: 'center' }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleAnularPago(p)}
+                                                        disabled={anulandoPagoId === p.id || p.es_conciliado}
+                                                        className="icon-btn"
+                                                        style={{
+                                                            padding: '0.3rem',
+                                                            color: p.es_conciliado ? '#cbd5e1' : '#dc2626',
+                                                            cursor: p.es_conciliado ? 'not-allowed' : 'pointer'
+                                                        }}
+                                                        title={p.es_conciliado ? 'No se puede anular porque ya fue conciliado en Bancos' : 'Anular pago y eliminar movimiento bancario'}
+                                                    >
+                                                        <Trash2 size={15} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
                         </div>
                     )}
                 </div>

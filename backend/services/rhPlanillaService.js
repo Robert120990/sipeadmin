@@ -786,6 +786,362 @@ const generateReciboIndividualPDF = async ({ companyId, planillaId }) => {
     });
 };
 
+/**
+ * 9. Obtener cuentas bancarias disponibles en SIPE Admin para el registro de pago
+ */
+const getCuentasBancariasParaPago = async (companyId = null) => {
+    const { getDb } = require('../db');
+    const db = getDb();
+
+    // Consultar todas las cuentas bancarias activas
+    const [cuentas] = await withRetry(() => db.query(`
+        SELECT cb.id, cb.numero, cb.nombre, cb.empresa_id,
+               cb.cod_cta, cb.activa, cb.orden,
+               b.id as banco_id, b.descripcion as banco_nombre,
+               e.id as empresa_id, e.nombre as empresa_nombre, e.codigo as empresa_codigo
+        FROM cuentas_bancarias cb
+        JOIN empresas e ON cb.empresa_id = e.id
+        LEFT JOIN bancos b ON cb.banco_id = b.id
+        WHERE cb.activa = TRUE
+        ORDER BY b.descripcion ASC, cb.numero ASC
+    `));
+
+    // Si se pasa companyId, buscar razón social en SaaS para ordenar o sugerir
+    let saasCompany = null;
+    if (companyId) {
+        try {
+            const saasDb = await getAccountingDb();
+            const [cRows] = await withRetry(() => saasDb.query(
+                'SELECT id, razon_social, nombre_comercial FROM companies WHERE id = ?',
+                [companyId]
+            ));
+            if (cRows.length > 0) saasCompany = cRows[0];
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    const cuentasConMatch = cuentas.map(c => {
+        let esSugerida = false;
+        if (saasCompany) {
+            const nomClean = (saasCompany.razon_social || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const empClean = (c.empresa_nombre || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (nomClean && empClean && (nomClean.includes(empClean) || empClean.includes(nomClean))) {
+                esSugerida = true;
+            }
+        }
+        return {
+            ...c,
+            es_sugerida: esSugerida
+        };
+    });
+
+    const formasPago = [
+        { codigo: 'TR', label: 'Transferencia Bancaria' },
+        { codigo: 'CH', label: 'Cheque' },
+        { codigo: 'NC', label: 'Nota de Cargo / Débito' }
+    ];
+
+    return {
+        cuentas: cuentasConMatch,
+        formas_pago: formasPago
+    };
+};
+
+/**
+ * 10. Consultar pagos registrados para un período de planilla
+ */
+const getPagosPlanilla = async ({ companyId, anio, mes, quincena }) => {
+    const { getDb } = require('../db');
+    const db = getDb();
+
+    const [pagos] = await withRetry(() => db.query(`
+        SELECT p.id, p.company_id, p.empresa_id, p.periodo_anio, p.periodo_mes, p.quincena,
+               p.cuenta_bancaria_id, p.movimiento_bancario_id, p.monto, p.forma_pago,
+               p.tipo_remesa_id, p.documento, p.concepto, p.fecha_pago, p.created_at,
+               cb.numero as numero_cuenta, cb.nombre as cuenta_nombre,
+               b.descripcion as banco_nombre,
+               e.nombre as empresa_nombre,
+               m.fecha_aplicado,
+               m.cargo,
+               IF(m.fecha_aplicado IS NOT NULL, 1, 0) as es_conciliado
+        FROM rh_planilla_pagos p
+        JOIN cuentas_bancarias cb ON p.cuenta_bancaria_id = cb.id
+        LEFT JOIN bancos b ON cb.banco_id = b.id
+        LEFT JOIN empresas e ON cb.empresa_id = e.id
+        LEFT JOIN movimientos_bancarios m ON p.movimiento_bancario_id = m.id
+        WHERE p.company_id = ? AND p.periodo_anio = ? AND p.periodo_mes = ? AND p.quincena = ?
+        ORDER BY p.id ASC
+    `, [companyId, anio, mes, quincena]));
+
+    return pagos;
+};
+
+/**
+ * 11. Registrar formas de pago de una planilla y generar movimientos bancarios (conciliables)
+ */
+const registrarPagoPlanilla = async ({ companyId, anio, mes, quincena, pagos, userId, io }) => {
+    if (!companyId || !anio || !mes || !quincena) {
+        throw new Error('Parámetros company_id, anio, mes y quincena requeridos');
+    }
+    if (!Array.isArray(pagos) || pagos.length === 0) {
+        throw new Error('Debe proporcionar al menos una forma de pago');
+    }
+
+    const { withTransaction } = require('../db');
+    const saasDb = await getAccountingDb();
+
+    // Obtener razón social de la empresa en SaaS para conceptos
+    const [cRows] = await withRetry(() => saasDb.query(
+        'SELECT id, razon_social, nombre_comercial FROM companies WHERE id = ?',
+        [companyId]
+    ));
+    const empresaNombre = cRows[0]?.nombre_comercial || cRows[0]?.razon_social || `Empresa ${companyId}`;
+
+    const mesNom = MESES_MAYUS[mes] || `MES ${mes}`;
+    const qLabel = quincena === 'primera' ? '1RA QUINCENA' : '2DA QUINCENA';
+
+    let totalPagado = 0;
+    const movimientosGenerados = [];
+
+    // Realizar operaciones en SIPE Admin dentro de transacción
+    await withTransaction(async (conn) => {
+        for (const item of pagos) {
+            const monto = parseFloat(item.monto || 0);
+            if (isNaN(monto) || monto <= 0) {
+                throw new Error(`El monto debe ser mayor a 0 (recibido: ${item.monto})`);
+            }
+            if (!item.cuenta_bancaria_id) {
+                throw new Error('Cada forma de pago debe tener una cuenta bancaria seleccionada');
+            }
+
+            // Buscar la cuenta bancaria para conocer su empresa_id
+            const [ctaRows] = await conn.query(
+                'SELECT cb.id, cb.numero, cb.nombre, cb.empresa_id, b.descripcion as banco_nombre ' +
+                'FROM cuentas_bancarias cb LEFT JOIN bancos b ON cb.banco_id = b.id WHERE cb.id = ?',
+                [item.cuenta_bancaria_id]
+            );
+            if (ctaRows.length === 0) {
+                throw new Error(`Cuenta bancaria #${item.cuenta_bancaria_id} no encontrada`);
+            }
+            const cta = ctaRows[0];
+
+            // Buscar tipo_remesa_id adecuado en esa empresa (TR para transferencia, CH para cheque, NC para nota de cargo)
+            let remCode = 'TR';
+            const formaPagoStr = (item.forma_pago || '').toLowerCase();
+            if (formaPagoStr.includes('cheque') || item.tipo_remesa_codigo === 'CH') {
+                remCode = 'CH';
+            } else if (formaPagoStr.includes('cargo') || formaPagoStr.includes('debito') || item.tipo_remesa_codigo === 'NC') {
+                remCode = 'NC';
+            }
+
+            const [remRows] = await conn.query(
+                'SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1',
+                [cta.empresa_id, remCode]
+            );
+            const tipoRemesaId = remRows.length > 0 ? remRows[0].id : null;
+
+            const docRef = (item.documento || '').trim();
+            const fechaPago = item.fecha_pago ? String(item.fecha_pago).slice(0, 10) : new Date().toISOString().split('T')[0];
+
+            const defaultConcepto = `PAGO PLANILLA ${empresaNombre.toUpperCase()} - ${qLabel} ${mesNom} ${anio}${docRef ? ' - ' + docRef : ''}`.slice(0, 250);
+            const conceptoFinal = (item.concepto || defaultConcepto).slice(0, 250);
+
+            // 1. Insertar movimiento bancario con fecha_aplicado = NULL
+            // CRÍTICO: fecha_aplicado = NULL permite que sea conciliable en el futuro en el módulo de Conciliación Bancaria
+            const [movResult] = await conn.query(`
+                INSERT INTO movimientos_bancarios (
+                    empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado,
+                    documento, concepto, monto, cargo, abono,
+                    tipo_remesa_id, es_contabilizado
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, ?, FALSE)
+            `, [
+                cta.empresa_id,
+                cta.id,
+                fechaPago,
+                docRef,
+                conceptoFinal,
+                monto,
+                monto, // cargo = salida de dinero
+                tipoRemesaId
+            ]);
+
+            const movId = movResult.insertId;
+
+            // 2. Registrar pago en rh_planilla_pagos
+            const [pagoResult] = await conn.query(`
+                INSERT INTO rh_planilla_pagos (
+                    company_id, empresa_id, periodo_anio, periodo_mes, quincena,
+                    cuenta_bancaria_id, movimiento_bancario_id, monto, forma_pago,
+                    tipo_remesa_id, documento, concepto, fecha_pago, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                companyId,
+                cta.empresa_id,
+                anio,
+                mes,
+                quincena,
+                cta.id,
+                movId,
+                monto,
+                item.forma_pago || (remCode === 'CH' ? 'Cheque' : (remCode === 'NC' ? 'Nota de Cargo' : 'Transferencia')),
+                tipoRemesaId,
+                docRef,
+                conceptoFinal,
+                fechaPago,
+                userId || null
+            ]);
+
+            totalPagado += monto;
+            movimientosGenerados.push({
+                pago_id: pagoResult.insertId,
+                movimiento_bancario_id: movId,
+                cuenta_id: cta.id,
+                cuenta_numero: cta.numero,
+                banco_nombre: cta.banco_nombre,
+                monto
+            });
+        }
+    });
+
+    // 3. En Sipe Web SaaS: actualizar estado de planilla a 'pagada'
+    await withRetry(() => saasDb.query(
+        'UPDATE rh_planillas SET estado = "pagada" WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
+        [companyId, anio, mes, quincena]
+    ));
+
+    // Si existe la tabla rh_empleado_descuentos en SaaS, descontar cuotas activas
+    try {
+        const [pendientes] = await withRetry(() => saasDb.query(
+            'SELECT DISTINCT empleado_id FROM rh_planillas WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
+            [companyId, anio, mes, quincena]
+        ));
+        if (pendientes.length > 0) {
+            const empIds = pendientes.map(p => p.empleado_id);
+            await withRetry(() => saasDb.query(`
+                UPDATE rh_empleado_descuentos
+                SET cuotas_restantes = GREATEST(0, cuotas_restantes - 1),
+                    activo = IF(cuotas_restantes - 1 <= 0, 0, activo)
+                WHERE company_id = ?
+                  AND empleado_id IN (?)
+                  AND activo = 1
+                  AND cuotas_restantes > 0
+                  AND (quincena = 'ambas' OR quincena = ?)
+            `, [companyId, empIds, quincena]));
+        }
+    } catch (e) {
+        // Ignorar si la tabla no existe en esta versión de SaaS
+    }
+
+    // 4. Emitir eventos en tiempo real si io está disponible
+    if (io) {
+        try {
+            io.emit('movimientos_updated', { source: 'rrhh_planilla_pago' });
+            io.emit('conciliacion_updated', { source: 'rrhh_planilla_pago' });
+            io.emit('planillas_updated', { company_id: companyId, anio, mes, quincena });
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    return {
+        success: true,
+        message: 'Pago(s) de planilla registrado(s) exitosamente y reflejado(s) en Bancos',
+        total_pagado: totalPagado,
+        pagos_count: movimientosGenerados.length,
+        movimientos: movimientosGenerados
+    };
+};
+
+/**
+ * 12. Anular un pago de planilla registrado
+ */
+const anularPagoPlanilla = async ({ pagoId, io }) => {
+    if (!pagoId) throw new Error('ID de pago requerido');
+
+    const { getDb, withTransaction } = require('../db');
+    const adminDb = getDb();
+    const saasDb = await getAccountingDb();
+
+    // 1. Consultar el pago y verificar si el movimiento ya fue conciliado
+    const [pagoRows] = await withRetry(() => adminDb.query(`
+        SELECT p.*, m.fecha_aplicado
+        FROM rh_planilla_pagos p
+        LEFT JOIN movimientos_bancarios m ON p.movimiento_bancario_id = m.id
+        WHERE p.id = ?
+    `, [pagoId]));
+
+    if (pagoRows.length === 0) {
+        throw new Error('Registro de pago no encontrado');
+    }
+    const pago = pagoRows[0];
+
+    if (pago.fecha_aplicado) {
+        throw new Error(
+            `No se puede anular este pago porque el movimiento bancario (#${pago.movimiento_bancario_id}) ` +
+            `ya ha sido conciliado en el módulo de Bancos (Fecha aplicado: ${pago.fecha_aplicado}). ` +
+            `Debe desconciliarlo primero en Bancos > Conciliación Bancaria.`
+        );
+    }
+
+    // 2. Eliminar movimiento bancario y registro de pago en transacción
+    await withTransaction(async (conn) => {
+        if (pago.movimiento_bancario_id) {
+            await conn.query('DELETE FROM movimientos_bancarios WHERE id = ?', [pago.movimiento_bancario_id]);
+        }
+        await conn.query('DELETE FROM rh_planilla_pagos WHERE id = ?', [pagoId]);
+    });
+
+    // 3. Verificar si quedan otros pagos para este mismo período
+    const [restantes] = await withRetry(() => adminDb.query(`
+        SELECT COUNT(*) as count FROM rh_planilla_pagos
+        WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?
+    `, [pago.company_id, pago.periodo_anio, pago.periodo_mes, pago.quincena]));
+
+    // Si ya no quedan pagos, regresar la planilla a 'pendiente' en SaaS
+    if (restantes[0]?.count === 0) {
+        await withRetry(() => saasDb.query(
+            'UPDATE rh_planillas SET estado = "pendiente" WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
+            [pago.company_id, pago.periodo_anio, pago.periodo_mes, pago.quincena]
+        ));
+
+        try {
+            const [emps] = await withRetry(() => saasDb.query(
+                'SELECT DISTINCT empleado_id FROM rh_planillas WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
+                [pago.company_id, pago.periodo_anio, pago.periodo_mes, pago.quincena]
+            ));
+            if (emps.length > 0) {
+                const empIds = emps.map(e => e.empleado_id);
+                await withRetry(() => saasDb.query(`
+                    UPDATE rh_empleado_descuentos
+                    SET cuotas_restantes = cuotas_restantes + 1,
+                        activo = 1
+                    WHERE company_id = ?
+                      AND empleado_id IN (?)
+                      AND (quincena = 'ambas' OR quincena = ?)
+                `, [pago.company_id, empIds, pago.quincena]));
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    if (io) {
+        try {
+            io.emit('movimientos_updated', { source: 'rrhh_pago_anulado' });
+            io.emit('conciliacion_updated', { source: 'rrhh_pago_anulado' });
+            io.emit('planillas_updated', { company_id: pago.company_id, anio: pago.periodo_anio, mes: pago.periodo_mes, quincena: pago.quincena });
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    return {
+        success: true,
+        message: 'Pago anulado y movimiento bancario eliminado correctamente'
+    };
+};
+
 module.exports = {
     getEmpresas,
     getFiltros,
@@ -794,5 +1150,9 @@ module.exports = {
     exportBancario,
     generatePlanillaReportePDF,
     generateRecibosMasivosPDF,
-    generateReciboIndividualPDF
+    generateReciboIndividualPDF,
+    getCuentasBancariasParaPago,
+    getPagosPlanilla,
+    registrarPagoPlanilla,
+    anularPagoPlanilla
 };

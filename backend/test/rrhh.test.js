@@ -145,4 +145,124 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(pdfBuffer.length > 1000, 'El PDF del recibo individual debe tener contenido');
         assert.equal(pdfBuffer.subarray(0, 4).toString(), '%PDF', 'Debe comenzar con la firma mágica %PDF');
     });
+
+    test('getCuentasBancariasParaPago debe retornar cuentas bancarias activas y formas de pago', async () => {
+        const resultado = await rhPlanillaService.getCuentasBancariasParaPago(9);
+        assert.ok(Array.isArray(resultado.cuentas), 'cuentas debe ser un arreglo');
+        assert.ok(resultado.cuentas.length > 0, 'Debe haber al menos una cuenta activa');
+        assert.ok(Array.isArray(resultado.formas_pago), 'formas_pago debe ser un arreglo');
+        assert.ok(resultado.formas_pago.some(f => f.codigo === 'TR'), 'Debe incluir Transferencia Bancaria (TR)');
+
+        const cta = resultado.cuentas[0];
+        assert.ok(cta.id > 0, 'Cuenta debe tener id');
+        assert.ok(cta.numero, 'Cuenta debe tener número');
+        assert.ok(cta.banco_nombre, 'Cuenta debe tener nombre de banco');
+    });
+
+    test('registrarPagoPlanilla debe registrar múltiples formas de pago, afectar cuentas con fecha_aplicado NULL y permitir anulación', async () => {
+        const adminDb = getDb();
+        const saasDb = await getAccountingDb();
+
+        // 1. Obtener una cuenta bancaria activa
+        const { cuentas } = await rhPlanillaService.getCuentasBancariasParaPago(9);
+        assert.ok(cuentas.length > 0, 'Debe haber cuentas disponibles');
+        const cta1 = cuentas[0];
+        const cta2 = cuentas[1] || cuentas[0];
+
+        // 2. Registrar pago dividido en dos formas de pago para período de prueba
+        const testAnio = 2026;
+        const testMes = 9;
+        const testQuincena = 'segunda';
+
+        // Limpiar pagos previos de prueba si hubiesen
+        await adminDb.query('DELETE FROM rh_planilla_pagos WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?', [9, testAnio, testMes, testQuincena]);
+
+        const resPago = await rhPlanillaService.registrarPagoPlanilla({
+            companyId: 9,
+            anio: testAnio,
+            mes: testMes,
+            quincena: testQuincena,
+            pagos: [
+                {
+                    cuenta_bancaria_id: cta1.id,
+                    forma_pago: 'Transferencia',
+                    documento: 'TR-TEST-100',
+                    monto: 150.00,
+                    fecha_pago: '2026-09-30'
+                },
+                {
+                    cuenta_bancaria_id: cta2.id,
+                    forma_pago: 'Cheque',
+                    documento: 'CH-TEST-200',
+                    monto: 75.50,
+                    fecha_pago: '2026-09-30'
+                }
+            ],
+            userId: 1
+        });
+
+        assert.equal(resPago.success, true);
+        assert.equal(resPago.pagos_count, 2);
+        assert.equal(resPago.total_pagado, 225.50);
+
+        // 3. Verificar que en movimientos_bancarios se crearon los registros con fecha_aplicado = NULL
+        const movIds = resPago.movimientos.map(m => m.movimiento_bancario_id);
+        const [movs] = await adminDb.query('SELECT * FROM movimientos_bancarios WHERE id IN (?)', [movIds]);
+        assert.equal(movs.length, 2, 'Deben existir 2 movimientos creados');
+        for (const m of movs) {
+            assert.equal(m.fecha_aplicado, null, 'OBLIGATORIO: fecha_aplicado debe ser NULL para ser conciliable');
+            assert.ok(Number(m.cargo) > 0, 'El cargo debe ser mayor a 0 (salida de dinero)');
+            assert.equal(Number(m.abono), 0, 'El abono debe ser 0');
+        }
+
+        // 4. Verificar que en db_sistema_saas rh_planillas el estado pasó a "pagada"
+        const [planillasPagadas] = await saasDb.query(
+            'SELECT DISTINCT estado FROM rh_planillas WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
+            [9, testAnio, testMes, testQuincena]
+        );
+        assert.equal(planillasPagadas[0]?.estado, 'pagada', 'Estado en SaaS debe ser pagada');
+
+        // 5. Consultar pagos registrados mediante getPagosPlanilla
+        const pagosRegistrados = await rhPlanillaService.getPagosPlanilla({
+            companyId: 9,
+            anio: testAnio,
+            mes: testMes,
+            quincena: testQuincena
+        });
+        assert.equal(pagosRegistrados.length, 2);
+        assert.equal(pagosRegistrados[0].es_conciliado, 0, 'No debe estar marcado como conciliado aún');
+
+        // 6. Validar que si el movimiento está conciliado (fecha_aplicado != null), la anulación sea rechazada
+        const primerPagoId = pagosRegistrados[0].id;
+        const primerMovId = pagosRegistrados[0].movimiento_bancario_id;
+        await adminDb.query('UPDATE movimientos_bancarios SET fecha_aplicado = "2026-09-30" WHERE id = ?', [primerMovId]);
+
+        await assert.rejects(
+            async () => {
+                await rhPlanillaService.anularPagoPlanilla({ pagoId: primerPagoId, userId: 1 });
+            },
+            /ya ha sido conciliado en el módulo de Bancos/
+        );
+
+        // Desconciliar para probar la anulación exitosa
+        await adminDb.query('UPDATE movimientos_bancarios SET fecha_aplicado = NULL WHERE id = ?', [primerMovId]);
+
+        // 7. Anular ambos pagos y verificar reversión
+        for (const p of pagosRegistrados) {
+            const anularRes = await rhPlanillaService.anularPagoPlanilla({ pagoId: p.id, userId: 1 });
+            assert.equal(anularRes.success, true);
+        }
+
+        // Verificar que los movimientos bancarios fueron eliminados
+        const [movsRestantes] = await adminDb.query('SELECT * FROM movimientos_bancarios WHERE id IN (?)', [movIds]);
+        assert.equal(movsRestantes.length, 0, 'Los movimientos bancarios deben haberse eliminado tras la anulación');
+
+        // Verificar que la planilla volvió a estado "pendiente"
+        const [planillasRevertidas] = await saasDb.query(
+            'SELECT DISTINCT estado FROM rh_planillas WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
+            [9, testAnio, testMes, testQuincena]
+        );
+        assert.equal(planillasRevertidas[0]?.estado, 'pendiente', 'Estado debe regresar a pendiente al anular todos los pagos');
+    });
 });
+
