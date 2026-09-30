@@ -367,10 +367,114 @@ router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, r
 
 // --- PORTAL ENERGY-LATAM / PUMA ORDERS & BANK INTEGRATION ---
 
+async function ensurePortalTablesAndSeed(db) {
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS portal_pedidos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                numero_orden VARCHAR(50) NOT NULL UNIQUE,
+                id_estacion VARCHAR(50) NULL,
+                estacion_nombre VARCHAR(150) NULL,
+                fecha_pedido DATETIME NULL,
+                fecha_solicitada DATE NULL,
+                tipo_entrega VARCHAR(50) NULL,
+                tipo_producto VARCHAR(50) NULL DEFAULT 'Bulk',
+                estado VARCHAR(50) NOT NULL DEFAULT 'PENDIENTE',
+                estado_original VARCHAR(50) NULL,
+                razon_estado TEXT NULL,
+                monto_total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                metodo_pago VARCHAR(50) NULL,
+                costo_diesel DECIMAL(10,4) DEFAULT 0.0000,
+                costo_regular DECIMAL(10,4) DEFAULT 0.0000,
+                costo_super DECIMAL(10,4) DEFAULT 0.0000,
+                costo_ion DECIMAL(10,4) DEFAULT 0.0000,
+                galones_diesel DECIMAL(10,2) DEFAULT 0.00,
+                galones_regular DECIMAL(10,2) DEFAULT 0.00,
+                galones_super DECIMAL(10,2) DEFAULT 0.00,
+                galones_ion DECIMAL(10,2) DEFAULT 0.00,
+                factura_numero VARCHAR(50) NULL,
+                factura_monto DECIMAL(12,2) DEFAULT 0.00,
+                factura_saldo_pendiente DECIMAL(12,2) DEFAULT 0.00,
+                factura_fecha_vencimiento DATE NULL,
+                factura_fecha_emision DATE NULL,
+                factura_pdf_url TEXT NULL,
+                orden_pdf_url TEXT NULL,
+                items_json LONGTEXT NULL,
+                raw_data_json LONGTEXT NULL,
+                estado_pago ENUM('PENDIENTE', 'PAGADO', 'PARCIAL', 'CONCILIADO') DEFAULT 'PENDIENTE',
+                cuenta_bancaria_id INT NULL,
+                movimiento_bancario_id INT NULL,
+                cheque_id INT NULL,
+                tipo_pago VARCHAR(50) DEFAULT 'Transferencia',
+                referencia_pago VARCHAR(100) NULL,
+                fecha_pago DATE NULL,
+                monto_pagado DECIMAL(12,2) DEFAULT 0.00,
+                observaciones_pago TEXT NULL,
+                listo_conciliacion TINYINT(1) DEFAULT 0,
+                fecha_conciliado DATE NULL,
+                sincronizado_at DATETIME NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_portal_orden (numero_orden),
+                INDEX idx_portal_estacion (id_estacion),
+                INDEX idx_portal_estado (estado),
+                INDEX idx_portal_fecha (fecha_pedido),
+                INDEX idx_portal_pago (estado_pago, listo_conciliacion)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS portal_resumen_cuenta (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                cuenta_nombre VARCHAR(150),
+                cuenta_numero VARCHAR(50),
+                saldo_disponible DECIMAL(12,2) DEFAULT 0.00,
+                limite_credito DECIMAL(12,2) DEFAULT 0.00,
+                porcentaje_disponible DECIMAL(5,2) DEFAULT 0.00,
+                ordenes_activas_count INT DEFAULT 0,
+                ordenes_anteriores_count INT DEFAULT 0,
+                ultima_sincronizacion DATETIME,
+                raw_user_json LONGTEXT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS combustible_precios_quincenales (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                periodo_inicio DATE NOT NULL,
+                periodo_fin DATE NOT NULL,
+                precio_diesel DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+                precio_regular DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+                precio_super DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+                precio_ion DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+                variacion_diesel DECIMAL(10,4) DEFAULT 0.0000,
+                variacion_regular DECIMAL(10,4) DEFAULT 0.0000,
+                variacion_super DECIMAL(10,4) DEFAULT 0.0000,
+                variacion_ion DECIMAL(10,4) DEFAULT 0.0000,
+                fuente VARCHAR(100) DEFAULT 'Portal Energy-Latam / DGEHM',
+                activo TINYINT(1) DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_periodo (periodo_inicio, periodo_fin)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+
+        const [cnt] = await db.query('SELECT COUNT(*) as c FROM portal_pedidos');
+        if (cnt[0].c === 0) {
+            await energyLatamService.seedInitialPortalOrders();
+        }
+    } catch(err) {
+        console.warn('[ensurePortalTablesAndSeed] Note:', err.message);
+    }
+}
+
 // 1. Obtener listado de pedidos del portal
 router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
+        await ensurePortalTablesAndSeed(db);
+
         const { estacion, estado, tipo_producto, estado_pago, desde, hasta, search } = req.query;
 
         let query = `
@@ -425,6 +529,7 @@ router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) =>
 router.get('/operaciones/portal/resumen-cuenta', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
+        await ensurePortalTablesAndSeed(db);
         const [rows] = await withRetry(() => db.query("SELECT * FROM portal_resumen_cuenta ORDER BY id DESC LIMIT 1"));
         if (rows.length > 0) {
             res.json(rows[0]);

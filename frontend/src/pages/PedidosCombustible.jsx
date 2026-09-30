@@ -64,6 +64,7 @@ export default function PedidosCombustible() {
     });
     const [preciosCombustible, setPreciosCombustible] = useState([]);
     const [isSyncingPortal, setIsSyncingPortal] = useState(false);
+    const [isPortalLoading, setIsPortalLoading] = useState(true);
     const [syncingOrderNum, setSyncingOrderNum] = useState(null);
 
     // Portal Filters
@@ -130,6 +131,7 @@ export default function PedidosCombustible() {
 
     // 1. Initial Load Master Data, Portal Orders, Accounts & Prices
     const fetchPortalOrders = async () => {
+        setIsPortalLoading(true);
         try {
             const params = {};
             if (filterEstacion) params.estacion = filterEstacion;
@@ -142,6 +144,9 @@ export default function PedidosCombustible() {
             setPortalOrders(res.data || []);
         } catch (e) {
             console.error('Error fetching portal orders:', e);
+            addToast('Error al consultar pedidos del portal: ' + (e.response?.data?.message || e.message), 'error');
+        } finally {
+            setIsPortalLoading(false);
         }
     };
 
@@ -1048,7 +1053,14 @@ export default function PedidosCombustible() {
                                     </tr>
                                 ))}
 
-                                {portalOrders.length === 0 && (
+                                {isPortalLoading ? (
+                                    <tr>
+                                        <td colSpan="9" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                                            <div className="spinner" style={{ width: '24px', height: '24px', border: '3px solid var(--primary)', borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 0.75rem auto' }}></div>
+                                            Cargando pedidos del portal...
+                                        </td>
+                                    </tr>
+                                ) : portalOrders.length === 0 ? (
                                     <tr>
                                         <td colSpan="9" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
                                             No se encontraron pedidos en el portal con los filtros aplicados.
@@ -1059,7 +1071,7 @@ export default function PedidosCombustible() {
                                             </div>
                                         </td>
                                     </tr>
-                                )}
+                                ) : null}
                             </tbody>
                         </table>
                     </div>
