@@ -510,6 +510,119 @@ export default function PedidosCombustible() {
         return null;
     }, [totalPipa, pipasWithCap]);
 
+    const getSelectedPipaData = () => {
+        if (!selectedPipa) return null;
+        return pipasWithCap.find(p => String(p.id) === String(selectedPipa)) || null;
+    };
+
+    const renderCompartments = () => {
+        if (!selectedPipa) return null;
+        const pData = getSelectedPipaData();
+        if (!pData) return null;
+        const comps = pData.parsedCompartments || [];
+        if (!comps.length) {
+            return (
+                <div style={{ padding: '0.4rem 0.6rem', marginBottom: '0.5rem', background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', borderRadius: '4px', fontSize: '0.72rem', color: '#eab308' }}>
+                    ℹ️ Esta pipa no tiene calibraciones/compartimientos configurados en el catálogo.
+                </div>
+            );
+        }
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.65rem', padding: '0.5rem 0.65rem', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.25rem' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: 'var(--primary)', letterSpacing: '0.02em' }}>
+                        CALIBRACIONES PIPA ({comps.length} {comps.length === 1 ? 'compartimiento' : 'compartimientos'}):
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        Capacidad Total: <b style={{ color: 'var(--text-color)' }}>{numFmt(pData.totalCapacity)} Gal</b>
+                    </span>
+                </div>
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', width: '100%' }}>
+                    {comps.map((c, i) => {
+                        const cCap = c.separations && Array.isArray(c.separations) && c.separations.length > 0 
+                            ? c.separations.reduce((acc, s) => acc + Number(s.capacity || 0), 0) 
+                            : Number(c.capacity || 0);
+                        const cNum = c.number || c.compartment_number || (i + 1);
+                        return (
+                            <div 
+                                key={i} 
+                                style={{ 
+                                    border: '1px solid var(--border)', 
+                                    background: 'var(--bg-active)', 
+                                    padding: '0.3rem 0.55rem', 
+                                    borderRadius: '4px', 
+                                    fontSize: '0.72rem', 
+                                    display: 'flex', 
+                                    flexDirection: 'column', 
+                                    gap: '0.15rem',
+                                    minWidth: '70px',
+                                    flex: '1 0 auto'
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.45rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.15rem' }}>
+                                    <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>C{cNum}</span>
+                                    <b style={{ color: 'var(--text-color)' }}>{numFmt(cCap)}</b>
+                                </div>
+                                {c.separations && Array.isArray(c.separations) && c.separations.length > 1 && (
+                                    <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                                        {c.separations.map((s, si) => (
+                                            <span 
+                                                key={si} 
+                                                title={`Separación ${si + 1}: ${numFmt(s.capacity)} Gal`} 
+                                                style={{ 
+                                                    fontSize: '0.62rem', 
+                                                    background: 'rgba(255,255,255,0.06)', 
+                                                    padding: '1px 3px', 
+                                                    borderRadius: '2px', 
+                                                    color: 'var(--text-muted)' 
+                                                }}
+                                            >
+                                                {numFmt(s.capacity)}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+    };
+
+    const RenderPipaRecommendation = () => {
+        if (totalPipa <= 0 || !recommendedPipa) return null;
+        
+        const isCurrentOk = selectedPipa && Number(selectedPipa) === recommendedPipa.id;
+        return (
+            <div style={{ marginTop: '0.5rem', marginBottom: '0.5rem', padding: '0.45rem 0.65rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem',
+                background: isCurrentOk ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                color: isCurrentOk ? '#10b981' : '#ef4444', border: `1px solid ${isCurrentOk ? '#10b981' : '#ef4444'}`
+            }}>
+                {isCurrentOk ? (
+                    <>✓ La Pipa seleccionada cubre dinámicamente tu solicitud.</>
+                ) : (
+                    <>⚠️ Sugerencia de Eficiencia: Selecciona la Pipa [{recommendedPipa.code}] (Capacidad Fija: {numFmt(recommendedPipa.totalCapacity)} Gal)</>
+                )}
+            </div>
+        );
+    };
+
+    const loadPedidoToForm = (row) => {
+        setPedidoTemp({ id: row.id_pedido });
+        setFechaPedido(row.fecha ? row.fecha.split('T')[0] : '');
+        setSelectedTransporte(row.id_transportista || '');
+        setSelectedPipa(row.id_calibracion_diesel || '');
+        setComp({
+            D: { val: row.diesel || 0 },
+            R: { val: row.regular || 0 },
+            S: { val: row.super || 0 },
+            I: { val: row.iondiesel || 0 }
+        });
+        setPrevisualizar(false);
+    };
+
     const fetchOperationalData = async (est) => {
         if (!est || !fechaConsulta) return;
         setIsLoading(true);
@@ -611,10 +724,16 @@ export default function PedidosCombustible() {
         let bestPipa = validPipas.length > 0 ? validPipas[0] : [...carrierPipas].sort((a,b) => a.totalCapacity - b.totalCapacity)[0];
 
         let alloc = { D: 0, R: 0, S: 0, I: 0 };
-        let compartments = [...bestPipa.parsedCompartments].sort((a,b) => Number(b.capacity) - Number(a.capacity));
+        const getCompCap = (compObj) => {
+            if (compObj.separations && Array.isArray(compObj.separations) && compObj.separations.length > 0) {
+                return compObj.separations.reduce((sum, s) => sum + Number(s.capacity || 0), 0);
+            }
+            return Number(compObj.capacity || 0);
+        };
+        let compartments = [...bestPipa.parsedCompartments].sort((a,b) => getCompCap(b) - getCompCap(a));
 
         compartments.forEach(c => {
-            const cap = Number(c.capacity);
+            const cap = getCompCap(c);
             let mostCriticalType = null;
             let lowestDuration = 9999;
 
@@ -1288,6 +1407,8 @@ export default function PedidosCombustible() {
                                 </select>
                             </div>
 
+                            {renderCompartments()}
+
                             {/* Inputs por Combustible */}
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
                                 <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>DIESEL</span>
@@ -1310,6 +1431,8 @@ export default function PedidosCombustible() {
                                     style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                             </div>
 
+                            <RenderPipaRecommendation />
+
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem', borderTop: '2px solid var(--border)', paddingTop: '0.75rem' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
                                     <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>TOTAL PIPA</span>
@@ -1317,7 +1440,7 @@ export default function PedidosCombustible() {
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
                                     <button className="btn-primary" onClick={handleGuardarPedido} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem' }}>
-                                        AGREGAR PEDIDO
+                                        {pedidoTemp.id ? 'ACTUALIZAR PEDIDO' : 'AGREGAR PEDIDO'}
                                     </button>
                                     <button className="btn-secondary" onClick={limpiarFormulario} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem' }}>
                                         CANCELAR
@@ -1408,7 +1531,12 @@ export default function PedidosCombustible() {
                             </thead>
                             <tbody>
                                 {programados.map(p => (
-                                    <tr key={p.id_pedido} style={{ borderBottom: '1px solid var(--border)' }}>
+                                    <tr 
+                                        key={p.id_pedido} 
+                                        style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                                        onDoubleClick={() => loadPedidoToForm(p)}
+                                        title="Doble clic para editar / cargar en el formulario"
+                                    >
                                         <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
                                         <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>{p.numero || p.id_pedido}</td>
                                         <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
