@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
     Truck, CheckCircle, XCircle, RefreshCw, AlertTriangle, ExternalLink,
     CreditCard, DollarSign, FileText, CheckCircle2, Clock, Scale, Eye,
@@ -52,8 +52,13 @@ export default function PedidosCombustible() {
     const [promedios, setPromedios] = useState({ D: 0, R: 0, S: 0, I: 0 });
     const [programados, setProgramados] = useState([]);
 
-    // Portal Orders State
+    // Portal Orders State & Pagination (10 por defecto para no sobrecargar)
     const [portalOrders, setPortalOrders] = useState([]);
+    const [portalLimit, setPortalLimit] = useState(10);
+    const [portalTotal, setPortalTotal] = useState(0);
+    const [hasMorePortal, setHasMorePortal] = useState(false);
+    const [isLoadingMorePortal, setIsLoadingMorePortal] = useState(false);
+    const portalSentinelRef = useRef(null);
     const [portalResumen, setPortalResumen] = useState({
         saldo_disponible: 633,
         limite_credito: 2000,
@@ -130,10 +135,21 @@ export default function PedidosCombustible() {
     });
 
     // 1. Initial Load Master Data, Portal Orders, Accounts & Prices
-    const fetchPortalOrders = async () => {
-        setIsPortalLoading(true);
+    const fetchPortalOrders = async (reset = true, customLimit = null) => {
+        const activeLimit = customLimit !== null ? customLimit : portalLimit;
+        if (reset) {
+            setIsPortalLoading(true);
+        } else {
+            if (isLoadingMorePortal || !hasMorePortal) return;
+            setIsLoadingMorePortal(true);
+        }
+
         try {
-            const params = {};
+            const offset = reset ? 0 : portalOrders.length;
+            const params = {
+                limit: activeLimit,
+                offset: offset
+            };
             if (filterEstacion) params.estacion = filterEstacion;
             if (filterEstado) params.estado = filterEstado;
             if (filterTipo) params.tipo_producto = filterTipo;
@@ -141,12 +157,30 @@ export default function PedidosCombustible() {
             if (filterSearch) params.search = filterSearch;
 
             const res = await api.get('/operaciones/portal/pedidos', { params });
-            setPortalOrders(res.data || []);
+            const items = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+            const total = res.data?.total !== undefined ? res.data.total : items.length;
+            const hasMore = res.data?.hasMore !== undefined ? res.data.hasMore : false;
+
+            if (reset) {
+                setPortalOrders(items);
+            } else {
+                setPortalOrders(prev => {
+                    const existingKeys = new Set(prev.map(p => String(p.numero_orden || p.id)));
+                    const filtered = items.filter(p => !existingKeys.has(String(p.numero_orden || p.id)));
+                    return [...prev, ...filtered];
+                });
+            }
+            setPortalTotal(total);
+            setHasMorePortal(hasMore);
         } catch (e) {
             console.error('Error fetching portal orders:', e);
             addToast('Error al consultar pedidos del portal: ' + (e.response?.data?.message || e.message), 'error');
         } finally {
-            setIsPortalLoading(false);
+            if (reset) {
+                setIsPortalLoading(false);
+            } else {
+                setIsLoadingMorePortal(false);
+            }
         }
     };
 
@@ -252,18 +286,41 @@ export default function PedidosCombustible() {
 
     // Trigger filters change
     useEffect(() => {
-        fetchPortalOrders();
+        fetchPortalOrders(true);
     }, [filterEstacion, filterEstado, filterTipo, filterEstadoPago, filterSearch]);
+
+    // Scroll progresivo / Infinite Scroll para el portal Puma Energy-Latam
+    useEffect(() => {
+        if (!portalSentinelRef.current || !hasMorePortal || isLoadingMorePortal || isPortalLoading) return;
+
+        const observer = new IntersectionObserver((entries) => {
+            const first = entries[0];
+            if (first.isIntersecting && hasMorePortal && !isLoadingMorePortal && !isPortalLoading) {
+                fetchPortalOrders(false);
+            }
+        }, {
+            root: null,
+            rootMargin: '120px',
+            threshold: 0.1
+        });
+
+        const currentSentinel = portalSentinelRef.current;
+        observer.observe(currentSentinel);
+        return () => {
+            if (currentSentinel) observer.unobserve(currentSentinel);
+            observer.disconnect();
+        };
+    }, [hasMorePortal, isLoadingMorePortal, isPortalLoading, portalOrders.length, portalLimit]);
 
     // Live sync from portal button
     const handleSyncPortal = async () => {
         setIsSyncingPortal(true);
-        addToast('Sincronizando con Portal Energy-Latam en segundo plano...', 'info');
+        addToast(`Sincronizando hasta ${portalLimit === 'all' ? 50 : portalLimit} transacciones con Portal Puma en segundo plano...`, 'info');
         try {
-            const res = await api.post('/operaciones/portal/sincronizar');
+            const res = await api.post('/operaciones/portal/sincronizar', { limit: portalLimit });
             if (res.data?.success) {
                 addToast(res.data.message || 'Sincronización completada con éxito', 'success');
-                fetchPortalOrders();
+                fetchPortalOrders(true);
                 fetchPortalResumen();
             } else {
                 addToast(res.data?.message || 'Error en sincronización', 'warning');
@@ -772,7 +829,7 @@ export default function PedidosCombustible() {
                         color: activeTab === 'portal' ? '#fff' : 'var(--text-muted)'
                     }}
                 >
-                    <Layers size={16} /> Portal Energy-Latam / Pedidos ({portalOrders.length})
+                    <Layers size={16} /> Portal Puma / Pedidos ({portalOrders.length}{portalTotal > portalOrders.length ? ` de ${portalTotal}` : ''})
                 </button>
 
                 <button
@@ -884,6 +941,25 @@ export default function PedidosCombustible() {
                             />
                         </div>
 
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '135px' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Mostrar:</label>
+                            <select
+                                value={portalLimit}
+                                onChange={e => {
+                                    const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                                    setPortalLimit(val);
+                                    fetchPortalOrders(true, val);
+                                }}
+                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                                title="Límite inicial de pedidos a consultar para evitar sobrecarga del sistema"
+                            >
+                                <option value={10}>10 pedidos</option>
+                                <option value={20}>20 pedidos</option>
+                                <option value={50}>50 pedidos</option>
+                                <option value="all">Todos</option>
+                            </select>
+                        </div>
+
                         {(filterEstacion || filterEstado || filterTipo || filterEstadoPago || filterSearch) && (
                             <button
                                 onClick={() => {
@@ -899,6 +975,17 @@ export default function PedidosCombustible() {
                                 Limpiar
                             </button>
                         )}
+
+                        <button
+                            onClick={handleSyncPortal}
+                            disabled={isSyncingPortal}
+                            className="btn-primary"
+                            style={{ height: '36px', padding: '0 0.85rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                            title="Conectar y sincronizar con el portal Puma Energy-Latam"
+                        >
+                            <RefreshCw size={13} className={isSyncingPortal ? 'spin' : ''} />
+                            {isSyncingPortal ? 'Sincronizando...' : 'Sincronizar Puma'}
+                        </button>
                     </div>
 
                     {/* Orders Table */}
@@ -1072,8 +1159,70 @@ export default function PedidosCombustible() {
                                         </td>
                                     </tr>
                                 ) : null}
+
+                                {/* Sentinel invisible para activación de scroll progresivo */}
+                                <tr ref={portalSentinelRef} style={{ height: '1px' }}>
+                                    <td colSpan="9" style={{ padding: 0, border: 'none', height: '1px' }} />
+                                </tr>
                             </tbody>
                         </table>
+
+                        {/* Barra inferior de estado y control progresivo de transacciones */}
+                        {portalOrders.length > 0 && (
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '0.65rem 1rem',
+                                background: 'var(--card-bg, rgba(255,255,255,0.02))',
+                                borderTop: '1px solid var(--border)',
+                                fontSize: '0.78rem',
+                                color: 'var(--text-muted)',
+                                flexWrap: 'wrap',
+                                gap: '0.5rem'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                    <span>Mostrando <strong style={{ color: 'var(--text)' }}>{portalOrders.length}</strong> de <strong style={{ color: 'var(--text)' }}>{portalTotal}</strong> transacciones</span>
+                                    {portalLimit !== 'all' && portalOrders.length < portalTotal && (
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.1)', padding: '2px 6px', borderRadius: '4px' }}>
+                                            Consultando de {portalLimit} en {portalLimit} al desplazarse hacia abajo
+                                        </span>
+                                    )}
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                    {isLoadingMorePortal && (
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--primary)', fontWeight: 'bold' }}>
+                                            <div className="spinner" style={{ width: '14px', height: '14px', border: '2px solid var(--primary)', borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                                            Consultando más transacciones...
+                                        </span>
+                                    )}
+
+                                    {hasMorePortal && !isLoadingMorePortal && (
+                                        <button
+                                            onClick={() => fetchPortalOrders(false)}
+                                            className="btn-secondary"
+                                            style={{
+                                                height: '32px',
+                                                fontSize: '0.75rem',
+                                                padding: '0 0.85rem',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '0.35rem'
+                                            }}
+                                        >
+                                            <RefreshCw size={12} /> Cargar {portalLimit === 'all' ? 'restantes' : `${portalLimit} más`}
+                                        </button>
+                                    )}
+
+                                    {!hasMorePortal && (
+                                        <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: '500' }}>
+                                            <CheckCircle size={14} /> Todas las transacciones disponibles han sido consultadas
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

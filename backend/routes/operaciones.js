@@ -5,6 +5,50 @@ const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const energyLatamService = require('../services/energyLatamService');
 
+/**
+ * Parsea y sanitiza los parámetros de paginación para consultas de pedidos.
+ * Por defecto limita a 10 transacciones para no sobrecargar el sistema.
+ * Permite ampliar a 20, 50, o 'all', y calcular offset progresivo (scroll infinito).
+ */
+function parsePedidosPagination(query = {}) {
+    const rawLimit = query.limit;
+    const rawOffset = query.offset;
+
+    if (rawLimit === 'all' || rawLimit === 'ALL' || rawLimit === '-1') {
+        const offset = Math.max(0, parseInt(rawOffset, 10) || 0);
+        return { limit: null, offset, isAll: true };
+    }
+
+    let limit = 10; // 10 transacciones por defecto según requerimiento
+    if (rawLimit !== undefined && rawLimit !== null && rawLimit !== '') {
+        const parsed = parseInt(rawLimit, 10);
+        if (isNaN(parsed) || parsed < 1) {
+            limit = 1;
+        } else {
+            limit = parsed;
+        }
+    }
+
+    let offset = 0;
+    if (rawOffset !== undefined && rawOffset !== null && rawOffset !== '') {
+        const parsedOff = parseInt(rawOffset, 10);
+        offset = isNaN(parsedOff) || parsedOff < 0 ? 0 : parsedOff;
+    }
+
+    return { limit, offset, isAll: false };
+}
+
+/**
+ * Determina si existen más registros disponibles por consultar
+ */
+function calculateHasMore(total, offset, countLoaded, isAll = false) {
+    if (isAll) return false;
+    const t = Number(total) || 0;
+    const off = Number(offset) || 0;
+    const loaded = Number(countLoaded) || 0;
+    return (off + loaded) < t;
+}
+
 // --- Dashboard / Vencimientos ---
 router.get('/dashboard/vencimientos', authenticateToken, async (req, res) => {
     try {
@@ -476,7 +520,43 @@ router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) =>
         await ensurePortalTablesAndSeed(db);
 
         const { estacion, estado, tipo_producto, estado_pago, desde, hasta, search } = req.query;
+        const pagination = parsePedidosPagination(req.query);
 
+        let whereClause = " WHERE 1=1 ";
+        const filterParams = [];
+
+        if (estacion) {
+            whereClause += " AND (p.id_estacion = ? OR p.estacion_nombre LIKE ?)";
+            filterParams.push(estacion, `%${estacion}%`);
+        }
+        if (estado) {
+            whereClause += " AND p.estado = ?";
+            filterParams.push(estado);
+        }
+        if (tipo_producto) {
+            whereClause += " AND p.tipo_producto = ?";
+            filterParams.push(tipo_producto);
+        }
+        if (estado_pago) {
+            whereClause += " AND p.estado_pago = ?";
+            filterParams.push(estado_pago);
+        }
+        if (desde && hasta) {
+            whereClause += " AND DATE(p.fecha_pedido) BETWEEN ? AND ?";
+            filterParams.push(desde, hasta);
+        }
+        if (search) {
+            whereClause += " AND (p.numero_orden LIKE ? OR p.factura_numero LIKE ? OR p.estacion_nombre LIKE ? OR p.razon_estado LIKE ?)";
+            const s = `%${search}%`;
+            filterParams.push(s, s, s, s);
+        }
+
+        // 1. Obtener conteo total para cálculo de páginas y scroll infinito
+        const countQuery = `SELECT COUNT(*) as total FROM portal_pedidos p ${whereClause}`;
+        const [countRows] = await withRetry(() => db.query(countQuery, filterParams));
+        const total = countRows[0]?.total || 0;
+
+        // 2. Consulta de registros con límite y desplazamiento
         let query = `
             SELECT p.*,
                    cb.numero as cuenta_numero, cb.nombre as cuenta_nombre, b.descripcion as banco_nombre,
@@ -486,40 +566,27 @@ router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) =>
             LEFT JOIN cuentas_bancarias cb ON p.cuenta_bancaria_id = cb.id
             LEFT JOIN bancos b ON cb.banco_id = b.id
             LEFT JOIN movimientos_bancarios m ON p.movimiento_bancario_id = m.id
-            WHERE 1=1
+            ${whereClause}
+            ORDER BY p.fecha_pedido DESC
         `;
-        const params = [];
 
-        if (estacion) {
-            query += " AND (p.id_estacion = ? OR p.estacion_nombre LIKE ?)";
-            params.push(estacion, `%${estacion}%`);
-        }
-        if (estado) {
-            query += " AND p.estado = ?";
-            params.push(estado);
-        }
-        if (tipo_producto) {
-            query += " AND p.tipo_producto = ?";
-            params.push(tipo_producto);
-        }
-        if (estado_pago) {
-            query += " AND p.estado_pago = ?";
-            params.push(estado_pago);
-        }
-        if (desde && hasta) {
-            query += " AND DATE(p.fecha_pedido) BETWEEN ? AND ?";
-            params.push(desde, hasta);
-        }
-        if (search) {
-            query += " AND (p.numero_orden LIKE ? OR p.factura_numero LIKE ? OR p.estacion_nombre LIKE ? OR p.razon_estado LIKE ?)";
-            const s = `%${search}%`;
-            params.push(s, s, s, s);
+        const queryParams = [...filterParams];
+        if (!pagination.isAll && pagination.limit !== null) {
+            query += " LIMIT ? OFFSET ?";
+            queryParams.push(pagination.limit, pagination.offset);
         }
 
-        query += " ORDER BY p.fecha_pedido DESC LIMIT 200";
+        const [rows] = await withRetry(() => db.query(query, queryParams));
+        const hasMore = calculateHasMore(total, pagination.offset, rows.length, pagination.isAll);
 
-        const [rows] = await withRetry(() => db.query(query, params));
-        res.json(rows);
+        res.json({
+            success: true,
+            data: rows,
+            total,
+            limit: pagination.limit,
+            offset: pagination.offset,
+            hasMore
+        });
     } catch (error) {
         sendSafeError(res, error, 'Error al obtener pedidos del portal');
     }
@@ -551,7 +618,9 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, async (req, 
 router.post('/operaciones/portal/sincronizar', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
         const io = req.app.get('io');
-        const result = await energyLatamService.syncFromPortal(io);
+        const limitParam = req.body?.limit;
+        const limit = limitParam !== undefined ? (limitParam === 'all' ? 50 : Math.min(50, Math.max(1, parseInt(limitParam, 10) || 10))) : 10;
+        const result = await energyLatamService.syncFromPortal(io, null, limit);
         res.json(result);
     } catch (error) {
         sendSafeError(res, error, 'Error al sincronizar con el portal Energy Latam');
@@ -848,4 +917,9 @@ router.post('/operaciones/portal/ajustar-costos-pedido', authenticateToken, requ
     }
 });
 
+router.parsePedidosPagination = parsePedidosPagination;
+router.calculateHasMore = calculateHasMore;
+
 module.exports = router;
+module.exports.parsePedidosPagination = parsePedidosPagination;
+module.exports.calculateHasMore = calculateHasMore;

@@ -222,13 +222,13 @@ async function processAndSaveOrders(orders, userSummary = null) {
 /**
  * Ejecuta el scraper headless en segundo plano para sincronizar el portal para todas las cuentas
  */
-async function syncFromPortal(io = null, targetOrderNumber = null) {
+async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount = 10) {
     if (isSyncRunning) {
         return { success: false, message: 'La sincronización ya está en curso' };
     }
 
     isSyncRunning = true;
-    console.log(`[energyLatamService] Starting sync from Energy Latam Portal across ALL fuel & lube accounts... ${targetOrderNumber ? `(target: ${targetOrderNumber})` : ''}`);
+    console.log(`[energyLatamService] Starting sync from Energy Latam Portal across ALL fuel & lube accounts (limit per account: ${maxPerAccount})... ${targetOrderNumber ? `(target: ${targetOrderNumber})` : ''}`);
 
     let browser = null;
     try {
@@ -321,7 +321,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
                 };
             });
 
-            capturedOrders = await page.evaluate(async (url, csrf, accounts) => {
+            capturedOrders = await page.evaluate(async (url, csrf, accounts, maxOrders) => {
                 const list = [];
                 async function fetchForAccount(accId, type) {
                     try {
@@ -333,13 +333,13 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
                             params: {
                                 params: {
                                     offset: 0,
-                                    queryLimit: 50,
+                                    queryLimit: maxOrders || 10,
                                     type: type,
                                     sellToIdSelected: accId,
                                     orderId: "all",
                                     pageNum: 1,
                                     queryContractStatus: "open_contracts",
-                                    rowsPerPage: 50,
+                                    rowsPerPage: maxOrders || 10,
                                     time: Date.now()
                                 }
                             },
@@ -373,7 +373,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null) {
                     }
                 }
                 return list;
-            }, reqUrl, csrfToken, accountsToQuery);
+            }, reqUrl, csrfToken, accountsToQuery, maxPerAccount);
 
             console.log(`[energyLatamService] Successfully fetched ${capturedOrders.length} orders directly from Salesforce API!`);
         }
