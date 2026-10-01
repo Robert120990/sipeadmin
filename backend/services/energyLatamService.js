@@ -38,16 +38,30 @@ function normalizeEstado(status, caption, isOnHold) {
 }
 
 /**
- * Normaliza el nombre y código de estación del grupo SIPE
+ * Normaliza el nombre y código de estación del grupo SIPE tanto para combustibles como lubricantes y non-fuels
  */
-function normalizeEstacion(rawName) {
-    const s = String(rawName || '').toUpperCase();
-    if (s.includes('CHALCHUAPA')) return { id: '006', nombre: 'SHELL CHALCHUAPA' };
-    if (s.includes('MIRAFLORES')) return { id: '002', nombre: 'PUMA MIRAFLORES' };
-    if (s.includes('DESVIO') || s.includes('DESVÍO')) return { id: '004', nombre: 'PUMA EL DESVIO' };
-    if (s.includes('COSTA')) return { id: '008', nombre: 'PUMA COSTA DEL SOL' };
-    if (s.includes('LOMA') || s.includes('LIL') || s.includes('SAN MARTIN')) return { id: '014', nombre: 'PUMA LA LOMA' };
-    if (s.includes('14 AVENIDA') || s.includes('14TA') || s.includes('14A')) return { id: '015', nombre: 'SHELL 14 AVENIDA' };
+function normalizeEstacion(rawName, meta = null) {
+    const s = (String(rawName || '') + ' ' + String(meta?.stationName || '') + ' ' + String(meta?.name || '')).toUpperCase();
+    const accNum = String(meta?.accountNumber || '');
+
+    if (s.includes('COSTA') || s.includes('SOL') || s.includes('ENERGY GAS')) {
+        return { id: '008', nombre: 'PUMA COSTA DEL SOL' };
+    }
+    if (s.includes('CHALCHUAPA') || accNum === '22209809' || accNum === '22210728' || accNum === '3409396') {
+        return { id: '006', nombre: 'SHELL CHALCHUAPA' };
+    }
+    if (s.includes('MIRAFLORES') || accNum === '3409084' || accNum === '3409101') {
+        return { id: '002', nombre: 'PUMA MIRAFLORES' };
+    }
+    if (s.includes('DESVIO') || s.includes('DESVÍO') || accNum === '3409100' || accNum === '3409102' || accNum === '3409387') {
+        return { id: '004', nombre: 'PUMA EL DESVIO' };
+    }
+    if (s.includes('LOMA') || s.includes('LIL') || s.includes('SAN MARTIN') || s.includes('SAN MARTÍN') || accNum === '3409795' || accNum === '3409796' || accNum === '3409797') {
+        return { id: '014', nombre: 'PUMA LA LOMA' };
+    }
+    if (s.includes('14 AVENIDA') || s.includes('14TA') || s.includes('14A') || s.includes('14 AV')) {
+        return { id: '015', nombre: 'SHELL 14 AVENIDA' };
+    }
     return { id: null, nombre: String(rawName || 'Estación Puma / Shell').trim() };
 }
 
@@ -65,7 +79,8 @@ async function processAndSaveOrders(orders, userSummary = null) {
             if (!orderNum) continue;
 
             const rawStation = o.shipto?.shipToName || o._accountMetadata?.stationName || o.accountDetails?.billingCity || 'Estación Puma / Shell';
-            const { id: idEstacion, nombre: estacionNombre } = normalizeEstacion(rawStation);
+            const meta = o._accountMetadata || o.accountDetails || {};
+            const { id: idEstacion, nombre: estacionNombre } = normalizeEstacion(rawStation, meta);
 
             const isOnHold = Boolean(o.DrawdownBlanketContractonHold || o.orderWithAlert);
             const estado = normalizeEstado(o.status || o.orderCustomerStatus, o.orderStatusCaption, isOnHold);
@@ -478,5 +493,6 @@ async function seedInitialPortalOrders(forceReload = false) {
 module.exports = {
     syncFromPortal,
     processAndSaveOrders,
-    seedInitialPortalOrders
+    seedInitialPortalOrders,
+    normalizeEstacion
 };

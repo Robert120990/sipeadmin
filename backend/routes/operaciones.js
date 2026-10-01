@@ -49,6 +49,73 @@ function calculateHasMore(total, offset, countLoaded, isAll = false) {
     return (off + loaded) < t;
 }
 
+/**
+ * Resuelve la condición SQL y parámetros para el filtro de estación.
+ * Permite filtrar de forma inteligente por:
+ *  - ID de empresa ('008', '002', '004', '006', '014', '015')
+ *  - Nombre en web_consolidado ('ENERGY GAS COSTA DEL SOL', 'PUMA LA LOMA (SAN MARTÍN)', etc.)
+ *  - Nombre en portal Puma ('PUMA COSTA DEL SOL', 'SHELL CHALCHUAPA', etc.)
+ *  - Palabras clave ('COSTA', 'MIRAFLORES', 'DESVIO', 'CHALCHUAPA', 'LOMA', '14')
+ */
+function buildEstacionFilterClause(estacionInput) {
+    if (!estacionInput) return null;
+    const s = String(estacionInput).trim().toUpperCase();
+
+    // 1. Costa del Sol (ENERGY GAS COSTA DEL SOL / PUMA COSTA DEL SOL)
+    if (s === '008' || s.includes('COSTA') || s.includes('SOL') || s.includes('ENERGY GAS')) {
+        return {
+            sql: "(p.id_estacion = '008' OR p.estacion_nombre LIKE '%COSTA%' OR p.estacion_nombre LIKE '%SOL%')",
+            params: []
+        };
+    }
+
+    // 2. Puma Miraflores
+    if (s === '002' || s.includes('MIRAFLORES')) {
+        return {
+            sql: "(p.id_estacion = '002' OR p.estacion_nombre LIKE '%MIRAFLORES%')",
+            params: []
+        };
+    }
+
+    // 3. Puma El Desvío
+    if (s === '004' || s.includes('DESVIO') || s.includes('DESVÍO')) {
+        return {
+            sql: "(p.id_estacion = '004' OR p.estacion_nombre LIKE '%DESVIO%' OR p.estacion_nombre LIKE '%DESVÍO%')",
+            params: []
+        };
+    }
+
+    // 4. Shell Chalchuapa
+    if (s === '006' || s.includes('CHALCHUAPA')) {
+        return {
+            sql: "(p.id_estacion = '006' OR p.estacion_nombre LIKE '%CHALCHUAPA%')",
+            params: []
+        };
+    }
+
+    // 5. Puma La Loma / San Martín / Inversiones LIL
+    if (s === '014' || s.includes('LOMA') || s.includes('SAN MARTIN') || s.includes('SAN MARTÍN') || s.includes('LIL')) {
+        return {
+            sql: "(p.id_estacion = '014' OR p.estacion_nombre LIKE '%LOMA%' OR p.estacion_nombre LIKE '%SAN MARTIN%')",
+            params: []
+        };
+    }
+
+    // 6. Shell 14 Avenida
+    if (s === '015' || s.includes('14 AVENIDA') || s.includes('14TA') || s.includes('14A') || s.includes('14 AV')) {
+        return {
+            sql: "(p.id_estacion = '015' OR p.estacion_nombre LIKE '%14 AVENIDA%' OR p.estacion_nombre LIKE '%14TA%')",
+            params: []
+        };
+    }
+
+    // Fallback genérico por coincidencia directa
+    return {
+        sql: "(p.id_estacion = ? OR p.estacion_nombre LIKE ?)",
+        params: [estacionInput, `%${estacionInput}%`]
+    };
+}
+
 // --- Dashboard / Vencimientos ---
 router.get('/dashboard/vencimientos', authenticateToken, async (req, res) => {
     try {
@@ -504,10 +571,43 @@ async function ensurePortalTablesAndSeed(db) {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
 
-        const [cnt] = await db.query('SELECT COUNT(*) as c FROM portal_pedidos');
-        if (cnt[0].c < 50) {
-            await energyLatamService.seedInitialPortalOrders();
+        const [cnt] = await db.query('SELECT COUNT(*) as c, COUNT(DISTINCT id_estacion) as distinct_est FROM portal_pedidos');
+        if (cnt[0].c < 250 || (cnt[0].distinct_est || 0) < 4) {
+            console.log('[ensurePortalTablesAndSeed] Seeding complete multi-station orders from snapshot...');
+            await energyLatamService.seedInitialPortalOrders(true);
         }
+
+        // Asegurar que las órdenes en la base de datos tengan su id_estacion y nombre normalizado
+        await db.query(`
+            UPDATE portal_pedidos SET id_estacion = '008', estacion_nombre = 'PUMA COSTA DEL SOL'
+            WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '008') 
+              AND (estacion_nombre LIKE '%COSTA%' OR raw_data_json LIKE '%COSTA%')
+        `);
+        await db.query(`
+            UPDATE portal_pedidos SET id_estacion = '002', estacion_nombre = 'PUMA MIRAFLORES'
+            WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '002') 
+              AND (estacion_nombre LIKE '%MIRAFLORES%' OR raw_data_json LIKE '%MIRAFLORES%')
+        `);
+        await db.query(`
+            UPDATE portal_pedidos SET id_estacion = '004', estacion_nombre = 'PUMA EL DESVIO'
+            WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '004') 
+              AND (estacion_nombre LIKE '%DESVIO%' OR estacion_nombre LIKE '%DESVÍO%' OR raw_data_json LIKE '%DESVIO%')
+        `);
+        await db.query(`
+            UPDATE portal_pedidos SET id_estacion = '006', estacion_nombre = 'SHELL CHALCHUAPA'
+            WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '006') 
+              AND (estacion_nombre LIKE '%CHALCHUAPA%' OR raw_data_json LIKE '%CHALCHUAPA%')
+        `);
+        await db.query(`
+            UPDATE portal_pedidos SET id_estacion = '014', estacion_nombre = 'PUMA LA LOMA'
+            WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '014') 
+              AND (estacion_nombre LIKE '%LOMA%' OR estacion_nombre LIKE '%SAN MARTIN%' OR raw_data_json LIKE '%INVERSIONES LIL%')
+        `);
+        await db.query(`
+            UPDATE portal_pedidos SET id_estacion = '015', estacion_nombre = 'SHELL 14 AVENIDA'
+            WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '015') 
+              AND (estacion_nombre LIKE '%14 AVENIDA%' OR raw_data_json LIKE '%14 AVENIDA%')
+        `);
     } catch(err) {
         console.warn('[ensurePortalTablesAndSeed] Note:', err.message);
     }
@@ -526,8 +626,11 @@ router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) =>
         const filterParams = [];
 
         if (estacion) {
-            whereClause += " AND (p.id_estacion = ? OR p.estacion_nombre LIKE ?)";
-            filterParams.push(estacion, `%${estacion}%`);
+            const estCond = buildEstacionFilterClause(estacion);
+            if (estCond) {
+                whereClause += ` AND ${estCond.sql}`;
+                filterParams.push(...estCond.params);
+            }
         }
         if (estado) {
             whereClause += " AND p.estado = ?";
@@ -546,9 +649,16 @@ router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) =>
             filterParams.push(desde, hasta);
         }
         if (search) {
-            whereClause += " AND (p.numero_orden LIKE ? OR p.factura_numero LIKE ? OR p.estacion_nombre LIKE ? OR p.razon_estado LIKE ?)";
-            const s = `%${search}%`;
-            filterParams.push(s, s, s, s);
+            const estSearchCond = buildEstacionFilterClause(search);
+            if (estSearchCond && estSearchCond.params.length === 0) {
+                whereClause += ` AND (${estSearchCond.sql} OR p.numero_orden LIKE ? OR p.factura_numero LIKE ? OR p.razon_estado LIKE ?)`;
+                const s = `%${search}%`;
+                filterParams.push(s, s, s);
+            } else {
+                whereClause += " AND (p.numero_orden LIKE ? OR p.factura_numero LIKE ? OR p.estacion_nombre LIKE ? OR p.razon_estado LIKE ?)";
+                const s = `%${search}%`;
+                filterParams.push(s, s, s, s);
+            }
         }
 
         // 1. Obtener conteo total para cálculo de páginas y scroll infinito
@@ -919,7 +1029,9 @@ router.post('/operaciones/portal/ajustar-costos-pedido', authenticateToken, requ
 
 router.parsePedidosPagination = parsePedidosPagination;
 router.calculateHasMore = calculateHasMore;
+router.buildEstacionFilterClause = buildEstacionFilterClause;
 
 module.exports = router;
 module.exports.parsePedidosPagination = parsePedidosPagination;
 module.exports.calculateHasMore = calculateHasMore;
+module.exports.buildEstacionFilterClause = buildEstacionFilterClause;

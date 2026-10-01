@@ -1,6 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
-const { parsePedidosPagination, calculateHasMore } = require('../routes/operaciones');
+const { parsePedidosPagination, calculateHasMore, buildEstacionFilterClause } = require('../routes/operaciones');
+const { normalizeEstacion } = require('../services/energyLatamService');
 
 describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
     describe('parsePedidosPagination', () => {
@@ -41,19 +42,16 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
 
     describe('calculateHasMore', () => {
         it('debe indicar hasMore = true cuando aún quedan registros por cargar', () => {
-            // total: 25, offset: 0, cargados: 10
             const hasMore = calculateHasMore(25, 0, 10, false);
             assert.strictEqual(hasMore, true);
         });
 
         it('debe indicar hasMore = true en la segunda página si aún hay más', () => {
-            // total: 25, offset: 10, cargados: 10 -> 20 de 25
             const hasMore = calculateHasMore(25, 10, 10, false);
             assert.strictEqual(hasMore, true);
         });
 
         it('debe indicar hasMore = false cuando se alcanzaron todas las transacciones', () => {
-            // total: 25, offset: 20, cargados: 5 -> 25 de 25
             const hasMore = calculateHasMore(25, 20, 5, false);
             assert.strictEqual(hasMore, false);
         });
@@ -61,6 +59,58 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
         it('debe indicar hasMore = false si isAll es true', () => {
             const hasMore = calculateHasMore(100, 0, 100, true);
             assert.strictEqual(hasMore, false);
+        });
+    });
+
+    describe('buildEstacionFilterClause y normalizeEstacion (Mapeo Inteligente Portal Puma)', () => {
+        it('debe mapear ENERGY GAS COSTA DEL SOL al ID 008 y coincidir con Puma Costa del Sol', () => {
+            const clause = buildEstacionFilterClause('ENERGY GAS COSTA DEL SOL');
+            assert.ok(clause);
+            assert.ok(clause.sql.includes("'008'"));
+            assert.ok(clause.sql.includes('COSTA'));
+
+            const norm = normalizeEstacion('ENERGY GAS COSTA DEL SOL');
+            assert.strictEqual(norm.id, '008');
+            assert.strictEqual(norm.nombre, 'PUMA COSTA DEL SOL');
+        });
+
+        it('debe resolver la estación por código numérico 008', () => {
+            const clause = buildEstacionFilterClause('008');
+            assert.ok(clause);
+            assert.ok(clause.sql.includes("'008'"));
+            assert.ok(clause.sql.includes('COSTA'));
+        });
+
+        it('debe resolver PUMA MIRAFLORES y código 002', () => {
+            const clause = buildEstacionFilterClause('002');
+            assert.ok(clause.sql.includes("'002'"));
+            const norm = normalizeEstacion('PUMA MIRAFLORES');
+            assert.strictEqual(norm.id, '002');
+        });
+
+        it('debe resolver PUMA EL DESVIO y código 004', () => {
+            const clause = buildEstacionFilterClause('004');
+            assert.ok(clause.sql.includes("'004'"));
+            const norm = normalizeEstacion('PUMA EL DESVIO');
+            assert.strictEqual(norm.id, '004');
+        });
+
+        it('debe resolver PUMA LA LOMA / SAN MARTIN y código 014', () => {
+            const clause = buildEstacionFilterClause('PUMA LA LOMA (SAN MARTÍN)');
+            assert.ok(clause.sql.includes("'014'"));
+            const norm = normalizeEstacion('PUMA LA LOMA-LUBES');
+            assert.strictEqual(norm.id, '014');
+        });
+
+        it('debe mapear órdenes non-fuels por número de cuenta al id de estación correspondiente', () => {
+            const normMiraflores = normalizeEstacion('NON FUELS', { accountNumber: '3409101' });
+            assert.strictEqual(normMiraflores.id, '002');
+
+            const normDesvio = normalizeEstacion('NON FUELS', { accountNumber: '3409102' });
+            assert.strictEqual(normDesvio.id, '004');
+
+            const normLil = normalizeEstacion('INVERSIONES LIL SA DE CV - NON FUELS', { accountNumber: '3409797' });
+            assert.strictEqual(normLil.id, '014');
         });
     });
 });

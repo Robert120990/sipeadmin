@@ -883,7 +883,7 @@ export default function PedidosCombustible() {
                             >
                                 <option value="">-- Todas las Estaciones --</option>
                                 {estaciones.map(e => (
-                                    <option key={e.id_empresa} value={e.titulo}>{e.titulo}</option>
+                                    <option key={e.id_empresa} value={e.id_empresa || e.titulo}>{e.titulo}</option>
                                 ))}
                             </select>
                         </div>
