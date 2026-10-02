@@ -430,9 +430,93 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             return { empresa: s.titulo, diesel: nD, regular: nR, super: nS, iondiesel: nI, duracion_diesel: pD > 0 ? Math.round((nD / pD) * 10) / 10 : 0, duracion_regular: pR > 0 ? Math.round((nR / pR) * 10) / 10 : 0, duracion_super: pS > 0 ? Math.round((nS / pS) * 10) / 10 : 0, duracion_ion: pI > 0 ? Math.round((nI / pI) * 10) / 10 : 0 };
         });
 
+        // Cortes de Tienda detallados (cort_cabecera)
+        const sqlCortesTienda = `
+            SELECT 
+                b.id_empresa,
+                b.titulo as tienda_nombre,
+                a.id as id_corte,
+                DATE_FORMAT(COALESCE(a.fecha, ?), '%Y-%m-%d') as fecha,
+                COALESCE(a.turno, 0) as turno,
+                COALESCE(a.responsable, '') as responsable,
+                COALESCE(a.tot_ventas, 0.0) as venta,
+                COALESCE(a.tot_ingresos, 0.0) as ingresos,
+                COALESCE(a.tot_tarjeta, 0.0) as tarjeta,
+                COALESCE(a.tot_remesado, 0.0) as remesado,
+                COALESCE(a.tot_gastos, 0.0) as gastos,
+                COALESCE(a.tot_retirado, 0.0) as retiros,
+                COALESCE(a.efectivo, 0.0) as saldo_f,
+                COALESCE(a.diferencia, 0.0) as dif,
+                CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END as tiene_corte
+            FROM web_consolidado b
+            LEFT JOIN cort_cabecera a ON b.id_empresa = a.id_empresa AND a.fecha = ?
+            WHERE b.grupo = 'TIENDA' AND b.id_empresa NOT IN ('004', '022')
+            ORDER BY b.orden
+        `;
+        const [cortesTiendaRows] = await externalDb.query(sqlCortesTienda, [date, date]);
+        const cortesTiendaLocal = (cortesTiendaRows || []).map(r => ({
+            id_corte: r.id_corte,
+            id_empresa: r.id_empresa,
+            empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
+            fecha: r.fecha,
+            turno: r.turno,
+            responsable: r.responsable,
+            venta: Math.round(Number(r.venta || 0) * 100) / 100,
+            ingresos: Math.round(Number(r.ingresos || 0) * 100) / 100,
+            tarjeta: Math.round(Number(r.tarjeta || 0) * 100) / 100,
+            remesado: Math.round(Number(r.remesado || 0) * 100) / 100,
+            gastos: Math.round(Number(r.gastos || 0) * 100) / 100,
+            retiros: Math.round(Number(r.retiros || 0) * 100) / 100,
+            saldo_f: Math.round(Number(r.saldo_f || 0) * 100) / 100,
+            dif: Math.round(Number(r.dif || 0) * 100) / 100,
+            tiene_corte: r.tiene_corte === 1
+        }));
+
+        // Resumen Cierre de Turno Pista (cierre_turno)
+        const sqlCierreTurno = `
+            SELECT x.id_empresa,
+                   x.titulo AS estacion,
+                   (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS creditos,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cupones b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cupones,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cheques b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cheques,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_tarjeta b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS tarjetas,
+                   (SELECT IFNULL(SUM(b.efectivo),0.0) + IFNULL(SUM(b.monedas),0.0) + IFNULL(SUM(b.transferencia),0.0) FROM cierre_turno a INNER JOIN cierre_turno_remesa b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS remesas,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_gastos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS gastos,
+                   (SELECT IFNULL(SUM(precio_total),0.0) FROM inventario_lubricantes WHERE id_empresa=x.id_empresa AND fecha_turno=?) AS lubricantes,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_anticipos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS anticipos,
+                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_pagos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS pagos,
+                   (SELECT IFNULL(SUM(b.valor*b.cantidad),0.0) FROM cierre_turno a INNER JOIN cierre_turno_descuentos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS descuentos,
+                   (SELECT IFNULL(SUM(b.monto),0.0) FROM cierre_turno a INNER JOIN cierre_turno_lecturas b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS total_venta
+            FROM web_consolidado x WHERE x.grupo = 'ESTACION' AND x.id_empresa != '004' ORDER BY x.orden
+        `;
+        const [resumenCierreRows] = await externalDb.query(sqlCierreTurno, Array(11).fill(sysDate));
+        const resumenCierreLocal = (resumenCierreRows || []).map(r => {
+            const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
+            const venta = Number(r.total_venta) + Number(r.lubricantes);
+            return {
+                id_empresa: r.id_empresa,
+                empresa: getCleanStationName(String(r.id_empresa), r.estacion),
+                credito: Math.round(Number(r.creditos) * 100) / 100,
+                cupones: Math.round(Number(r.cupones) * 100) / 100,
+                cheques: Math.round(Number(r.cheques) * 100) / 100,
+                tarjetas: Math.round(Number(r.tarjetas) * 100) / 100,
+                remesas: Math.round(Number(r.remesas) * 100) / 100,
+                gastos: Math.round(Number(r.gastos) * 100) / 100,
+                lubricantes: Math.round(Number(r.lubricantes) * 100) / 100,
+                anticipos: Math.round(Number(r.anticipos) * 100) / 100,
+                pagos: Math.round(Number(r.pagos) * 100) / 100,
+                descuentos: Math.round(Number(r.descuentos) * 100) / 100,
+                suma: Math.round(monto * 100) / 100,
+                tot_venta: Math.round(venta * 100) / 100,
+                diferencia: Math.round((monto - venta) * 100) / 100
+            };
+        });
+
         res.json({
             tiendas: tiendasLocal,
+            cortes_tienda: cortesTiendaLocal,
             estaciones: estacionesLocal,
+            resumen_cierre: resumenCierreLocal,
             margenes: margenesLocal,
             inventario: inventarioLocal,
             quincena: quincenaRow ? {
@@ -445,7 +529,10 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
                 fuente: quincenaRow.fuente || 'Portal Puma / DGEHM'
             } : null
         });
-    } catch (error) { res.status(500).json({ message: 'Error fetching consolidado' }); }
+    } catch (error) { 
+        console.error('Error fetching consolidado:', error);
+        res.status(500).json({ message: 'Error fetching consolidado' }); 
+    }
 });
 
 // Obtener fletes de combustible por estación
@@ -1259,11 +1346,443 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, async (req, res) =
         res.json(rows.map(r => {
             const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
             const venta = Number(r.total_venta) + Number(r.lubricantes);
-            return { empresa: r.estacion, credito: Number(r.creditos), cupones: Number(r.cupones), cheques: Number(r.cheques), tarjetas: Number(r.tarjetas), remesas: Number(r.remesas), gastos: Number(r.gastos), lubricantes: Number(r.lubricantes), anticipos: Number(r.anticipos), pagos: Number(r.pagos), descuentos: Number(r.descuentos), suma: Math.round(monto * 100) / 100, tot_venta: Math.round(venta * 100) / 100, diferencia: Math.round((monto - venta) * 100) / 100 };
+            return { 
+                id_empresa: r.id_empresa,
+                empresa: r.estacion, 
+                credito: Number(r.creditos), 
+                cupones: Number(r.cupones), 
+                cheques: Number(r.cheques), 
+                tarjetas: Number(r.tarjetas), 
+                remesas: Number(r.remesas), 
+                gastos: Number(r.gastos), 
+                lubricantes: Number(r.lubricantes), 
+                anticipos: Number(r.anticipos), 
+                pagos: Number(r.pagos), 
+                descuentos: Number(r.descuentos), 
+                suma: Math.round(monto * 100) / 100, 
+                tot_venta: Math.round(venta * 100) / 100, 
+                diferencia: Math.round((monto - venta) * 100) / 100 
+            };
         }));
     } catch (error) { 
         console.error('Error fetching resumen:', error);
         res.status(500).json({ message: 'Error fetching resumen' }); 
+    }
+});
+
+// Cortes de Tienda (Listado)
+router.get('/ventas/cortes-tienda/:date', authenticateToken, async (req, res) => {
+    const { date } = req.params;
+    try {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
+        }
+        const externalDb = await getExternalDb();
+        const sql = `
+            SELECT 
+                b.id_empresa,
+                b.titulo as tienda_nombre,
+                a.id as id_corte,
+                DATE_FORMAT(COALESCE(a.fecha, ?), '%Y-%m-%d') as fecha,
+                COALESCE(a.turno, 0) as turno,
+                COALESCE(a.responsable, '') as responsable,
+                COALESCE(a.tot_ventas, 0.0) as venta,
+                COALESCE(a.tot_ingresos, 0.0) as ingresos,
+                COALESCE(a.tot_tarjeta, 0.0) as tarjeta,
+                COALESCE(a.tot_remesado, 0.0) as remesado,
+                COALESCE(a.tot_gastos, 0.0) as gastos,
+                COALESCE(a.tot_retirado, 0.0) as retiros,
+                COALESCE(a.efectivo, 0.0) as saldo_f,
+                COALESCE(a.diferencia, 0.0) as dif,
+                CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END as tiene_corte
+            FROM web_consolidado b
+            LEFT JOIN cort_cabecera a ON b.id_empresa = a.id_empresa AND a.fecha = ?
+            WHERE b.grupo = 'TIENDA' AND b.id_empresa NOT IN ('004', '022')
+            ORDER BY b.orden
+        `;
+        const [rows] = await externalDb.query(sql, [date, date]);
+        res.json((rows || []).map(r => ({
+            id_corte: r.id_corte,
+            id_empresa: r.id_empresa,
+            empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
+            fecha: r.fecha,
+            turno: r.turno,
+            responsable: r.responsable,
+            venta: Math.round(Number(r.venta || 0) * 100) / 100,
+            ingresos: Math.round(Number(r.ingresos || 0) * 100) / 100,
+            tarjeta: Math.round(Number(r.tarjeta || 0) * 100) / 100,
+            remesado: Math.round(Number(r.remesado || 0) * 100) / 100,
+            gastos: Math.round(Number(r.gastos || 0) * 100) / 100,
+            retiros: Math.round(Number(r.retiros || 0) * 100) / 100,
+            saldo_f: Math.round(Number(r.saldo_f || 0) * 100) / 100,
+            dif: Math.round(Number(r.dif || 0) * 100) / 100,
+            tiene_corte: r.tiene_corte === 1
+        })));
+    } catch (error) {
+        console.error('Error fetching cortes tienda:', error);
+        res.status(500).json({ message: 'Error fetching cortes tienda' });
+    }
+});
+
+// Detalle de un Corte de Tienda específico (Líneas de Venta + Movimientos de Tarjeta/Gastos)
+router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (req, res) => {
+    const { id_corte } = req.params;
+    try {
+        const externalDb = await getExternalDb();
+        const [cabeceraRows] = await externalDb.query(`
+            SELECT a.*, b.titulo as tienda_nombre 
+            FROM cort_cabecera a 
+            LEFT JOIN web_consolidado b ON a.id_empresa = b.id_empresa AND b.grupo = 'TIENDA'
+            WHERE a.id = ?
+        `, [id_corte]);
+
+        if (!cabeceraRows || cabeceraRows.length === 0) {
+            return res.status(404).json({ message: 'Corte de tienda no encontrado' });
+        }
+
+        const cabecera = cabeceraRows[0];
+        const [ventasRows] = await externalDb.query(`
+            SELECT linea, monto, porcentaje 
+            FROM cort_ventas 
+            WHERE id_corte = ? 
+            ORDER BY monto DESC
+        `, [id_corte]);
+
+        const [detalleRows] = await externalDb.query(`
+            SELECT tipo, descripcion, monto 
+            FROM cort_detalle 
+            WHERE id_corte = ? 
+            ORDER BY tipo, monto DESC
+        `, [id_corte]);
+
+        const totalGastos = (detalleRows || []).filter(d => d.tipo === 'G').reduce((acc, c) => acc + Number(c.monto || 0), 0);
+        const totalTarjetas = (detalleRows || []).filter(d => d.tipo === 'T').reduce((acc, c) => acc + Number(c.monto || 0), 0);
+        const totalIngresos = (detalleRows || []).filter(d => d.tipo === 'I').reduce((acc, c) => acc + Number(c.monto || 0), 0);
+
+        res.json({
+            id_corte,
+            cabecera: {
+                id: cabecera.id,
+                id_empresa: cabecera.id_empresa,
+                tienda_nombre: getCleanTiendaName(String(cabecera.id_empresa), cabecera.tienda_nombre),
+                fecha: cabecera.fecha ? new Date(cabecera.fecha).toISOString().split('T')[0] : '',
+                turno: cabecera.turno,
+                responsable: cabecera.responsable || '-',
+                venta: Number(cabecera.tot_ventas || 0),
+                ingresos: Number(cabecera.tot_ingresos || 0),
+                tarjeta: Number(cabecera.tot_tarjeta || 0),
+                remesado: Number(cabecera.tot_remesado || 0),
+                gastos: Number(cabecera.tot_gastos || 0),
+                retiros: Number(cabecera.tot_retirado || 0),
+                saldo_f: Number(cabecera.efectivo || 0),
+                dif: Number(cabecera.diferencia || 0)
+            },
+            ventas_lineas: (ventasRows || []).map(v => ({
+                linea: v.linea,
+                monto: Math.round(Number(v.monto || 0) * 100) / 100,
+                porcentaje: Math.round(Number(v.porcentaje || 0) * 10000) / 100
+            })),
+            detalles_movimientos: (detalleRows || []).map(d => ({
+                tipo: d.tipo,
+                tipo_nombre: d.tipo === 'G' ? 'Gasto' : d.tipo === 'T' ? 'Tarjeta' : 'Ingreso',
+                descripcion: d.descripcion,
+                monto: Math.round(Number(d.monto || 0) * 100) / 100
+            })),
+            totales: {
+                gastos: Math.round(totalGastos * 100) / 100,
+                tarjetas: Math.round(totalTarjetas * 100) / 100,
+                ingresos: Math.round(totalIngresos * 100) / 100
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching detalle corte tienda:', error);
+        res.status(500).json({ message: 'Error fetching detalle corte tienda' });
+    }
+});
+
+// Detalle por Rubro de Cierre de Turno de Estación (Gastos, Tarjetas, Remesas, Crédito, etc.)
+router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticateToken, async (req, res) => {
+    const { id_empresa, date, rubro } = req.params;
+    try {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
+        }
+        const externalDb = await getExternalDb();
+        const parts = date.split('-');
+        const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+        const cleanId = String(id_empresa).padStart(3, '0');
+
+        const [stRows] = await externalDb.query("SELECT titulo FROM web_consolidado WHERE id_empresa = ?", [cleanId]);
+        const estacionNombre = stRows[0]?.titulo ? getCleanStationName(cleanId, stRows[0].titulo) : `Estación ${cleanId}`;
+
+        let query = '';
+        let queryParams = [sysDate, cleanId];
+        let mapFn = (row) => row;
+
+        switch (rubro.toLowerCase()) {
+            case 'gastos':
+                query = `
+                    SELECT g.id, g.id_cierre_turno, g.fecha, g.documento, g.tipo_doc, 
+                           g.cod_proveedor, COALESCE(p.nombre, g.cod_proveedor) as nombre, 
+                           g.valor, g.concepto, g.cuenta as rubro
+                    FROM cierre_turno_gastos g 
+                    INNER JOIN cierre_turno c ON g.id_cierre_turno = c.id AND g.id_empresa = c.id_empresa
+                    LEFT JOIN proveedores p ON (g.cod_proveedor = p.codigo OR g.cod_proveedor = p.id) AND g.id_empresa = p.id_empresa 
+                    WHERE c.fecha_turno = ? AND g.id_empresa = ?
+                    ORDER BY g.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    documento: r.documento || '-',
+                    tipo_doc: (r.tipo_doc || '').toUpperCase(),
+                    codigo: r.cod_proveedor || '-',
+                    nombre: r.nombre || 'Sin nombre',
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                    concepto: r.concepto || r.rubro || 'Gasto operativo',
+                    rubro: r.rubro || 'Gastos'
+                });
+                break;
+
+            case 'tarjetas':
+                query = `
+                    SELECT t.id, t.id_cierre_turno, t.fecha, t.numero_tarjeta, t.autorizacion, 
+                           t.id_banco, COALESCE(b.descripcion, t.id_banco) as banco_nombre, 
+                           t.valor, t.tipo_operacion
+                    FROM cierre_turno_tarjeta t
+                    INNER JOIN cierre_turno c ON t.id_cierre_turno = c.id AND t.id_empresa = c.id_empresa
+                    LEFT JOIN bancos b ON t.id_banco = b.id AND t.id_empresa = b.id_empresa
+                    WHERE c.fecha_turno = ? AND t.id_empresa = ?
+                    ORDER BY t.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    tarjeta: r.numero_tarjeta || '****',
+                    autorizacion: r.autorizacion || '-',
+                    banco: r.banco_nombre || 'POS / Terminal',
+                    tipo_operacion: r.tipo_operacion || 'VTA',
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100
+                });
+                break;
+
+            case 'remesas':
+                query = `
+                    SELECT r.id, r.id_cierre_turno, r.fecha, r.documento, r.id_banco,
+                           COALESCE(b.descripcion, r.id_banco) as banco_nombre, r.efectivo, r.monedas,
+                           r.transferencia, (r.efectivo + r.monedas + r.transferencia) as total,
+                           r.num_voucher, r.tipo_operacion
+                    FROM cierre_turno_remesa r
+                    INNER JOIN cierre_turno c ON r.id_cierre_turno = c.id AND r.id_empresa = c.id_empresa
+                    LEFT JOIN bancos b ON r.id_banco = b.id AND r.id_empresa = b.id_empresa
+                    WHERE c.fecha_turno = ? AND r.id_empresa = ?
+                    ORDER BY r.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    documento: r.documento || '-',
+                    banco: r.banco_nombre || 'Remesa General',
+                    efectivo: Math.round(Number(r.efectivo || 0) * 100) / 100,
+                    monedas: Math.round(Number(r.monedas || 0) * 100) / 100,
+                    transferencia: Math.round(Number(r.transferencia || 0) * 100) / 100,
+                    total: Math.round(Number(r.total || 0) * 100) / 100,
+                    voucher: (r.num_voucher || '').trim() || '-',
+                    tipo_operacion: r.tipo_operacion || 'VTA'
+                });
+                break;
+
+            case 'credito':
+            case 'creditos':
+                query = `
+                    SELECT cr.id, cr.id_cierre_turno, cr.fecha, cr.documento, cr.tipo_doc,
+                           cr.cod_cliente, COALESCE(cl.nombre, cr.cod_cliente) as cliente_nombre,
+                           cr.cod_producto, cr.cantidad, cr.precio, cr.total_descuento as valor,
+                           cr.placa, cr.kilometraje
+                    FROM cierre_turno_credito cr
+                    INNER JOIN cierre_turno c ON cr.id_cierre_turno = c.id AND cr.id_empresa = c.id_empresa
+                    LEFT JOIN clientes cl ON cr.cod_cliente = cl.codigo AND cr.id_empresa = cl.id_empresa
+                    WHERE c.fecha_turno = ? AND cr.id_empresa = ?
+                    ORDER BY cr.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    documento: r.documento || '-',
+                    tipo_doc: r.tipo_doc || 'CCF',
+                    codigo: r.cod_cliente || '-',
+                    cliente: r.cliente_nombre || 'Cliente Crédito',
+                    producto: r.cod_producto || '-',
+                    cantidad: Math.round(Number(r.cantidad || 0) * 100) / 100,
+                    precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                    placa: r.placa || '-',
+                    kilometraje: Number(r.kilometraje || 0)
+                });
+                break;
+
+            case 'lubricantes':
+                query = `
+                    SELECT l.id_producto, COALESCE(p.descripcion, l.id_producto) as nom_producto, 
+                           l.inicial, l.complemento, l.final, l.ventas, l.precio_unitario, l.precio_total
+                    FROM inventario_lubricantes l
+                    LEFT JOIN productos p ON l.id_producto = p.codigo AND l.id_empresa = p.id_empresa
+                    WHERE l.fecha_turno = ? AND l.id_empresa = ? AND (l.inicial > 0 OR l.ventas > 0 OR l.complemento > 0)
+                    ORDER BY nom_producto
+                `;
+                mapFn = (r) => ({
+                    codigo: r.id_producto,
+                    producto: r.nom_producto,
+                    inicial: Number(r.inicial || 0),
+                    complemento: Number(r.complemento || 0),
+                    final: Number(r.final || 0),
+                    ventas: Number(r.ventas || 0),
+                    precio_unitario: Math.round(Number(r.precio_unitario || 0) * 100) / 100,
+                    precio_total: Math.round(Number(r.precio_total || 0) * 100) / 100
+                });
+                break;
+
+            case 'lecturas':
+            case 'tot_venta':
+            case 'total_venta':
+                query = `
+                    SELECT l.id_cierre_turno, l.id_manguera, l.codigo_producto, l.nom_producto,
+                           l.inicial, l.final, l.total as galones, l.precio, l.monto
+                    FROM cierre_turno_lecturas l
+                    INNER JOIN cierre_turno c ON l.id_cierre_turno = c.id AND l.id_empresa = c.id_empresa
+                    WHERE c.fecha_turno = ? AND l.id_empresa = ?
+                    ORDER BY l.id_manguera, l.codigo_producto
+                `;
+                mapFn = (r) => ({
+                    manguera: r.id_manguera || '-',
+                    codigo: r.codigo_producto || '-',
+                    producto: r.nom_producto || 'Combustible',
+                    inicial: Math.round(Number(r.inicial || 0) * 100) / 100,
+                    final: Math.round(Number(r.final || 0) * 100) / 100,
+                    galones: Math.round(Number(r.galones || 0) * 100) / 100,
+                    precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
+                    monto: Math.round(Number(r.monto || 0) * 100) / 100
+                });
+                break;
+
+            case 'cupones':
+                query = `
+                    SELECT cp.id, cp.id_cierre_turno, cp.fecha, cp.documento, cp.distribuidora, cp.cod_producto, cp.valor
+                    FROM cierre_turno_cupones cp
+                    INNER JOIN cierre_turno c ON cp.id_cierre_turno = c.id AND cp.id_empresa = c.id_empresa
+                    WHERE c.fecha_turno = ? AND cp.id_empresa = ?
+                    ORDER BY cp.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    documento: r.documento || '-',
+                    distribuidora: r.distribuidora || '-',
+                    producto: r.cod_producto || '-',
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100
+                });
+                break;
+
+            case 'cheques':
+                query = `
+                    SELECT ch.id, ch.id_cierre_turno, ch.fecha, ch.documento, ch.id_banco,
+                           COALESCE(b.descripcion, ch.id_banco) as banco_nombre, ch.valor, ch.tipo_operacion
+                    FROM cierre_turno_cheques ch
+                    INNER JOIN cierre_turno c ON ch.id_cierre_turno = c.id AND ch.id_empresa = c.id_empresa
+                    LEFT JOIN bancos b ON ch.id_banco = b.id AND ch.id_empresa = b.id_empresa
+                    WHERE c.fecha_turno = ? AND ch.id_empresa = ?
+                    ORDER BY ch.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    documento: r.documento || '-',
+                    banco: r.banco_nombre || 'Banco',
+                    tipo_operacion: r.tipo_operacion || 'CHQ',
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100
+                });
+                break;
+
+            case 'anticipos':
+                query = `
+                    SELECT a.id, a.id_cierre_turno, a.id_cajero, a.id_empleado, a.valor
+                    FROM cierre_turno_anticipos a
+                    INNER JOIN cierre_turno c ON a.id_cierre_turno = c.id AND a.id_empresa = c.id_empresa
+                    WHERE c.fecha_turno = ? AND a.id_empresa = ?
+                    ORDER BY a.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    cajero: r.id_cajero || '-',
+                    empleado: r.id_empleado || '-',
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100
+                });
+                break;
+
+            case 'pagos':
+                query = `
+                    SELECT p.id, p.id_cierre_turno, p.fecha, p.documento, p.tipo_doc, p.cod_cliente,
+                           COALESCE(cl.nombre, p.cod_cliente) as cliente_nombre, p.valor, p.cod_producto,
+                           p.cantidad, p.precio, p.total_descuento
+                    FROM cierre_turno_pagos p
+                    INNER JOIN cierre_turno c ON p.id_cierre_turno = c.id AND p.id_empresa = c.id_empresa
+                    LEFT JOIN clientes cl ON p.cod_cliente = cl.codigo AND p.id_empresa = cl.id_empresa
+                    WHERE c.fecha_turno = ? AND p.id_empresa = ?
+                    ORDER BY p.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    documento: r.documento || '-',
+                    tipo_doc: r.tipo_doc || '-',
+                    cliente: r.cliente_nombre || r.cod_cliente || '-',
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100
+                });
+                break;
+
+            case 'descuentos':
+                query = `
+                    SELECT d.id, d.id_cierre_turno, d.fecha, d.documento, d.cod_cliente,
+                           COALESCE(cl.nombre, d.cod_cliente) as cliente_nombre, d.cod_producto,
+                           d.cantidad, d.valor, (d.cantidad * d.valor) as total
+                    FROM cierre_turno_descuentos d
+                    INNER JOIN cierre_turno c ON d.id_cierre_turno = c.id AND d.id_empresa = c.id_empresa
+                    LEFT JOIN clientes cl ON d.cod_cliente = cl.codigo AND d.id_empresa = cl.id_empresa
+                    WHERE c.fecha_turno = ? AND d.id_empresa = ?
+                    ORDER BY d.id
+                `;
+                mapFn = (r) => ({
+                    id: r.id,
+                    fecha: r.fecha,
+                    documento: r.documento || '-',
+                    cliente: r.cliente_nombre || r.cod_cliente || '-',
+                    producto: r.cod_producto || '-',
+                    cantidad: Number(r.cantidad || 0),
+                    valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                    total: Math.round(Number(r.total || 0) * 100) / 100
+                });
+                break;
+
+            default:
+                return res.status(400).json({ message: `Rubro '${rubro}' no soportado` });
+        }
+
+        const [rows] = await externalDb.query(query, queryParams);
+        const mapped = (rows || []).map(mapFn);
+        const total = mapped.reduce((acc, curr) => acc + Number(curr.valor || curr.total || curr.monto || curr.precio_total || 0), 0);
+
+        res.json({
+            id_empresa: cleanId,
+            estacion_nombre: estacionNombre,
+            rubro,
+            fecha: date,
+            fecha_turno: sysDate,
+            total: Math.round(total * 100) / 100,
+            registros: mapped
+        });
+    } catch (error) {
+        console.error(`Error fetching detalle cierre (${rubro}):`, error);
+        res.status(500).json({ message: `Error fetching detalle de ${rubro}: ${error.message}` });
     }
 });
 

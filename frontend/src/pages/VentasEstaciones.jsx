@@ -4,7 +4,8 @@ import {
     ChevronLeft, ChevronRight, Fuel, Store, DollarSign, 
     Layers, TrendingUp, BarChart3, LineChart,
     ArrowUpRight, ArrowDownRight, Sparkles, RefreshCw,
-    Sliders, Save, Edit3
+    Sliders, Save, Edit3, ChevronDown, ChevronUp, Eye,
+    CreditCard, Receipt, Banknote, Tag, Filter, CheckCircle2
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -22,12 +23,22 @@ export default function VentasEstaciones() {
     const [fecha, setFecha] = useState(defaultDate);
     
     const [dataTiendas, setDataTiendas] = useState([]);
+    const [dataCortesTienda, setDataCortesTienda] = useState([]);
     const [dataEstaciones, setDataEstaciones] = useState([]);
+    const [dataResumenCierre, setDataResumenCierre] = useState([]);
     const [dataMargenes, setDataMargenes] = useState([]);
     const [dataInventario, setDataInventario] = useState([]);
     const [infoQuincena, setInfoQuincena] = useState(null);
     const [showCostStructure, setShowCostStructure] = useState(false);
     const [loading, setLoading] = useState(false);
+
+    // --- ESTADO DE DETALLES Y EXPANSION ---
+    const [expandedStations, setExpandedStations] = useState({});
+    const [drillDownModal, setDrillDownModal] = useState(null);
+    const [corteModal, setCorteModal] = useState(null);
+    const [drillDownSearch, setDrillDownSearch] = useState('');
+    const [corteMovSearch, setCorteMovSearch] = useState('');
+    const [vistaTiendasModo, setVistaTiendasModo] = useState('cortes'); // 'cortes' | 'promedios'
 
     // --- ESTADO MENSUAL ---
     const now = new Date();
@@ -211,7 +222,9 @@ export default function VentasEstaciones() {
         try {
             const res = await api.get(`/ventas/consolidado/${fecha}`);
             setDataTiendas(res.data.tiendas || []);
+            setDataCortesTienda(res.data.cortes_tienda || []);
             setDataEstaciones(res.data.estaciones || []);
+            setDataResumenCierre(res.data.resumen_cierre || []);
             setDataMargenes(res.data.margenes || []);
             setDataInventario(res.data.inventario || []);
             setInfoQuincena(res.data.quincena || null);
@@ -221,6 +234,179 @@ export default function VentasEstaciones() {
         } finally {
             setLoading(false);
         }
+    };
+
+    // --- ACCIONES DE DRILL-DOWN Y CORTE DE TIENDA ---
+    const handleOpenDrillDown = async (id_empresa, estacion_nombre, rubro, tituloRubro) => {
+        setDrillDownSearch('');
+        setDrillDownModal({
+            id_empresa,
+            estacion_nombre: estacion_nombre || `Estación ${id_empresa}`,
+            rubro,
+            titulo: `${estacion_nombre || 'Estación'} - ${tituloRubro || rubro}`,
+            loading: true,
+            data: [],
+            total: 0
+        });
+        try {
+            const res = await api.get(`/ventas/cierre-turno/detalle/${id_empresa}/${fecha}/${rubro}`);
+            setDrillDownModal({
+                id_empresa,
+                estacion_nombre: res.data.estacion_nombre || estacion_nombre,
+                rubro,
+                titulo: `${res.data.estacion_nombre || estacion_nombre} - ${tituloRubro || rubro}`,
+                loading: false,
+                data: res.data.registros || [],
+                total: res.data.total || 0,
+                fecha: res.data.fecha,
+                fecha_turno: res.data.fecha_turno
+            });
+        } catch (err) {
+            addToast(err.response?.data?.message || `Error al cargar detalle de ${rubro}`, 'error');
+            setDrillDownModal(null);
+        }
+    };
+
+    const handleOpenCorteModal = async (corte) => {
+        if (!corte || !corte.id_corte) {
+            addToast('Esta sucursal no tiene corte de tienda registrado para la fecha seleccionada', 'warning');
+            return;
+        }
+        setCorteMovSearch('');
+        setCorteModal({
+            id_corte: corte.id_corte,
+            empresa: corte.empresa,
+            fecha: corte.fecha,
+            cabecera: corte,
+            loading: true,
+            ventas_lineas: [],
+            detalles_movimientos: [],
+            totales: {},
+            activeTab: 'lineas',
+            filterTipo: 'ALL'
+        });
+        try {
+            const res = await api.get(`/ventas/corte-tienda/detalle/${corte.id_corte}`);
+            setCorteModal(prev => ({
+                ...prev,
+                loading: false,
+                cabecera: res.data.cabecera || corte,
+                ventas_lineas: res.data.ventas_lineas || [],
+                detalles_movimientos: res.data.detalles_movimientos || [],
+                totales: res.data.totales || {}
+            }));
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al cargar detalle del corte de tienda', 'error');
+            setCorteModal(null);
+        }
+    };
+
+    const toggleStationExpand = (id_empresa) => {
+        setExpandedStations(prev => ({
+            ...prev,
+            [id_empresa]: !prev[id_empresa]
+        }));
+    };
+
+    const exportDrillDownToExcel = () => {
+        if (!drillDownModal || !drillDownModal.data?.length) return;
+        const wb = XLSX.utils.book_new();
+        const rows = [
+            [`DETALLE DE CIERRE DE TURNO: ${drillDownModal.titulo.toUpperCase()}`],
+            ['Estación:', drillDownModal.estacion_nombre],
+            ['Rubro:', drillDownModal.rubro],
+            ['Fecha:', drillDownModal.fecha_turno || drillDownModal.fecha || fecha],
+            ['Total Acumulado:', `$${drillDownModal.total}`],
+            ['']
+        ];
+        
+        if (drillDownModal.rubro === 'gastos') {
+            rows.push(['Rubro', 'Fecha', 'Documento', 'Tipo Doc', 'Código Proveedor', 'Nombre / Proveedor', 'Valor ($)', 'Concepto']);
+            drillDownModal.data.forEach(r => {
+                rows.push([r.rubro, r.fecha, r.documento, r.tipo_doc, r.codigo, r.nombre, r.valor, r.concepto]);
+            });
+            rows.push(['', '', '', '', '', 'TOTAL', drillDownModal.total, '']);
+        } else if (drillDownModal.rubro === 'tarjetas') {
+            rows.push(['#', 'Fecha', 'Tarjeta', 'Autorización', 'Banco / POS', 'Operación', 'Valor ($)']);
+            drillDownModal.data.forEach((r, idx) => {
+                rows.push([idx + 1, r.fecha, r.tarjeta, r.autorizacion, r.banco, r.tipo_operacion, r.valor]);
+            });
+            rows.push(['', '', '', '', '', 'TOTAL', drillDownModal.total]);
+        } else if (drillDownModal.rubro === 'remesas') {
+            rows.push(['#', 'Fecha', 'Documento', 'Banco', 'Efectivo ($)', 'Monedas ($)', 'Transferencia ($)', 'Total ($)', 'Voucher']);
+            drillDownModal.data.forEach((r, idx) => {
+                rows.push([idx + 1, r.fecha, r.documento, r.banco, r.efectivo, r.monedas, r.transferencia, r.total, r.voucher]);
+            });
+            rows.push(['', '', '', 'TOTALES', '', '', '', drillDownModal.total, '']);
+        } else if (drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') {
+            rows.push(['#', 'Fecha', 'Documento', 'Tipo Doc', 'Cliente', 'Producto', 'Cantidad', 'Precio ($)', 'Valor ($)', 'Placa']);
+            drillDownModal.data.forEach((r, idx) => {
+                rows.push([idx + 1, r.fecha, r.documento, r.tipo_doc, r.cliente, r.producto, r.cantidad, r.precio, r.valor, r.placa]);
+            });
+            rows.push(['', '', '', '', '', '', '', 'TOTAL', drillDownModal.total, '']);
+        } else if (drillDownModal.rubro === 'lubricantes') {
+            rows.push(['Código', 'Producto', 'Inicial', 'Complemento', 'Final', 'Ventas', 'Precio Unit ($)', 'Precio Total ($)']);
+            drillDownModal.data.forEach(r => {
+                rows.push([r.codigo, r.producto, r.inicial, r.complemento, r.final, r.ventas, r.precio_unitario, r.precio_total]);
+            });
+            rows.push(['', '', '', '', '', '', 'TOTAL', drillDownModal.total]);
+        } else if (drillDownModal.rubro === 'lecturas') {
+            rows.push(['Manguera', 'Código', 'Producto', 'Inicial', 'Final', 'Galones', 'Precio ($)', 'Monto ($)']);
+            drillDownModal.data.forEach(r => {
+                rows.push([r.manguera, r.codigo, r.producto, r.inicial, r.final, r.galones, r.precio, r.monto]);
+            });
+            rows.push(['', '', '', '', '', '', 'TOTAL', drillDownModal.total]);
+        } else {
+            const keys = Object.keys(drillDownModal.data[0] || {});
+            rows.push(keys);
+            drillDownModal.data.forEach(r => {
+                rows.push(keys.map(k => r[k]));
+            });
+        }
+
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, 'Detalle');
+        XLSX.writeFile(wb, `Cierre_${drillDownModal.estacion_nombre.replace(/\s+/g, '_')}_${drillDownModal.rubro}_${fecha}.xlsx`);
+    };
+
+    const exportCorteTiendaToExcel = () => {
+        if (!corteModal) return;
+        const wb = XLSX.utils.book_new();
+        const rowsCab = [
+            [`CORTE DE TIENDA: ${corteModal.empresa}`],
+            ['Fecha:', corteModal.fecha],
+            ['Turno:', corteModal.cabecera?.turno || '0'],
+            ['Responsable:', corteModal.cabecera?.responsable || '-'],
+            [''],
+            ['Venta', 'Ingresos', 'Tarjeta', 'Remesado', 'Gastos', 'Retiros', 'Saldo Final', 'Diferencia'],
+            [
+                corteModal.cabecera?.venta || 0,
+                corteModal.cabecera?.ingresos || 0,
+                corteModal.cabecera?.tarjeta || 0,
+                corteModal.cabecera?.remesado || 0,
+                corteModal.cabecera?.gastos || 0,
+                corteModal.cabecera?.retiros || 0,
+                corteModal.cabecera?.saldo_f || 0,
+                corteModal.cabecera?.dif || 0
+            ],
+            [''],
+            ['--- VENTAS POR LÍNEA ---'],
+            ['Línea de Producto', 'Monto ($)', '% Participación']
+        ];
+        (corteModal.ventas_lineas || []).forEach(v => {
+            rowsCab.push([v.linea, v.monto, `${v.porcentaje}%`]);
+        });
+
+        rowsCab.push(['']);
+        rowsCab.push(['--- DETALLE DE MOVIMIENTOS ---']);
+        rowsCab.push(['Tipo', 'Descripción / Concepto', 'Monto ($)']);
+        (corteModal.detalles_movimientos || []).forEach(d => {
+            rowsCab.push([d.tipo_nombre || d.tipo, d.descripcion, d.monto]);
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet(rowsCab);
+        XLSX.utils.book_append_sheet(wb, ws, 'Corte');
+        XLSX.writeFile(wb, `Corte_${corteModal.empresa.replace(/\s+/g, '_')}_${corteModal.fecha}.xlsx`);
     };
 
     // --- CARGA Y AJUSTE DE PRECIOS DE QUINCENA ---
@@ -620,6 +806,33 @@ export default function VentasEstaciones() {
         );
     };
 
+    const totalCortesTienda = dataCortesTienda.reduce((acc, curr) => ({
+        venta: acc.venta + (Number(curr.venta) || 0),
+        ingresos: acc.ingresos + (Number(curr.ingresos) || 0),
+        tarjeta: acc.tarjeta + (Number(curr.tarjeta) || 0),
+        remesado: acc.remesado + (Number(curr.remesado) || 0),
+        gastos: acc.gastos + (Number(curr.gastos) || 0),
+        retiros: acc.retiros + (Number(curr.retiros) || 0),
+        saldo_f: acc.saldo_f + (Number(curr.saldo_f) || 0),
+        dif: acc.dif + (Number(curr.dif) || 0)
+    }), { venta: 0, ingresos: 0, tarjeta: 0, remesado: 0, gastos: 0, retiros: 0, saldo_f: 0, dif: 0 });
+
+    const totalResumenCierre = dataResumenCierre.reduce((acc, curr) => ({
+        credito: acc.credito + (Number(curr.credito) || 0),
+        cupones: acc.cupones + (Number(curr.cupones) || 0),
+        cheques: acc.cheques + (Number(curr.cheques) || 0),
+        tarjetas: acc.tarjetas + (Number(curr.tarjetas) || 0),
+        remesas: acc.remesas + (Number(curr.remesas) || 0),
+        gastos: acc.gastos + (Number(curr.gastos) || 0),
+        lubricantes: acc.lubricantes + (Number(curr.lubricantes) || 0),
+        anticipos: acc.anticipos + (Number(curr.anticipos) || 0),
+        pagos: acc.pagos + (Number(curr.pagos) || 0),
+        descuentos: acc.descuentos + (Number(curr.descuentos) || 0),
+        suma: acc.suma + (Number(curr.suma) || 0),
+        tot_venta: acc.tot_venta + (Number(curr.tot_venta) || 0),
+        diferencia: acc.diferencia + (Number(curr.diferencia) || 0)
+    }), { credito: 0, cupones: 0, cheques: 0, tarjetas: 0, remesas: 0, gastos: 0, lubricantes: 0, anticipos: 0, pagos: 0, descuentos: 0, suma: 0, tot_venta: 0, diferencia: 0 });
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {/* Control Bar Diario */}
@@ -639,46 +852,473 @@ export default function VentasEstaciones() {
                 </button>
             </div>
 
-            {/* Table 1: Tiendas E-Market Diario */}
+            {/* Table 1: Consulta de Cortes de Tienda (E-Market) */}
             <div className="card glass" style={{ padding: '0' }}>
-                <h3 style={{ margin: '0', padding: '1rem', borderBottom: '1px solid var(--border)', fontSize: '1rem', color: 'var(--text-muted)' }}>
-                    Resumen de Ventas Tiendas E-Market
-                </h3>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.85rem 1rem',
+                    borderBottom: '1px solid var(--border)',
+                    flexWrap: 'wrap',
+                    gap: '0.6rem'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <h3 style={{ margin: 0, fontSize: '1rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <Store size={18} color="var(--primary)" /> Consulta de Cortes de Tienda
+                        </h3>
+                        <span style={{ fontSize: '0.72rem', backgroundColor: 'var(--surface-hover)', padding: '0.15rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                            E-Market / Super 7
+                        </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            className={`btn btn-sm ${vistaTiendasModo === 'cortes' ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setVistaTiendasModo('cortes')}
+                            style={{ fontSize: '0.75rem', height: '30px', padding: '0 0.65rem' }}
+                        >
+                            Cortes Detallados
+                        </button>
+                        <button
+                            type="button"
+                            className={`btn btn-sm ${vistaTiendasModo === 'promedios' ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setVistaTiendasModo('promedios')}
+                            style={{ fontSize: '0.75rem', height: '30px', padding: '0 0.65rem' }}
+                        >
+                            Comparativo Quincenal
+                        </button>
+                    </div>
+                </div>
+
+                {vistaTiendasModo === 'cortes' ? (
+                    <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '920px' }}>
+                            <thead>
+                                <tr style={{ backgroundColor: 'var(--surface-hover)', borderBottom: '1px solid var(--border)' }}>
+                                    <th style={{ textAlign: 'left', padding: '0.55rem 0.85rem' }}>Estación</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Venta</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Ingresos</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Tarjeta</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Remesado</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Gastos</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Retiros</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Saldo F.</th>
+                                    <th style={{ textAlign: 'right', padding: '0.55rem 0.75rem' }}>Dif</th>
+                                    <th style={{ textAlign: 'center', padding: '0.55rem 0.75rem' }}>Detalle</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {dataCortesTienda.map((t, i) => (
+                                    <tr 
+                                        key={i} 
+                                        style={{ borderBottom: '1px solid var(--border)', cursor: t.tiene_corte ? 'pointer' : 'default', transition: 'background-color 0.15s ease' }}
+                                        onClick={() => t.tiene_corte && handleOpenCorteModal(t)}
+                                        className={t.tiene_corte ? 'row-hover' : ''}
+                                    >
+                                        <td style={{ padding: '0.5rem 0.85rem', fontWeight: '500' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                <Store size={14} color="var(--primary)" />
+                                                <span>{t.empresa}</span>
+                                                {t.responsable && (
+                                                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>({t.responsable})</span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 'bold' }}>
+                                            {moneyFmt(t.venta)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.ingresos > 0 ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                                            {moneyFmt(t.ingresos)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.tarjeta > 0 ? '#3b82f6' : 'var(--text-muted)' }}>
+                                            {moneyFmt(t.tarjeta)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.remesado > 0 ? '#10b981' : 'var(--text-muted)' }}>
+                                            {moneyFmt(t.remesado)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.gastos > 0 ? '#ef4444' : 'var(--text-muted)' }}>
+                                            {moneyFmt(t.gastos)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.retiros > 0 ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                                            {moneyFmt(t.retiros)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: '500', color: t.saldo_f < 0 ? '#ef4444' : 'var(--text-main)' }}>
+                                            {moneyFmt(t.saldo_f)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right' }}>
+                                            <span style={{
+                                                fontSize: '0.75rem',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                fontWeight: 'bold',
+                                                backgroundColor: t.dif === 0 ? 'rgba(34, 197, 94, 0.15)' : t.dif < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                                color: t.dif === 0 ? '#22c55e' : t.dif < 0 ? '#ef4444' : '#f59e0b'
+                                            }}>
+                                                {moneyFmt(t.dif)}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                                            {t.tiene_corte ? (
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary"
+                                                    onClick={() => handleOpenCorteModal(t)}
+                                                    style={{ height: '28px', padding: '0 0.55rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                                    title="Ver líneas de venta y detalle de gastos y tarjetas"
+                                                >
+                                                    <Eye size={13} color="var(--primary)" /> Ver
+                                                </button>
+                                            ) : (
+                                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Sin corte</span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                                {dataCortesTienda.length > 0 && (
+                                    <tr style={{ fontWeight: 'bold', backgroundColor: 'var(--surface-active)', borderTop: '2px solid var(--border)' }}>
+                                        <td style={{ padding: '0.65rem 0.85rem' }}>TOTALES</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.venta)}</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.ingresos)}</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.tarjeta)}</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.remesado)}</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.gastos)}</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.retiros)}</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.saldo_f)}</td>
+                                        <td style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>{moneyFmt(totalCortesTienda.dif)}</td>
+                                        <td></td>
+                                    </tr>
+                                )}
+                                {dataCortesTienda.length === 0 && !loading && (
+                                    <tr><td colSpan="10" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No hay cortes registrados para la fecha</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    /* Vista Comparativa Quincenal de Tiendas */
+                    <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '650px' }}>
+                            <thead>
+                                <tr>
+                                    <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Fecha</th>
+                                    <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Sucursal</th>
+                                    <th style={{ textAlign: 'right', padding: '0.75rem 1rem' }}>Monto</th>
+                                    <th style={{ textAlign: 'right', padding: '0.75rem 1rem' }}>Promedio</th>
+                                    <th style={{ textAlign: 'right', padding: '0.75rem 1rem' }}>Eficiencia</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {dataTiendas.map((t, i) => {
+                                    const eficiencia = t.promedio === 0 ? 'NaN%' : (((t.venta / t.promedio) - 1) * 100).toFixed(2) + '%';
+                                    return (
+                                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '0.5rem 1rem' }}>{formatMsDate(t.fecha)}</td>
+                                        <td style={{ padding: '0.5rem 1rem' }}>{t.empresa}</td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>
+                                            {t.venta === 0 ? <Badge val={moneyFmt(t.venta)} /> : moneyFmt(t.venta)}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{moneyFmt(t.promedio)}</td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{eficiencia}</td>
+                                    </tr>
+                                );})}
+                                {dataTiendas.length > 0 && (
+                                    <tr style={{ fontWeight: 'bold', background: 'rgba(0,0,0,0.02)' }}>
+                                        <td colSpan="2" style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Total</td>
+                                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>{moneyFmt(totalMontoTiendas)}</td>
+                                        <td></td>
+                                        <td></td>
+                                    </tr>
+                                )}
+                                {dataTiendas.length === 0 && !loading && (
+                                    <tr><td colSpan="5" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No hay datos para mostrar</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+
+            {/* Table 2: Montos Cierre de Turno Pista (Réplica Fiel Sys.sipesv) */}
+            <div className="card glass" style={{ padding: '0' }}>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.85rem 1rem',
+                    borderBottom: '1px solid var(--border)',
+                    flexWrap: 'wrap',
+                    gap: '0.6rem'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <h3 style={{ margin: 0, fontSize: '1rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <Receipt size={18} color="var(--primary)" /> Montos Cierre de Turno
+                        </h3>
+                        <span style={{ fontSize: '0.72rem', backgroundColor: 'var(--surface-hover)', padding: '0.15rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                            Pista / Estaciones
+                        </span>
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        💡 Haz clic en cualquier estación o valor (Gastos, Tarjetas, Remesas, etc.) para expandir el detalle
+                    </span>
+                </div>
+
                 <div className="table-responsive" style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '650px' }}>
+                    <table style={{ width: '100%', fontSize: '0.78rem', borderCollapse: 'collapse', minWidth: '1050px' }}>
                         <thead>
-                            <tr>
-                                <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Fecha</th>
-                                <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Sucursal</th>
-                                <th style={{ textAlign: 'right', padding: '0.75rem 1rem' }}>Monto</th>
-                                <th style={{ textAlign: 'right', padding: '0.75rem 1rem' }}>Promedio</th>
-                                <th style={{ textAlign: 'right', padding: '0.75rem 1rem' }}>Eficiencia</th>
+                            <tr style={{ backgroundColor: 'var(--surface-hover)', borderBottom: '1px solid var(--border)' }}>
+                                <th style={{ textAlign: 'left', padding: '0.55rem 0.75rem' }}>Estación</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Crédito</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Cupones</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Cheques</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Tarjetas</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Remesa</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Gastos</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Lubric.</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Anticipos</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Pagos</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.5rem' }}>Desc.</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.6rem', fontWeight: 'bold' }}>Suma</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.6rem', fontWeight: 'bold' }}>Total Vta.</th>
+                                <th style={{ textAlign: 'right', padding: '0.55rem 0.6rem', fontWeight: 'bold' }}>Dif.</th>
+                                <th style={{ textAlign: 'center', padding: '0.55rem 0.5rem' }}>Detalle</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {dataTiendas.map((t, i) => {
-                                const eficiencia = t.promedio === 0 ? 'NaN%' : (((t.venta / t.promedio) - 1) * 100).toFixed(2) + '%';
+                            {dataResumenCierre.map((r, i) => {
+                                const isExpanded = !!expandedStations[r.id_empresa];
+                                const renderDrillCell = (val, rubro, title) => {
+                                    const num = Number(val || 0);
+                                    if (num === 0) {
+                                        return <span style={{ color: 'var(--text-muted)' }}>0.00</span>;
+                                    }
+                                    return (
+                                        <button
+                                            type="button"
+                                            onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, rubro, title)}
+                                            style={{
+                                                background: 'transparent',
+                                                border: '1px solid transparent',
+                                                borderRadius: '4px',
+                                                padding: '2px 5px',
+                                                cursor: 'pointer',
+                                                fontSize: '0.78rem',
+                                                fontFamily: 'inherit',
+                                                color: rubro === 'gastos' ? '#ef4444' : rubro === 'tarjetas' ? '#3b82f6' : rubro === 'remesas' ? '#10b981' : 'var(--text-main)',
+                                                fontWeight: '500',
+                                                transition: 'all 0.15s ease'
+                                            }}
+                                            className="drill-btn"
+                                            title={`Clic para ver comprobantes de ${title} (${moneyFmt(num)})`}
+                                        >
+                                            {moneyFmt(num)}
+                                        </button>
+                                    );
+                                };
+
                                 return (
-                                <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                                    <td style={{ padding: '0.5rem 1rem' }}>{formatMsDate(t.fecha)}</td>
-                                    <td style={{ padding: '0.5rem 1rem' }}>{t.empresa}</td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>
-                                        {t.venta === 0 ? <Badge val={moneyFmt(t.venta)} /> : moneyFmt(t.venta)}
-                                    </td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{moneyFmt(t.promedio)}</td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{eficiencia}</td>
-                                </tr>
-                            );})}
-                            {dataTiendas.length > 0 && (
-                                <tr style={{ fontWeight: 'bold', background: 'rgba(0,0,0,0.02)' }}>
-                                    <td colSpan="2" style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Total</td>
-                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>{moneyFmt(totalMontoTiendas)}</td>
-                                    <td></td>
+                                    <React.Fragment key={r.id_empresa || i}>
+                                        <tr 
+                                            style={{ 
+                                                borderBottom: '1px solid var(--border)',
+                                                backgroundColor: isExpanded ? 'rgba(59, 130, 246, 0.04)' : 'transparent',
+                                                transition: 'background-color 0.15s ease'
+                                            }}
+                                        >
+                                            <td style={{ padding: '0.45rem 0.75rem', fontWeight: '600' }}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleStationExpand(r.id_empresa)}
+                                                    style={{
+                                                        background: 'none',
+                                                        border: 'none',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.35rem',
+                                                        cursor: 'pointer',
+                                                        fontSize: '0.8rem',
+                                                        fontWeight: '600',
+                                                        color: 'var(--text-main)',
+                                                        padding: 0
+                                                    }}
+                                                    title="Clic para expandir / contraer opciones rápidas"
+                                                >
+                                                    {isExpanded ? <ChevronUp size={15} color="var(--primary)" /> : <ChevronDown size={15} color="var(--text-muted)" />}
+                                                    <span>{r.empresa}</span>
+                                                </button>
+                                            </td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.credito, 'credito', 'Créditos')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.cupones, 'cupones', 'Cupones')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.cheques, 'cheques', 'Cheques')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.tarjetas, 'tarjetas', 'Tarjetas')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.remesas, 'remesas', 'Remesas')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.gastos, 'gastos', 'Gastos')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.lubricantes, 'lubricantes', 'Lubricantes')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.anticipos, 'anticipos', 'Anticipos')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.pagos, 'pagos', 'Pagos')}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.descuentos, 'descuentos', 'Descuentos')}</td>
+                                            <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontWeight: 'bold' }}>{moneyFmt(r.suma)}</td>
+                                            <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontWeight: 'bold' }}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, 'lecturas', 'Lecturas de Combustible')}
+                                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 'bold', padding: 0 }}
+                                                    title="Clic para ver lecturas de dispensadores"
+                                                >
+                                                    {moneyFmt(r.tot_venta)}
+                                                </button>
+                                            </td>
+                                            <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right' }}>
+                                                <span style={{
+                                                    fontSize: '0.74rem',
+                                                    padding: '2px 5px',
+                                                    borderRadius: '4px',
+                                                    fontWeight: 'bold',
+                                                    backgroundColor: r.diferencia === 0 ? 'rgba(34, 197, 94, 0.15)' : r.diferencia < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                                    color: r.diferencia === 0 ? '#22c55e' : r.diferencia < 0 ? '#ef4444' : '#f59e0b'
+                                                }}>
+                                                    {moneyFmt(r.diferencia)}
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary"
+                                                    onClick={() => toggleStationExpand(r.id_empresa)}
+                                                    style={{ height: '26px', padding: '0 0.45rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                                >
+                                                    {isExpanded ? 'Cerrar' : 'Ver Más'}
+                                                </button>
+                                            </td>
+                                        </tr>
+
+                                        {/* Fila Expandible para la Estación */}
+                                        {isExpanded && (
+                                            <tr style={{ backgroundColor: 'rgba(59, 130, 246, 0.03)', borderBottom: '2px solid var(--border)' }}>
+                                                <td colSpan="15" style={{ padding: '0.85rem 1rem' }}>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                                            <div style={{ fontSize: '0.825rem', fontWeight: 'bold', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                                <Fuel size={16} color="var(--primary)" />
+                                                                Desglose Operativo: {r.empresa} (Turno del {fecha})
+                                                            </div>
+                                                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                                                Selecciona cualquier rubro para inspeccionar todos los comprobantes individuales
+                                                            </span>
+                                                        </div>
+
+                                                        <div style={{
+                                                            display: 'grid',
+                                                            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                                                            gap: '0.6rem'
+                                                        }}>
+                                                            <div style={{ padding: '0.6rem 0.75rem', borderRadius: '6px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>🧾 Gastos Operativos</div>
+                                                                <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#ef4444', margin: '0.2rem 0' }}>{moneyFmt(r.gastos)}</div>
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn-secondary"
+                                                                    onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, 'gastos', 'Gastos')}
+                                                                    style={{ height: '24px', fontSize: '0.7rem', width: '100%', padding: 0 }}
+                                                                >
+                                                                    Ver Comprobantes
+                                                                </button>
+                                                            </div>
+
+                                                            <div style={{ padding: '0.6rem 0.75rem', borderRadius: '6px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>💳 Tarjetas / POS</div>
+                                                                <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#3b82f6', margin: '0.2rem 0' }}>{moneyFmt(r.tarjetas)}</div>
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn-secondary"
+                                                                    onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, 'tarjetas', 'Tarjetas')}
+                                                                    style={{ height: '24px', fontSize: '0.7rem', width: '100%', padding: 0 }}
+                                                                >
+                                                                    Ver Transacciones
+                                                                </button>
+                                                            </div>
+
+                                                            <div style={{ padding: '0.6rem 0.75rem', borderRadius: '6px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>💰 Remesas Bancarias</div>
+                                                                <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#10b981', margin: '0.2rem 0' }}>{moneyFmt(r.remesas)}</div>
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn-secondary"
+                                                                    onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, 'remesas', 'Remesas')}
+                                                                    style={{ height: '24px', fontSize: '0.7rem', width: '100%', padding: 0 }}
+                                                                >
+                                                                    Ver Remesas
+                                                                </button>
+                                                            </div>
+
+                                                            <div style={{ padding: '0.6rem 0.75rem', borderRadius: '6px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>⛽ Total Venta Combustible</div>
+                                                                <div style={{ fontSize: '1rem', fontWeight: 'bold', color: 'var(--primary)', margin: '0.2rem 0' }}>{moneyFmt(r.tot_venta)}</div>
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn-secondary"
+                                                                    onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, 'lecturas', 'Lecturas de Combustible')}
+                                                                    style={{ height: '24px', fontSize: '0.7rem', width: '100%', padding: 0 }}
+                                                                >
+                                                                    Ver Mangueras
+                                                                </button>
+                                                            </div>
+
+                                                            <div style={{ padding: '0.6rem 0.75rem', borderRadius: '6px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>📄 Ventas a Crédito</div>
+                                                                <div style={{ fontSize: '1rem', fontWeight: 'bold', color: 'var(--text-main)', margin: '0.2rem 0' }}>{moneyFmt(r.credito)}</div>
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn-secondary"
+                                                                    onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, 'credito', 'Créditos')}
+                                                                    style={{ height: '24px', fontSize: '0.7rem', width: '100%', padding: 0 }}
+                                                                >
+                                                                    Ver Clientes
+                                                                </button>
+                                                            </div>
+
+                                                            <div style={{ padding: '0.6rem 0.75rem', borderRadius: '6px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>🛢️ Lubricantes</div>
+                                                                <div style={{ fontSize: '1rem', fontWeight: 'bold', color: 'var(--text-main)', margin: '0.2rem 0' }}>{moneyFmt(r.lubricantes)}</div>
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn-secondary"
+                                                                    onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, 'lubricantes', 'Lubricantes')}
+                                                                    style={{ height: '24px', fontSize: '0.7rem', width: '100%', padding: 0 }}
+                                                                >
+                                                                    Ver Inventario
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
+                                );
+                            })}
+                            {dataResumenCierre.length > 0 && (
+                                <tr style={{ fontWeight: 'bold', backgroundColor: 'var(--surface-active)', borderTop: '2px solid var(--border)' }}>
+                                    <td style={{ padding: '0.6rem 0.75rem' }}>TOTALES</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.credito)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.cupones)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.cheques)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.tarjetas)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.remesas)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.gastos)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.lubricantes)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.anticipos)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.pagos)}</td>
+                                    <td style={{ padding: '0.6rem 0.5rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.descuentos)}</td>
+                                    <td style={{ padding: '0.6rem 0.6rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.suma)}</td>
+                                    <td style={{ padding: '0.6rem 0.6rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.tot_venta)}</td>
+                                    <td style={{ padding: '0.6rem 0.6rem', textAlign: 'right' }}>{moneyFmt(totalResumenCierre.diferencia)}</td>
                                     <td></td>
                                 </tr>
                             )}
-                            {dataTiendas.length === 0 && !loading && (
-                                <tr><td colSpan="5" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No hay datos para mostrar</td></tr>
+                            {dataResumenCierre.length === 0 && !loading && (
+                                <tr><td colSpan="15" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No hay cierres registrados para la fecha</td></tr>
                             )}
                         </tbody>
                     </table>
@@ -2478,6 +3118,684 @@ export default function VentasEstaciones() {
                     </div>
                 </div>
             </Modal>
+
+            {/* Modal de Detalle de Rubro Cierre de Turno (Gastos, Tarjetas, Remesas, Crédito, etc.) */}
+            {drillDownModal && (
+                <Modal
+                    isOpen={!!drillDownModal}
+                    onClose={() => setDrillDownModal(null)}
+                    title={drillDownModal.titulo}
+                    size="xl"
+                >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {/* Header info bar */}
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: '0.75rem',
+                            padding: '0.75rem 1rem',
+                            background: 'var(--bg-card)',
+                            borderRadius: 'var(--border-radius)',
+                            border: '1px solid var(--border)'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                    Fecha: <strong style={{ color: 'var(--text)' }}>{drillDownModal.fecha_turno || drillDownModal.fecha || fecha}</strong>
+                                </span>
+                                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                    Estación: <strong style={{ color: 'var(--primary)' }}>{drillDownModal.estacion_nombre}</strong>
+                                </span>
+                                <span style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    padding: '0.2rem 0.6rem',
+                                    borderRadius: '12px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    background: 'rgba(59, 130, 246, 0.12)',
+                                    color: 'var(--primary)'
+                                }}>
+                                    {drillDownModal.rubro.toUpperCase()}
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                                <div style={{ textAlign: 'right' }}>
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block' }}>Total Registrado</span>
+                                    <strong style={{ fontSize: '1.15rem', color: 'var(--primary)' }}>
+                                        {moneyFmt(drillDownModal.total)}
+                                    </strong>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={exportDrillDownToExcel}
+                                    className="btn btn-secondary"
+                                    style={{ height: '36px', padding: '0 0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+                                    disabled={!drillDownModal.data?.length}
+                                    title="Exportar a Excel"
+                                >
+                                    <FileSpreadsheet size={16} color="#10B981" />
+                                    <span>Excel</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Search filter input */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', maxWidth: '380px' }}>
+                            <div style={{ position: 'relative', width: '100%' }}>
+                                <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                                <input
+                                    type="text"
+                                    placeholder="Buscar por documento, nombre, concepto..."
+                                    value={drillDownSearch}
+                                    onChange={(e) => setDrillDownSearch(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        height: '34px',
+                                        padding: '0 0.75rem 0 2rem',
+                                        fontSize: '0.8rem',
+                                        borderRadius: 'var(--border-radius)',
+                                        border: '1px solid var(--border)',
+                                        background: 'var(--bg-color)',
+                                        color: 'var(--text)'
+                                    }}
+                                />
+                            </div>
+                            {drillDownSearch && (
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setDrillDownSearch('')}
+                                    style={{ height: '34px', padding: '0 0.6rem', fontSize: '0.75rem' }}
+                                >
+                                    Limpiar
+                                </button>
+                            )}
+                        </div>
+
+                        {/* Content area: Loading vs Table */}
+                        {drillDownModal.loading ? (
+                            <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                <RefreshCw size={28} className="spin" style={{ margin: '0 auto 0.75rem auto', display: 'block', color: 'var(--primary)' }} />
+                                <p style={{ fontSize: '0.85rem' }}>Cargando registros detallados de {drillDownModal.rubro}...</p>
+                            </div>
+                        ) : (() => {
+                            const query = (drillDownSearch || '').toLowerCase().trim();
+                            const filteredRows = (drillDownModal.data || []).filter(item => {
+                                if (!query) return true;
+                                return Object.values(item).some(val => 
+                                    val !== null && val !== undefined && String(val).toLowerCase().includes(query)
+                                );
+                            });
+
+                            if (filteredRows.length === 0) {
+                                return (
+                                    <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--text-secondary)', background: 'var(--bg-card)', borderRadius: 'var(--border-radius)' }}>
+                                        <p style={{ fontSize: '0.85rem' }}>No se encontraron comprobantes ni movimientos para este rubro con los filtros aplicados.</p>
+                                    </div>
+                                );
+                            }
+
+                            return (
+                                <div className="table-responsive" style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                                    <table className="table" style={{ width: '100%', minWidth: '750px', fontSize: '0.8rem' }}>
+                                        <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-card)' }}>
+                                            {drillDownModal.rubro === 'gastos' && (
+                                                <tr>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Rubro</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Fecha</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Docu.</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Tipo</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Código</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Nombre / Proveedor</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Valor ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Concepto</th>
+                                                </tr>
+                                            )}
+                                            {drillDownModal.rubro === 'tarjetas' && (
+                                                <tr>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', width: '40px' }}>#</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Fecha</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Tarjeta</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Autorización</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Banco / POS</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Operación</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Valor ($)</th>
+                                                </tr>
+                                            )}
+                                            {drillDownModal.rubro === 'remesas' && (
+                                                <tr>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', width: '40px' }}>#</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Fecha</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Documento</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Banco</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Efectivo</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Monedas</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Transfer.</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Total ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Voucher</th>
+                                                </tr>
+                                            )}
+                                            {(drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') && (
+                                                <tr>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', width: '40px' }}>#</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Fecha</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Documento</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Tipo</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Cliente</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Prod.</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Cantidad</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Precio ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Valor ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Placa</th>
+                                                </tr>
+                                            )}
+                                            {drillDownModal.rubro === 'lubricantes' && (
+                                                <tr>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Código</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Producto</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Inicial</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Complem.</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Final</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Ventas</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>P. Unit ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>P. Total ($)</th>
+                                                </tr>
+                                            )}
+                                            {drillDownModal.rubro === 'lecturas' && (
+                                                <tr>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Manguera</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Código</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Producto</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Inicial</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Final</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Galones</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Precio ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Monto ($)</th>
+                                                </tr>
+                                            )}
+                                            {!['gastos', 'tarjetas', 'remesas', 'credito', 'creditos', 'lubricantes', 'lecturas'].includes(drillDownModal.rubro) && (
+                                                <tr>
+                                                    {Object.keys(filteredRows[0] || {}).map(k => (
+                                                        <th key={k} style={{ padding: '0.45rem 0.5rem', textAlign: typeof filteredRows[0][k] === 'number' ? 'right' : 'left' }}>
+                                                            {k.replace(/_/g, ' ').toUpperCase()}
+                                                        </th>
+                                                    ))}
+                                                </tr>
+                                            )}
+                                        </thead>
+                                        <tbody>
+                                            {filteredRows.map((r, idx) => (
+                                                <tr key={r.id || idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                    {drillDownModal.rubro === 'gastos' && (
+                                                        <>
+                                                            <td style={{ padding: '0.45rem 0.5rem' }}>
+                                                                <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'var(--bg-color)', border: '1px solid var(--border)' }}>
+                                                                    {r.rubro}
+                                                                </span>
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>{r.fecha}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.documento}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                                <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{r.tipo_doc}</span>
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)' }}>{r.codigo}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 600 }}>{r.nombre}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600, color: '#DC2626' }}>
+                                                                {moneyFmt(r.valor)}
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)', maxWidth: '250px' }}>
+                                                                {r.concepto}
+                                                            </td>
+                                                        </>
+                                                    )}
+                                                    {drillDownModal.rubro === 'tarjetas' && (
+                                                        <>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>{idx + 1}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>{r.fecha}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace' }}>{r.tarjeta}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem' }}>{r.autorizacion}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.banco}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                                <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.1)', color: 'var(--primary)' }}>
+                                                                    {r.tipo_operacion}
+                                                                </span>
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600 }}>
+                                                                {moneyFmt(r.valor)}
+                                                            </td>
+                                                        </>
+                                                    )}
+                                                    {drillDownModal.rubro === 'remesas' && (
+                                                        <>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>{idx + 1}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>{r.fecha}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.documento}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem' }}>{r.banco}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{moneyFmt(r.efectivo)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{moneyFmt(r.monedas)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{moneyFmt(r.transferencia)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600, color: 'var(--primary)' }}>
+                                                                {moneyFmt(r.total)}
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)' }}>{r.voucher}</td>
+                                                        </>
+                                                    )}
+                                                    {(drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') && (
+                                                        <>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>{idx + 1}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>{r.fecha}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.documento}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>{r.tipo_doc}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 600 }}>{r.cliente}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem' }}>{r.producto}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(r.cantidad)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>${r.precio}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600 }}>{moneyFmt(r.valor)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)' }}>{r.placa}</td>
+                                                        </>
+                                                    )}
+                                                    {drillDownModal.rubro === 'lubricantes' && (
+                                                        <>
+                                                            <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)' }}>{r.codigo}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.producto}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{r.inicial}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{r.complemento}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{r.final}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600, color: 'var(--primary)' }}>{r.ventas}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{moneyFmt(r.precio_unitario)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600 }}>{moneyFmt(r.precio_total)}</td>
+                                                        </>
+                                                    )}
+                                                    {drillDownModal.rubro === 'lecturas' && (
+                                                        <>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontWeight: 600 }}>{r.manguera}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)' }}>{r.codigo}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.producto}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(r.inicial)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(r.final)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600 }}>{numFmt(r.galones)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>${r.precio}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600 }}>{moneyFmt(r.monto)}</td>
+                                                        </>
+                                                    )}
+                                                    {!['gastos', 'tarjetas', 'remesas', 'credito', 'creditos', 'lubricantes', 'lecturas'].includes(drillDownModal.rubro) && (
+                                                        <>
+                                                            {Object.keys(r).map(k => (
+                                                                <td key={k} style={{ padding: '0.45rem 0.5rem', textAlign: typeof r[k] === 'number' ? 'right' : 'left' }}>
+                                                                    {typeof r[k] === 'number' ? (k.includes('precio') || k.includes('valor') || k.includes('monto') || k.includes('total') ? moneyFmt(r[k]) : numFmt(r[k])) : String(r[k] ?? '-')}
+                                                                </td>
+                                                            ))}
+                                                        </>
+                                                    )}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--bg-card)', fontWeight: 700 }}>
+                                            <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                                <td colSpan={drillDownModal.rubro === 'gastos' ? 6 : drillDownModal.rubro === 'tarjetas' ? 6 : drillDownModal.rubro === 'remesas' ? 7 : (drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') ? 8 : drillDownModal.rubro === 'lubricantes' ? 7 : drillDownModal.rubro === 'lecturas' ? 7 : 1} style={{ padding: '0.5rem', textAlign: 'right' }}>
+                                                    TOTAL ACUMULADO:
+                                                </td>
+                                                <td style={{ padding: '0.5rem', textAlign: 'right', color: 'var(--primary)', fontSize: '0.9rem' }}>
+                                                    {moneyFmt(filteredRows.reduce((acc, curr) => acc + Number(curr.valor || curr.total || curr.monto || curr.precio_total || 0), 0))}
+                                                </td>
+                                                {(drillDownModal.rubro === 'gastos' || drillDownModal.rubro === 'remesas' || drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') && (
+                                                    <td style={{ padding: '0.5rem' }}></td>
+                                                )}
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                            );
+                        })()}
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => setDrillDownModal(null)}
+                                style={{ height: '36px', padding: '0 1.25rem', fontSize: '0.825rem' }}
+                            >
+                                Cerrar
+                            </button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Modal de Detalle de Corte de Tienda (Líneas de Venta + Gastos/Tarjetas/Ingresos) */}
+            {corteModal && (
+                <Modal
+                    isOpen={!!corteModal}
+                    onClose={() => setCorteModal(null)}
+                    title={`Corte de Tienda - ${corteModal.empresa}`}
+                    size="xl"
+                >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {/* Header info badge & actions */}
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            gap: '0.75rem',
+                            padding: '0.75rem 1rem',
+                            background: 'var(--bg-card)',
+                            borderRadius: 'var(--border-radius)',
+                            border: '1px solid var(--border)'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <Store size={18} color="var(--primary)" />
+                                    <strong style={{ fontSize: '1rem', color: 'var(--text)' }}>{corteModal.empresa}</strong>
+                                </div>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                    Fecha: <strong style={{ color: 'var(--text)' }}>{corteModal.fecha}</strong>
+                                </span>
+                                {corteModal.cabecera?.turno && (
+                                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                        Turno: <strong style={{ color: 'var(--text)' }}>{corteModal.cabecera.turno}</strong>
+                                    </span>
+                                )}
+                                {corteModal.cabecera?.responsable && (
+                                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                        Responsable: <strong style={{ color: 'var(--text)' }}>{corteModal.cabecera.responsable}</strong>
+                                    </span>
+                                )}
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={exportCorteTiendaToExcel}
+                                className="btn btn-secondary"
+                                style={{ height: '36px', padding: '0 0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+                                title="Exportar Corte a Excel"
+                            >
+                                <FileSpreadsheet size={16} color="#10B981" />
+                                <span>Exportar Excel</span>
+                            </button>
+                        </div>
+
+                        {/* KPI Strip */}
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))',
+                            gap: '0.5rem'
+                        }}>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Venta Total</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--primary)', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.venta)}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Ingresos</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.ingresos)}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Tarjetas</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#3B82F6', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.tarjeta)}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Remesado</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#10B981', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.remesado)}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Gastos</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#EF4444', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.gastos)}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Retiros</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.retiros)}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Saldo Final</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: (corteModal.cabecera?.saldo_f || 0) < 0 ? '#EF4444' : 'var(--text)', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.saldo_f)}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.6rem', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Diferencia</div>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: (corteModal.cabecera?.dif || 0) === 0 ? '#10B981' : (corteModal.cabecera?.dif || 0) < 0 ? '#EF4444' : '#F59E0B', marginTop: '2px' }}>
+                                    {moneyFmt(corteModal.cabecera?.dif)}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Navigation tabs for Lineas vs Movimientos */}
+                        <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
+                            <button
+                                type="button"
+                                onClick={() => setCorteModal(prev => ({ ...prev, activeTab: 'lineas' }))}
+                                style={{
+                                    padding: '0.45rem 1rem',
+                                    fontSize: '0.825rem',
+                                    fontWeight: 600,
+                                    border: 'none',
+                                    borderBottom: (corteModal.activeTab || 'lineas') === 'lineas' ? '2px solid var(--primary)' : '2px solid transparent',
+                                    background: 'transparent',
+                                    color: (corteModal.activeTab || 'lineas') === 'lineas' ? 'var(--primary)' : 'var(--text-secondary)',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem'
+                                }}
+                            >
+                                <Layers size={15} />
+                                <span>Ventas por Línea ({corteModal.ventas_lineas?.length || 0})</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setCorteModal(prev => ({ ...prev, activeTab: 'movimientos' }))}
+                                style={{
+                                    padding: '0.45rem 1rem',
+                                    fontSize: '0.825rem',
+                                    fontWeight: 600,
+                                    border: 'none',
+                                    borderBottom: corteModal.activeTab === 'movimientos' ? '2px solid var(--primary)' : '2px solid transparent',
+                                    background: 'transparent',
+                                    color: corteModal.activeTab === 'movimientos' ? 'var(--primary)' : 'var(--text-secondary)',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem'
+                                }}
+                            >
+                                <Receipt size={15} />
+                                <span>Detalle de Movimientos ({corteModal.detalles_movimientos?.length || 0})</span>
+                            </button>
+                        </div>
+
+                        {/* Tab 1: Ventas por Línea */}
+                        {(corteModal.activeTab || 'lineas') === 'lineas' && (
+                            <div className="table-responsive" style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                                <table className="table" style={{ width: '100%', minWidth: '550px', fontSize: '0.8rem' }}>
+                                    <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-card)' }}>
+                                        <tr>
+                                            <th style={{ padding: '0.45rem 0.6rem', textAlign: 'left' }}>Línea de Producto</th>
+                                            <th style={{ padding: '0.45rem 0.6rem', textAlign: 'right' }}>Monto ($)</th>
+                                            <th style={{ padding: '0.45rem 0.6rem', textAlign: 'right', width: '120px' }}>% Participación</th>
+                                            <th style={{ padding: '0.45rem 0.6rem', width: '140px' }}>Distribución</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(corteModal.ventas_lineas || []).map((v, idx) => (
+                                            <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                <td style={{ padding: '0.45rem 0.6rem', fontWeight: 500 }}>{v.linea}</td>
+                                                <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontWeight: 600 }}>{moneyFmt(v.monto)}</td>
+                                                <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', color: 'var(--text-secondary)' }}>{v.porcentaje}%</td>
+                                                <td style={{ padding: '0.45rem 0.6rem' }}>
+                                                    <div style={{ width: '100%', height: '8px', background: 'var(--border)', borderRadius: '4px', overflow: 'hidden' }}>
+                                                        <div style={{ width: `${Math.min(v.porcentaje, 100)}%`, height: '100%', background: 'var(--primary)', borderRadius: '4px' }} />
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {(!corteModal.ventas_lineas || corteModal.ventas_lineas.length === 0) && (
+                                            <tr>
+                                                <td colSpan="4" style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                                    No hay líneas de venta registradas para este corte.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                    <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--bg-card)', fontWeight: 700 }}>
+                                        <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                            <td style={{ padding: '0.5rem 0.6rem' }}>TOTAL VENTAS LÍNEAS</td>
+                                            <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right', color: 'var(--primary)', fontSize: '0.9rem' }}>
+                                                {moneyFmt((corteModal.ventas_lineas || []).reduce((acc, curr) => acc + Number(curr.monto || 0), 0))}
+                                            </td>
+                                            <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>100%</td>
+                                            <td></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        )}
+
+                        {/* Tab 2: Movimientos */}
+                        {corteModal.activeTab === 'movimientos' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                    {/* Sub-filter chips */}
+                                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                        {[
+                                            { key: 'ALL', label: 'Todos' },
+                                            { key: 'G', label: 'Gastos' },
+                                            { key: 'T', label: 'Tarjetas' },
+                                            { key: 'I', label: 'Ingresos' }
+                                        ].map(filter => (
+                                            <button
+                                                key={filter.key}
+                                                type="button"
+                                                onClick={() => setCorteModal(prev => ({ ...prev, filterTipo: filter.key }))}
+                                                style={{
+                                                    height: '28px',
+                                                    padding: '0 0.65rem',
+                                                    fontSize: '0.74rem',
+                                                    borderRadius: '14px',
+                                                    border: (corteModal.filterTipo || 'ALL') === filter.key ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                                    background: (corteModal.filterTipo || 'ALL') === filter.key ? 'rgba(59, 130, 246, 0.12)' : 'var(--bg-card)',
+                                                    color: (corteModal.filterTipo || 'ALL') === filter.key ? 'var(--primary)' : 'var(--text)',
+                                                    cursor: 'pointer',
+                                                    fontWeight: (corteModal.filterTipo || 'ALL') === filter.key ? 600 : 400
+                                                }}
+                                            >
+                                                {filter.label}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {/* Search input */}
+                                    <div style={{ position: 'relative', width: '240px' }}>
+                                        <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                                        <input
+                                            type="text"
+                                            placeholder="Buscar movimiento..."
+                                            value={corteMovSearch}
+                                            onChange={(e) => setCorteMovSearch(e.target.value)}
+                                            style={{
+                                                width: '100%',
+                                                height: '30px',
+                                                padding: '0 0.5rem 0 1.8rem',
+                                                fontSize: '0.75rem',
+                                                borderRadius: 'var(--border-radius)',
+                                                border: '1px solid var(--border)',
+                                                background: 'var(--bg-color)',
+                                                color: 'var(--text)'
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {(() => {
+                                    const q = (corteMovSearch || '').toLowerCase().trim();
+                                    const fTipo = corteModal.filterTipo || 'ALL';
+                                    const items = (corteModal.detalles_movimientos || []).filter(item => {
+                                        if (fTipo !== 'ALL' && item.tipo !== fTipo) return false;
+                                        if (q && !String(item.descripcion || '').toLowerCase().includes(q) && !String(item.tipo_nombre || '').toLowerCase().includes(q)) return false;
+                                        return true;
+                                    });
+
+                                    return (
+                                        <div className="table-responsive" style={{ maxHeight: '340px', overflowY: 'auto' }}>
+                                            <table className="table" style={{ width: '100%', minWidth: '500px', fontSize: '0.8rem' }}>
+                                                <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-card)' }}>
+                                                    <tr>
+                                                        <th style={{ padding: '0.45rem 0.6rem', textAlign: 'center', width: '90px' }}>Tipo</th>
+                                                        <th style={{ padding: '0.45rem 0.6rem', textAlign: 'left' }}>Descripción / Concepto</th>
+                                                        <th style={{ padding: '0.45rem 0.6rem', textAlign: 'right', width: '120px' }}>Monto ($)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {items.map((mov, idx) => (
+                                                        <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                            <td style={{ padding: '0.45rem 0.6rem', textAlign: 'center' }}>
+                                                                <span style={{
+                                                                    fontSize: '0.72rem',
+                                                                    padding: '0.15rem 0.45rem',
+                                                                    borderRadius: '4px',
+                                                                    fontWeight: 600,
+                                                                    background: mov.tipo === 'G' ? 'rgba(239, 68, 68, 0.12)' : mov.tipo === 'T' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                                                                    color: mov.tipo === 'G' ? '#EF4444' : mov.tipo === 'T' ? '#3B82F6' : '#10B981'
+                                                                }}>
+                                                                    {mov.tipo_nombre || mov.tipo}
+                                                                </span>
+                                                            </td>
+                                                            <td style={{ padding: '0.45rem 0.6rem' }}>{mov.descripcion}</td>
+                                                            <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontWeight: 600, color: mov.tipo === 'G' ? '#EF4444' : 'var(--text)' }}>
+                                                                {moneyFmt(mov.monto)}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                    {items.length === 0 && (
+                                                        <tr>
+                                                            <td colSpan="3" style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                                                No se encontraron movimientos registrados con los filtros seleccionados.
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                                <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--bg-card)', fontWeight: 700 }}>
+                                                    <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                                        <td colSpan="2" style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>TOTAL MOVIMIENTOS:</td>
+                                                        <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right', color: 'var(--primary)', fontSize: '0.9rem' }}>
+                                                            {moneyFmt(items.reduce((acc, curr) => acc + Number(curr.monto || 0), 0))}
+                                                        </td>
+                                                    </tr>
+                                                </tfoot>
+                                            </table>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => setCorteModal(null)}
+                                style={{ height: '36px', padding: '0 1.25rem', fontSize: '0.825rem' }}
+                            >
+                                Cerrar
+                            </button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
         </div>
     );
 }
