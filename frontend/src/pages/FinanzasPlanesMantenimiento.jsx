@@ -609,7 +609,7 @@ export default function FinanzasPlanesMantenimiento() {
                     </div>
 
                     {/* Formulario de Parámetros TCO */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginBottom: '1.5rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.5rem', marginBottom: '1.5rem' }}>
                         {/* Opción A: Mantener y Reparar Actual */}
                         <div className="card glass" style={{ padding: '1.5rem', borderTop: '4px solid #ef4444' }}>
                             <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#ef4444', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>

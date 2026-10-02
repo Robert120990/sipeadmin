@@ -99,7 +99,7 @@ export default function Users() {
                 </button>
             </div>
 
-            <div className="card glass">
+            <div className="card glass table-responsive">
                 <table className="table-to-cards">
                     <thead>
                         <tr>

@@ -282,7 +282,7 @@ export default function EstrategiaTorreControl() {
             )}
 
             {/* Dos Columnas: Ventas de Ayer vs Posición de Liquidez */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem' }}>
                 {/* Columna Izquierda: Ventas por Estación */}
                 <div className="card glass" style={{ padding: '1rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>

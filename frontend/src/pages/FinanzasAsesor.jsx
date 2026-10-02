@@ -227,7 +227,7 @@ export default function FinanzasAsesor() {
 
             {/* SECCIÓN PRINCIPAL: DIAGNÓSTICO EJECUTIVO Y ARBITRAJE */}
             {diag && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '1.5rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', gap: '1.5rem', marginBottom: '1.5rem' }}>
                     {/* Tarjeta Diagnóstico Ejecutivo */}
                     <div className="card glass" style={{ padding: '1.5rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -322,7 +322,7 @@ export default function FinanzasAsesor() {
                         Recomendaciones Financieras Prioritarias para la Gerencia
                     </h3>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '1rem' }}>
                         {diag.recomendaciones_prioritarias.map((rec, i) => (
                             <div key={i} style={{ background: 'var(--bg-secondary)', padding: '1.2rem', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                                 <div>

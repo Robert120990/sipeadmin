@@ -179,7 +179,7 @@ export default function Bitacora() {
             </div>
 
             {/* Table */}
-            <div style={{ flex: 1, overflow: 'auto' }}>
+            <div className="table-responsive" style={{ flex: 1, overflow: 'auto' }}>
                 {loading ? (
                     <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
                         <p>Cargando bitácora...</p>
@@ -190,7 +190,7 @@ export default function Bitacora() {
                         <p>{hasFilters ? 'No se encontraron registros con los filtros aplicados' : 'No hay registros en la bitácora'}</p>
                     </div>
                 ) : (
-                    <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
                         <thead>
                             <tr style={{ borderBottom: '1px solid var(--border)' }}>
                                 <th style={{ textAlign: 'left', padding: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>Fecha / Hora</th>

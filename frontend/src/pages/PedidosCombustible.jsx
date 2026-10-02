@@ -908,7 +908,7 @@ export default function PedidosCombustible() {
             </div>
 
             {/* Account Status / KPI Banner */}
-            <div className="card glass" style={{ padding: '0.85rem 1.25rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', alignItems: 'center', borderLeft: '4px solid var(--primary)' }}>
+            <div className="card glass pedidos-kpi-grid" style={{ padding: '0.85rem 1rem', borderLeft: '4px solid var(--primary)' }}>
                 <div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>Cuenta Portal Puma</div>
                     <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: 'var(--text)' }}>{portalResumen.cuenta_nombre || 'RAUL SOSA CASTELLANOS'}</div>
@@ -938,24 +938,22 @@ export default function PedidosCombustible() {
             </div>
 
             {/* Navigation Tabs */}
-            <div style={{ display: 'flex', gap: '0.35rem', borderBottom: '2px solid var(--border)', paddingBottom: '0.2rem', flexWrap: 'wrap' }}>
+            <div className="pedidos-tabs-bar">
                 <button
                     onClick={() => setActiveTab('portal')}
+                    className="pedidos-tab-btn"
                     style={{
-                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
-                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
                         background: activeTab === 'portal' ? 'var(--primary)' : 'transparent',
                         color: activeTab === 'portal' ? '#fff' : 'var(--text-muted)'
                     }}
                 >
-                    <Layers size={16} /> Portal Puma / Pedidos ({portalOrders.length}{portalTotal > portalOrders.length ? ` de ${portalTotal}` : ''})
+                    <Layers size={16} /> Portal Puma ({portalOrders.length}{portalTotal > portalOrders.length ? `/${portalTotal}` : ''})
                 </button>
 
                 <button
                     onClick={() => setActiveTab('programados')}
+                    className="pedidos-tab-btn"
                     style={{
-                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
-                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
                         background: activeTab === 'programados' ? 'var(--primary)' : 'transparent',
                         color: activeTab === 'programados' ? '#fff' : 'var(--text-muted)'
                     }}
@@ -965,26 +963,24 @@ export default function PedidosCombustible() {
 
                 <button
                     onClick={() => setActiveTab('precios')}
+                    className="pedidos-tab-btn"
                     style={{
-                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
-                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
                         background: activeTab === 'precios' ? 'var(--primary)' : 'transparent',
                         color: activeTab === 'precios' ? '#fff' : 'var(--text-muted)'
                     }}
                 >
-                    <Sliders size={16} /> Precios Quincenales de Combustible
+                    <Sliders size={16} /> Precios Quincenales
                 </button>
 
                 <button
                     onClick={() => setActiveTab('conciliacion')}
+                    className="pedidos-tab-btn"
                     style={{
-                        padding: '0.5rem 1rem', fontSize: '0.825rem', fontWeight: 'bold', borderRadius: '6px 6px 0 0',
-                        border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem',
                         background: activeTab === 'conciliacion' ? 'var(--primary)' : 'transparent',
                         color: activeTab === 'conciliacion' ? '#fff' : 'var(--text-muted)'
                     }}
                 >
-                    <Scale size={16} /> Control de Pagos & Conciliación Bancaria
+                    <Scale size={16} /> Pagos & Conciliación
                 </button>
             </div>
 
@@ -992,8 +988,8 @@ export default function PedidosCombustible() {
             {activeTab === 'portal' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                     {/* Filters Toolbar */}
-                    <div className="card glass" style={{ padding: '0.85rem 1.15rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '160px', flex: 1 }}>
+                    <div className="card glass pedidos-filter-toolbar" style={{ padding: '0.85rem 1rem', display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '150px', flex: '1 1 200px' }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Estación:</label>
                             <select
                                 value={filterEstacion}
@@ -1007,12 +1003,12 @@ export default function PedidosCombustible() {
                             </select>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '130px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '120px', flex: '1 1 120px' }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Estado:</label>
                             <select
                                 value={filterEstado}
                                 onChange={e => setFilterEstado(e.target.value)}
-                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                                style={{ flex: 1, height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
                             >
                                 <option value="">Todos</option>
                                 <option value="RETENIDO">RETENIDO</option>
@@ -1023,12 +1019,12 @@ export default function PedidosCombustible() {
                             </select>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '120px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '120px', flex: '1 1 120px' }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Tipo:</label>
                             <select
                                 value={filterTipo}
                                 onChange={e => setFilterTipo(e.target.value)}
-                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                                style={{ flex: 1, height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
                             >
                                 <option value="">Todos</option>
                                 <option value="Bulk">Bulk (Combustible)</option>
@@ -1036,12 +1032,12 @@ export default function PedidosCombustible() {
                             </select>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '130px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '120px', flex: '1 1 120px' }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Pago:</label>
                             <select
                                 value={filterEstadoPago}
                                 onChange={e => setFilterEstadoPago(e.target.value)}
-                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                                style={{ flex: 1, height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
                             >
                                 <option value="">Todos</option>
                                 <option value="PENDIENTE">PENDIENTE</option>
@@ -1050,7 +1046,7 @@ export default function PedidosCombustible() {
                             </select>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '180px', flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '180px', flex: '2 1 220px' }}>
                             <input
                                 type="text"
                                 placeholder="Buscar por # orden, factura, estación..."
@@ -1060,7 +1056,7 @@ export default function PedidosCombustible() {
                             />
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '135px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: '130px', flex: '1 1 130px' }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Mostrar:</label>
                             <select
                                 value={portalLimit}
@@ -1069,7 +1065,7 @@ export default function PedidosCombustible() {
                                     setPortalLimit(val);
                                     fetchPortalOrders(true, val);
                                 }}
-                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                                style={{ flex: 1, height: '36px', fontSize: '0.8rem', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
                                 title="Límite inicial de pedidos a consultar para evitar sobrecarga del sistema"
                             >
                                 <option value={10}>10 pedidos</option>
@@ -1079,32 +1075,34 @@ export default function PedidosCombustible() {
                             </select>
                         </div>
 
-                        {(filterEstacion || filterEstado || filterTipo || filterEstadoPago || filterSearch) && (
-                            <button
-                                onClick={() => {
-                                    setFilterEstacion('');
-                                    setFilterEstado('');
-                                    setFilterTipo('');
-                                    setFilterEstadoPago('');
-                                    setFilterSearch('');
-                                }}
-                                className="btn-secondary"
-                                style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.75rem' }}
-                            >
-                                Limpiar
-                            </button>
-                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', flex: '1 1 auto', justifyContent: 'flex-end' }}>
+                            {(filterEstacion || filterEstado || filterTipo || filterEstadoPago || filterSearch) && (
+                                <button
+                                    onClick={() => {
+                                        setFilterEstacion('');
+                                        setFilterEstado('');
+                                        setFilterTipo('');
+                                        setFilterEstadoPago('');
+                                        setFilterSearch('');
+                                    }}
+                                    className="btn-secondary"
+                                    style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.75rem', flex: '1 1 auto' }}
+                                >
+                                    Limpiar
+                                </button>
+                            )}
 
-                        <button
-                            onClick={handleSyncPortal}
-                            disabled={isSyncingPortal}
-                            className="btn-primary"
-                            style={{ height: '36px', padding: '0 0.85rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                            title="Conectar y sincronizar con el portal Puma Energy-Latam"
-                        >
-                            <RefreshCw size={13} className={isSyncingPortal ? 'spin' : ''} />
-                            {isSyncingPortal ? 'Sincronizando...' : 'Sincronizar Puma'}
-                        </button>
+                            <button
+                                onClick={handleSyncPortal}
+                                disabled={isSyncingPortal}
+                                className="btn-primary"
+                                style={{ height: '36px', padding: '0 0.85rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flex: '1 1 auto', justifyContent: 'center' }}
+                                title="Conectar y sincronizar con el portal Puma Energy-Latam"
+                            >
+                                <RefreshCw size={13} className={isSyncingPortal ? 'spin' : ''} />
+                                {isSyncingPortal ? 'Sincronizando...' : 'Sincronizar Puma'}
+                            </button>
+                        </div>
                     </div>
 
                     {/* Orders Table */}
@@ -1370,7 +1368,7 @@ export default function PedidosCombustible() {
                         </span>}
                     </div>
 
-                    <div className="pedidos-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1rem', alignItems: 'start', opacity: isLoading ? 0.5 : 1 }}>
+                    <div className="pedidos-grid" style={{ opacity: isLoading ? 0.5 : 1 }}>
                         {/* Formulario */}
                         <div className="card glass" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem' }}>
                             <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', textAlign: 'center', borderBottom: '1px solid var(--primary)', paddingBottom: '0.5rem' }}>
@@ -1381,25 +1379,25 @@ export default function PedidosCombustible() {
                                 <CheckSquare size={18} /> Sugerir Pedido (IA)
                             </button>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>FECHA</span>
-                                <input type="date" value={fechaPedido} onChange={e => setFechaPedido(e.target.value)} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }} />
-                                <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <input type="checkbox" checked={previsualizar} onChange={e => setPrevisualizar(e.target.checked)} /> PREVISUALIZAR
+                                <input type="date" value={fechaPedido} onChange={e => setFechaPedido(e.target.value)} style={{ flex: '1 1 140px', minWidth: '130px', padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }} />
+                                <label style={{ fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <input type="checkbox" checked={previsualizar} onChange={e => setPrevisualizar(e.target.checked)} style={{ width: '16px', height: '16px' }} /> PREVISUALIZAR
                                 </label>
                             </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>TRANSPORTE</span>
-                                <select value={selectedTransporte} onChange={e => {setSelectedTransporte(e.target.value); setSelectedPipa('');}} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}>
+                                <select value={selectedTransporte} onChange={e => {setSelectedTransporte(e.target.value); setSelectedPipa('');}} style={{ flex: '1 1 180px', minWidth: '160px', padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}>
                                     <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione --</option>
                                     {transportistas.map(t => <option key={t.id} value={t.id} style={{ background: '#1e293b', color: 'white' }}>[{t.code}] {t.description}</option>)}
                                 </select>
                             </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>PIPA</span>
-                                <select value={selectedPipa} onChange={e => setSelectedPipa(e.target.value)} style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }} disabled={!selectedTransporte}>
+                                <select value={selectedPipa} onChange={e => setSelectedPipa(e.target.value)} style={{ flex: '1 1 180px', minWidth: '160px', padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }} disabled={!selectedTransporte}>
                                     <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Pipa --</option>
                                     {pipas.filter(p => !selectedTransporte || p.carrier_id === Number(selectedTransporte)).map(p => (
                                         <option key={p.id} value={p.id} style={{ background: '#1e293b', color: 'white' }}>{p.code}</option>
@@ -1410,39 +1408,39 @@ export default function PedidosCombustible() {
                             {renderCompartments()}
 
                             {/* Inputs por Combustible */}
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>DIESEL</span>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>DIESEL</span>
                                 <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                             </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>REGULAR</span>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>REGULAR</span>
                                 <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                             </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>SUPER</span>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>SUPER</span>
                                 <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                             </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '100px' }}>IONDIESEL</span>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>IONDIESEL</span>
                                 <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: 1, minWidth: '120px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                             </div>
 
                             <RenderPipaRecommendation />
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem', borderTop: '2px solid var(--border)', paddingTop: '0.75rem' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>TOTAL PIPA</span>
-                                    <input type="text" readOnly value={numFmt(totalPipa)} style={{ flex: 1, maxWidth: '160px', textAlign: 'right', padding: '0.35rem', fontSize: '1rem', fontWeight: 'bold', background: 'var(--bg-active)', color: 'var(--primary)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }} />
+                                    <input type="text" readOnly value={numFmt(totalPipa)} style={{ flex: '1 1 120px', maxWidth: '160px', textAlign: 'right', padding: '0.35rem', fontSize: '1rem', fontWeight: 'bold', background: 'var(--bg-active)', color: 'var(--primary)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }} />
                                 </div>
-                                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
-                                    <button className="btn-primary" onClick={handleGuardarPedido} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem' }}>
+                                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap' }}>
+                                    <button className="btn-primary" onClick={handleGuardarPedido} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem', flex: '1 1 auto' }}>
                                         {pedidoTemp.id ? 'ACTUALIZAR PEDIDO' : 'AGREGAR PEDIDO'}
                                     </button>
-                                    <button className="btn-secondary" onClick={limpiarFormulario} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem' }}>
+                                    <button className="btn-secondary" onClick={limpiarFormulario} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem', flex: '1 1 auto' }}>
                                         CANCELAR
                                     </button>
                                 </div>
@@ -1543,9 +1541,11 @@ export default function PedidosCombustible() {
                                         <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
                                         <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.super)}</td>
                                         <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.iondiesel)}</td>
-                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', display: 'flex', gap: '0.35rem', justifyContent: 'center' }}>
-                                            <button onClick={() => { setPedidoTemp({ id: p.id_pedido }); setShowConfirmModal(true); }} className="btn-primary" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>CONFIRMAR</button>
-                                            <button onClick={() => handleEliminarPedido(p.id_pedido)} className="btn-secondary" style={{ padding: '3px 8px', fontSize: '0.68rem', color: '#ef4444' }}>ANULAR</button>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                            <div style={{ display: 'inline-flex', gap: '0.35rem', justifyContent: 'center' }}>
+                                                <button onClick={() => { setPedidoTemp({ id: p.id_pedido }); setShowConfirmModal(true); }} className="btn-primary" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>CONFIRMAR</button>
+                                                <button onClick={() => handleEliminarPedido(p.id_pedido)} className="btn-secondary" style={{ padding: '3px 8px', fontSize: '0.68rem', color: '#ef4444' }}>ANULAR</button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -1862,9 +1862,9 @@ export default function PedidosCombustible() {
                         <span><b>Alistar para Conciliación Bancaria:</b> Genera el movimiento bancario oficial (débito/salida) para conciliar con el extracto bancario.</span>
                     </label>
 
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <button className="btn-secondary" onClick={() => setShowVincularPagoModal(false)}>Cancelar</button>
-                        <button className="btn-primary" onClick={handleGuardarPago}>Guardar y Vincular Pago</button>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                        <button className="btn-secondary" onClick={() => setShowVincularPagoModal(false)} style={{ flex: '1 1 auto' }}>Cancelar</button>
+                        <button className="btn-primary" onClick={handleGuardarPago} style={{ flex: '1 1 auto' }}>Guardar y Vincular Pago</button>
                     </div>
                 </div>
             </Modal>
@@ -1933,9 +1933,9 @@ export default function PedidosCombustible() {
                         <span style={{ fontSize: '1.15rem', fontWeight: 'bold', color: '#10b981' }}>${numFmt(nuevoTotalCalculado)}</span>
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <button className="btn-secondary" onClick={() => setShowAjustarCostosModal(false)}>Cancelar</button>
-                        <button className="btn-primary" onClick={handleGuardarCostos}>Aplicar Nuevos Costos</button>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                        <button className="btn-secondary" onClick={() => setShowAjustarCostosModal(false)} style={{ flex: '1 1 auto' }}>Cancelar</button>
+                        <button className="btn-primary" onClick={handleGuardarCostos} style={{ flex: '1 1 auto' }}>Aplicar Nuevos Costos</button>
                     </div>
                 </div>
             </Modal>
@@ -2023,9 +2023,9 @@ export default function PedidosCombustible() {
                         <span>Actualizar automáticamente los pedidos pendientes con estos nuevos precios quincenales.</span>
                     </label>
 
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <button className="btn-secondary" onClick={() => setShowNuevoPrecioModal(false)}>Cancelar</button>
-                        <button className="btn-primary" onClick={handleGuardarPreciosQuincena}>Guardar Precios</button>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                        <button className="btn-secondary" onClick={() => setShowNuevoPrecioModal(false)} style={{ flex: '1 1 auto' }}>Cancelar</button>
+                        <button className="btn-primary" onClick={handleGuardarPreciosQuincena} style={{ flex: '1 1 auto' }}>Guardar Precios</button>
                     </div>
                 </div>
             </Modal>
@@ -2034,7 +2034,7 @@ export default function PedidosCombustible() {
             <Modal open={showDetalleModal} onClose={() => setShowDetalleModal(false)} title={`Detalle de Orden #${selectedOrderDetalle?.numero_orden || ''}`}>
                 {selectedOrderDetalle && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', padding: '0.75rem', background: 'var(--bg-active)', borderRadius: '6px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: '0.75rem', padding: '0.75rem', background: 'var(--bg-active)', borderRadius: '6px' }}>
                             <div>
                                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Estación Destino</span>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{selectedOrderDetalle.estacion_nombre}</div>
@@ -2093,8 +2093,8 @@ export default function PedidosCombustible() {
                             </table>
                         </div>
 
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-                            <button className="btn-secondary" onClick={() => setShowDetalleModal(false)}>Cerrar</button>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                            <button className="btn-secondary" onClick={() => setShowDetalleModal(false)} style={{ flex: '1 1 auto' }}>Cerrar</button>
                         </div>
                     </div>
                 )}
@@ -2133,8 +2133,8 @@ export default function PedidosCombustible() {
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-                        <button className="btn-secondary" onClick={() => setShowConfirmModal(false)}>Cancelar</button>
-                        <button className="btn-primary" onClick={executeConfirmTransaction}>Aplicar Confirmación</button>
+                        <button className="btn-secondary" onClick={() => setShowConfirmModal(false)} style={{ flex: '1 1 auto' }}>Cancelar</button>
+                        <button className="btn-primary" onClick={executeConfirmTransaction} style={{ flex: '1 1 auto' }}>Aplicar Confirmación</button>
                     </div>
                 </div>
             </Modal>

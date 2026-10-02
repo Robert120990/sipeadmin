@@ -1258,7 +1258,7 @@ const ConsultasPreciosCompetencia = () => {
                                         <Sparkles size={18} color="var(--primary)" />
                                         <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--primary)' }}>Patrones de Mercado & Insights Detectados</h3>
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '1rem' }}>
                                         {biData.insights.map((ins, idx) => (
                                             <div key={idx} style={{ padding: '0.85rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
                                                 <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.25rem', color: 'var(--primary)' }}>
@@ -1274,7 +1274,7 @@ const ConsultasPreciosCompetencia = () => {
                             )}
 
                             {/* Brand Comparison Charts & Breakdown */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.5rem' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: '1.5rem' }}>
                                 {/* Brand Comparison Bar Chart */}
                                 <div className="card glass" style={{ padding: '1.25rem' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>

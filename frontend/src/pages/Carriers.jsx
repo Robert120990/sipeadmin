@@ -83,7 +83,7 @@ export default function Carriers() {
                 </button>
             </div>
 
-            <div className="card glass">
+            <div className="card glass table-responsive">
                 <table className="table-to-cards">
                     <thead>
                         <tr>
