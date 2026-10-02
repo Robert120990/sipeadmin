@@ -24,6 +24,7 @@ export default function VentasEstaciones() {
     const [dataEstaciones, setDataEstaciones] = useState([]);
     const [dataMargenes, setDataMargenes] = useState([]);
     const [dataInventario, setDataInventario] = useState([]);
+    const [infoQuincena, setInfoQuincena] = useState(null);
     const [loading, setLoading] = useState(false);
 
     // --- ESTADO MENSUAL ---
@@ -198,6 +199,7 @@ export default function VentasEstaciones() {
             setDataEstaciones(res.data.estaciones || []);
             setDataMargenes(res.data.margenes || []);
             setDataInventario(res.data.inventario || []);
+            setInfoQuincena(res.data.quincena || null);
             addToast('Datos diarios cargados exitosamente', 'success');
         } catch (error) {
             addToast(error.response?.data?.message || 'Error al cargar datos consolidados diarios', 'error');
@@ -621,9 +623,43 @@ export default function VentasEstaciones() {
 
             {/* Table 3: Margenes */}
             <div className="card glass" style={{ padding: '0' }}>
-                <h3 style={{ margin: '0', padding: '1rem', borderBottom: '1px solid var(--border)', fontSize: '1rem', color: 'var(--text-muted)' }}>
-                    Márgenes de Combustible
-                </h3>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.85rem 1rem',
+                    borderBottom: '1px solid var(--border)',
+                    flexWrap: 'wrap',
+                    gap: '0.5rem'
+                }}>
+                    <h3 style={{ margin: '0', fontSize: '1rem', color: 'var(--text-muted)' }}>
+                        Márgenes de Combustible
+                    </h3>
+                    {infoQuincena && (
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.6rem',
+                            fontSize: '0.78rem',
+                            color: 'var(--text-muted)',
+                            flexWrap: 'wrap'
+                        }}>
+                            <span style={{
+                                backgroundColor: 'var(--surface-hover)',
+                                padding: '0.2rem 0.6rem',
+                                borderRadius: '4px',
+                                border: '1px solid var(--border)'
+                            }}>
+                                📅 Quincena: <strong style={{ color: 'var(--text-main)' }}>
+                                    {infoQuincena.periodo_inicio ? new Date(infoQuincena.periodo_inicio + 'T00:00:00').toLocaleDateString('es-SV') : ''} al {infoQuincena.periodo_fin ? new Date(infoQuincena.periodo_fin + 'T00:00:00').toLocaleDateString('es-SV') : ''}
+                                </strong>
+                            </span>
+                            <span style={{ fontSize: '0.74rem', opacity: 0.9 }}>
+                                Costos Portal: <strong>D:</strong> ${Number(infoQuincena.precio_diesel || 0).toFixed(2)} | <strong>R:</strong> ${Number(infoQuincena.precio_regular || 0).toFixed(2)} | <strong>S:</strong> ${Number(infoQuincena.precio_super || 0).toFixed(2)}
+                            </span>
+                        </div>
+                    )}
+                </div>
                 <div className="table-responsive" style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '850px' }}>
                         <thead>
@@ -640,19 +676,33 @@ export default function VentasEstaciones() {
                             </tr>
                         </thead>
                         <tbody>
-                            {dataMargenes.map((m, i) => (
-                                <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                                    <td style={{ padding: '0.5rem 1rem' }}>{m.empresa}</td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_da || 0).toFixed(2)}`} /></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_ra || 0).toFixed(2)}`} /></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_sa || 0).toFixed(2)}`} /></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_dc || 0).toFixed(2)}`} /></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_rc || 0).toFixed(2)}`} /></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_sc || 0).toFixed(2)}`} /></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_master || 0).toFixed(2)}`} /></td>
-                                    <td style={{ padding: '0.5rem', textAlign: 'center' }}><Badge val={`$${(m.margen_io || 0).toFixed(2)}`} /></td>
-                                </tr>
-                            ))}
+                            {dataMargenes.map((m, i) => {
+                                const renderCell = (val, precio, costo) => {
+                                    if (val === null || val === undefined) {
+                                        return <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>-</span>;
+                                    }
+                                    const titleStr = precio && costo ? `Venta: $${Number(precio).toFixed(2)} - Costo: $${Number(costo).toFixed(2)} = $${Number(val).toFixed(2)}` : undefined;
+                                    return (
+                                        <span title={titleStr} style={{ cursor: titleStr ? 'help' : 'default' }}>
+                                            <Badge val={`$${Number(val).toFixed(2)}`} />
+                                        </span>
+                                    );
+                                };
+
+                                return (
+                                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '0.5rem 1rem', fontWeight: '500' }}>{m.empresa}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_da, m.precios?.diesel_a, m.costos?.diesel)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_ra, m.precios?.regular_a, m.costos?.regular)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_sa, m.precios?.super_a, m.costos?.super)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_dc, m.precios?.diesel_c, m.costos?.diesel)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_rc, m.precios?.regular_c, m.costos?.regular)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_sc, m.precios?.super_c, m.costos?.super)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_master, m.precios?.master, m.costos?.diesel)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_io, m.precios?.ion_diesel, m.costos?.ion)}</td>
+                                    </tr>
+                                );
+                            })}
                             {dataMargenes.length === 0 && !loading && (
                                 <tr><td colSpan="9" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No hay datos para mostrar</td></tr>
                             )}

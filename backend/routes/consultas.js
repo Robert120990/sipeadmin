@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getExternalDb, getAccountingDb, withRetry } = require('../db');
+const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
@@ -95,14 +95,185 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             ORDER BY a.orden
         `;
         const [margenesRows] = await externalDb.query(sqlMargenes, [sysDate]);
-        const [costsRows] = await externalDb.query(`SELECT id_empresa, cod_producto, costo FROM combustibles_costos WHERE id IN (SELECT MAX(id) FROM combustibles_costos GROUP BY id_empresa, cod_producto)`);
-        const costsMap = {};
-        costsRows.forEach(row => { if (!costsMap[row.id_empresa]) costsMap[row.id_empresa] = {}; costsMap[row.id_empresa][row.cod_producto] = Number(row.costo || 0); });
-        const margenesLocal = margenesRows.map(row => {
-            const getC = (prod) => (costsMap[row.id_empresa] && costsMap[row.id_empresa][prod]) || 0;
-            const cD = getC('DIESEL'), cR = getC('REGULAR'), cS = getC('SUPER'), cI = getC('IONDIESEL');
-            return { empresa: row.titulo, margen_da: Number(row.diesel_a || 0) - cD, margen_ra: Number(row.regular_a || 0) - cR, margen_sa: Number(row.super_a || 0) - cS, margen_dc: Number(row.diesel_c || 0) - cD, margen_rc: Number(row.regular_c || 0) - cR, margen_sc: Number(row.super_c || 0) - cS, margen_io: Number(row.ion_diesel || 0) - cI, margen_master: Number(row.master || 0) - cD };
-        });
+
+        // Obtener costos de combustibles vigentes para la quincena de la fecha consultada
+        let quincenaRow = null;
+        let stationCostsMap = {};
+        try {
+            const db = getDb();
+            // 1. Quincena exacta según la fecha consultada
+            const [qRows] = await withRetry(() => db.query(
+                `SELECT * FROM combustible_precios_quincenales 
+                 WHERE ? BETWEEN periodo_inicio AND periodo_fin 
+                 ORDER BY periodo_inicio DESC LIMIT 1`,
+                [date]
+            ));
+
+            if (qRows && qRows.length > 0) {
+                quincenaRow = qRows[0];
+            } else {
+                // Quincena anterior más cercana a la fecha
+                const [qFallback] = await withRetry(() => db.query(
+                    `SELECT * FROM combustible_precios_quincenales 
+                     WHERE periodo_inicio <= ? 
+                     ORDER BY periodo_inicio DESC LIMIT 1`,
+                    [date]
+                ));
+                if (qFallback && qFallback.length > 0) {
+                    quincenaRow = qFallback[0];
+                } else {
+                    // Última quincena registrada
+                    const [qLatest] = await withRetry(() => db.query(
+                        `SELECT * FROM combustible_precios_quincenales 
+                         ORDER BY periodo_inicio DESC LIMIT 1`
+                    ));
+                    if (qLatest && qLatest.length > 0) {
+                        quincenaRow = qLatest[0];
+                    }
+                }
+            }
+
+            // 2. Costos de compra mayorista (Bulk) por estación desde portal_pedidos en o cerca del período
+            const fechaDesde = quincenaRow ? quincenaRow.periodo_inicio : date;
+            const fechaHasta = quincenaRow ? quincenaRow.periodo_fin : date;
+
+            const [portalCostsRows] = await withRetry(() => db.query(
+                `SELECT id_estacion, estacion_nombre,
+                        AVG(NULLIF(costo_diesel, 0)) as costo_diesel,
+                        AVG(NULLIF(costo_regular, 0)) as costo_regular,
+                        AVG(NULLIF(costo_super, 0)) as costo_super,
+                        AVG(NULLIF(costo_ion, 0)) as costo_ion
+                 FROM portal_pedidos
+                 WHERE tipo_producto = 'Bulk'
+                   AND (costo_diesel > 0 OR costo_regular > 0 OR costo_super > 0 OR costo_ion > 0)
+                   AND (
+                       (fecha_pedido BETWEEN ? AND ?)
+                       OR (fecha_pedido BETWEEN DATE_SUB(?, INTERVAL 20 DAY) AND DATE_ADD(?, INTERVAL 5 DAY))
+                   )
+                 GROUP BY id_estacion, estacion_nombre`,
+                [fechaDesde, fechaHasta, date, date]
+            ));
+
+            const mapStationCode = (id, name) => {
+                if (id) {
+                    const clean = String(id).padStart(3, '0');
+                    if (['002', '004', '006', '008', '014', '015'].includes(clean)) return clean;
+                }
+                const n = (name || '').toUpperCase();
+                if (n.includes('MIRAFLORES')) return '002';
+                if (n.includes('DESVIO') || n.includes('DESVÍO')) return '004';
+                if (n.includes('CHALCHUAPA')) return '006';
+                if (n.includes('COSTA')) return '008';
+                if (n.includes('LOMA') || n.includes('SAN MARTIN')) return '014';
+                if (n.includes('14 AVENIDA')) return '015';
+                return null;
+            };
+
+            (portalCostsRows || []).forEach(r => {
+                const stCode = mapStationCode(r.id_estacion, r.estacion_nombre);
+                if (stCode) {
+                    stationCostsMap[stCode] = {
+                        costo_diesel: Number(r.costo_diesel || 0),
+                        costo_regular: Number(r.costo_regular || 0),
+                        costo_super: Number(r.costo_super || 0),
+                        costo_ion: Number(r.costo_ion || 0)
+                    };
+                }
+            });
+        } catch (dbErr) {
+            console.warn('[Consolidado Ventas] Nota: portal_pedidos o combustible_precios_quincenales no disponibles:', dbErr.message);
+        }
+
+        // 3. Fallback de costos históricos en externalDb (si existiesen)
+        let legacyCostsMap = {};
+        try {
+            const [costsRows] = await externalDb.query(
+                `SELECT id_empresa, cod_producto, costo FROM combustibles_costos 
+                 WHERE id IN (SELECT MAX(id) FROM combustibles_costos GROUP BY id_empresa, cod_producto)`
+            );
+            (costsRows || []).forEach(row => {
+                const id = String(row.id_empresa).padStart(3, '0');
+                if (!legacyCostsMap[id]) legacyCostsMap[id] = {};
+                legacyCostsMap[id][row.cod_producto] = Number(row.costo || 0);
+            });
+        } catch (extErr) {
+            console.warn('[Consolidado Ventas] Nota: tabla combustibles_costos externa:', extErr.message);
+        }
+
+        const getFuelCost = (idEmpresa, fuelType) => {
+            const idKey = String(idEmpresa).padStart(3, '0');
+            // 1. Costo específico de estación en pedidos del portal
+            const stCost = stationCostsMap[idKey];
+            if (stCost && stCost[`costo_${fuelType}`] > 0) {
+                return stCost[`costo_${fuelType}`];
+            }
+            // 2. Costo de referencia quincenal
+            if (quincenaRow && Number(quincenaRow[`precio_${fuelType}`] || 0) > 0) {
+                return Number(quincenaRow[`precio_${fuelType}`]);
+            }
+            // 3. Costo heredado de externalDb
+            const legacyKey = fuelType === 'ion' ? 'IONDIESEL' : fuelType.toUpperCase();
+            if (legacyCostsMap[idKey] && Number(legacyCostsMap[idKey][legacyKey] || 0) > 0) {
+                return Number(legacyCostsMap[idKey][legacyKey]);
+            }
+            return 0;
+        };
+
+        const calcMargin = (retailPrice, cost) => {
+            const p = Number(retailPrice || 0);
+            const c = Number(cost || 0);
+            // Si la estación no vende ese producto o no tiene esa modalidad, precio es 0 -> no aplica margen
+            if (p <= 0 || c <= 0) return null;
+            return Math.round((p - c) * 100) / 100;
+        };
+
+        const margenesLocal = (margenesRows || [])
+            .filter(r => r.id_empresa !== '004')
+            .map(row => {
+                const idEmpresa = String(row.id_empresa);
+                const cD = getFuelCost(idEmpresa, 'diesel');
+                const cR = getFuelCost(idEmpresa, 'regular');
+                const cS = getFuelCost(idEmpresa, 'super');
+                const cI = getFuelCost(idEmpresa, 'ion') || cD;
+
+                const pDA = Number(row.diesel_a || 0);
+                const pRA = Number(row.regular_a || 0);
+                const pSA = Number(row.super_a || 0);
+                const pDC = Number(row.diesel_c || 0);
+                const pRC = Number(row.regular_c || 0);
+                const pSC = Number(row.super_c || 0);
+                const pMaster = Number(row.master || 0);
+                const pIon = Number(row.ion_diesel || 0);
+
+                return {
+                    id_empresa: idEmpresa,
+                    empresa: getCleanStationName(idEmpresa, row.titulo),
+                    margen_da: calcMargin(pDA, cD),
+                    margen_ra: calcMargin(pRA, cR),
+                    margen_sa: calcMargin(pSA, cS),
+                    margen_dc: calcMargin(pDC, cD),
+                    margen_rc: calcMargin(pRC, cR),
+                    margen_sc: calcMargin(pSC, cS),
+                    margen_master: calcMargin(pMaster, cD),
+                    margen_io: calcMargin(pIon, cI),
+                    precios: {
+                        diesel_a: pDA,
+                        regular_a: pRA,
+                        super_a: pSA,
+                        diesel_c: pDC,
+                        regular_c: pRC,
+                        super_c: pSC,
+                        master: pMaster,
+                        ion_diesel: pIon
+                    },
+                    costos: {
+                        diesel: cD,
+                        regular: cR,
+                        super: cS,
+                        ion: cI
+                    }
+                };
+            });
 
         const cDesde = new Date(date + 'T12:00:00'); cDesde.setDate(cDesde.getDate() - 6);
         const promediosDates = []; let pCurr = new Date(cDesde);
@@ -149,7 +320,21 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             return { empresa: s.titulo, diesel: nD, regular: nR, super: nS, iondiesel: nI, duracion_diesel: pD > 0 ? Math.round((nD / pD) * 10) / 10 : 0, duracion_regular: pR > 0 ? Math.round((nR / pR) * 10) / 10 : 0, duracion_super: pS > 0 ? Math.round((nS / pS) * 10) / 10 : 0, duracion_ion: pI > 0 ? Math.round((nI / pI) * 10) / 10 : 0 };
         });
 
-        res.json({ tiendas: tiendasLocal, estaciones: estacionesLocal, margenes: margenesLocal, inventario: inventarioLocal });
+        res.json({
+            tiendas: tiendasLocal,
+            estaciones: estacionesLocal,
+            margenes: margenesLocal,
+            inventario: inventarioLocal,
+            quincena: quincenaRow ? {
+                periodo_inicio: quincenaRow.periodo_inicio,
+                periodo_fin: quincenaRow.periodo_fin,
+                precio_diesel: Number(quincenaRow.precio_diesel || 0),
+                precio_regular: Number(quincenaRow.precio_regular || 0),
+                precio_super: Number(quincenaRow.precio_super || 0),
+                precio_ion: Number(quincenaRow.precio_ion || 0),
+                fuente: quincenaRow.fuente || 'Portal Puma / DGEHM'
+            } : null
+        });
     } catch (error) { res.status(500).json({ message: 'Error fetching consolidado' }); }
 });
 
