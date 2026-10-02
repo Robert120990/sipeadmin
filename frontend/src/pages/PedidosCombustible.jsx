@@ -1451,178 +1451,193 @@ export default function PedidosCombustible() {
                             </div>
                         </div>
 
-                        {/* Matriz de Resultados Operacionales */}
-                        <div className="card glass table-responsive" style={{ padding: 0 }}>
-                            <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--primary)', textAlign: 'center', background: 'rgba(37,99,235,0.1)', padding: '0.5rem', fontWeight: 'bold' }}>
-                                RESUMEN DE DATOS OPERACIONALES ({estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Seleccione Estación'})
-                            </h3>
-                            <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
-                                <thead>
-                                    <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
-                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>METRICA</th>
-                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>DIESEL</th>
-                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>REGULAR</th>
-                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>SUPER</th>
-                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>ION</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>CAPACIDAD</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.capacidad)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
-                                    </tr>
-                                    <tr>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>INVENTARIO</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.inventario)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
-                                    </tr>
-                                    <tr>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>VENTA PROMEDIO</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.promedio)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
-                                    </tr>
-                                    <tr style={{ background: 'rgba(37,99,235,0.05)' }}>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}>PROGRAMADOS</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.programado)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.programado)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.programado)}</td>
-                                        <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.programado)}</td>
-                                    </tr>
-                                    <tr>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN DIAS</td>
-                                        {['D', 'R', 'S', 'I'].map(t => {
-                                            const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
-                                            return (
-                                                <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
-                                                    <div style={{
-                                                        display: 'inline-flex',
-                                                        justifyContent: 'center',
-                                                        alignItems: 'center',
-                                                        minWidth: '85px',
-                                                        padding: '0.2rem 0.4rem',
-                                                        background: 'var(--bg-active)',
-                                                        borderRadius: '4px',
-                                                        border: '1px solid var(--border)',
-                                                        fontWeight: 'bold',
-                                                        fontSize: '0.85rem',
-                                                        color: 'var(--text-color)'
-                                                    }}>
-                                                        {matrix[t].duracionDias.toFixed(1)}
-                                                    </div>
-                                                </td>
-                                            );
-                                        })}
-                                    </tr>
-                                    <tr>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN FECHA</td>
-                                        {['D', 'R', 'S', 'I'].map(t => {
-                                            const m = matrix[t];
-                                            const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
-                                            const hasVal = m.duracionDias > 0 && m.duracionFecha;
-                                            return (
-                                                <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
+                        {/* Columna Derecha: Resumen Operacional + Pedidos Programados */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 0 }}>
+                            {/* Matriz de Resultados Operacionales */}
+                            <div className="card glass table-responsive" style={{ padding: 0 }}>
+                                <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--primary)', textAlign: 'center', background: 'rgba(37,99,235,0.1)', padding: '0.5rem', fontWeight: 'bold' }}>
+                                    RESUMEN DE DATOS OPERACIONALES ({estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Seleccione Estación'})
+                                </h3>
+                                <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
+                                    <thead>
+                                        <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>METRICA</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>DIESEL</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>REGULAR</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>SUPER</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>ION</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>CAPACIDAD</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.capacidad)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>INVENTARIO</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.inventario)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>VENTA PROMEDIO</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.promedio)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
+                                        </tr>
+                                        <tr style={{ background: 'rgba(37,99,235,0.05)' }}>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}>PROGRAMADOS</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.programado)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.programado)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.programado)}</td>
+                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.programado)}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN DIAS</td>
+                                            {['D', 'R', 'S', 'I'].map(t => {
+                                                const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
+                                                return (
+                                                    <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
                                                         <div style={{
+                                                            display: 'inline-flex',
+                                                            justifyContent: 'center',
+                                                            alignItems: 'center',
                                                             minWidth: '85px',
-                                                            minHeight: '24px',
-                                                            padding: '0.2rem 0.35rem',
+                                                            padding: '0.2rem 0.4rem',
                                                             background: 'var(--bg-active)',
                                                             borderRadius: '4px',
                                                             border: '1px solid var(--border)',
-                                                            fontSize: '0.75rem',
                                                             fontWeight: 'bold',
-                                                            color: hasVal ? 'var(--text-color)' : 'transparent',
-                                                            display: 'flex',
-                                                            alignItems: 'center',
-                                                            justifyContent: 'center'
+                                                            fontSize: '0.85rem',
+                                                            color: 'var(--text-color)'
                                                         }}>
-                                                            {hasVal ? fmtDateArray(m.duracionFecha) : '\u00A0'}
+                                                            {matrix[t].duracionDias.toFixed(1)}
                                                         </div>
-                                                        <div style={{
-                                                            minWidth: '85px',
-                                                            minHeight: '22px',
-                                                            padding: '0.15rem 0.35rem',
-                                                            background: 'var(--bg-active)',
-                                                            borderRadius: '4px',
-                                                            border: '1px solid var(--border)',
-                                                            fontSize: '0.7rem',
-                                                            fontWeight: 'bold',
-                                                            color: hasVal ? 'var(--primary)' : 'transparent',
-                                                            letterSpacing: '0.03em',
-                                                            display: 'flex',
-                                                            alignItems: 'center',
-                                                            justifyContent: 'center'
-                                                        }}>
-                                                            {hasVal ? m.duracionDiaNom : '\u00A0'}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                        <tr>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN FECHA</td>
+                                            {['D', 'R', 'S', 'I'].map(t => {
+                                                const m = matrix[t];
+                                                const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
+                                                const hasVal = m.duracionDias > 0 && m.duracionFecha;
+                                                return (
+                                                    <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
+                                                            <div style={{
+                                                                minWidth: '85px',
+                                                                minHeight: '24px',
+                                                                padding: '0.2rem 0.35rem',
+                                                                background: 'var(--bg-active)',
+                                                                borderRadius: '4px',
+                                                                border: '1px solid var(--border)',
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 'bold',
+                                                                color: hasVal ? 'var(--text-color)' : 'transparent',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center'
+                                                            }}>
+                                                                {hasVal ? fmtDateArray(m.duracionFecha) : '\u00A0'}
+                                                            </div>
+                                                            <div style={{
+                                                                minWidth: '85px',
+                                                                minHeight: '22px',
+                                                                padding: '0.15rem 0.35rem',
+                                                                background: 'var(--bg-active)',
+                                                                borderRadius: '4px',
+                                                                border: '1px solid var(--border)',
+                                                                fontSize: '0.7rem',
+                                                                fontWeight: 'bold',
+                                                                color: hasVal ? 'var(--primary)' : 'transparent',
+                                                                letterSpacing: '0.03em',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center'
+                                                            }}>
+                                                                {hasVal ? m.duracionDiaNom : '\u00A0'}
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                </td>
-                                            );
-                                        })}
-                                    </tr>
-                                    <tr style={{ background: 'rgba(16,185,129,0.08)' }}>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL TANQUE</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{pctFmt(matrix.D.nivelTanque)}</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.R.nivelTanque)}</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.S.nivelTanque)}</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.I.nivelTanque)}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                        <tr style={{ background: 'rgba(16,185,129,0.08)' }}>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL TANQUE</td>
+                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{pctFmt(matrix.D.nivelTanque)}</td>
+                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.R.nivelTanque)}</td>
+                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.S.nivelTanque)}</td>
+                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.I.nivelTanque)}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
 
-                    {/* Tabla de Programados */}
-                    <div className="card glass table-responsive" style={{ padding: 0 }}>
-                        <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', background: 'var(--bg-active)', padding: '0.5rem 1rem', borderBottom: '1px solid var(--border)' }}>
-                            PEDIDOS PROGRAMADOS POR ESTACION ({programados.length})
-                        </h3>
-                        <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '600px' }}>
-                            <thead>
-                                <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg-color)' }}>
-                                    <th style={{ textAlign: 'left', padding: '0.45rem 0.5rem' }}>FECHA</th>
-                                    <th style={{ textAlign: 'left', padding: '0.45rem 0.5rem' }}>ORDEN_T</th>
-                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>DIESEL</th>
-                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>REGULAR</th>
-                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>SUPER</th>
-                                    <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>ION</th>
-                                    <th style={{ textAlign: 'center', padding: '0.45rem 0.5rem' }}>ACCION</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {programados.map(p => (
-                                    <tr 
-                                        key={p.id_pedido} 
-                                        style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                                        onDoubleClick={() => loadPedidoToForm(p)}
-                                        title="Doble clic para editar / cargar en el formulario"
-                                    >
-                                        <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
-                                        <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>{p.numero || p.id_pedido}</td>
-                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
-                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
-                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.super)}</td>
-                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.iondiesel)}</td>
-                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
-                                            <div style={{ display: 'inline-flex', gap: '0.35rem', justifyContent: 'center' }}>
-                                                <button onClick={() => { setPedidoTemp({ id: p.id_pedido }); setShowConfirmModal(true); }} className="btn-primary" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>CONFIRMAR</button>
-                                                <button onClick={() => handleEliminarPedido(p.id_pedido)} className="btn-secondary" style={{ padding: '3px 8px', fontSize: '0.68rem', color: '#ef4444' }}>ANULAR</button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                                {programados.length === 0 && (
-                                    <tr><td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>No hay pedidos programados para la estación y fecha seleccionada.</td></tr>
-                                )}
-                            </tbody>
-                        </table>
+                            {/* Tabla de Programados */}
+                            <div className="card glass table-responsive" style={{ padding: 0 }}>
+                                <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', background: 'var(--bg-active)', padding: '0.5rem 1rem', borderBottom: '1px solid var(--border)' }}>
+                                    PEDIDOS PROGRAMADOS POR ESTACION ({programados.length})
+                                </h3>
+                                <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
+                                    <thead>
+                                        <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg-color)' }}>
+                                            <th style={{ textAlign: 'left', padding: '0.45rem 0.5rem' }}>FECHA</th>
+                                            <th style={{ textAlign: 'left', padding: '0.45rem 0.5rem' }}>ORDEN_T</th>
+                                            <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>DIESEL</th>
+                                            <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>REGULAR</th>
+                                            <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>SUPER</th>
+                                            <th style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>ION</th>
+                                            <th style={{ textAlign: 'center', padding: '0.45rem 0.5rem' }}>ACCION</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {programados.map(p => (
+                                            <tr 
+                                                key={p.id_pedido} 
+                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                                                onDoubleClick={() => loadPedidoToForm(p)}
+                                                title="Doble clic para editar / cargar en el formulario"
+                                            >
+                                                <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>{p.numero || p.id_pedido}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.super)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.iondiesel)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                    <div style={{ display: 'inline-flex', gap: '0.35rem', justifyContent: 'center' }}>
+                                                        <button onClick={() => { setPedidoTemp({ id: p.id_pedido }); setShowConfirmModal(true); }} className="btn-primary" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>CONFIRMAR</button>
+                                                        <button onClick={() => handleEliminarPedido(p.id_pedido)} className="btn-secondary" style={{ padding: '3px 8px', fontSize: '0.68rem', color: '#ef4444' }}>ANULAR</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {programados.length === 0 && (
+                                            <tr><td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>No hay pedidos programados para la estación y fecha seleccionada.</td></tr>
+                                        )}
+                                    </tbody>
+                                    {programados.length > 0 && (
+                                        <tfoot>
+                                            <tr style={{ background: 'rgba(37,99,235,0.05)', borderTop: '2px solid var(--border)', fontWeight: 'bold' }}>
+                                                <td colSpan="2" style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)' }}>TOTAL PROGRAMADO</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.D.programado)}</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.R.programado)}</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.S.programado)}</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.I.programado)}</td>
+                                                <td></td>
+                                            </tr>
+                                        </tfoot>
+                                    )}
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
