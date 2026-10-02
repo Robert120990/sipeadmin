@@ -43,6 +43,115 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
     }
 });
 
+// --- Gestión de Entidades Bancarias (Bancos) ---
+router.get('/entidades-banco', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const [rows] = await db.query(`
+            SELECT 
+                b.codigo, 
+                b.descripcion, 
+                COUNT(DISTINCT b.empresa_id) as empresas_count,
+                GROUP_CONCAT(DISTINCT e.nombre ORDER BY e.nombre SEPARATOR ', ') as empresas_nombres
+            FROM bancos b
+            JOIN empresas e ON b.empresa_id = e.id
+            GROUP BY b.codigo, b.descripcion
+            ORDER BY b.descripcion ASC
+        `);
+
+        // Calcular siguiente código numérico sugerido
+        const [maxRow] = await db.query(`
+            SELECT MAX(CAST(codigo AS UNSIGNED)) as max_cod 
+            FROM bancos 
+            WHERE codigo REGEXP '^[0-9]+$'
+        `);
+        const nextNum = (maxRow[0]?.max_cod || 0) + 1;
+        const nextCodigo = String(nextNum).padStart(2, '0');
+
+        res.json({
+            bancos: rows,
+            nextCodigo
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener lista de bancos');
+    }
+});
+
+router.post('/entidades-banco', authenticateToken, requirePermission('/dashboard/bancos/cuentas'), async (req, res) => {
+    const { descripcion, codigo, id_empresa, todas_empresas = true } = req.body;
+    try {
+        if (!descripcion || !descripcion.trim()) {
+            return res.status(400).json({ message: 'El nombre o descripción del banco es requerido' });
+        }
+
+        const db = getDb();
+        const cleanDesc = descripcion.trim().toUpperCase();
+
+        // Determinar código (si el usuario ingresó número de 1 dígito ej '5', padear a '05')
+        let bankCode = (codigo || '').trim();
+        if (!bankCode) {
+            const [maxRow] = await db.query(`
+                SELECT MAX(CAST(codigo AS UNSIGNED)) as max_cod 
+                FROM bancos 
+                WHERE codigo REGEXP '^[0-9]+$'
+            `);
+            const nextNum = (maxRow[0]?.max_cod || 0) + 1;
+            bankCode = String(nextNum).padStart(2, '0');
+        } else if (/^\d+$/.test(bankCode) && bankCode.length === 1) {
+            bankCode = bankCode.padStart(2, '0');
+        }
+
+        // Obtener empresas destino
+        let targetEmpresas = [];
+        if (todas_empresas) {
+            const [allEmp] = await db.query('SELECT id, codigo, nombre FROM empresas ORDER BY id');
+            targetEmpresas = allEmp;
+        } else {
+            if (!id_empresa) {
+                return res.status(400).json({ message: 'Debe especificar una empresa o seleccionar todas las empresas' });
+            }
+            const [empRows] = await db.query('SELECT id, codigo, nombre FROM empresas WHERE codigo = ? OR id = ?', [id_empresa, id_empresa]);
+            if (empRows.length === 0) {
+                return res.status(400).json({ message: 'Empresa no encontrada' });
+            }
+            targetEmpresas = empRows;
+        }
+
+        let insertedCount = 0;
+        for (const emp of targetEmpresas) {
+            // Verificar si ya existe este código en esta empresa
+            const [existingCode] = await db.query('SELECT id FROM bancos WHERE empresa_id = ? AND codigo = ?', [emp.id, bankCode]);
+            if (existingCode.length > 0) {
+                continue;
+            }
+            // Verificar si ya existe con la misma descripción en esta empresa
+            const [existingDesc] = await db.query('SELECT id FROM bancos WHERE empresa_id = ? AND UPPER(descripcion) = ?', [emp.id, cleanDesc]);
+            if (existingDesc.length > 0) {
+                continue;
+            }
+
+            await db.query(
+                'INSERT INTO bancos (empresa_id, codigo, descripcion) VALUES (?, ?, ?)',
+                [emp.id, bankCode, cleanDesc]
+            );
+            insertedCount++;
+        }
+
+        if (insertedCount === 0) {
+            return res.status(400).json({ message: `El banco '${cleanDesc}' o código '${bankCode}' ya se encuentra registrado para las empresas seleccionadas.` });
+        }
+
+        res.status(201).json({
+            message: `Banco '${cleanDesc}' registrado exitosamente en ${insertedCount} empresa(s)`,
+            codigo: bankCode,
+            descripcion: cleanDesc,
+            insertedCount
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al registrar el banco');
+    }
+});
+
 router.get('/cuentas', authenticateToken, async (req, res) => {
     try {
         const db = getDb();

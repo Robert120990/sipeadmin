@@ -18,6 +18,19 @@ export default function CuentasBancarias() {
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [pendingToggle, setPendingToggle] = useState(null);
 
+    // Estados para gestión de Bancos
+    const [showBancoModal, setShowBancoModal] = useState(false);
+    const [savingBanco, setSavingBanco] = useState(false);
+    const [listaBancos, setListaBancos] = useState([]);
+    const [nextCodigoBanco, setNextCodigoBanco] = useState('');
+    const [searchBancoTerm, setSearchBancoTerm] = useState('');
+    const [bancoFormData, setBancoFormData] = useState({
+        descripcion: '',
+        codigo: '',
+        todas_empresas: true,
+        id_empresa: ''
+    });
+
     const [formData, setFormData] = useState({ 
         id_empresa: '', 
         cod_banco: '', 
@@ -54,14 +67,14 @@ export default function CuentasBancarias() {
         }
     };
 
-    const fetchCatalogsForCompany = async (id_empresa) => {
+    const fetchCatalogsForCompany = async (id_empresa, preserveSelected = true) => {
         if (!id_empresa) return;
         try {
             const res = await api.get(`/bancos/catalogos?id_empresa=${id_empresa}`);
-            setBancos(res.data.bancos);
-            setTipos(res.data.tipos);
+            setBancos(res.data.bancos || []);
+            setTipos(res.data.tipos || []);
             
-            if (!editingAccount) {
+            if (!editingAccount && !preserveSelected) {
                 setFormData(prev => ({ 
                     ...prev, 
                     cod_banco: res.data.bancos[0]?.id || '',
@@ -72,6 +85,77 @@ export default function CuentasBancarias() {
             addToast('Error al cargar bancos y tipos para la empresa', 'error');
         }
     };
+
+    const fetchBancosList = async () => {
+        try {
+            const res = await api.get('/bancos/entidades-banco');
+            setListaBancos(res.data.bancos || []);
+            setNextCodigoBanco(res.data.nextCodigo || '');
+            return res.data;
+        } catch (err) {
+            addToast('Error al obtener lista de bancos', 'error');
+            return null;
+        }
+    };
+
+    const handleOpenNuevoBancoModal = async () => {
+        const data = await fetchBancosList();
+        setBancoFormData({
+            descripcion: '',
+            codigo: data?.nextCodigo || nextCodigoBanco || '',
+            todas_empresas: true,
+            id_empresa: formData.id_empresa || empresas[0]?.id || ''
+        });
+        setSearchBancoTerm('');
+        setShowBancoModal(true);
+    };
+
+    const handleCloseBancoModal = () => {
+        setShowBancoModal(false);
+        if (formData.cod_banco === '__NEW_BANK__') {
+            setFormData(prev => ({ ...prev, cod_banco: bancos[0]?.id || '' }));
+        }
+    };
+
+    const handleSaveBanco = async (e) => {
+        e.preventDefault();
+        if (!bancoFormData.descripcion.trim()) {
+            addToast('El nombre del banco es obligatorio', 'warning');
+            return;
+        }
+        setSavingBanco(true);
+        try {
+            const res = await api.post('/bancos/entidades-banco', bancoFormData);
+            addToast(res.data.message || 'Banco registrado exitosamente', 'success');
+            
+            const targetEmpresa = formData.id_empresa || empresas[0]?.id;
+            if (targetEmpresa) {
+                await fetchCatalogsForCompany(targetEmpresa, true);
+            }
+            
+            setFormData(prev => ({
+                ...prev,
+                cod_banco: res.data.codigo
+            }));
+
+            await fetchBancosList();
+            setShowBancoModal(false);
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Error al registrar el banco';
+            addToast(msg, 'error');
+        } finally {
+            setSavingBanco(false);
+        }
+    };
+
+    const filteredListaBancos = useMemo(() => {
+        if (!searchBancoTerm) return listaBancos;
+        const low = searchBancoTerm.toLowerCase();
+        return listaBancos.filter(b => 
+            (b.descripcion || '').toLowerCase().includes(low) ||
+            (b.codigo || '').toLowerCase().includes(low)
+        );
+    }, [listaBancos, searchBancoTerm]);
 
     // Filters and Pagination logic
     const filteredAccounts = useMemo(() => {
@@ -98,7 +182,7 @@ export default function CuentasBancarias() {
 
     const handleCompanyChange = (id_empresa) => {
         setFormData(prev => ({ ...prev, id_empresa, cod_banco: '', cod_tipo: '' }));
-        fetchCatalogsForCompany(id_empresa);
+        fetchCatalogsForCompany(id_empresa, false);
     };
 
     const handleOpenModal = async (account = null) => {
@@ -115,7 +199,7 @@ export default function CuentasBancarias() {
                 orden: ordenValue
             });
             setEditingAccount(account);
-            await fetchCatalogsForCompany(account.id_empresa);
+            await fetchCatalogsForCompany(account.id_empresa, true);
         } else {
             setEditingAccount(null);
             const firstEmp = empresas[0]?.id || '';
@@ -129,7 +213,7 @@ export default function CuentasBancarias() {
                 cod_cta: '',
                 orden: ''
             });
-            if (firstEmp) fetchCatalogsForCompany(firstEmp);
+            if (firstEmp) await fetchCatalogsForCompany(firstEmp, false);
         }
         setShowModal(true);
     };
@@ -190,7 +274,7 @@ export default function CuentasBancarias() {
                     </h1>
                     <p style={{ color: 'var(--text-muted)' }}>Gestión de cuentas por empresa y banco.</p>
                 </div>
-                <div style={{ display: 'flex', gap: '1rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
                     <div style={{ position: 'relative' }}>
                         <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                         <input 
@@ -201,6 +285,10 @@ export default function CuentasBancarias() {
                             onChange={e => setSearchTerm(e.target.value)}
                         />
                     </div>
+                    <button className="btn-secondary" onClick={() => handleOpenNuevoBancoModal()} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <Landmark size={18} />
+                        Bancos
+                    </button>
                     <button className="btn-primary" onClick={() => handleOpenModal()} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <Plus size={18} />
                         Nueva Cuenta
@@ -378,11 +466,36 @@ export default function CuentasBancarias() {
 
                     <div className="form-grid form-grid-2">
                         <div>
-                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Banco</label>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)', margin: 0 }}>Banco</label>
+                                <button
+                                    type="button"
+                                    onClick={handleOpenNuevoBancoModal}
+                                    style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        color: 'var(--primary)',
+                                        cursor: 'pointer',
+                                        fontSize: '0.78rem',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        padding: 0
+                                    }}
+                                >
+                                    <Plus size={14} /> + Nuevo Banco
+                                </button>
+                            </div>
                             <select 
                                 style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
                                 value={formData.cod_banco}
-                                onChange={e => setFormData({...formData, cod_banco: e.target.value})}
+                                onChange={e => {
+                                    if (e.target.value === '__NEW_BANK__') {
+                                        handleOpenNuevoBancoModal();
+                                    } else {
+                                        setFormData({...formData, cod_banco: e.target.value});
+                                    }
+                                }}
                                 required
                                 disabled={!formData.id_empresa}
                             >
@@ -390,6 +503,9 @@ export default function CuentasBancarias() {
                                 {bancos.map(ban => (
                                     <option key={ban.id} value={ban.id}>{ban.descripcion}</option>
                                 ))}
+                                <option value="__NEW_BANK__" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>
+                                    ➕ Agregar nuevo banco...
+                                </option>
                             </select>
                         </div>
                         <div>
@@ -474,6 +590,168 @@ export default function CuentasBancarias() {
                         </button>
                     </div>
                 </form>
+            </Modal>
+
+            <Modal
+                open={showBancoModal}
+                onClose={handleCloseBancoModal}
+                title={
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Landmark size={20} color="var(--primary)" />
+                        Gestión de Bancos
+                    </span>
+                }
+                size="md"
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Formulario para Registrar Nuevo Banco */}
+                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.9rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontWeight: 600, fontSize: '0.875rem' }}>
+                            <Plus size={16} color="var(--primary)" />
+                            <span>Registrar Nuevo Banco</span>
+                        </div>
+                        <form onSubmit={handleSaveBanco} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                        Nombre del Banco *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="Ej: BANCO AZTECA"
+                                        value={bancoFormData.descripcion}
+                                        onChange={e => setBancoFormData(prev => ({ ...prev, descripcion: e.target.value.toUpperCase() }))}
+                                        required
+                                        autoFocus
+                                        style={{ height: '36px', fontSize: '0.825rem', textTransform: 'uppercase' }}
+                                    />
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                        Código Sugerido
+                                    </label>
+                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                        <input
+                                            type="text"
+                                            placeholder="00"
+                                            value={bancoFormData.codigo}
+                                            onChange={e => setBancoFormData(prev => ({ ...prev, codigo: e.target.value }))}
+                                            style={{ height: '36px', fontSize: '0.825rem', width: '80px', textAlign: 'center', fontWeight: 'bold' }}
+                                        />
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            (Código del banco)
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', userSelect: 'none', cursor: 'pointer' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={bancoFormData.todas_empresas}
+                                        onChange={e => setBancoFormData(prev => ({ ...prev, todas_empresas: e.target.checked }))}
+                                        style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                                    />
+                                    <span>Habilitar para <strong>todas las empresas</strong> (Recomendado)</span>
+                                </label>
+
+                                {!bancoFormData.todas_empresas && (
+                                    <div style={{ marginTop: '0.5rem' }}>
+                                        <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                            Asignar únicamente a la empresa:
+                                        </label>
+                                        <select
+                                            value={bancoFormData.id_empresa}
+                                            onChange={e => setBancoFormData(prev => ({ ...prev, id_empresa: e.target.value }))}
+                                            style={{ height: '36px', fontSize: '0.825rem', width: '100%', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
+                                            required={!bancoFormData.todas_empresas}
+                                        >
+                                            <option value="">Seleccione Empresa</option>
+                                            {empresas.map(emp => (
+                                                <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                                <button
+                                    type="submit"
+                                    className="btn-primary"
+                                    disabled={savingBanco || !bancoFormData.descripcion.trim()}
+                                    style={{ height: '36px', padding: '0 1.25rem', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.825rem' }}
+                                >
+                                    <Plus size={16} />
+                                    {savingBanco ? 'Guardando...' : 'Guardar Banco'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    {/* Listado de Bancos Existentes */}
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                            <span style={{ fontSize: '0.825rem', fontWeight: 600, color: 'var(--text)' }}>
+                                Bancos en Sistema ({filteredListaBancos.length})
+                            </span>
+                            <div style={{ position: 'relative', width: '170px' }}>
+                                <Search size={14} style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                <input
+                                    type="text"
+                                    placeholder="Buscar banco..."
+                                    value={searchBancoTerm}
+                                    onChange={e => setSearchBancoTerm(e.target.value)}
+                                    style={{ height: '28px', fontSize: '0.75rem', paddingLeft: '1.75rem', width: '100%' }}
+                                />
+                            </div>
+                        </div>
+
+                        <div style={{ maxHeight: '190px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px' }}>
+                            <table style={{ width: '100%', fontSize: '0.78rem', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
+                                        <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.72rem', width: '60px' }}>CÓDIGO</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.72rem' }}>DESCRIPCIÓN</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.72rem', textAlign: 'right' }}>EMPRESAS</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredListaBancos.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={3} style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                No se encontraron bancos
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredListaBancos.map((b, idx) => (
+                                            <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                                <td style={{ padding: '0.45rem 0.5rem' }}>
+                                                    <code style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{b.codigo}</code>
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>
+                                                    {b.descripcion}
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
+                                                    <span className="badge" style={{ fontSize: '0.7rem', padding: '0.12rem 0.4rem', background: b.empresas_count >= empresas.length && empresas.length > 0 ? 'rgba(40,167,69,0.15)' : 'rgba(255,193,7,0.15)', color: b.empresas_count >= empresas.length && empresas.length > 0 ? '#28a745' : '#ffc107', border: 'none' }}>
+                                                        {b.empresas_count >= empresas.length && empresas.length > 0 ? 'Todas' : `${b.empresas_count} emp.`}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                        <button type="button" onClick={handleCloseBancoModal} className="btn-secondary" style={{ height: '34px', padding: '0 1.25rem', fontSize: '0.825rem' }}>
+                            Cerrar
+                        </button>
+                    </div>
+                </div>
             </Modal>
 
             <Modal
