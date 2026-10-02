@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDb, getExternalDb, withRetry } = require('../db');
+const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const energyLatamService = require('../services/energyLatamService');
@@ -181,7 +181,37 @@ router.get('/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticateT
             if (targetDate instanceof Date) { targetDate = targetDate.toISOString().split('T')[0]; }
         }
         const query = `
-            SELECT b.id_producto AS id_tanque, sum(b.lectura) as lectura, sum(c.capacidad) as capacidad, sum(c.galones_reserva) as reserva, if(c.tipo_combustible='M','I',c.tipo_combustible) as tipo_combustible 
+            SELECT 
+                b.id_producto AS id_tanque, 
+                SUM(b.lectura) AS lectura, 
+                SUM(
+                    CASE 
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03')) THEN 5000
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01')) THEN 3000
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02')) THEN 
+                            IF(a.id LIKE '%-T', 6000, c.capacidad)
+                        ELSE COALESCE(c.capacidad, 0)
+                    END
+                ) AS capacidad, 
+                SUM(
+                    CASE 
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03')) THEN 86
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01')) THEN 86
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02')) THEN 
+                            IF(a.id LIKE '%-T', 105, c.galones_reserva)
+                        ELSE COALESCE(c.galones_reserva, 0)
+                    END
+                ) AS reserva, 
+                CASE 
+                    WHEN a.id_empresa = '008' THEN 
+                        CASE 
+                            WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                            WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                            WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                            ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                        END
+                    ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                END AS tipo_combustible
             FROM lecturas_tanque a 
             INNER JOIN (
                 SELECT id_empresa, fecha, MAX(turno) as max_turno 
@@ -189,12 +219,73 @@ router.get('/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticateT
                 WHERE id_empresa = ? AND fecha = ?
                 GROUP BY id_empresa, fecha
             ) m ON a.id_empresa = m.id_empresa AND a.fecha = m.fecha AND a.turno = m.max_turno
-            INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa=b.id_empresa 
-            INNER JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa=c.id_empresa 
+            INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa 
+            LEFT JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa 
             WHERE a.id_empresa = ? AND a.fecha = ?
-            GROUP BY tipo_combustible
+            GROUP BY 
+                CASE 
+                    WHEN a.id_empresa = '008' THEN 
+                        CASE 
+                            WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                            WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                            WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                            ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                        END
+                    ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                END
         `;
-        const [rows] = await externalDb.query(query, [id_empresa, targetDate, id_empresa, targetDate]);
+        let [rows] = await externalDb.query(query, [id_empresa, targetDate, id_empresa, targetDate]);
+
+        // Fallback a nuevo sistema SaaS (accountingDb) si externalDb no tiene datos o falta diesel para Costa del Sol
+        if (!rows || rows.length === 0 || (id_empresa === '008' && !rows.some(r => r.tipo_combustible === 'D' && Number(r.capacidad) > 0))) {
+            try {
+                const accountingDb = await getAccountingDb();
+                const [settings] = await accountingDb.query('SELECT branch_id FROM gas_station_settings WHERE setting_key = ? AND setting_value = ? LIMIT 1', ['rrs_id_empresa', id_empresa]);
+                let branchId = settings.length ? settings[0].branch_id : null;
+                if (!branchId) {
+                    const [b] = await accountingDb.query('SELECT id FROM branches WHERE id = ? LIMIT 1', [parseInt(id_empresa, 10)]);
+                    if (b.length) branchId = b[0].id;
+                }
+                if (branchId) {
+                    const [closeoutRows] = await accountingDb.query(`
+                        SELECT id, fecha_turno, numero_turno 
+                        FROM gas_station_closeouts 
+                        WHERE branch_id = ? AND fecha_turno <= ? AND estado = 'cerrado'
+                        ORDER BY fecha_turno DESC, numero_turno DESC 
+                        LIMIT 1
+                    `, [branchId, fecha]);
+
+                    if (closeoutRows.length) {
+                        const closeout = closeoutRows[0];
+                        const [tanks] = await accountingDb.query(`
+                            SELECT 
+                                t.codigo as id_tanque,
+                                COALESCE(tr.lectura_actual, 0) as lectura,
+                                t.capacidad,
+                                t.reserva,
+                                CASE 
+                                    WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                                    WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                                    WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                                    WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                                    ELSE 'D'
+                                END as tipo_combustible
+                            FROM gas_station_tanks t
+                            LEFT JOIN gas_station_closeout_tank_readings tr ON t.id = tr.tank_id AND tr.closeout_id = ?
+                            WHERE t.branch_id = ?
+                            ORDER BY t.codigo
+                        `, [closeout.id, branchId]);
+
+                        if (tanks && tanks.length > 0) {
+                            rows = tanks;
+                        }
+                    }
+                }
+            } catch (fallbackErr) {
+                console.warn('Fallback accountingDb datos-tanque warning:', fallbackErr.message);
+            }
+        }
+
         res.json({ fecha: fecha, inventario: rows });
     } catch (error) { res.status(500).json({ message: 'Error fetching datos-tanque' }); }
 });

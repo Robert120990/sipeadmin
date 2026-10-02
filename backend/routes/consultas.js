@@ -108,8 +108,35 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
         const promediosDates = []; let pCurr = new Date(cDesde);
         while (pCurr <= new Date(date + 'T12:00:00')) { const d = String(pCurr.getDate()).padStart(2, '0'); const m = String(pCurr.getMonth() + 1).padStart(2, '0'); const y = pCurr.getFullYear(); promediosDates.push(`${d}/${m}/${y}`); pCurr.setDate(pCurr.getDate() + 1); }
 
+        const lecturasTanquesQ = `
+            SELECT 
+                b.lectura, 
+                CASE 
+                    WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03')) THEN 86
+                    WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01')) THEN 86
+                    WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02')) THEN 
+                        IF(a.id LIKE '%-T', 105, c.galones_reserva)
+                    ELSE COALESCE(c.galones_reserva, 0)
+                END AS galones_reserva,
+                CASE 
+                    WHEN a.id_empresa = '008' THEN 
+                        CASE 
+                            WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                            WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                            WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                            ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                        END
+                    ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                END AS tipo_combustible, 
+                a.id_empresa 
+            FROM lecturas_tanque a 
+            INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa 
+            LEFT JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa 
+            WHERE a.fecha = ? AND a.turno = (SELECT MAX(x.turno) FROM lecturas_tanque x WHERE x.id_empresa = a.id_empresa AND x.fecha = a.fecha)
+        `;
+
         const [lecturasRows, promediosRows] = await Promise.all([
-            externalDb.query(`SELECT b.lectura, c.galones_reserva, IF(c.tipo_combustible='M','I',c.tipo_combustible) as tipo_combustible, a.id_empresa FROM lecturas_tanque a INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa INNER JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa WHERE a.fecha = ? AND a.turno = (SELECT MAX(x.turno) FROM lecturas_tanque x WHERE x.id_empresa = a.id_empresa AND x.fecha = a.fecha)`, [date]),
+            externalDb.query(lecturasTanquesQ, [date]),
             externalDb.query(`SELECT a.id_empresa, IF(a.id_empresa = '004' AND a.codigo_producto = '0007','I', LEFT(a.nom_producto,1)) AS tipo_combustible, SUM(a.total) as total_7d FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa WHERE b.fecha_turno IN (?) GROUP BY a.id_empresa, tipo_combustible`, [promediosDates])
         ]);
         const lecturas = lecturasRows[0], promedios = promediosRows[0];
@@ -878,7 +905,44 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
         while (curr <= new Date(hasta + 'T12:00:00')) { const day = String(curr.getDate()).padStart(2, '0'); const month = String(curr.getMonth() + 1).padStart(2, '0'); const year = curr.getFullYear(); datesArray.push(`${day}/${month}/${year}`); curr.setDate(curr.getDate() + 1); }
         const sql1 = `select x.id_empresa, a.titulo as estacion, z.clasificacion as tipo, 0.0 as inicial, 0.0 as recargas, sum(y.total) as venta, 0.0 as final, 0.0 as suma, 0.0 as diferencia from cierre_turno x inner join cierre_turno_lecturas y on x.id_empresa = y.id_empresa and x.id = y.id_cierre_turno inner join cfg_combustibles z on y.id_empresa = z.id_empresa and y.id_producto = z.id_producto inner join web_consolidado a on x.id_empresa = a.id_empresa where x.fecha_turno IN (?) and a.grupo = 'ESTACION' group by x.id_empresa, a.titulo, z.clasificacion, a.orden order by a.orden, z.clasificacion`;
         const [dt_result] = await externalDb.query(sql1, [datesArray]);
-        const sql2 = `select a.id_empresa,a.fecha,a.turno,c.tipo_combustible,sum(b.anterior) as anterior,sum(b.recarga) as recarga,sum(b.lectura) as lectura from lecturas_tanque a inner join detalle_lecturas_tanque b on a.id_empresa = b.id_empresa and a.id = b.id_lectura inner join tanques c on a.id_empresa = c.id_empresa and b.codigo_producto = c.id where a.fecha between ? and ? group by id_empresa,tipo_combustible,fecha,turno order by id_empresa,fecha,turno`;
+        const sql2 = `
+            SELECT 
+                a.id_empresa,
+                a.fecha,
+                a.turno,
+                CASE 
+                    WHEN a.id_empresa = '008' THEN 
+                        CASE 
+                            WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                            WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                            WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                            ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                        END
+                    ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                END AS tipo_combustible,
+                SUM(b.anterior) AS anterior,
+                SUM(b.recarga) AS recarga,
+                SUM(b.lectura) AS lectura 
+            FROM lecturas_tanque a 
+            INNER JOIN detalle_lecturas_tanque b ON a.id_empresa = b.id_empresa AND a.id = b.id_lectura 
+            LEFT JOIN tanques c ON a.id_empresa = c.id_empresa AND b.codigo_producto = c.id 
+            WHERE a.fecha BETWEEN ? AND ? 
+            GROUP BY 
+                a.id_empresa,
+                CASE 
+                    WHEN a.id_empresa = '008' THEN 
+                        CASE 
+                            WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                            WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                            WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                            ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                        END
+                    ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                END,
+                a.fecha,
+                a.turno 
+            ORDER BY a.id_empresa, a.fecha, a.turno
+        `;
         const [dt_movi] = await externalDb.query(sql2, [desde, hasta]);
         res.json(dt_result.map(fila => {
             let inicial = 0.0, final = 0.0; const FindRow = dt_movi.filter(m => String(m.id_empresa) === String(fila.id_empresa) && String(m.tipo_combustible) === String(fila.tipo));
