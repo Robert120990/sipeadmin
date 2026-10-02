@@ -235,6 +235,77 @@ async function processAndSaveOrders(orders, userSummary = null) {
 }
 
 /**
+ * Lanza una instancia de navegador Puppeteer de manera resiliente,
+ * adaptándose automáticamente a entornos Windows (desarrollo local) y Linux VPS / Serverless.
+ * Si Puppeteer nativo falla por falta de dependencias del sistema (como libatk-1.0.so.0 en Linux),
+ * recurre de forma transparente a @sparticuz/chromium o binarios del sistema.
+ */
+async function launchBrowser(sessionDir) {
+    const isLinux = process.platform === 'linux';
+    const baseArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer'
+    ];
+
+    // Intento 1: Navegador estándar de Puppeteer o binarios instalados en Linux
+    try {
+        const launchOpts = {
+            headless: 'new',
+            args: baseArgs
+        };
+        if (sessionDir) {
+            launchOpts.userDataDir = sessionDir;
+        }
+
+        if (isLinux) {
+            const knownPaths = [
+                '/usr/bin/google-chrome-stable',
+                '/usr/bin/google-chrome',
+                '/usr/bin/chromium-browser',
+                '/usr/bin/chromium'
+            ];
+            for (const kp of knownPaths) {
+                if (fs.existsSync(kp)) {
+                    launchOpts.executablePath = kp;
+                    break;
+                }
+            }
+        }
+
+        return await puppeteer.launch(launchOpts);
+    } catch (stdError) {
+        console.warn(`[energyLatamService] Puppeteer estándar falló (${stdError.message}). Intentando fallback con @sparticuz/chromium...`);
+
+        // Intento 2: Fallback con @sparticuz/chromium (autocontenido sin requerir paquetes del sistema)
+        try {
+            const chromium = require('@sparticuz/chromium');
+            const execPath = await chromium.executablePath();
+            console.log(`[energyLatamService] Usando binario @sparticuz/chromium en: ${execPath}`);
+
+            const fallbackOpts = {
+                headless: true,
+                executablePath: execPath,
+                args: Array.from(new Set([
+                    ...chromium.args,
+                    ...baseArgs
+                ]))
+            };
+            if (sessionDir) {
+                fallbackOpts.userDataDir = sessionDir;
+            }
+
+            return await puppeteer.launch(fallbackOpts);
+        } catch (chromError) {
+            console.error('[energyLatamService] Fallback con @sparticuz/chromium también falló:', chromError);
+            throw new Error(`Error al iniciar el navegador en el servidor: ${stdError.message}. Para instalar las librerías del sistema en el VPS Linux, ejecute en la terminal: 'sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2'.`);
+        }
+    }
+}
+
+/**
  * Ejecuta el scraper headless en segundo plano para sincronizar el portal para todas las cuentas
  */
 async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount = 10) {
@@ -248,11 +319,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
     let browser = null;
     try {
         const sessionDir = path.join(__dirname, '..', 'data', 'puppeteer_session');
-        browser = await puppeteer.launch({
-            headless: "new",
-            userDataDir: sessionDir,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
+        browser = await launchBrowser(sessionDir);
 
         const page = await browser.newPage();
         await page.setViewport({ width: 1400, height: 900 });
@@ -527,11 +594,7 @@ async function checkPortalStatus() {
     let browser = null;
     try {
         const sessionDir = path.join(__dirname, '..', 'data', 'puppeteer_session');
-        browser = await puppeteer.launch({
-            headless: "new",
-            userDataDir: sessionDir,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
+        browser = await launchBrowser(sessionDir);
 
         const page = await browser.newPage();
         await page.setViewport({ width: 1400, height: 900 });
@@ -663,11 +726,7 @@ async function submit2FACode(code) {
     let browser = null;
     try {
         const sessionDir = path.join(__dirname, '..', 'data', 'puppeteer_session');
-        browser = await puppeteer.launch({
-            headless: "new",
-            userDataDir: sessionDir,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
+        browser = await launchBrowser(sessionDir);
 
         const page = await browser.newPage();
         await page.goto(PORTAL_URL, { waitUntil: 'networkidle2', timeout: 35000 });

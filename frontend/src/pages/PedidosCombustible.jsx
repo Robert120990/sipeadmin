@@ -2390,6 +2390,34 @@ export default function PedidosCombustible() {
                                 </div>
                             )}
 
+                            {/* Dependencias del Servidor Linux VPS si hay error de librerías */}
+                            {(diagnosticoData.status === 'ERROR' || String(diagnosticoData.message || '').includes('libatk') || String(diagnosticoData.message || '').includes('librerías')) && (
+                                <div className="card glass" style={{ padding: '0.85rem 1rem', borderLeft: '4px solid #ef4444', display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.05)' }}>
+                                    <div style={{ fontSize: '0.825rem', fontWeight: 'bold', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <AlertTriangle size={15} /> Librerías del Sistema Linux Requeridas en el VPS
+                                    </div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-color)', lineHeight: '1.4' }}>
+                                        En servidores Linux mínimos, el navegador Chrome requiere dependencias del sistema. Para instalarlas de una sola vez, ejecute por terminal SSH en el VPS:
+                                        <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(0,0,0,0.25)', padding: '0.5rem 0.75rem', borderRadius: '4px', overflowX: 'auto' }}>
+                                            <code style={{ fontSize: '0.75rem', color: '#10b981', whiteSpace: 'nowrap', flex: 1 }}>
+                                                sudo apt-get update && sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2
+                                            </code>
+                                            <button
+                                                type="button"
+                                                className="btn-secondary"
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText('sudo apt-get update && sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2');
+                                                    addToast('Comando copiado al portapapeles', 'info');
+                                                }}
+                                                style={{ height: '28px', padding: '0 0.5rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                                            >
+                                                <Copy size={12} /> Copiar
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Detalles de Configuración y Solución Permanente */}
                             <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.02)' }}>
                                 <div style={{ fontSize: '0.825rem', fontWeight: 'bold', color: 'var(--text-color)' }}>
