@@ -668,16 +668,20 @@ export default function PedidosCombustible() {
             if (previsualizar) prog += Number(comp[tipo].val);
 
             let durDias = 0;
-            if (prom > 0) durDias = (invActual + prog - res) / prom;
+            if (prom > 0) durDias = Math.max(0, (invActual + prog - res) / prom);
 
             let fechaDur = "";
             let nomDia = "";
             if (durDias > 0 && fechaConsulta) {
-                const [y, m, d] = fechaConsulta.split('-').map(Number);
-                const target = new Date(y, m - 1, d + Math.floor(durDias));
-                fechaDur = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
-                const days = ['DOMINGO','LUNES','MARTES','MIERCOLES','JUEVES','VIERNES','SABADO'];
-                nomDia = days[target.getDay()];
+                const cleanDate = fechaConsulta.includes('T') ? fechaConsulta.split('T')[0] : fechaConsulta;
+                const parts = cleanDate.split('-').map(Number);
+                if (parts.length === 3) {
+                    const [y, m, d] = parts;
+                    const target = new Date(y, m - 1, d + Math.floor(durDias));
+                    fechaDur = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+                    const days = ['DOMINGO', 'LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO'];
+                    nomDia = days[target.getDay()];
+                }
             }
 
             let nivel = 0;
@@ -1452,7 +1456,7 @@ export default function PedidosCombustible() {
                             <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--primary)', textAlign: 'center', background: 'rgba(37,99,235,0.1)', padding: '0.5rem', fontWeight: 'bold' }}>
                                 RESUMEN DE DATOS OPERACIONALES ({estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Seleccione Estación'})
                             </h3>
-                            <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '450px' }}>
+                            <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
                                 <thead>
                                     <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>METRICA</th>
@@ -1492,11 +1496,76 @@ export default function PedidosCombustible() {
                                         <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.programado)}</td>
                                     </tr>
                                     <tr>
-                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION DIAS</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{matrix.D.duracionDias.toFixed(1)}</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{matrix.R.duracionDias.toFixed(1)}</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{matrix.S.duracionDias.toFixed(1)}</td>
-                                        <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{matrix.I.duracionDias.toFixed(1)}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN DIAS</td>
+                                        {['D', 'R', 'S', 'I'].map(t => {
+                                            const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
+                                            return (
+                                                <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
+                                                    <div style={{
+                                                        display: 'inline-flex',
+                                                        justifyContent: 'center',
+                                                        alignItems: 'center',
+                                                        minWidth: '85px',
+                                                        padding: '0.2rem 0.4rem',
+                                                        background: 'var(--bg-active)',
+                                                        borderRadius: '4px',
+                                                        border: '1px solid var(--border)',
+                                                        fontWeight: 'bold',
+                                                        fontSize: '0.85rem',
+                                                        color: 'var(--text-color)'
+                                                    }}>
+                                                        {matrix[t].duracionDias.toFixed(1)}
+                                                    </div>
+                                                </td>
+                                            );
+                                        })}
+                                    </tr>
+                                    <tr>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN FECHA</td>
+                                        {['D', 'R', 'S', 'I'].map(t => {
+                                            const m = matrix[t];
+                                            const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
+                                            const hasVal = m.duracionDias > 0 && m.duracionFecha;
+                                            return (
+                                                <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
+                                                        <div style={{
+                                                            minWidth: '85px',
+                                                            minHeight: '24px',
+                                                            padding: '0.2rem 0.35rem',
+                                                            background: 'var(--bg-active)',
+                                                            borderRadius: '4px',
+                                                            border: '1px solid var(--border)',
+                                                            fontSize: '0.75rem',
+                                                            fontWeight: 'bold',
+                                                            color: hasVal ? 'var(--text-color)' : 'transparent',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center'
+                                                        }}>
+                                                            {hasVal ? fmtDateArray(m.duracionFecha) : '\u00A0'}
+                                                        </div>
+                                                        <div style={{
+                                                            minWidth: '85px',
+                                                            minHeight: '22px',
+                                                            padding: '0.15rem 0.35rem',
+                                                            background: 'var(--bg-active)',
+                                                            borderRadius: '4px',
+                                                            border: '1px solid var(--border)',
+                                                            fontSize: '0.7rem',
+                                                            fontWeight: 'bold',
+                                                            color: hasVal ? 'var(--primary)' : 'transparent',
+                                                            letterSpacing: '0.03em',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center'
+                                                        }}>
+                                                            {hasVal ? m.duracionDiaNom : '\u00A0'}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            );
+                                        })}
                                     </tr>
                                     <tr style={{ background: 'rgba(16,185,129,0.08)' }}>
                                         <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL TANQUE</td>
