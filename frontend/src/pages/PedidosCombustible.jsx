@@ -2400,13 +2400,13 @@ export default function PedidosCombustible() {
                                         En servidores Linux mínimos, el navegador Chrome requiere dependencias del sistema. Para instalarlas de una sola vez, ejecute por terminal SSH en el VPS:
                                         <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(0,0,0,0.25)', padding: '0.5rem 0.75rem', borderRadius: '4px', overflowX: 'auto' }}>
                                             <code style={{ fontSize: '0.75rem', color: '#10b981', whiteSpace: 'nowrap', flex: 1 }}>
-                                                sudo apt-get update && sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2
+                                                sudo apt-get install -y libasound2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2
                                             </code>
                                             <button
                                                 type="button"
                                                 className="btn-secondary"
                                                 onClick={() => {
-                                                    navigator.clipboard.writeText('sudo apt-get update && sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2');
+                                                    navigator.clipboard.writeText('sudo apt-get install -y libasound2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2');
                                                     addToast('Comando copiado al portapapeles', 'info');
                                                 }}
                                                 style={{ height: '28px', padding: '0 0.5rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
