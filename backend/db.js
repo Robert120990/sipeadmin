@@ -880,6 +880,25 @@ const initDB = async () => {
             `);
 
             await pool.query(`
+                CREATE TABLE IF NOT EXISTS combustible_precios_estacion_quincenal (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    id_estacion VARCHAR(10) NOT NULL,
+                    estacion_nombre VARCHAR(100) NOT NULL,
+                    periodo_inicio DATE NOT NULL,
+                    periodo_fin DATE NOT NULL,
+                    precio_diesel DECIMAL(10,5) NOT NULL DEFAULT 0.00000,
+                    precio_regular DECIMAL(10,5) NOT NULL DEFAULT 0.00000,
+                    precio_super DECIMAL(10,5) NOT NULL DEFAULT 0.00000,
+                    precio_ion DECIMAL(10,5) NOT NULL DEFAULT 0.00000,
+                    fuente VARCHAR(100) DEFAULT 'Liquidación Quincenal Puma / SIPE',
+                    activo TINYINT(1) DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_estacion_periodo (id_estacion, periodo_inicio, periodo_fin)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
                 CREATE TABLE IF NOT EXISTS web_pedidos_temp (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     id_estacion VARCHAR(50) NOT NULL,
@@ -925,30 +944,62 @@ const initDB = async () => {
             // Seed initial resumen
             await pool.query(`
                 INSERT IGNORE INTO portal_resumen_cuenta (id, cuenta_nombre, cuenta_numero, saldo_disponible, limite_credito, porcentaje_disponible, ultima_sincronizacion)
-                VALUES (1, 'corina sosah', '3409396', 633.00, 2000.00, 32.00, NOW())
+                VALUES (1, 'corina sosah', '3409396', 642.00, 2000.00, 32.00, NOW())
             `);
 
-            // Seed initial reference prices
-            const today = new Date();
-            const currYear = today.getFullYear();
-            const currMonth = String(today.getMonth() + 1).padStart(2, '0');
+            // Seed real reference quincenas (exact wholesale base prices from Puma fuel liquidation)
             await pool.query(`
-                INSERT IGNORE INTO combustible_precios_quincenales 
+                INSERT INTO combustible_precios_quincenales 
                 (periodo_inicio, periodo_fin, precio_diesel, precio_regular, precio_super, precio_ion, fuente, activo)
                 VALUES 
-                ('${currYear}-${currMonth}-01', '${currYear}-${currMonth}-15', 3.6500, 3.8200, 4.1500, 3.7500, 'Precios de Referencia Quincenal', 0),
-                ('${currYear}-${currMonth}-16', '${currYear}-${currMonth}-30', 3.6800, 3.8500, 4.1800, 3.7800, 'Precios de Referencia Quincenal', 1)
+                ('2026-09-15', '2026-09-28', 3.8281, 3.7120, 3.9800, 4.0274, 'Liquidación Quincenal Puma / SIPE', 0),
+                ('2026-09-29', '2026-10-12', 3.8281, 3.7120, 3.9800, 4.0274, 'Liquidación Quincenal Puma / SIPE', 1)
+                ON DUPLICATE KEY UPDATE
+                precio_diesel = VALUES(precio_diesel),
+                precio_regular = VALUES(precio_regular),
+                precio_super = VALUES(precio_super),
+                precio_ion = VALUES(precio_ion),
+                fuente = VALUES(fuente),
+                activo = VALUES(activo)
+            `);
+
+            // Seed exact wholesale station prices (Base Facturación Puma)
+            await pool.query(`
+                INSERT INTO combustible_precios_estacion_quincenal
+                (id_estacion, estacion_nombre, periodo_inicio, periodo_fin, precio_diesel, precio_regular, precio_super, precio_ion)
+                VALUES
+                ('002', 'Puma Miraflores', '2026-09-15', '2026-09-28', 3.82810, 3.71200, 3.98000, 0.00000),
+                ('006', 'Shell Chalchuapa', '2026-09-15', '2026-09-28', 3.83330, 3.72610, 3.99410, 0.00000),
+                ('008', 'Puma Costa del Sol', '2026-09-15', '2026-09-28', 3.82810, 3.71200, 3.98004, 0.00000),
+                ('014', 'Puma San Martin (La Loma)', '2026-09-15', '2026-09-28', 3.85040, 3.73430, 4.00234, 4.02739),
+                ('015', 'Shell 14 Avenida (Zurita)', '2026-09-15', '2026-09-28', 3.85420, 3.73810, 4.00614, 0.00000),
+                ('004', 'Puma El Desvio', '2026-09-15', '2026-09-28', 3.83000, 3.72000, 3.99000, 0.00000),
+
+                ('002', 'Puma Miraflores', '2026-09-29', '2026-10-12', 3.82810, 3.71200, 3.98000, 0.00000),
+                ('006', 'Shell Chalchuapa', '2026-09-29', '2026-10-12', 3.83330, 3.72610, 3.99410, 0.00000),
+                ('008', 'Puma Costa del Sol', '2026-09-29', '2026-10-12', 3.82810, 3.71200, 3.98004, 0.00000),
+                ('014', 'Puma San Martin (La Loma)', '2026-09-29', '2026-10-12', 3.85040, 3.73430, 4.00234, 4.02739),
+                ('015', 'Shell 14 Avenida (Zurita)', '2026-09-29', '2026-10-12', 3.85420, 3.73810, 4.00614, 0.00000),
+                ('004', 'Puma El Desvio', '2026-09-29', '2026-10-12', 3.83000, 3.72000, 3.99000, 0.00000)
+                ON DUPLICATE KEY UPDATE
+                precio_diesel = VALUES(precio_diesel),
+                precio_regular = VALUES(precio_regular),
+                precio_super = VALUES(precio_super),
+                precio_ion = VALUES(precio_ion)
             `);
 
             // Seed default station freight rates per gallon
             await pool.query(`
-                INSERT IGNORE INTO combustible_fletes_estacion (id_estacion, estacion_nombre, flete_galon) VALUES
+                INSERT INTO combustible_fletes_estacion (id_estacion, estacion_nombre, flete_galon) VALUES
                 ('002', 'Puma Miraflores', 0.04630),
                 ('006', 'Shell Chalchuapa', 0.03110),
                 ('008', 'Puma Costa del Sol', 0.05370),
                 ('014', 'Puma San Martin (La Loma)', 0.04690),
                 ('015', 'Shell 14 Avenida (Zurita)', 0.02820),
                 ('004', 'Puma El Desvio', 0.04000)
+                ON DUPLICATE KEY UPDATE
+                flete_galon = VALUES(flete_galon),
+                estacion_nombre = VALUES(estacion_nombre)
             `);
 
             // Seed orders from snapshot if empty or only partial

@@ -3,7 +3,8 @@ import {
     Calendar, Search, FileSpreadsheet, Printer, 
     ChevronLeft, ChevronRight, Fuel, Store, DollarSign, 
     Layers, TrendingUp, BarChart3, LineChart,
-    ArrowUpRight, ArrowDownRight, Sparkles, RefreshCw
+    ArrowUpRight, ArrowDownRight, Sparkles, RefreshCw,
+    Sliders, Save, Edit3
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -58,6 +59,19 @@ export default function VentasEstaciones() {
     // --- ESTADO COMPARATIVO ANUAL ---
     const [showComparativoModal, setShowComparativoModal] = useState(false);
     const [comparativoData, setComparativoData] = useState(null);
+
+    // --- ESTADO AJUSTAR PRECIOS QUINCENA ---
+    const [showAjustarPreciosModal, setShowAjustarPreciosModal] = useState(false);
+    const [isSavingQuincena, setIsSavingQuincena] = useState(false);
+    const [quincenaEditForm, setQuincenaEditForm] = useState({
+        periodo_inicio: '',
+        periodo_fin: '',
+        precio_diesel: 3.8281,
+        precio_regular: 3.7120,
+        precio_super: 3.9800,
+        precio_ion: 4.0274,
+        estaciones: []
+    });
     const [loadingComparativo, setLoadingComparativo] = useState(false);
     const [anioPrincipal, setAnioPrincipal] = useState(new Date().getFullYear());
     const [anioComparar, setAnioComparar] = useState(new Date().getFullYear() - 1);
@@ -207,6 +221,95 @@ export default function VentasEstaciones() {
         } finally {
             setLoading(false);
         }
+    };
+
+    // --- CARGA Y AJUSTE DE PRECIOS DE QUINCENA ---
+    const handleOpenAjustarPrecios = async () => {
+        try {
+            const res = await api.get('/ventas/combustibles/quincenas');
+            const quincenas = res.data?.quincenas || [];
+            const stPrecios = res.data?.estaciones_precios || [];
+            const fletes = res.data?.fletes || [];
+
+            const qActive = quincenas.find(q => q.activo === 1) || quincenas[0] || {};
+            const pInicio = qActive.periodo_inicio ? qActive.periodo_inicio.split('T')[0] : '2026-09-29';
+            const pFin = qActive.periodo_fin ? qActive.periodo_fin.split('T')[0] : '2026-10-12';
+
+            const estacionesConfig = [
+                { id: '002', nombre: 'Puma Miraflores', flete: 0.04630, d: 3.8281, r: 3.7120, s: 3.9800, i: 0 },
+                { id: '006', nombre: 'Shell Chalchuapa', flete: 0.03110, d: 3.8333, r: 3.7261, s: 3.9941, i: 0 },
+                { id: '008', nombre: 'Puma Costa del Sol', flete: 0.05370, d: 3.8281, r: 3.7120, s: 3.9800, i: 0 },
+                { id: '014', nombre: 'Puma San Martín (La Loma)', flete: 0.04690, d: 3.8504, r: 3.7343, s: 4.0023, i: 4.0274 },
+                { id: '015', nombre: 'Shell 14 Avenida (Zurita)', flete: 0.02820, d: 3.8542, r: 3.7381, s: 4.0061, i: 0 },
+                { id: '004', nombre: 'Puma El Desvío', flete: 0.04000, d: 3.8300, r: 3.7200, s: 3.9900, i: 0 }
+            ];
+
+            const estacionesMapped = estacionesConfig.map(ec => {
+                const sp = stPrecios.find(p => String(p.id_estacion).padStart(3, '0') === ec.id && (p.periodo_inicio || '').startsWith(pInicio)) ||
+                           stPrecios.find(p => String(p.id_estacion).padStart(3, '0') === ec.id) || {};
+                const fl = fletes.find(f => String(f.id_estacion).padStart(3, '0') === ec.id) || {};
+                return {
+                    id_estacion: ec.id,
+                    estacion_nombre: ec.nombre,
+                    flete_galon: fl.flete_galon !== undefined ? Number(fl.flete_galon) : ec.flete,
+                    precio_diesel: sp.precio_diesel !== undefined ? Number(sp.precio_diesel) : ec.d,
+                    precio_regular: sp.precio_regular !== undefined ? Number(sp.precio_regular) : ec.r,
+                    precio_super: sp.precio_super !== undefined ? Number(sp.precio_super) : ec.s,
+                    precio_ion: sp.precio_ion !== undefined ? Number(sp.precio_ion) : ec.i
+                };
+            });
+
+            setQuincenaEditForm({
+                periodo_inicio: pInicio,
+                periodo_fin: pFin,
+                precio_diesel: Number(qActive.precio_diesel || 3.8281),
+                precio_regular: Number(qActive.precio_regular || 3.7120),
+                precio_super: Number(qActive.precio_super || 3.9800),
+                precio_ion: Number(qActive.precio_ion || 4.0274),
+                estaciones: estacionesMapped
+            });
+            setShowAjustarPreciosModal(true);
+        } catch (e) {
+            addToast('Error al cargar quincenas de combustible', 'error');
+        }
+    };
+
+    const handleSaveQuincenaPrecios = async (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        setIsSavingQuincena(true);
+        try {
+            await api.post('/ventas/combustibles/quincenas', quincenaEditForm);
+            for (const est of quincenaEditForm.estaciones) {
+                if (est.flete_galon !== undefined) {
+                    await api.post('/ventas/combustibles/fletes', {
+                        id_estacion: est.id_estacion,
+                        estacion_nombre: est.estacion_nombre,
+                        flete_galon: est.flete_galon
+                    });
+                }
+            }
+            addToast('Precios de quincena y fletes actualizados exitosamente', 'success');
+            setShowAjustarPreciosModal(false);
+            fetchData();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al guardar precios de quincena', 'error');
+        } finally {
+            setIsSavingQuincena(false);
+        }
+    };
+
+    const handleApplyGeneralToAll = () => {
+        setQuincenaEditForm(prev => ({
+            ...prev,
+            estaciones: prev.estaciones.map(st => ({
+                ...st,
+                precio_diesel: prev.precio_diesel,
+                precio_regular: prev.precio_regular,
+                precio_super: prev.precio_super,
+                precio_ion: st.id_estacion === '014' ? prev.precio_ion : st.precio_ion
+            }))
+        }));
+        addToast('Precios base generales aplicados a todas las sucursales', 'info');
     };
 
     // --- CARGA DE DATOS MENSUALES ---
@@ -679,6 +782,24 @@ export default function VentasEstaciones() {
                         >
                             <Layers size={14} />
                             {showCostStructure ? 'Ocultar Desglose' : 'Ver Desglose de Costos e Impuestos'}
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={handleOpenAjustarPrecios}
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                fontSize: '0.75rem',
+                                padding: '0.25rem 0.65rem',
+                                height: '30px',
+                                background: '#2563eb'
+                            }}
+                            title="Ajustar costos base mayoristas de Puma y fletes por estación para esta quincena"
+                        >
+                            <Sliders size={14} />
+                            Ajustar Precios Quincena
                         </button>
                     </div>
                 </div>
@@ -2122,6 +2243,239 @@ export default function VentasEstaciones() {
                             </>
                         );
                     })()}
+                </div>
+            </Modal>
+
+            {/* Modal de Ajuste de Precios Quincenales y Fletes */}
+            <Modal
+                isOpen={showAjustarPreciosModal}
+                onClose={() => setShowAjustarPreciosModal(false)}
+                title="Ajustar Costos Base y Fletes de Quincena"
+                size="xl"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Fórmula: Costo en Bomba = (Base Facturación + Flete) × 1.13 + $0.30 (FOVIAL+COTRANS)
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => setShowAjustarPreciosModal(false)}
+                                style={{ height: '36px', padding: '0 1rem', fontSize: '0.8rem' }}
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-primary"
+                                onClick={handleSaveQuincenaPrecios}
+                                disabled={isSavingQuincena}
+                                style={{ height: '36px', padding: '0 1.25rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                            >
+                                {isSavingQuincena ? <RefreshCw size={14} className="spin" /> : null}
+                                Guardar y Recalcular Márgenes
+                            </button>
+                        </div>
+                    </div>
+                }
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.25rem 0' }}>
+                    {/* Periodo de la Quincena */}
+                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end', background: 'rgba(0,0,0,0.02)', border: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Inicio Quincena
+                            </label>
+                            <input
+                                type="date"
+                                value={quincenaEditForm.periodo_inicio}
+                                onChange={e => setQuincenaEditForm(prev => ({ ...prev, periodo_inicio: e.target.value }))}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '140px' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Fin Quincena
+                            </label>
+                            <input
+                                type="date"
+                                value={quincenaEditForm.periodo_fin}
+                                onChange={e => setQuincenaEditForm(prev => ({ ...prev, periodo_fin: e.target.value }))}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '140px' }}
+                            />
+                        </div>
+
+                        {/* Precios Base Generales */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Base Diésel ($)
+                            </label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={quincenaEditForm.precio_diesel}
+                                onChange={e => setQuincenaEditForm(prev => ({ ...prev, precio_diesel: parseFloat(e.target.value) || 0 }))}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '100px' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Base Regular ($)
+                            </label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={quincenaEditForm.precio_regular}
+                                onChange={e => setQuincenaEditForm(prev => ({ ...prev, precio_regular: parseFloat(e.target.value) || 0 }))}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '100px' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Base Súper ($)
+                            </label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={quincenaEditForm.precio_super}
+                                onChange={e => setQuincenaEditForm(prev => ({ ...prev, precio_super: parseFloat(e.target.value) || 0 }))}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '100px' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <label style={{ fontSize: '0.74rem', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                Base Ion ($)
+                            </label>
+                            <input
+                                type="number"
+                                step="0.0001"
+                                value={quincenaEditForm.precio_ion}
+                                onChange={e => setQuincenaEditForm(prev => ({ ...prev, precio_ion: parseFloat(e.target.value) || 0 }))}
+                                style={{ height: '36px', padding: '0 0.65rem', fontSize: '0.825rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)', width: '100px' }}
+                            />
+                        </div>
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={handleApplyGeneralToAll}
+                            style={{ height: '36px', padding: '0 0.85rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                            title="Copiar estos precios base a todas las estaciones de la lista abajo"
+                        >
+                            Aplicar Base a Todas
+                        </button>
+                    </div>
+
+                    {/* Explicación de Fletes y Costos por Estación */}
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0 0.25rem' }}>
+                        Ajuste personalizado por estación (cada estación puede tener flete diferente y ligeras variaciones en precio de facturación base según su terminal o contrato):
+                    </div>
+
+                    {/* Tabla de Estaciones */}
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <table style={{ width: '100%', minWidth: '780px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                            <thead>
+                                <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(0,0,0,0.03)' }}>
+                                    <th style={{ padding: '0.45rem 0.65rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Estación</th>
+                                    <th style={{ padding: '0.45rem 0.65rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', width: '110px' }}>Flete ($/Gal)</th>
+                                    <th style={{ padding: '0.45rem 0.65rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', width: '110px' }}>Base Diésel</th>
+                                    <th style={{ padding: '0.45rem 0.65rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', width: '110px' }}>Base Regular</th>
+                                    <th style={{ padding: '0.45rem 0.65rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', width: '110px' }}>Base Súper</th>
+                                    <th style={{ padding: '0.45rem 0.65rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', width: '110px' }}>Base Ion</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {quincenaEditForm.estaciones.map((est, idx) => (
+                                    <tr key={est.id_estacion} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem', fontWeight: '600' }}>
+                                            {est.estacion_nombre}
+                                            <span style={{ marginLeft: '0.35rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>({est.id_estacion})</span>
+                                        </td>
+                                        <td style={{ padding: '0.35rem 0.5rem' }}>
+                                            <input
+                                                type="number"
+                                                step="0.0001"
+                                                value={est.flete_galon}
+                                                onChange={e => {
+                                                    const val = parseFloat(e.target.value) || 0;
+                                                    setQuincenaEditForm(prev => {
+                                                        const arr = [...prev.estaciones];
+                                                        arr[idx] = { ...arr[idx], flete_galon: val };
+                                                        return { ...prev, estaciones: arr };
+                                                    });
+                                                }}
+                                                style={{ width: '100%', height: '32px', padding: '0 0.5rem', fontSize: '0.8rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)' }}
+                                            />
+                                        </td>
+                                        <td style={{ padding: '0.35rem 0.5rem' }}>
+                                            <input
+                                                type="number"
+                                                step="0.0001"
+                                                value={est.precio_diesel}
+                                                onChange={e => {
+                                                    const val = parseFloat(e.target.value) || 0;
+                                                    setQuincenaEditForm(prev => {
+                                                        const arr = [...prev.estaciones];
+                                                        arr[idx] = { ...arr[idx], precio_diesel: val };
+                                                        return { ...prev, estaciones: arr };
+                                                    });
+                                                }}
+                                                style={{ width: '100%', height: '32px', padding: '0 0.5rem', fontSize: '0.8rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)' }}
+                                            />
+                                        </td>
+                                        <td style={{ padding: '0.35rem 0.5rem' }}>
+                                            <input
+                                                type="number"
+                                                step="0.0001"
+                                                value={est.precio_regular}
+                                                onChange={e => {
+                                                    const val = parseFloat(e.target.value) || 0;
+                                                    setQuincenaEditForm(prev => {
+                                                        const arr = [...prev.estaciones];
+                                                        arr[idx] = { ...arr[idx], precio_regular: val };
+                                                        return { ...prev, estaciones: arr };
+                                                    });
+                                                }}
+                                                style={{ width: '100%', height: '32px', padding: '0 0.5rem', fontSize: '0.8rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)' }}
+                                            />
+                                        </td>
+                                        <td style={{ padding: '0.35rem 0.5rem' }}>
+                                            <input
+                                                type="number"
+                                                step="0.0001"
+                                                value={est.precio_super}
+                                                onChange={e => {
+                                                    const val = parseFloat(e.target.value) || 0;
+                                                    setQuincenaEditForm(prev => {
+                                                        const arr = [...prev.estaciones];
+                                                        arr[idx] = { ...arr[idx], precio_super: val };
+                                                        return { ...prev, estaciones: arr };
+                                                    });
+                                                }}
+                                                style={{ width: '100%', height: '32px', padding: '0 0.5rem', fontSize: '0.8rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)' }}
+                                            />
+                                        </td>
+                                        <td style={{ padding: '0.35rem 0.5rem' }}>
+                                            <input
+                                                type="number"
+                                                step="0.0001"
+                                                value={est.precio_ion}
+                                                onChange={e => {
+                                                    const val = parseFloat(e.target.value) || 0;
+                                                    setQuincenaEditForm(prev => {
+                                                        const arr = [...prev.estaciones];
+                                                        arr[idx] = { ...arr[idx], precio_ion: val };
+                                                        return { ...prev, estaciones: arr };
+                                                    });
+                                                }}
+                                                style={{ width: '100%', height: '32px', padding: '0 0.5rem', fontSize: '0.8rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text)' }}
+                                            />
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </Modal>
         </div>

@@ -99,6 +99,7 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
         // Obtener costos de combustibles vigentes para la quincena de la fecha consultada
         let quincenaRow = null;
         let stationCostsMap = {};
+        let stationQuincenalMap = {};
         try {
             const db = getDb();
             // 1. Quincena exacta según la fecha consultada
@@ -180,6 +181,28 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
                     };
                 }
             });
+
+            // 2b. Precios base mayoristas específicos por estación fijados para esta quincena
+            stationQuincenalMap = {};
+            try {
+                const [stQRows] = await withRetry(() => db.query(
+                    `SELECT id_estacion, precio_diesel, precio_regular, precio_super, precio_ion 
+                     FROM combustible_precios_estacion_quincenal
+                     WHERE ? BETWEEN periodo_inicio AND periodo_fin AND activo = 1`,
+                    [date]
+                ));
+                (stQRows || []).forEach(r => {
+                    const stCode = String(r.id_estacion).padStart(3, '0');
+                    stationQuincenalMap[stCode] = {
+                        costo_diesel: Number(r.precio_diesel || 0),
+                        costo_regular: Number(r.precio_regular || 0),
+                        costo_super: Number(r.precio_super || 0),
+                        costo_ion: Number(r.precio_ion || 0)
+                    };
+                });
+            } catch (sqErr) {
+                // Ignore if table not yet migrated
+            }
         } catch (dbErr) {
             console.warn('[Consolidado Ventas] Nota: portal_pedidos o combustible_precios_quincenales no disponibles:', dbErr.message);
         }
@@ -222,27 +245,47 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             // Predeterminados aplicados
         }
 
+        const FOVIAL_COTRANS = 0.30000;
+        const IVA_RATE = 0.13;
+
         const getFuelBaseCost = (idEmpresa, fuelType) => {
             const idKey = String(idEmpresa).padStart(3, '0');
-            // 1. Costo base de factura/portal específico de la estación
+            
+            // 1. Costo base oficial específico por estación para la quincena (Base Facturación Puma)
+            const stQ = stationQuincenalMap[idKey];
+            if (stQ && stQ[`costo_${fuelType}`] > 0) {
+                return stQ[`costo_${fuelType}`];
+            }
+
+            // 2. Costo base deducido de factura/portal específico de la estación
             const stCost = stationCostsMap[idKey];
             if (stCost && stCost[`costo_${fuelType}`] > 0) {
-                return stCost[`costo_${fuelType}`];
+                const flete = stationFletes[idKey] !== undefined ? stationFletes[idKey] : 0.04000;
+                const portalPrice = stCost[`costo_${fuelType}`];
+                // En facturación Puma mayorista, el precio unitario es (Base + Flete + FOVIAL/COTRANS $0.30)
+                // Se deduce el FOVIAL y el flete para obtener la Base Facturación pura
+                const baseFromPortal = Math.max(0, portalPrice - flete - FOVIAL_COTRANS);
+                if (baseFromPortal > 1.0) {
+                    return Math.round(baseFromPortal * 100000) / 100000;
+                }
+                return portalPrice;
             }
-            // 2. Costo base de referencia quincenal
+
+            // 3. Costo base de referencia quincenal general
             if (quincenaRow && Number(quincenaRow[`precio_${fuelType}`] || 0) > 0) {
                 return Number(quincenaRow[`precio_${fuelType}`]);
             }
-            // 3. Costo heredado de externalDb
+
+            // 4. Costo heredado de externalDb
             const legacyKey = fuelType === 'ion' ? 'IONDIESEL' : fuelType.toUpperCase();
             if (legacyCostsMap[idKey] && Number(legacyCostsMap[idKey][legacyKey] || 0) > 0) {
                 return Number(legacyCostsMap[idKey][legacyKey]);
             }
-            return 0;
-        };
 
-        const FOVIAL_COTRANS = 0.30000;
-        const IVA_RATE = 0.13;
+            // 5. Precios de referencia oficiales según informe de liquidación Puma
+            const defaultBases = { diesel: 3.82810, regular: 3.71200, super: 3.98000, ion: 4.02739 };
+            return defaultBases[fuelType] || 0;
+        };
 
         // Desglose de costos oficiales:
         // Subtotal = Base + Flete
@@ -440,6 +483,86 @@ router.post('/ventas/combustibles/fletes', authenticateToken, requirePermission(
         res.json({ message: 'Flete actualizado exitosamente', id_estacion, flete_galon: Number(flete_galon) });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar flete de combustible');
+    }
+});
+
+// Obtener todas las quincenas y precios por estación
+router.get('/ventas/combustibles/quincenas', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const [quincenas] = await db.query(`
+            SELECT * FROM combustible_precios_quincenales 
+            ORDER BY periodo_inicio DESC LIMIT 24
+        `);
+        const [estacionesPrecios] = await db.query(`
+            SELECT * FROM combustible_precios_estacion_quincenal 
+            ORDER BY periodo_inicio DESC, id_estacion ASC
+        `);
+        const [fletes] = await db.query(`
+            SELECT * FROM combustible_fletes_estacion WHERE activo = 1 ORDER BY id_estacion ASC
+        `);
+        res.json({
+            quincenas: quincenas || [],
+            estaciones_precios: estacionesPrecios || [],
+            fletes: fletes || []
+        });
+    } catch (e) {
+        sendSafeError(res, e, 'Error al consultar quincenas de combustible');
+    }
+});
+
+// Guardar o actualizar precios de quincena (general y por estación)
+router.post('/ventas/combustibles/quincenas', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const { periodo_inicio, periodo_fin, precio_diesel, precio_regular, precio_super, precio_ion, estaciones, activo } = req.body;
+        if (!periodo_inicio || !periodo_fin) {
+            return res.status(400).json({ message: 'Se requiere periodo_inicio y periodo_fin' });
+        }
+        const db = getDb();
+        
+        // 1. Guardar o actualizar quincena general
+        await db.query(`
+            INSERT INTO combustible_precios_quincenales 
+            (periodo_inicio, periodo_fin, precio_diesel, precio_regular, precio_super, precio_ion, fuente, activo)
+            VALUES (?, ?, ?, ?, ?, ?, 'Ajuste Manual SIPE', ?)
+            ON DUPLICATE KEY UPDATE
+            precio_diesel = VALUES(precio_diesel),
+            precio_regular = VALUES(precio_regular),
+            precio_super = VALUES(precio_super),
+            precio_ion = VALUES(precio_ion),
+            activo = VALUES(activo)
+        `, [periodo_inicio, periodo_fin, Number(precio_diesel || 0), Number(precio_regular || 0), Number(precio_super || 0), Number(precio_ion || 0), activo ? 1 : 1]);
+
+        // 2. Si se proporcionaron precios por estación, guardarlos
+        if (Array.isArray(estaciones) && estaciones.length > 0) {
+            for (const est of estaciones) {
+                if (!est.id_estacion) continue;
+                await db.query(`
+                    INSERT INTO combustible_precios_estacion_quincenal
+                    (id_estacion, estacion_nombre, periodo_inicio, periodo_fin, precio_diesel, precio_regular, precio_super, precio_ion)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                    precio_diesel = VALUES(precio_diesel),
+                    precio_regular = VALUES(precio_regular),
+                    precio_super = VALUES(precio_super),
+                    precio_ion = VALUES(precio_ion),
+                    estacion_nombre = VALUES(estacion_nombre)
+                `, [
+                    est.id_estacion,
+                    est.estacion_nombre || est.id_estacion,
+                    periodo_inicio,
+                    periodo_fin,
+                    Number(est.precio_diesel || precio_diesel || 0),
+                    Number(est.precio_regular || precio_regular || 0),
+                    Number(est.precio_super || precio_super || 0),
+                    Number(est.precio_ion || precio_ion || 0)
+                ]);
+            }
+        }
+
+        res.json({ message: 'Precios de quincena guardados exitosamente' });
+    } catch (e) {
+        sendSafeError(res, e, 'Error al guardar precios de quincena');
     }
 });
 

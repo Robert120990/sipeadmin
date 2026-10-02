@@ -828,6 +828,27 @@ router.post('/operaciones/portal/sincronizar', authenticateToken, requirePermiss
     }
 });
 
+// 3b. Diagnosticar estado de conexión con el portal Puma / Salesforce
+router.get('/operaciones/portal/diagnostico', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const result = await energyLatamService.checkPortalStatus();
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al diagnosticar portal');
+    }
+});
+
+// 3c. Enviar código de verificación OTP a Salesforce (2FA)
+router.post('/operaciones/portal/verificar-codigo', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const { code } = req.body;
+        const result = await energyLatamService.submit2FACode(code);
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al procesar código de verificación');
+    }
+});
+
 // 4. Actualizar pedido individual
 router.post('/operaciones/portal/actualizar-pedido/:numero_orden', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {

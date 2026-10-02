@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
     Truck, CheckCircle, XCircle, RefreshCw, AlertTriangle, ExternalLink,
     CreditCard, DollarSign, FileText, CheckCircle2, Clock, Scale, Eye,
-    TrendingUp, TrendingDown, Layers, ChevronRight, Filter, Sliders, CheckSquare, Plus
+    TrendingUp, TrendingDown, Layers, ChevronRight, Filter, Sliders, CheckSquare, Plus,
+    Activity, ShieldCheck, Key, Copy
 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -117,6 +118,13 @@ export default function PedidosCombustible() {
 
     const [showDetalleModal, setShowDetalleModal] = useState(false);
     const [selectedOrderDetalle, setSelectedOrderDetalle] = useState(null);
+
+    // Diagnóstico Portal Puma
+    const [showDiagnosticoModal, setShowDiagnosticoModal] = useState(false);
+    const [diagnosticoData, setDiagnosticoData] = useState(null);
+    const [isLoadingDiagnostico, setIsLoadingDiagnostico] = useState(false);
+    const [twoFactorCode, setTwoFactorCode] = useState('');
+    const [isSubmittingCode, setIsSubmittingCode] = useState(false);
 
     const [showNuevoPrecioModal, setShowNuevoPrecioModal] = useState(false);
     const [precioForm, setPrecioForm] = useState({
@@ -348,6 +356,48 @@ export default function PedidosCombustible() {
             addToast('Error al actualizar la orden', 'error');
         } finally {
             setSyncingOrderNum(null);
+        }
+    };
+
+    // Diagnóstico Portal Puma
+    const fetchDiagnostico = async () => {
+        setIsLoadingDiagnostico(true);
+        try {
+            const res = await api.get('/operaciones/portal/diagnostico');
+            setDiagnosticoData(res.data);
+        } catch (e) {
+            addToast('Error al diagnosticar portal: ' + (e.response?.data?.message || e.message), 'error');
+        } finally {
+            setIsLoadingDiagnostico(false);
+        }
+    };
+
+    const handleOpenDiagnosticoPortal = () => {
+        setShowDiagnosticoModal(true);
+        fetchDiagnostico();
+    };
+
+    const handleSubmit2FACode = async (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        if (!twoFactorCode || twoFactorCode.trim().length === 0) {
+            return addToast('Ingrese el código de verificación recibido por correo', 'warning');
+        }
+        setIsSubmittingCode(true);
+        try {
+            const res = await api.post('/operaciones/portal/verificar-codigo', { code: twoFactorCode.trim() });
+            if (res.data?.success) {
+                addToast(res.data.message || 'Código verificado con éxito', 'success');
+                setTwoFactorCode('');
+                fetchDiagnostico();
+                fetchPortalOrders(true);
+                fetchPortalResumen();
+            } else {
+                addToast(res.data?.message || 'Error al verificar código', 'error');
+            }
+        } catch (e) {
+            addToast('Error al enviar código: ' + (e.response?.data?.message || e.message), 'error');
+        } finally {
+            setIsSubmittingCode(false);
         }
     };
 
@@ -1095,6 +1145,16 @@ export default function PedidosCombustible() {
                                     Limpiar
                                 </button>
                             )}
+
+                            <button
+                                onClick={handleOpenDiagnosticoPortal}
+                                className="btn-secondary"
+                                style={{ height: '36px', padding: '0 0.85rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flex: '1 1 auto', justifyContent: 'center' }}
+                                title="Diagnóstico de conexión y estado del Portal Puma Energy-Latam"
+                            >
+                                <Activity size={13} />
+                                Diagnóstico Portal
+                            </button>
 
                             <button
                                 onClick={handleSyncPortal}
@@ -2220,6 +2280,153 @@ export default function PedidosCombustible() {
                         <button className="btn-secondary" onClick={() => setShowConfirmModal(false)} style={{ flex: '1 1 auto' }}>Cancelar</button>
                         <button className="btn-primary" onClick={executeConfirmTransaction} style={{ flex: '1 1 auto' }}>Aplicar Confirmación</button>
                     </div>
+                </div>
+            </Modal>
+
+            {/* MODAL 6: DIAGNÓSTICO PORTAL PUMA / SALESFORCE */}
+            <Modal
+                isOpen={showDiagnosticoModal}
+                onClose={() => setShowDiagnosticoModal(false)}
+                title="Diagnóstico de Conexión — Portal Puma Energy-Latam"
+                size="lg"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            VPS IP: <code>5.252.55.29</code> • Usuario: <code>corina.sosah@sipesv.com</code>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => setShowDiagnosticoModal(false)}
+                                style={{ height: '36px', padding: '0 1rem', fontSize: '0.8rem' }}
+                            >
+                                Cerrar
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-primary"
+                                onClick={fetchDiagnostico}
+                                disabled={isLoadingDiagnostico}
+                                style={{ height: '36px', padding: '0 1rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                            >
+                                <RefreshCw size={14} className={isLoadingDiagnostico ? 'spin' : ''} />
+                                Probar Conexión Ahora
+                            </button>
+                        </div>
+                    </div>
+                }
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.25rem 0' }}>
+                    {isLoadingDiagnostico ? (
+                        <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                            <RefreshCw size={28} className="spin" color="var(--primary, #3b82f6)" />
+                            <span style={{ fontSize: '0.9rem' }}>Verificando conexión en vivo con el portal de Puma...</span>
+                        </div>
+                    ) : diagnosticoData ? (
+                        <>
+                            {/* Estado General */}
+                            <div style={{
+                                padding: '1rem',
+                                borderRadius: '6px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                background: diagnosticoData.status === 'CONECTADO'
+                                    ? 'rgba(34, 197, 94, 0.12)'
+                                    : diagnosticoData.status === 'REQUIRES_2FA'
+                                    ? 'rgba(245, 158, 11, 0.12)'
+                                    : 'rgba(239, 68, 68, 0.12)',
+                                border: `1px solid ${diagnosticoData.status === 'CONECTADO' ? '#22c55e' : diagnosticoData.status === 'REQUIRES_2FA' ? '#f59e0b' : '#ef4444'}`
+                            }}>
+                                {diagnosticoData.status === 'CONECTADO' ? (
+                                    <CheckCircle size={24} color="#22c55e" style={{ flexShrink: 0 }} />
+                                ) : diagnosticoData.status === 'REQUIRES_2FA' ? (
+                                    <Key size={24} color="#f59e0b" style={{ flexShrink: 0 }} />
+                                ) : (
+                                    <AlertTriangle size={24} color="#ef4444" style={{ flexShrink: 0 }} />
+                                )}
+                                <div>
+                                    <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>
+                                        {diagnosticoData.status === 'CONECTADO' && '¡Conexión Exitosa y Sesión Activa!'}
+                                        {diagnosticoData.status === 'REQUIRES_2FA' && 'Autenticación en Dos Pasos (2FA) Requerida'}
+                                        {diagnosticoData.status === 'IP_BLOCKED' && 'Acceso Bloqueado por Política de IP en Salesforce'}
+                                        {diagnosticoData.status === 'ERROR' && 'No se pudo conectar con el portal'}
+                                    </div>
+                                    <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                        {diagnosticoData.message}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Formulario 2FA si se requiere */}
+                            {diagnosticoData.requires2FA && (
+                                <div className="card glass" style={{ padding: '1rem', borderLeft: '4px solid #f59e0b', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                    <h4 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <Key size={16} color="#f59e0b" /> Introducir Código de Verificación OTP
+                                    </h4>
+                                    <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                        Salesforce envió un código de 5 o 6 dígitos al correo de la cuenta (<b>corina.sosah@sipesv.com</b>). Ingréselo aquí para completar el inicio de sesión:
+                                    </p>
+                                    <form onSubmit={handleSubmit2FACode} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <input
+                                            type="text"
+                                            placeholder="Código de verificación (ej. 123456)"
+                                            value={twoFactorCode}
+                                            onChange={e => setTwoFactorCode(e.target.value)}
+                                            style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.85rem', width: '240px', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                                            autoFocus
+                                        />
+                                        <button
+                                            type="submit"
+                                            className="btn-primary"
+                                            disabled={isSubmittingCode || !twoFactorCode.trim()}
+                                            style={{ height: '36px', padding: '0 1rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                        >
+                                            {isSubmittingCode ? <RefreshCw size={13} className="spin" /> : null}
+                                            Verificar Código
+                                        </button>
+                                    </form>
+                                </div>
+                            )}
+
+                            {/* Detalles de Configuración y Solución Permanente */}
+                            <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.02)' }}>
+                                <div style={{ fontSize: '0.825rem', fontWeight: 'bold', color: 'var(--text-color)' }}>
+                                    Solución Permanente para no pedir 2FA ni bloquearse por IP:
+                                </div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                                    Para autorizar permanentemente el servidor en Salesforce y que nunca vuelva a requerir códigos por correo ni bloqueos de ubicación:
+                                    <ol style={{ margin: '0.4rem 0 0 1.2rem', padding: 0 }}>
+                                        <li>Inicie sesión en el portal de Puma / Salesforce con usuario administrador.</li>
+                                        <li>Vaya a <b>Setup (Configuración)</b> → busque <b>Network Access (Acceso a la Red)</b>.</li>
+                                        <li>Haga clic en <b>New (Nuevo)</b> y agregue el rango de IP de confianza:
+                                            <div style={{ margin: '0.3rem 0', fontFamily: 'monospace', background: 'rgba(0,0,0,0.06)', padding: '0.2rem 0.5rem', borderRadius: '4px', display: 'inline-block' }}>
+                                                IP inicial: <b>5.252.55.29</b> &nbsp;|&nbsp; IP final: <b>5.252.55.29</b>
+                                            </div>
+                                        </li>
+                                        <li>Guarde los cambios. Esto garantiza acceso ininterrumpido 24/7 sin solicitar 2FA.</li>
+                                    </ol>
+                                </div>
+                            </div>
+
+                            {/* Mini Captura del Navegador del Servidor */}
+                            {diagnosticoData.screenshotBase64 && (
+                                <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                    <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>
+                                        Captura en vivo del navegador en el VPS:
+                                    </div>
+                                    <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '4px', background: '#000' }}>
+                                        <img
+                                            src={`data:image/png;base64,${diagnosticoData.screenshotBase64}`}
+                                            alt="Captura de pantalla de portal Puma"
+                                            style={{ width: '100%', height: 'auto', display: 'block' }}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                    ) : null}
                 </div>
             </Modal>
         </div>
