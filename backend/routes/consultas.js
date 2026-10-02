@@ -200,14 +200,36 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             console.warn('[Consolidado Ventas] Nota: tabla combustibles_costos externa:', extErr.message);
         }
 
-        const getFuelCost = (idEmpresa, fuelType) => {
+        // 4. Fletes por estación (por galón) según tabla o predeterminados oficiales
+        const stationFletes = {
+            '002': 0.04630, // Puma Miraflores
+            '006': 0.03110, // Shell Chalchuapa
+            '008': 0.05370, // Puma Costa del Sol
+            '014': 0.04690, // Puma San Martín (La Loma)
+            '015': 0.02820, // Shell Zurita (14 Avenida)
+            '004': 0.04000  // Puma El Desvío
+        };
+
+        try {
+            const db = getDb();
+            const [fleteRows] = await db.query('SELECT id_estacion, flete_galon FROM combustible_fletes_estacion WHERE activo = 1');
+            (fleteRows || []).forEach(f => {
+                if (f.id_estacion && Number(f.flete_galon) > 0) {
+                    stationFletes[String(f.id_estacion).padStart(3, '0')] = Number(f.flete_galon);
+                }
+            });
+        } catch (fErr) {
+            // Predeterminados aplicados
+        }
+
+        const getFuelBaseCost = (idEmpresa, fuelType) => {
             const idKey = String(idEmpresa).padStart(3, '0');
-            // 1. Costo específico de estación en pedidos del portal
+            // 1. Costo base de factura/portal específico de la estación
             const stCost = stationCostsMap[idKey];
             if (stCost && stCost[`costo_${fuelType}`] > 0) {
                 return stCost[`costo_${fuelType}`];
             }
-            // 2. Costo de referencia quincenal
+            // 2. Costo base de referencia quincenal
             if (quincenaRow && Number(quincenaRow[`precio_${fuelType}`] || 0) > 0) {
                 return Number(quincenaRow[`precio_${fuelType}`]);
             }
@@ -219,9 +241,38 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             return 0;
         };
 
-        const calcMargin = (retailPrice, cost) => {
+        const FOVIAL_COTRANS = 0.30000;
+        const IVA_RATE = 0.13;
+
+        // Desglose de costos oficiales:
+        // Subtotal = Base + Flete
+        // IVA = Subtotal * 0.13
+        // FOVIAL/COTRANS = $0.30 fijo
+        // Costo Total = Subtotal + IVA + FOVIAL/COTRANS = (Base + Flete) * 1.13 + 0.30
+        const getFuelCostBreakdown = (idEmpresa, fuelType) => {
+            const idKey = String(idEmpresa).padStart(3, '0');
+            const baseCost = getFuelBaseCost(idKey, fuelType);
+            if (baseCost <= 0) return { base: 0, flete: 0, subtotal: 0, iva: 0, fovial: 0, total: 0 };
+
+            const flete = stationFletes[idKey] !== undefined ? stationFletes[idKey] : 0.04000;
+            const subtotal = Math.round((baseCost + flete) * 100000) / 100000;
+            const iva = Math.round(subtotal * IVA_RATE * 100000) / 100000;
+            const fovial = FOVIAL_COTRANS;
+            const total = Math.round((subtotal + iva + fovial) * 100000) / 100000;
+
+            return {
+                base: Math.round(baseCost * 100000) / 100000,
+                flete: Math.round(flete * 100000) / 100000,
+                subtotal,
+                iva,
+                fovial,
+                total
+            };
+        };
+
+        const calcMargin = (retailPrice, totalCost) => {
             const p = Number(retailPrice || 0);
-            const c = Number(cost || 0);
+            const c = Number(totalCost || 0);
             // Si la estación no vende ese producto o no tiene esa modalidad, precio es 0 -> no aplica margen
             if (p <= 0 || c <= 0) return null;
             return Math.round((p - c) * 100) / 100;
@@ -231,10 +282,13 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             .filter(r => r.id_empresa !== '004')
             .map(row => {
                 const idEmpresa = String(row.id_empresa);
-                const cD = getFuelCost(idEmpresa, 'diesel');
-                const cR = getFuelCost(idEmpresa, 'regular');
-                const cS = getFuelCost(idEmpresa, 'super');
-                const cI = getFuelCost(idEmpresa, 'ion') || cD;
+                const costD = getFuelCostBreakdown(idEmpresa, 'diesel');
+                const costR = getFuelCostBreakdown(idEmpresa, 'regular');
+                const costS = getFuelCostBreakdown(idEmpresa, 'super');
+                let costI = getFuelCostBreakdown(idEmpresa, 'ion');
+                if (costI.total <= 0 && costD.total > 0) {
+                    costI = { ...costD };
+                }
 
                 const pDA = Number(row.diesel_a || 0);
                 const pRA = Number(row.regular_a || 0);
@@ -248,14 +302,15 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
                 return {
                     id_empresa: idEmpresa,
                     empresa: getCleanStationName(idEmpresa, row.titulo),
-                    margen_da: calcMargin(pDA, cD),
-                    margen_ra: calcMargin(pRA, cR),
-                    margen_sa: calcMargin(pSA, cS),
-                    margen_dc: calcMargin(pDC, cD),
-                    margen_rc: calcMargin(pRC, cR),
-                    margen_sc: calcMargin(pSC, cS),
-                    margen_master: calcMargin(pMaster, cD),
-                    margen_io: calcMargin(pIon, cI),
+                    flete: stationFletes[idEmpresa] || 0.04000,
+                    margen_da: calcMargin(pDA, costD.total),
+                    margen_ra: calcMargin(pRA, costR.total),
+                    margen_sa: calcMargin(pSA, costS.total),
+                    margen_dc: calcMargin(pDC, costD.total),
+                    margen_rc: calcMargin(pRC, costR.total),
+                    margen_sc: calcMargin(pSC, costS.total),
+                    margen_master: calcMargin(pMaster, costD.total),
+                    margen_io: calcMargin(pIon, costI.total),
                     precios: {
                         diesel_a: pDA,
                         regular_a: pRA,
@@ -267,10 +322,22 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
                         ion_diesel: pIon
                     },
                     costos: {
-                        diesel: cD,
-                        regular: cR,
-                        super: cS,
-                        ion: cI
+                        diesel: costD.total,
+                        regular: costR.total,
+                        super: costS.total,
+                        ion: costI.total
+                    },
+                    costos_base: {
+                        diesel: costD.base,
+                        regular: costR.base,
+                        super: costS.base,
+                        ion: costI.base
+                    },
+                    desglose_costos: {
+                        diesel: costD,
+                        regular: costR,
+                        super: costS,
+                        ion: costI
                     }
                 };
             });
@@ -336,6 +403,44 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             } : null
         });
     } catch (error) { res.status(500).json({ message: 'Error fetching consolidado' }); }
+});
+
+// Obtener fletes de combustible por estación
+router.get('/ventas/combustibles/fletes', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const [rows] = await db.query('SELECT * FROM combustible_fletes_estacion ORDER BY id_estacion');
+        if (rows && rows.length > 0) return res.json(rows);
+    } catch (e) {
+        // Fallback default
+    }
+    res.json([
+        { id_estacion: '002', estacion_nombre: 'Puma Miraflores', flete_galon: 0.04630 },
+        { id_estacion: '006', estacion_nombre: 'Shell Chalchuapa', flete_galon: 0.03110 },
+        { id_estacion: '008', estacion_nombre: 'Puma Costa del Sol', flete_galon: 0.05370 },
+        { id_estacion: '014', estacion_nombre: 'Puma San Martin (La Loma)', flete_galon: 0.04690 },
+        { id_estacion: '015', estacion_nombre: 'Shell 14 Avenida (Zurita)', flete_galon: 0.02820 },
+        { id_estacion: '004', estacion_nombre: 'Puma El Desvio', flete_galon: 0.04000 }
+    ]);
+});
+
+// Actualizar flete de combustible por estación
+router.post('/ventas/combustibles/fletes', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const { id_estacion, flete_galon, estacion_nombre } = req.body;
+        if (!id_estacion || flete_galon === undefined) {
+            return res.status(400).json({ message: 'Se requiere id_estacion y flete_galon' });
+        }
+        const db = getDb();
+        await db.query(`
+            INSERT INTO combustible_fletes_estacion (id_estacion, estacion_nombre, flete_galon, activo)
+            VALUES (?, ?, ?, 1)
+            ON DUPLICATE KEY UPDATE flete_galon = VALUES(flete_galon), estacion_nombre = COALESCE(VALUES(estacion_nombre), estacion_nombre)
+        `, [id_estacion, estacion_nombre || id_estacion, Number(flete_galon)]);
+        res.json({ message: 'Flete actualizado exitosamente', id_estacion, flete_galon: Number(flete_galon) });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar flete de combustible');
+    }
 });
 
 const getCleanStationName = (id, defaultTitulo) => {

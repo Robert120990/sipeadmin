@@ -25,6 +25,7 @@ export default function VentasEstaciones() {
     const [dataMargenes, setDataMargenes] = useState([]);
     const [dataInventario, setDataInventario] = useState([]);
     const [infoQuincena, setInfoQuincena] = useState(null);
+    const [showCostStructure, setShowCostStructure] = useState(false);
     const [loading, setLoading] = useState(false);
 
     // --- ESTADO MENSUAL ---
@@ -630,36 +631,58 @@ export default function VentasEstaciones() {
                     padding: '0.85rem 1rem',
                     borderBottom: '1px solid var(--border)',
                     flexWrap: 'wrap',
-                    gap: '0.5rem'
+                    gap: '0.6rem'
                 }}>
-                    <h3 style={{ margin: '0', fontSize: '1rem', color: 'var(--text-muted)' }}>
-                        Márgenes de Combustible
-                    </h3>
-                    {infoQuincena && (
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.6rem',
-                            fontSize: '0.78rem',
-                            color: 'var(--text-muted)',
-                            flexWrap: 'wrap'
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <h3 style={{ margin: '0', fontSize: '1rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <Fuel size={18} color="var(--primary)" /> Márgenes de Combustible
+                        </h3>
+                        <span style={{
+                            fontSize: '0.72rem',
+                            backgroundColor: 'var(--surface-hover)',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '4px',
+                            border: '1px solid var(--border)',
+                            color: 'var(--text-muted)'
                         }}>
+                            Fórmula Real: (Base + Flete) × 1.13 + $0.30 FOVIAL/COTRANS
+                        </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        {infoQuincena && (
                             <span style={{
                                 backgroundColor: 'var(--surface-hover)',
                                 padding: '0.2rem 0.6rem',
                                 borderRadius: '4px',
-                                border: '1px solid var(--border)'
+                                border: '1px solid var(--border)',
+                                fontSize: '0.76rem',
+                                color: 'var(--text-muted)'
                             }}>
                                 📅 Quincena: <strong style={{ color: 'var(--text-main)' }}>
                                     {infoQuincena.periodo_inicio ? new Date(infoQuincena.periodo_inicio + 'T00:00:00').toLocaleDateString('es-SV') : ''} al {infoQuincena.periodo_fin ? new Date(infoQuincena.periodo_fin + 'T00:00:00').toLocaleDateString('es-SV') : ''}
                                 </strong>
                             </span>
-                            <span style={{ fontSize: '0.74rem', opacity: 0.9 }}>
-                                Costos Portal: <strong>D:</strong> ${Number(infoQuincena.precio_diesel || 0).toFixed(2)} | <strong>R:</strong> ${Number(infoQuincena.precio_regular || 0).toFixed(2)} | <strong>S:</strong> ${Number(infoQuincena.precio_super || 0).toFixed(2)}
-                            </span>
-                        </div>
-                    )}
+                        )}
+                        <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setShowCostStructure(!showCostStructure)}
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                fontSize: '0.75rem',
+                                padding: '0.25rem 0.65rem',
+                                height: '30px'
+                            }}
+                        >
+                            <Layers size={14} />
+                            {showCostStructure ? 'Ocultar Desglose' : 'Ver Desglose de Costos e Impuestos'}
+                        </button>
+                    </div>
                 </div>
+
                 <div className="table-responsive" style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '850px' }}>
                         <thead>
@@ -677,11 +700,18 @@ export default function VentasEstaciones() {
                         </thead>
                         <tbody>
                             {dataMargenes.map((m, i) => {
-                                const renderCell = (val, precio, costo) => {
+                                const renderCell = (val, precio, costo, desglose) => {
                                     if (val === null || val === undefined) {
                                         return <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>-</span>;
                                     }
-                                    const titleStr = precio && costo ? `Venta: $${Number(precio).toFixed(2)} - Costo: $${Number(costo).toFixed(2)} = $${Number(val).toFixed(2)}` : undefined;
+                                    let titleStr = undefined;
+                                    if (precio && costo) {
+                                        if (desglose && desglose.base) {
+                                            titleStr = `Venta: $${Number(precio).toFixed(2)} | Costo Total: $${Number(costo).toFixed(4)} (Base: $${Number(desglose.base).toFixed(4)} + Flete: $${Number(desglose.flete).toFixed(4)} + IVA: $${Number(desglose.iva).toFixed(4)} + FOV: $${Number(desglose.fovial).toFixed(2)}) -> Margen: $${Number(val).toFixed(2)}`;
+                                        } else {
+                                            titleStr = `Venta: $${Number(precio).toFixed(2)} - Costo Total: $${Number(costo).toFixed(2)} = Margen: $${Number(val).toFixed(2)}`;
+                                        }
+                                    }
                                     return (
                                         <span title={titleStr} style={{ cursor: titleStr ? 'help' : 'default' }}>
                                             <Badge val={`$${Number(val).toFixed(2)}`} />
@@ -692,14 +722,14 @@ export default function VentasEstaciones() {
                                 return (
                                     <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
                                         <td style={{ padding: '0.5rem 1rem', fontWeight: '500' }}>{m.empresa}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_da, m.precios?.diesel_a, m.costos?.diesel)}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_ra, m.precios?.regular_a, m.costos?.regular)}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_sa, m.precios?.super_a, m.costos?.super)}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_dc, m.precios?.diesel_c, m.costos?.diesel)}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_rc, m.precios?.regular_c, m.costos?.regular)}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_sc, m.precios?.super_c, m.costos?.super)}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_master, m.precios?.master, m.costos?.diesel)}</td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_io, m.precios?.ion_diesel, m.costos?.ion)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_da, m.precios?.diesel_a, m.costos?.diesel, m.desglose_costos?.diesel)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_ra, m.precios?.regular_a, m.costos?.regular, m.desglose_costos?.regular)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_sa, m.precios?.super_a, m.costos?.super, m.desglose_costos?.super)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_dc, m.precios?.diesel_c, m.costos?.diesel, m.desglose_costos?.diesel)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_rc, m.precios?.regular_c, m.costos?.regular, m.desglose_costos?.regular)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_sc, m.precios?.super_c, m.costos?.super, m.desglose_costos?.super)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_master, m.precios?.master, m.costos?.diesel, m.desglose_costos?.diesel)}</td>
+                                        <td style={{ padding: '0.5rem', textAlign: 'center' }}>{renderCell(m.margen_io, m.precios?.ion_diesel, m.costos?.ion, m.desglose_costos?.ion)}</td>
                                     </tr>
                                 );
                             })}
@@ -709,6 +739,80 @@ export default function VentasEstaciones() {
                         </tbody>
                     </table>
                 </div>
+
+                {/* Desglose Detallado de Costos e Impuestos (Espejo del informe de quincena) */}
+                {showCostStructure && (
+                    <div style={{ padding: '1rem', borderTop: '1px solid var(--border)', backgroundColor: 'var(--surface-hover)' }}>
+                        <div style={{ marginBottom: '0.75rem' }}>
+                            <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '0.88rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <Layers size={16} color="var(--primary)" /> Estructura Detallada de Costos e Impuestos por Galón
+                            </h4>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                Cálculo exacto según normativa: Facturación Base + Flete por Estación + IVA 13% + FOVIAL/COTRANS ($0.30) = Costo Total Puesto en Estación
+                            </span>
+                        </div>
+                        <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', fontSize: '0.76rem', borderCollapse: 'collapse', minWidth: '950px', backgroundColor: 'var(--surface)' }}>
+                                <thead>
+                                    <tr style={{ backgroundColor: 'var(--surface-active)', borderBottom: '1px solid var(--border)' }}>
+                                        <th style={{ textAlign: 'left', padding: '0.5rem 0.75rem' }}>Sucursal</th>
+                                        <th style={{ textAlign: 'left', padding: '0.5rem 0.5rem' }}>Producto</th>
+                                        <th style={{ textAlign: 'right', padding: '0.5rem 0.5rem' }}>Facturación Base</th>
+                                        <th style={{ textAlign: 'right', padding: '0.5rem 0.5rem' }}>Flete</th>
+                                        <th style={{ textAlign: 'right', padding: '0.5rem 0.5rem' }}>IVA (13%)</th>
+                                        <th style={{ textAlign: 'right', padding: '0.5rem 0.5rem' }}>FOVIAL/COTRANS</th>
+                                        <th style={{ textAlign: 'right', padding: '0.5rem 0.75rem', fontWeight: 'bold' }}>Total Costo</th>
+                                        <th style={{ textAlign: 'right', padding: '0.5rem 0.5rem' }}>P. Venta Auto</th>
+                                        <th style={{ textAlign: 'center', padding: '0.5rem 0.5rem' }}>Margen Auto</th>
+                                        <th style={{ textAlign: 'right', padding: '0.5rem 0.5rem' }}>P. Venta Comp.</th>
+                                        <th style={{ textAlign: 'center', padding: '0.5rem 0.5rem' }}>Margen Comp.</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {dataMargenes.flatMap((m, sIdx) => {
+                                        const fuels = [
+                                            { nombre: 'Diésel', pA: m.precios?.diesel_a, mA: m.margen_da, pC: m.precios?.diesel_c, mC: m.margen_dc, cost: m.desglose_costos?.diesel },
+                                            { nombre: 'Regular', pA: m.precios?.regular_a, mA: m.margen_ra, pC: m.precios?.regular_c, mC: m.margen_rc, cost: m.desglose_costos?.regular },
+                                            { nombre: 'Súper', pA: m.precios?.super_a, mA: m.margen_sa, pC: m.precios?.super_c, mC: m.margen_sc, cost: m.desglose_costos?.super },
+                                            ...(m.precios?.ion_diesel > 0 ? [{ nombre: 'Ion Diésel', pA: m.precios?.ion_diesel, mA: m.margen_io, pC: 0, mC: null, cost: m.desglose_costos?.ion }] : []),
+                                            ...(m.precios?.master > 0 ? [{ nombre: 'Master Diésel', pA: m.precios?.master, mA: m.margen_master, pC: 0, mC: null, cost: m.desglose_costos?.diesel }] : [])
+                                        ];
+
+                                        return fuels.map((f, fIdx) => (
+                                            <tr key={`${sIdx}-${fIdx}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                {fIdx === 0 && (
+                                                    <td rowSpan={fuels.length} style={{ padding: '0.5rem 0.75rem', fontWeight: 'bold', borderRight: '1px solid var(--border)', verticalAlign: 'top' }}>
+                                                        {m.empresa}
+                                                    </td>
+                                                )}
+                                                <td style={{ padding: '0.45rem 0.5rem', fontWeight: '500' }}>{f.nombre}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>${(f.cost?.base || 0).toFixed(4)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>${(f.cost?.flete || 0).toFixed(4)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>${(f.cost?.iva || 0).toFixed(4)}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>${(f.cost?.fovial || 0.30).toFixed(2)}</td>
+                                                <td style={{ padding: '0.45rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: 'var(--primary)' }}>
+                                                    ${(f.cost?.total || 0).toFixed(5)}
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
+                                                    {f.pA > 0 ? `$${Number(f.pA).toFixed(2)}` : '-'}
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                    {f.mA !== null && f.mA !== undefined ? <Badge val={`$${Number(f.mA).toFixed(2)}`} /> : '-'}
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
+                                                    {f.pC > 0 ? `$${Number(f.pC).toFixed(2)}` : '-'}
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                    {f.mC !== null && f.mC !== undefined ? <Badge val={`$${Number(f.mC).toFixed(2)}`} /> : '-'}
+                                                </td>
+                                            </tr>
+                                        ));
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Table 4: Inventario */}

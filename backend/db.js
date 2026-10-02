@@ -869,6 +869,17 @@ const initDB = async () => {
             `);
 
             await pool.query(`
+                CREATE TABLE IF NOT EXISTS combustible_fletes_estacion (
+                    id_estacion VARCHAR(10) PRIMARY KEY,
+                    estacion_nombre VARCHAR(100) NOT NULL,
+                    flete_galon DECIMAL(10,5) NOT NULL DEFAULT 0.04000,
+                    activo TINYINT(1) DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
                 CREATE TABLE IF NOT EXISTS web_pedidos_temp (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     id_estacion VARCHAR(50) NOT NULL,
@@ -927,6 +938,17 @@ const initDB = async () => {
                 VALUES 
                 ('${currYear}-${currMonth}-01', '${currYear}-${currMonth}-15', 3.6500, 3.8200, 4.1500, 3.7500, 'Precios de Referencia Quincenal', 0),
                 ('${currYear}-${currMonth}-16', '${currYear}-${currMonth}-30', 3.6800, 3.8500, 4.1800, 3.7800, 'Precios de Referencia Quincenal', 1)
+            `);
+
+            // Seed default station freight rates per gallon
+            await pool.query(`
+                INSERT IGNORE INTO combustible_fletes_estacion (id_estacion, estacion_nombre, flete_galon) VALUES
+                ('002', 'Puma Miraflores', 0.04630),
+                ('006', 'Shell Chalchuapa', 0.03110),
+                ('008', 'Puma Costa del Sol', 0.05370),
+                ('014', 'Puma San Martin (La Loma)', 0.04690),
+                ('015', 'Shell 14 Avenida (Zurita)', 0.02820),
+                ('004', 'Puma El Desvio', 0.04000)
             `);
 
             // Seed orders from snapshot if empty or only partial
