@@ -53,6 +53,18 @@ const isGenericDescription = (desc) => {
     return false;
 };
 
+const formatYMD = (val) => {
+    if (!val) return '';
+    if (val instanceof Date) {
+        const y = val.getFullYear();
+        const m = String(val.getMonth() + 1).padStart(2, '0');
+        const d = String(val.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+    const s = String(val).trim();
+    return s.split('T')[0].split(' ')[0];
+};
+
 const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) => {
     // 1. Obtener cortes del sistema legado (cort_cabecera)
     const sqlCortesTienda = `
@@ -796,8 +808,8 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             inventario: inventarioLocal,
             auditoria,
             quincena: quincenaRow ? {
-                periodo_inicio: quincenaRow.periodo_inicio,
-                periodo_fin: quincenaRow.periodo_fin,
+                periodo_inicio: formatYMD(quincenaRow.periodo_inicio),
+                periodo_fin: formatYMD(quincenaRow.periodo_fin),
                 precio_diesel: Number(quincenaRow.precio_diesel || 0),
                 precio_regular: Number(quincenaRow.precio_regular || 0),
                 precio_super: Number(quincenaRow.precio_super || 0),
@@ -2091,19 +2103,20 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
             case 'tot_venta':
             case 'total_venta':
                 query = `
-                    SELECT l.id_cierre_turno, l.id_manguera, l.codigo_producto, l.nom_producto,
-                           l.inicial, l.final, l.total as galones, l.precio, l.monto
+                    SELECT l.id, l.id_cierre_turno, l.id_producto, l.codigo_producto, l.nom_producto,
+                           l.total as galones, l.precio, COALESCE(l.monto, (l.total * l.precio), 0.0) as monto,
+                           c.turno
                     FROM cierre_turno_lecturas l
                     INNER JOIN cierre_turno c ON l.id_cierre_turno = c.id AND l.id_empresa = c.id_empresa
-                    WHERE c.fecha_turno = ? AND l.id_empresa = ?
-                    ORDER BY l.id_manguera, l.codigo_producto
+                    WHERE c.fecha_turno = ? AND (l.id_empresa = ? OR l.id_empresa = ?)
+                    ORDER BY c.turno, l.nom_producto
                 `;
+                queryParams = [sysDate, cleanId, String(parseInt(id_empresa, 10) || cleanId)];
                 mapFn = (r) => ({
-                    manguera: r.id_manguera || '-',
-                    codigo: r.codigo_producto || '-',
+                    id: r.id,
+                    turno: r.turno || 1,
+                    codigo: r.codigo_producto || r.id_producto || '-',
                     producto: r.nom_producto || 'Combustible',
-                    inicial: Math.round(Number(r.inicial || 0) * 100) / 100,
-                    final: Math.round(Number(r.final || 0) * 100) / 100,
                     galones: Math.round(Number(r.galones || 0) * 100) / 100,
                     precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
                     monto: Math.round(Number(r.monto || 0) * 100) / 100

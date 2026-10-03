@@ -203,6 +203,17 @@ export default function VentasEstaciones() {
         return new Date(ms).toLocaleDateString();
     };
 
+    const formatQuincenaDate = (str) => {
+        if (!str) return '';
+        const clean = String(str).split('T')[0].split(' ')[0];
+        const parts = clean.split('-');
+        if (parts.length === 3) {
+            const [y, m, d] = parts;
+            return `${d}/${m}/${y}`;
+        }
+        return clean;
+    };
+
     const getNombreMes = (mesStr) => {
         if (!mesStr) return '';
         const meses = [
@@ -355,11 +366,12 @@ export default function VentasEstaciones() {
             });
             rows.push(['', '', '', '', '', '', 'TOTAL', drillDownModal.total]);
         } else if (drillDownModal.rubro === 'lecturas') {
-            rows.push(['Manguera', 'Código', 'Producto', 'Inicial', 'Final', 'Galones', 'Precio ($)', 'Monto ($)']);
+            rows.push(['Turno', 'Código', 'Producto', 'Galones', 'Precio ($)', 'Monto ($)']);
             drillDownModal.data.forEach(r => {
-                rows.push([r.manguera, r.codigo, r.producto, r.inicial, r.final, r.galones, r.precio, r.monto]);
+                rows.push([`T-${r.turno || 1}`, r.codigo, r.producto, r.galones, r.precio, r.monto]);
             });
-            rows.push(['', '', '', '', '', '', 'TOTAL', drillDownModal.total]);
+            const totGalones = Math.round(drillDownModal.data.reduce((acc, curr) => acc + Number(curr.galones || 0), 0) * 100) / 100;
+            rows.push(['', '', 'TOTAL', totGalones, '', drillDownModal.total]);
         } else {
             const keys = Object.keys(drillDownModal.data[0] || {});
             rows.push(keys);
@@ -1768,7 +1780,7 @@ export default function VentasEstaciones() {
                                 color: 'var(--text-muted)'
                             }}>
                                 📅 Quincena: <strong style={{ color: 'var(--text-main)' }}>
-                                    {infoQuincena.periodo_inicio ? new Date(infoQuincena.periodo_inicio + 'T00:00:00').toLocaleDateString('es-SV') : ''} al {infoQuincena.periodo_fin ? new Date(infoQuincena.periodo_fin + 'T00:00:00').toLocaleDateString('es-SV') : ''}
+                                    {formatQuincenaDate(infoQuincena.periodo_inicio)} al {formatQuincenaDate(infoQuincena.periodo_fin)}
                                 </strong>
                             </span>
                         )}
@@ -3689,14 +3701,12 @@ export default function VentasEstaciones() {
                                             )}
                                             {drillDownModal.rubro === 'lecturas' && (
                                                 <tr>
-                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Manguera</th>
-                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Código</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', width: '70px' }}>Turno</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', width: '100px' }}>Código</th>
                                                     <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Producto</th>
-                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Inicial</th>
-                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Final</th>
-                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Galones</th>
-                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Precio ($)</th>
-                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Monto ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', width: '120px' }}>Galones</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', width: '110px' }}>Precio ($)</th>
+                                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', width: '120px' }}>Monto ($)</th>
                                                 </tr>
                                             )}
                                             {!['gastos', 'tarjetas', 'remesas', 'credito', 'creditos', 'lubricantes', 'lecturas'].includes(drillDownModal.rubro) && (
@@ -3809,14 +3819,16 @@ export default function VentasEstaciones() {
                                                     )}
                                                     {drillDownModal.rubro === 'lecturas' && (
                                                         <>
-                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontWeight: 600 }}>{r.manguera}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                                <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.1)', color: 'var(--primary)', fontWeight: 600 }}>
+                                                                    T-{r.turno}
+                                                                </span>
+                                                            </td>
                                                             <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)' }}>{r.codigo}</td>
-                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.producto}</td>
-                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(r.inicial)}</td>
-                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(r.final)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 600 }}>{r.producto}</td>
                                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600 }}>{numFmt(r.galones)}</td>
                                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>${r.precio}</td>
-                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600 }}>{moneyFmt(r.monto)}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600, color: 'var(--primary)' }}>{moneyFmt(r.monto)}</td>
                                                         </>
                                                     )}
                                                     {!['gastos', 'tarjetas', 'remesas', 'credito', 'creditos', 'lubricantes', 'lecturas'].includes(drillDownModal.rubro) && (
@@ -3832,17 +3844,32 @@ export default function VentasEstaciones() {
                                             ))}
                                         </tbody>
                                         <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--bg-card)', fontWeight: 700 }}>
-                                            <tr style={{ borderTop: '2px solid var(--border)' }}>
-                                                <td colSpan={drillDownModal.rubro === 'gastos' ? 6 : drillDownModal.rubro === 'tarjetas' ? 6 : drillDownModal.rubro === 'remesas' ? 7 : (drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') ? 8 : drillDownModal.rubro === 'lubricantes' ? 7 : drillDownModal.rubro === 'lecturas' ? 7 : 1} style={{ padding: '0.5rem', textAlign: 'right' }}>
-                                                    TOTAL ACUMULADO:
-                                                </td>
-                                                <td style={{ padding: '0.5rem', textAlign: 'right', color: 'var(--primary)', fontSize: '0.9rem' }}>
-                                                    {moneyFmt(filteredRows.reduce((acc, curr) => acc + Number(curr.valor || curr.total || curr.monto || curr.precio_total || 0), 0))}
-                                                </td>
-                                                {(drillDownModal.rubro === 'gastos' || drillDownModal.rubro === 'remesas' || drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') && (
+                                            {drillDownModal.rubro === 'lecturas' ? (
+                                                <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                                    <td colSpan={3} style={{ padding: '0.5rem', textAlign: 'right', fontWeight: 700 }}>
+                                                        TOTAL ACUMULADO:
+                                                    </td>
+                                                    <td style={{ padding: '0.5rem', textAlign: 'right', color: 'var(--text-main)', fontSize: '0.85rem', fontWeight: 700 }}>
+                                                        {numFmt(filteredRows.reduce((acc, curr) => acc + Number(curr.galones || 0), 0))} gl
+                                                    </td>
                                                     <td style={{ padding: '0.5rem' }}></td>
-                                                )}
-                                            </tr>
+                                                    <td style={{ padding: '0.5rem', textAlign: 'right', color: 'var(--primary)', fontSize: '0.9rem', fontWeight: 700 }}>
+                                                        {moneyFmt(filteredRows.reduce((acc, curr) => acc + Number(curr.monto || 0), 0))}
+                                                    </td>
+                                                </tr>
+                                            ) : (
+                                                <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                                    <td colSpan={drillDownModal.rubro === 'gastos' ? 6 : drillDownModal.rubro === 'tarjetas' ? 6 : drillDownModal.rubro === 'remesas' ? 7 : (drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') ? 8 : drillDownModal.rubro === 'lubricantes' ? 7 : 1} style={{ padding: '0.5rem', textAlign: 'right' }}>
+                                                        TOTAL ACUMULADO:
+                                                    </td>
+                                                    <td style={{ padding: '0.5rem', textAlign: 'right', color: 'var(--primary)', fontSize: '0.9rem' }}>
+                                                        {moneyFmt(filteredRows.reduce((acc, curr) => acc + Number(curr.valor || curr.total || curr.monto || curr.precio_total || 0), 0))}
+                                                    </td>
+                                                    {(drillDownModal.rubro === 'gastos' || drillDownModal.rubro === 'remesas' || drillDownModal.rubro === 'credito' || drillDownModal.rubro === 'creditos') && (
+                                                        <td style={{ padding: '0.5rem' }}></td>
+                                                    )}
+                                                </tr>
+                                            )}
                                         </tfoot>
                                     </table>
                                 </div>
