@@ -918,9 +918,12 @@ export default function VentasEstaciones() {
                                         className={t.tiene_corte ? 'row-hover' : ''}
                                     >
                                         <td style={{ padding: '0.5rem 0.85rem', fontWeight: '500' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                                 <Store size={14} color="var(--primary)" />
                                                 <span>{t.empresa}</span>
+                                                {String(t.id_corte || '').startsWith('SAAS_') && (
+                                                    <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(59, 130, 246, 0.12)', color: '#3B82F6', fontWeight: 600 }} title="Datos cargados desde sys.sipesv.com">sys</span>
+                                                )}
                                                 {t.responsable && (
                                                     <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>({t.responsable})</span>
                                                 )}
@@ -3490,6 +3493,9 @@ export default function VentasEstaciones() {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                                     <Store size={18} color="var(--primary)" />
                                     <strong style={{ fontSize: '1rem', color: 'var(--text)' }}>{corteModal.empresa}</strong>
+                                    {String(corteModal.id_corte || '').startsWith('SAAS_') && (
+                                        <span style={{ fontSize: '0.7rem', padding: '2px 7px', borderRadius: '4px', backgroundColor: 'rgba(59, 130, 246, 0.12)', color: '#3B82F6', fontWeight: 600 }}>SaaS sys.sipesv.com</span>
+                                    )}
                                 </div>
                                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                     Fecha: <strong style={{ color: 'var(--text)' }}>{corteModal.fecha}</strong>
@@ -3670,11 +3676,12 @@ export default function VentasEstaciones() {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                                     {/* Sub-filter chips */}
-                                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                                         {[
                                             { key: 'ALL', label: 'Todos' },
                                             { key: 'G', label: 'Gastos' },
                                             { key: 'T', label: 'Tarjetas' },
+                                            { key: 'R', label: 'Remesas' },
                                             { key: 'I', label: 'Ingresos' }
                                         ].map(filter => (
                                             <button
@@ -3748,8 +3755,8 @@ export default function VentasEstaciones() {
                                                                     padding: '0.15rem 0.45rem',
                                                                     borderRadius: '4px',
                                                                     fontWeight: 600,
-                                                                    background: mov.tipo === 'G' ? 'rgba(239, 68, 68, 0.12)' : mov.tipo === 'T' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                                                                    color: mov.tipo === 'G' ? '#EF4444' : mov.tipo === 'T' ? '#3B82F6' : '#10B981'
+                                                                    background: mov.tipo === 'G' ? 'rgba(239, 68, 68, 0.12)' : mov.tipo === 'T' ? 'rgba(59, 130, 246, 0.12)' : mov.tipo === 'R' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(139, 92, 246, 0.12)',
+                                                                    color: mov.tipo === 'G' ? '#EF4444' : mov.tipo === 'T' ? '#3B82F6' : mov.tipo === 'R' ? '#10B981' : '#8B5CF6'
                                                                 }}>
                                                                     {mov.tipo_nombre || mov.tipo}
                                                                 </span>

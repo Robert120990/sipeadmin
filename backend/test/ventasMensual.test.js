@@ -231,5 +231,64 @@ describe('Ventas Mensual Backend Logic Tests', () => {
             assert.strictEqual(result.totales.ytd.diferencia.galonaje, 15000);
         });
     });
+
+    describe('getCortesTiendaData (Híbrido Legado y SaaS)', () => {
+        const getCortesTiendaData = consultasRouter.getCortesTiendaData;
+
+        it('debe mantener datos legados si existe corte con venta > 0', async () => {
+            const mockExtDb = {
+                query: async () => [[
+                    { id_empresa: '002', tienda_nombre: 'E-Market Miraflores', id_corte: 101, fecha: '2026-06-01', turno: 1, responsable: 'Juan', venta: 3200, ingresos: 50, tarjeta: 800, remesado: 2400, gastos: 50, retiros: 0, saldo_f: 50, dif: 0, tiene_corte: 1 }
+                ]]
+            };
+            const mockSaasDb = {
+                query: async () => [[]]
+            };
+
+            const cortes = await getCortesTiendaData(mockExtDb, '2026-06-01', mockSaasDb);
+            assert.strictEqual(cortes.length, 1);
+            assert.strictEqual(cortes[0].id_corte, 101);
+            assert.strictEqual(cortes[0].venta, 3200);
+            assert.strictEqual(cortes[0].tiene_corte, true);
+            assert.strictEqual(cortes[0].fuente, 'db_system_rrs');
+        });
+
+        it('debe complementar con SaaS cuando legado no tiene corte o registra $0.00', async () => {
+            const mockExtDb = {
+                query: async () => [[
+                    { id_empresa: '014', tienda_nombre: 'E-Market San Martin', id_corte: null, fecha: '2026-10-01', turno: 0, responsable: '', venta: 0, ingresos: 0, tarjeta: 0, remesado: 0, gastos: 0, retiros: 0, saldo_f: 0, dif: 0, tiene_corte: 0 }
+                ]]
+            };
+            const mockSaasDb = {
+                query: async (sql) => {
+                    if (sql.includes('FROM pos_shifts')) {
+                        return [[
+                            { id: 10, branch_id: 1, branch_nombre: 'Puma San Martin II', pos_nombre: 'Tienda 1', total_sales: 1366.99, total_incomes: 9.03, card_sales: 0, total_remesas: 1349.97, total_expenses: 16.30, actual_cash: 10, difference: 0, shift_number: 1, seller_nombre: 'Oscar Ruiz' }
+                        ]];
+                    }
+                    if (sql.includes('FROM pos_shift_remesas')) {
+                        return [[
+                            { description: 'Venta POS Credomatic', amount: 373.27 },
+                            { description: 'Remesa Banco Agricola', amount: 976.70 }
+                        ]];
+                    }
+                    return [[]];
+                }
+            };
+
+            const cortes = await getCortesTiendaData(mockExtDb, '2026-10-01', mockSaasDb);
+            assert.strictEqual(cortes.length, 1);
+            assert.strictEqual(cortes[0].id_corte, 'SAAS_1_2026-10-01');
+            assert.strictEqual(cortes[0].empresa, 'E-Market San Martin');
+            assert.strictEqual(cortes[0].venta, 1366.99);
+            assert.strictEqual(cortes[0].tarjeta, 373.27);
+            assert.strictEqual(cortes[0].remesado, 976.70);
+            assert.strictEqual(cortes[0].gastos, 16.30);
+            assert.strictEqual(cortes[0].responsable, 'Oscar Ruiz');
+            assert.strictEqual(cortes[0].tiene_corte, true);
+            assert.strictEqual(cortes[0].fuente, 'db_sistema_saas (sys.sipesv.com)');
+        });
+    });
 });
+
 

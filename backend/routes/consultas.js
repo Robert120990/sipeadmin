@@ -4,6 +4,192 @@ const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
+const getCleanStationName = (id, defaultTitulo) => {
+    if (!defaultTitulo) return '';
+    const upper = defaultTitulo.toUpperCase();
+    if (id === '002' && (upper.includes('MIRAFLORES') || upper === '002')) return 'Puma Miraflores';
+    if (id === '006' && (upper.includes('CHALCHUAPA') || upper === '006')) return 'Shell Chalchuapa';
+    if (id === '008' && (upper.includes('COSTA') || upper === '008')) return 'Puma Costa del Sol';
+    if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA') || upper === '014')) return 'Puma La Loma (San Martín)';
+    if (id === '015' && (upper.includes('14') || upper === '015')) return 'Shell 14 Avenida';
+    return defaultTitulo;
+};
+
+const getCleanTiendaName = (id, defaultTitulo) => {
+    if (!defaultTitulo) return '';
+    const upper = defaultTitulo.toUpperCase();
+    if (id === '002' && upper.includes('MIRAFLORES')) return 'E-Market Miraflores';
+    if (id === '006' && upper.includes('CHALCHUAPA')) return 'E-Market Chalchuapa';
+    if (id === '008' && upper.includes('COSTA')) return 'Super 7 Costa';
+    if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA'))) return 'E-Market San Martin';
+    if (id === '009' && upper.includes('PEDREGAL')) return 'Super El Pedregal';
+    return defaultTitulo;
+};
+
+const saasBranchMap = {
+    '014': 1, // San Martin -> Puma San Martin II
+    '006': 3, // Chalchuapa -> Shell Chalchuapa
+    '009': 6, // El Pedregal -> Super El Pedregal
+    '002': 4, // Miraflores -> Puma Miraflores
+    '008': 8  // Costa del Sol -> Puma Costa del Sol
+};
+
+const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) => {
+    // 1. Obtener cortes del sistema legado (cort_cabecera)
+    const sqlCortesTienda = `
+        SELECT 
+            b.id_empresa,
+            b.titulo as tienda_nombre,
+            a.id as id_corte,
+            DATE_FORMAT(COALESCE(a.fecha, ?), '%Y-%m-%d') as fecha,
+            COALESCE(a.turno, 0) as turno,
+            COALESCE(a.responsable, '') as responsable,
+            COALESCE(a.tot_ventas, 0.0) as venta,
+            COALESCE(a.tot_ingresos, 0.0) as ingresos,
+            COALESCE(a.tot_tarjeta, 0.0) as tarjeta,
+            COALESCE(a.tot_remesado, 0.0) as remesado,
+            COALESCE(a.tot_gastos, 0.0) as gastos,
+            COALESCE(a.tot_retirado, 0.0) as retiros,
+            COALESCE(a.efectivo, 0.0) as saldo_f,
+            COALESCE(a.diferencia, 0.0) as dif,
+            CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END as tiene_corte
+        FROM web_consolidado b
+        LEFT JOIN cort_cabecera a ON b.id_empresa = a.id_empresa AND a.fecha = ?
+        WHERE b.grupo = 'TIENDA' AND b.id_empresa NOT IN ('004', '022')
+        ORDER BY b.orden
+    `;
+    const [legacyRows] = await externalDb.query(sqlCortesTienda, [date, date]);
+
+    // 2. Consultar turnos de tiendas en db_sistema_saas (sys.sipesv.com)
+    const saasByBranch = {};
+    try {
+        const saasDb = accountingDbParam || await getAccountingDb();
+        if (saasDb) {
+            const [saasShifts] = await withRetry(() => saasDb.query(`
+                SELECT s.id, s.branch_id, b.nombre as branch_nombre, p.nombre as pos_nombre,
+                       s.total_sales, s.total_incomes, s.card_sales, s.total_remesas, s.total_expenses,
+                       s.actual_cash, s.difference, s.shift_number, u.nombre as seller_nombre
+                FROM pos_shifts s
+                JOIN branches b ON s.branch_id = b.id
+                JOIN points_of_sale p ON s.pos_id = p.id
+                LEFT JOIN users u ON s.seller_id = u.id
+                WHERE s.shift_date = ?
+                  AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
+                ORDER BY s.branch_id, s.id
+            `, [date]));
+
+            for (const sh of (saasShifts || [])) {
+                if (!saasByBranch[sh.branch_id]) {
+                    saasByBranch[sh.branch_id] = {
+                        branch_id: sh.branch_id,
+                        shift_ids: [],
+                        shift_numbers: new Set(),
+                        sellers: new Set(),
+                        venta: 0,
+                        ingresos: 0,
+                        tarjeta: 0,
+                        remesado: 0,
+                        gastos: 0,
+                        saldo_f: 0,
+                        dif: 0
+                    };
+                }
+                const b = saasByBranch[sh.branch_id];
+                b.shift_ids.push(sh.id);
+                if (sh.shift_number) b.shift_numbers.add(sh.shift_number);
+                if (sh.seller_nombre) b.sellers.add(sh.seller_nombre);
+                b.venta += Number(sh.total_sales || 0);
+                b.ingresos += Number(sh.total_incomes || 0);
+                b.tarjeta += Number(sh.card_sales || 0);
+                b.remesado += Number(sh.total_remesas || 0);
+                b.gastos += Number(sh.total_expenses || 0);
+                b.saldo_f += Number(sh.actual_cash || 0);
+                b.dif += Number(sh.difference || 0);
+            }
+
+            // Distinguir tarjetas y remesas analizando pos_shift_remesas
+            for (const bId of Object.keys(saasByBranch)) {
+                const b = saasByBranch[bId];
+                if (b.shift_ids.length > 0) {
+                    try {
+                        const [remRows] = await withRetry(() => saasDb.query(
+                            "SELECT description, amount FROM pos_shift_remesas WHERE shift_id IN (?)",
+                            [b.shift_ids]
+                        ));
+                        let tarjetaTotal = 0;
+                        let remesaTotal = 0;
+                        for (const r of (remRows || [])) {
+                            const desc = (r.description || '').toLowerCase();
+                            const amt = Number(r.amount || 0);
+                            const isCard = desc.includes('pos') || desc.includes('credomatic') || desc.includes('tarjeta') || desc.includes('voucher');
+                            if (isCard) {
+                                tarjetaTotal += amt;
+                            } else {
+                                remesaTotal += amt;
+                            }
+                        }
+                        if (remRows && remRows.length > 0) {
+                            b.tarjeta = tarjetaTotal;
+                            b.remesado = remesaTotal;
+                        }
+                    } catch (remErr) {
+                        console.warn('[Cortes Tienda] Error leyendo pos_shift_remesas:', remErr.message);
+                    }
+                }
+            }
+        }
+    } catch (saasErr) {
+        console.warn('[Cortes Tienda] Error consultando SaaS pos_shifts:', saasErr.message);
+    }
+
+    // 3. Fusionar datos respetando histórico legado y complementando con SaaS
+    return (legacyRows || []).map(r => {
+        const saasBranchId = saasBranchMap[r.id_empresa];
+        const saasData = saasBranchId ? saasByBranch[saasBranchId] : null;
+
+        // Si el sistema legado no tiene corte o registra $0.00 y SaaS tiene datos reales, usar SaaS
+        if ((!r.tiene_corte || Number(r.venta || 0) === 0) && saasData && saasData.venta > 0) {
+            return {
+                id_corte: `SAAS_${saasBranchId}_${date}`,
+                id_empresa: r.id_empresa,
+                empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
+                fecha: date,
+                turno: Array.from(saasData.shift_numbers).join('-') || 1,
+                responsable: Array.from(saasData.sellers).join(', ') || 'Cajero Turno',
+                venta: Math.round(saasData.venta * 100) / 100,
+                ingresos: Math.round(saasData.ingresos * 100) / 100,
+                tarjeta: Math.round(saasData.tarjeta * 100) / 100,
+                remesado: Math.round(saasData.remesado * 100) / 100,
+                gastos: Math.round(saasData.gastos * 100) / 100,
+                retiros: 0,
+                saldo_f: Math.round(saasData.saldo_f * 100) / 100,
+                dif: Math.round(saasData.dif * 100) / 100,
+                tiene_corte: true,
+                fuente: 'db_sistema_saas (sys.sipesv.com)'
+            };
+        }
+
+        return {
+            id_corte: r.id_corte,
+            id_empresa: r.id_empresa,
+            empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
+            fecha: r.fecha,
+            turno: r.turno,
+            responsable: r.responsable,
+            venta: Math.round(Number(r.venta || 0) * 100) / 100,
+            ingresos: Math.round(Number(r.ingresos || 0) * 100) / 100,
+            tarjeta: Math.round(Number(r.tarjeta || 0) * 100) / 100,
+            remesado: Math.round(Number(r.remesado || 0) * 100) / 100,
+            gastos: Math.round(Number(r.gastos || 0) * 100) / 100,
+            retiros: Math.round(Number(r.retiros || 0) * 100) / 100,
+            saldo_f: Math.round(Number(r.saldo_f || 0) * 100) / 100,
+            dif: Math.round(Number(r.dif || 0) * 100) / 100,
+            tiene_corte: r.tiene_corte === 1,
+            fuente: 'db_system_rrs'
+        };
+    });
+};
+
 // --- Ventas ---
 router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
     const { date } = req.params;
@@ -430,47 +616,18 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             return { empresa: s.titulo, diesel: nD, regular: nR, super: nS, iondiesel: nI, duracion_diesel: pD > 0 ? Math.round((nD / pD) * 10) / 10 : 0, duracion_regular: pR > 0 ? Math.round((nR / pR) * 10) / 10 : 0, duracion_super: pS > 0 ? Math.round((nS / pS) * 10) / 10 : 0, duracion_ion: pI > 0 ? Math.round((nI / pI) * 10) / 10 : 0 };
         });
 
-        // Cortes de Tienda detallados (cort_cabecera)
-        const sqlCortesTienda = `
-            SELECT 
-                b.id_empresa,
-                b.titulo as tienda_nombre,
-                a.id as id_corte,
-                DATE_FORMAT(COALESCE(a.fecha, ?), '%Y-%m-%d') as fecha,
-                COALESCE(a.turno, 0) as turno,
-                COALESCE(a.responsable, '') as responsable,
-                COALESCE(a.tot_ventas, 0.0) as venta,
-                COALESCE(a.tot_ingresos, 0.0) as ingresos,
-                COALESCE(a.tot_tarjeta, 0.0) as tarjeta,
-                COALESCE(a.tot_remesado, 0.0) as remesado,
-                COALESCE(a.tot_gastos, 0.0) as gastos,
-                COALESCE(a.tot_retirado, 0.0) as retiros,
-                COALESCE(a.efectivo, 0.0) as saldo_f,
-                COALESCE(a.diferencia, 0.0) as dif,
-                CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END as tiene_corte
-            FROM web_consolidado b
-            LEFT JOIN cort_cabecera a ON b.id_empresa = a.id_empresa AND a.fecha = ?
-            WHERE b.grupo = 'TIENDA' AND b.id_empresa NOT IN ('004', '022')
-            ORDER BY b.orden
-        `;
-        const [cortesTiendaRows] = await externalDb.query(sqlCortesTienda, [date, date]);
-        const cortesTiendaLocal = (cortesTiendaRows || []).map(r => ({
-            id_corte: r.id_corte,
-            id_empresa: r.id_empresa,
-            empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
-            fecha: r.fecha,
-            turno: r.turno,
-            responsable: r.responsable,
-            venta: Math.round(Number(r.venta || 0) * 100) / 100,
-            ingresos: Math.round(Number(r.ingresos || 0) * 100) / 100,
-            tarjeta: Math.round(Number(r.tarjeta || 0) * 100) / 100,
-            remesado: Math.round(Number(r.remesado || 0) * 100) / 100,
-            gastos: Math.round(Number(r.gastos || 0) * 100) / 100,
-            retiros: Math.round(Number(r.retiros || 0) * 100) / 100,
-            saldo_f: Math.round(Number(r.saldo_f || 0) * 100) / 100,
-            dif: Math.round(Number(r.dif || 0) * 100) / 100,
-            tiene_corte: r.tiene_corte === 1
-        }));
+        // Cortes de Tienda detallados (combinando legado cort_cabecera y nuevo sistema SaaS pos_shifts)
+        const cortesTiendaLocal = await getCortesTiendaData(externalDb, date);
+
+        // Si alguna tienda no tenía venta en ventas_tienda pero sí en cortes de tienda, complementar
+        tiendasLocal.forEach(t => {
+            if (Number(t.venta || 0) === 0) {
+                const c = cortesTiendaLocal.find(k => k.empresa === t.empresa);
+                if (c && Number(c.venta || 0) > 0) {
+                    t.venta = c.venta;
+                }
+            }
+        });
 
         // Resumen Cierre de Turno Pista (cierre_turno)
         const sqlCierreTurno = `
@@ -652,29 +809,6 @@ router.post('/ventas/combustibles/quincenas', authenticateToken, requirePermissi
         sendSafeError(res, e, 'Error al guardar precios de quincena');
     }
 });
-
-const getCleanStationName = (id, defaultTitulo) => {
-    if (!defaultTitulo) return '';
-    const upper = defaultTitulo.toUpperCase();
-    if (id === '002' && (upper.includes('MIRAFLORES') || upper === '002')) return 'Puma Miraflores';
-    if (id === '006' && (upper.includes('CHALCHUAPA') || upper === '006')) return 'Shell Chalchuapa';
-    if (id === '008' && (upper.includes('COSTA') || upper === '008')) return 'Puma Costa del Sol';
-    if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA') || upper === '014')) return 'Puma La Loma (San Martín)';
-    if (id === '015' && (upper.includes('14') || upper === '015')) return 'Shell 14 Avenida';
-    return defaultTitulo;
-};
-
-const getCleanTiendaName = (id, defaultTitulo) => {
-    if (!defaultTitulo) return '';
-    const upper = defaultTitulo.toUpperCase();
-    if (id === '002' && upper.includes('MIRAFLORES')) return 'E-Market Miraflores';
-    if (id === '006' && upper.includes('CHALCHUAPA')) return 'E-Market Chalchuapa';
-    if (id === '008' && upper.includes('COSTA')) return 'Super 7 Costa';
-    if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA'))) return 'E-Market San Martin';
-    if (id === '009' && upper.includes('PEDREGAL')) return 'Super El Pedregal';
-    return defaultTitulo;
-};
-
 const normalizeStationName = (name) => {
     if (!name) return '';
     return name
@@ -729,7 +863,7 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                         COUNT(DISTINCT sh.fecha_emision) as dias_con_venta,
                         IFNULL(AVG(sh.total_pagar), 0.0) as promedio_diario
                     FROM branches b
-                    LEFT JOIN sales_headers sh ON b.id = sh.branch_id AND (sh.estado = 'emitido' OR sh.status = 'COMPLETED') AND sh.fecha_emision BETWEEN ? AND ?
+                    LEFT JOIN sales_headers sh ON b.id = sh.branch_id AND (sh.estado = 'emitido' OR sh.estado IS NULL) AND sh.fecha_emision BETWEEN ? AND ?
                     WHERE b.id IN (SELECT DISTINCT branch_id FROM gas_station_closeouts WHERE estado = 'cerrado' AND fecha_turno BETWEEN ? AND ?)
                        OR sh.total_pagar > 0
                     GROUP BY b.id, b.nombre
@@ -1286,6 +1420,7 @@ router.getResumenMensualData = getResumenMensualData;
 router.getComparativoAnualData = getComparativoAnualData;
 router.getCleanStationName = getCleanStationName;
 router.getCleanTiendaName = getCleanTiendaName;
+router.getCortesTiendaData = getCortesTiendaData;
 
 router.get('/ventas/lubricantes/:start/:end', authenticateToken, async (req, res) => {
     const { start, end } = req.params;
@@ -1378,46 +1513,8 @@ router.get('/ventas/cortes-tienda/:date', authenticateToken, async (req, res) =>
             return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
         }
         const externalDb = await getExternalDb();
-        const sql = `
-            SELECT 
-                b.id_empresa,
-                b.titulo as tienda_nombre,
-                a.id as id_corte,
-                DATE_FORMAT(COALESCE(a.fecha, ?), '%Y-%m-%d') as fecha,
-                COALESCE(a.turno, 0) as turno,
-                COALESCE(a.responsable, '') as responsable,
-                COALESCE(a.tot_ventas, 0.0) as venta,
-                COALESCE(a.tot_ingresos, 0.0) as ingresos,
-                COALESCE(a.tot_tarjeta, 0.0) as tarjeta,
-                COALESCE(a.tot_remesado, 0.0) as remesado,
-                COALESCE(a.tot_gastos, 0.0) as gastos,
-                COALESCE(a.tot_retirado, 0.0) as retiros,
-                COALESCE(a.efectivo, 0.0) as saldo_f,
-                COALESCE(a.diferencia, 0.0) as dif,
-                CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END as tiene_corte
-            FROM web_consolidado b
-            LEFT JOIN cort_cabecera a ON b.id_empresa = a.id_empresa AND a.fecha = ?
-            WHERE b.grupo = 'TIENDA' AND b.id_empresa NOT IN ('004', '022')
-            ORDER BY b.orden
-        `;
-        const [rows] = await externalDb.query(sql, [date, date]);
-        res.json((rows || []).map(r => ({
-            id_corte: r.id_corte,
-            id_empresa: r.id_empresa,
-            empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
-            fecha: r.fecha,
-            turno: r.turno,
-            responsable: r.responsable,
-            venta: Math.round(Number(r.venta || 0) * 100) / 100,
-            ingresos: Math.round(Number(r.ingresos || 0) * 100) / 100,
-            tarjeta: Math.round(Number(r.tarjeta || 0) * 100) / 100,
-            remesado: Math.round(Number(r.remesado || 0) * 100) / 100,
-            gastos: Math.round(Number(r.gastos || 0) * 100) / 100,
-            retiros: Math.round(Number(r.retiros || 0) * 100) / 100,
-            saldo_f: Math.round(Number(r.saldo_f || 0) * 100) / 100,
-            dif: Math.round(Number(r.dif || 0) * 100) / 100,
-            tiene_corte: r.tiene_corte === 1
-        })));
+        const cortes = await getCortesTiendaData(externalDb, date);
+        res.json(cortes);
     } catch (error) {
         console.error('Error fetching cortes tienda:', error);
         res.status(500).json({ message: 'Error fetching cortes tienda' });
@@ -1428,6 +1525,168 @@ router.get('/ventas/cortes-tienda/:date', authenticateToken, async (req, res) =>
 router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (req, res) => {
     const { id_corte } = req.params;
     try {
+        // 1. Manejo de cortes provenientes del nuevo sistema SaaS (sys.sipesv.com)
+        if (id_corte && String(id_corte).startsWith('SAAS_')) {
+            const parts = String(id_corte).split('_');
+            const branchId = parseInt(parts[1], 10);
+            const date = parts.slice(2).join('_');
+
+            const saasDb = await getAccountingDb();
+            const [branchRow] = await withRetry(() => saasDb.query("SELECT nombre FROM branches WHERE id = ?", [branchId]));
+            const branchNombre = branchRow?.[0]?.nombre || `Sucursal ${branchId}`;
+
+            const storeNames = {
+                1: 'E-Market San Martin',
+                3: 'E-Market Chalchuapa',
+                6: 'Super El Pedregal',
+                4: 'E-Market Miraflores',
+                8: 'Super 7 Costa'
+            };
+            const storeName = storeNames[branchId] || branchNombre;
+
+            // Turnos de tienda
+            const [shifts] = await withRetry(() => saasDb.query(`
+                SELECT s.id, s.shift_number, s.total_sales, s.total_incomes, s.card_sales,
+                       s.total_remesas, s.total_expenses, s.actual_cash, s.difference,
+                       u.nombre as seller_nombre
+                FROM pos_shifts s
+                JOIN points_of_sale p ON s.pos_id = p.id
+                LEFT JOIN users u ON s.seller_id = u.id
+                WHERE s.branch_id = ? AND s.shift_date = ?
+                  AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
+            `, [branchId, date]));
+
+            const shiftIds = (shifts || []).map(s => s.id);
+            const shiftNumbers = Array.from(new Set((shifts || []).map(s => s.shift_number).filter(Boolean))).join('-');
+            const sellers = Array.from(new Set((shifts || []).map(s => s.seller_nombre).filter(Boolean))).join(', ');
+
+            const totalVentas = (shifts || []).reduce((acc, s) => acc + Number(s.total_sales || 0), 0);
+            const totalIngresos = (shifts || []).reduce((acc, s) => acc + Number(s.total_incomes || 0), 0);
+            const totalGastos = (shifts || []).reduce((acc, s) => acc + Number(s.total_expenses || 0), 0);
+            const totalSaldoF = (shifts || []).reduce((acc, s) => acc + Number(s.actual_cash || 0), 0);
+            const totalDif = (shifts || []).reduce((acc, s) => acc + Number(s.difference || 0), 0);
+
+            // Detalle de movimientos (gastos, tarjetas, remesas, ingresos)
+            const detallesMovimientos = [];
+            let totalTarjetas = 0;
+            let totalRemesado = 0;
+
+            if (shiftIds.length > 0) {
+                const [expRows] = await withRetry(() => saasDb.query(
+                    "SELECT description, amount FROM pos_shift_expenses WHERE shift_id IN (?)",
+                    [shiftIds]
+                ));
+                (expRows || []).forEach(e => {
+                    detallesMovimientos.push({
+                        tipo: 'G',
+                        tipo_nombre: 'Gasto',
+                        descripcion: e.description || 'Gasto operativo',
+                        monto: Math.round(Number(e.amount || 0) * 100) / 100
+                    });
+                });
+
+                const [remRows] = await withRetry(() => saasDb.query(
+                    "SELECT description, amount FROM pos_shift_remesas WHERE shift_id IN (?)",
+                    [shiftIds]
+                ));
+                (remRows || []).forEach(r => {
+                    const desc = (r.description || '').toLowerCase();
+                    const amt = Math.round(Number(r.amount || 0) * 100) / 100;
+                    const isCard = desc.includes('pos') || desc.includes('credomatic') || desc.includes('tarjeta') || desc.includes('voucher');
+                    if (isCard) {
+                        totalTarjetas += amt;
+                        detallesMovimientos.push({
+                            tipo: 'T',
+                            tipo_nombre: 'Tarjeta',
+                            descripcion: r.description || 'Tarjeta / POS',
+                            monto: amt
+                        });
+                    } else {
+                        totalRemesado += amt;
+                        detallesMovimientos.push({
+                            tipo: 'R',
+                            tipo_nombre: 'Remesa',
+                            descripcion: r.description || 'Remesa efectivo',
+                            monto: amt
+                        });
+                    }
+                });
+
+                const [incRows] = await withRetry(() => saasDb.query(
+                    "SELECT description, amount FROM pos_shift_incomes WHERE shift_id IN (?)",
+                    [shiftIds]
+                ));
+                (incRows || []).forEach(i => {
+                    detallesMovimientos.push({
+                        tipo: 'I',
+                        tipo_nombre: 'Ingreso',
+                        descripcion: i.description || 'Ingreso de caja',
+                        monto: Math.round(Number(i.amount || 0) * 100) / 100
+                    });
+                });
+            }
+
+            // Si pos_shift_remesas no tuvo tarjetas explícitas, usar el card_sales de pos_shifts
+            if (totalTarjetas === 0 && (shifts || []).some(s => Number(s.card_sales || 0) > 0)) {
+                totalTarjetas = (shifts || []).reduce((acc, s) => acc + Number(s.card_sales || 0), 0);
+            }
+            if (totalRemesado === 0 && (shifts || []).some(s => Number(s.total_remesas || 0) > 0)) {
+                totalRemesado = (shifts || []).reduce((acc, s) => acc + Number(s.total_remesas || 0), 0);
+            }
+
+            // Ventas agrupadas por categoría/línea
+            const [lineRows] = await withRetry(() => saasDb.query(`
+                SELECT COALESCE(c.name, 'General') as linea, 
+                       ROUND(SUM(si.venta_gravada + si.venta_exenta), 2) as monto
+                FROM sales_items si
+                JOIN sales_headers sh ON si.sale_id = sh.id
+                LEFT JOIN products p ON si.product_id = p.id
+                LEFT JOIN product_categories c ON p.category_id = c.id
+                WHERE sh.branch_id = ? AND sh.fecha_emision = ?
+                  AND (sh.estado = 'emitido' OR sh.estado IS NULL)
+                  AND (p.tipo_item IS NULL OR p.tipo_item != 'combustible')
+                  AND (c.name IS NULL OR c.name != 'COMBUSTIBLES')
+                GROUP BY linea
+                ORDER BY monto DESC
+            `, [branchId, date]));
+
+            const sumLines = (lineRows || []).reduce((acc, l) => acc + Number(l.monto || 0), 0);
+            const ventasLineas = (lineRows || []).map(l => ({
+                linea: l.linea,
+                monto: Math.round(Number(l.monto || 0) * 100) / 100,
+                porcentaje: sumLines > 0 ? Math.round((Number(l.monto || 0) / sumLines) * 10000) / 100 : 0
+            }));
+
+            return res.json({
+                id_corte,
+                cabecera: {
+                    id: id_corte,
+                    id_empresa: String(branchId).padStart(3, '0'),
+                    tienda_nombre: storeName,
+                    fecha: date,
+                    turno: shiftNumbers || 1,
+                    responsable: sellers || 'Cajero Turno',
+                    venta: Math.round(totalVentas * 100) / 100,
+                    ingresos: Math.round(totalIngresos * 100) / 100,
+                    tarjeta: Math.round(totalTarjetas * 100) / 100,
+                    remesado: Math.round(totalRemesado * 100) / 100,
+                    gastos: Math.round(totalGastos * 100) / 100,
+                    retiros: 0,
+                    saldo_f: Math.round(totalSaldoF * 100) / 100,
+                    dif: Math.round(totalDif * 100) / 100
+                },
+                ventas_lineas: ventasLineas,
+                detalles_movimientos: detallesMovimientos,
+                totales: {
+                    gastos: Math.round(totalGastos * 100) / 100,
+                    tarjetas: Math.round(totalTarjetas * 100) / 100,
+                    remesas: Math.round(totalRemesado * 100) / 100,
+                    ingresos: Math.round(totalIngresos * 100) / 100
+                }
+            });
+        }
+
+        // 2. Manejo de cortes legado (db_system_rrs)
         const externalDb = await getExternalDb();
         const [cabeceraRows] = await externalDb.query(`
             SELECT a.*, b.titulo as tienda_nombre 
