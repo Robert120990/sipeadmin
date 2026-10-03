@@ -287,6 +287,55 @@ describe('Ventas Mensual Backend Logic Tests', () => {
             assert.strictEqual(cortes[0].responsable, 'Oscar Ruiz');
             assert.strictEqual(cortes[0].tiene_corte, true);
             assert.strictEqual(cortes[0].fuente, 'db_sistema_saas (sys.sipesv.com)');
+            assert.strictEqual(cortes[0].tiene_incongruencia, true);
+            assert.ok(cortes[0].alertas.some(a => a.tipo === 'gasto_tienda'));
+        });
+
+        it('debe etiquetar descuadres de caja como incongruencia en cortes de tienda', async () => {
+            const mockExtDb = {
+                query: async () => [[
+                    { id_empresa: '002', tienda_nombre: 'E-Market Miraflores', id_corte: 101, fecha: '2026-06-01', turno: 1, responsable: 'Juan', venta: 3200, ingresos: 0, tarjeta: 800, remesado: 2400, gastos: 0, retiros: 0, saldo_f: 0, dif: -15.50, tiene_corte: 1 }
+                ]]
+            };
+            const cortes = await getCortesTiendaData(mockExtDb, '2026-06-01', null);
+            assert.strictEqual(cortes[0].tiene_incongruencia, true);
+            assert.ok(cortes[0].alertas.some(a => a.tipo === 'descuadre' && a.nivel === 'danger'));
+        });
+    });
+
+    describe('isGenericDescription (Detección de Conceptos Genéricos / Sin Detalle)', () => {
+        const isGenericDescription = consultasRouter.isGenericDescription;
+
+        it('debe marcar como genéricos textos vacíos, demasiado cortos o símbolos', () => {
+            assert.strictEqual(isGenericDescription(''), true);
+            assert.strictEqual(isGenericDescription(null), true);
+            assert.strictEqual(isGenericDescription(undefined), true);
+            assert.strictEqual(isGenericDescription('-'), true);
+            assert.strictEqual(isGenericDescription('.'), true);
+            assert.strictEqual(isGenericDescription('N/A'), true);
+            assert.strictEqual(isGenericDescription('NA'), true);
+            assert.strictEqual(isGenericDescription('x'), true);
+        });
+
+        it('debe detectar palabras genéricas típicas sin mayor justificación', () => {
+            assert.strictEqual(isGenericDescription('gasto'), true);
+            assert.strictEqual(isGenericDescription('gastos'), true);
+            assert.strictEqual(isGenericDescription('gastos varios'), true);
+            assert.strictEqual(isGenericDescription('gasto operativo'), true);
+            assert.strictEqual(isGenericDescription('vale provisional'), true);
+            assert.strictEqual(isGenericDescription('caja'), true);
+            assert.strictEqual(isGenericDescription('ajuste'), true);
+            assert.strictEqual(isGenericDescription('otro'), true);
+            assert.strictEqual(isGenericDescription('pendiente'), true);
+            assert.strictEqual(isGenericDescription('sin concepto'), true);
+        });
+
+        it('debe permitir descripciones reales y suficientemente detalladas', () => {
+            assert.strictEqual(isGenericDescription('Compra de insumos CCF #5431'), false);
+            assert.strictEqual(isGenericDescription('Factura de pan Bimbo 19283'), false);
+            assert.strictEqual(isGenericDescription('Pago de agua potable ANDA septiembre'), false);
+            assert.strictEqual(isGenericDescription('Reparación de aire acondicionado técnico Sánchez'), false);
+            assert.strictEqual(isGenericDescription('Compra café gourmet distribuidora El Grano'), false);
         });
     });
 });

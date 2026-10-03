@@ -34,6 +34,25 @@ const saasBranchMap = {
     '008': 8  // Costa del Sol -> Puma Costa del Sol
 };
 
+// Tokens y conceptos genéricos para auditoría de movimientos sin descripción suficiente
+const GENERIC_TOKENS = new Set([
+    'gasto', 'gastos', 'varios', 'otro', 'otros', 'caja', 'ajuste', 'pendiente',
+    'compra', 'vale', 'pago', 'cajero', 'general', 'operativo', 'tienda', 'super',
+    'sin concepto', 'ninguno', 'na', 'n/a', 'x', '-', '.', '..', '...', 'cierre',
+    'saldo', 'fondo', 's/n', 'sn', 'vale provisional', 'diferencia', 'descuadre'
+]);
+
+const isGenericDescription = (desc) => {
+    if (!desc) return true;
+    const clean = String(desc).trim().toLowerCase();
+    if (clean.length < 4) return true;
+    if (GENERIC_TOKENS.has(clean)) return true;
+    const words = clean.replace(/[^a-z0-9áéíóúüñ]/g, ' ').split(/\s+/).filter(Boolean);
+    if (words.length === 0) return true;
+    if (words.length <= 2 && words.every(w => GENERIC_TOKENS.has(w))) return true;
+    return false;
+};
+
 const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) => {
     // 1. Obtener cortes del sistema legado (cort_cabecera)
     const sqlCortesTienda = `
@@ -149,7 +168,7 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) =
 
         // Si el sistema legado no tiene corte o registra $0.00 y SaaS tiene datos reales, usar SaaS
         if ((!r.tiene_corte || Number(r.venta || 0) === 0) && saasData && saasData.venta > 0) {
-            return {
+            const row = {
                 id_corte: `SAAS_${saasBranchId}_${date}`,
                 id_empresa: r.id_empresa,
                 empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
@@ -167,9 +186,15 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) =
                 tiene_corte: true,
                 fuente: 'db_sistema_saas (sys.sipesv.com)'
             };
+            const alertas = [];
+            if (row.gastos > 0) alertas.push({ tipo: 'gasto_tienda', nivel: 'warning', texto: `Gasto en tienda: $${row.gastos.toFixed(2)}` });
+            if (row.dif !== 0) alertas.push({ tipo: 'descuadre', nivel: 'danger', texto: row.dif < 0 ? `Faltante: -$${Math.abs(row.dif).toFixed(2)}` : `Sobrante: +$${row.dif.toFixed(2)}` });
+            row.alertas = alertas;
+            row.tiene_incongruencia = alertas.length > 0;
+            return row;
         }
 
-        return {
+        const legacyRow = {
             id_corte: r.id_corte,
             id_empresa: r.id_empresa,
             empresa: getCleanTiendaName(String(r.id_empresa), r.tienda_nombre),
@@ -187,6 +212,14 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) =
             tiene_corte: r.tiene_corte === 1,
             fuente: 'db_system_rrs'
         };
+        const legAlertas = [];
+        if (legacyRow.gastos > 0) legAlertas.push({ tipo: 'gasto_tienda', nivel: 'warning', texto: `Gasto en tienda: $${legacyRow.gastos.toFixed(2)}` });
+        if (legacyRow.dif !== 0) legAlertas.push({ tipo: 'descuadre', nivel: 'danger', texto: legacyRow.dif < 0 ? `Faltante: -$${Math.abs(legacyRow.dif).toFixed(2)}` : `Sobrante: +$${legacyRow.dif.toFixed(2)}` });
+        if (!legacyRow.tiene_corte) legAlertas.push({ tipo: 'sin_corte', nivel: 'info', texto: 'Sin corte registrado' });
+        else if (legacyRow.venta === 0) legAlertas.push({ tipo: 'venta_cero', nivel: 'warning', texto: 'Corte con venta $0.00' });
+        legacyRow.alertas = legAlertas;
+        legacyRow.tiene_incongruencia = legAlertas.length > 0;
+        return legacyRow;
     });
 };
 
@@ -246,15 +279,36 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
         const [estacionesRows] = await externalDb.query(sqlEstaciones, [sysDate]);
         const estacionesLocal = (estacionesRows || [])
             .filter(r => r.id_empresa !== '004')
-            .map(row => ({
-                empresa: getCleanStationName(String(row.id_empresa), row.titulo),
-                diesel: Math.round(Number(row.diesel || 0) * 100) / 100,
-                regular: Math.round(Number(row.regular || 0) * 100) / 100,
-                super: Math.round(Number(row.super || 0) * 100) / 100,
-                ion: Math.round(Number(row.ion || 0) * 100) / 100,
-                galonaje: Math.round(Number(row.galonaje || 0) * 100) / 100,
-                venta: Math.round(Number(row.monto || 0) * 100) / 100
-            }));
+            .map(row => {
+                const diesel = Math.round(Number(row.diesel || 0) * 100) / 100;
+                const regular = Math.round(Number(row.regular || 0) * 100) / 100;
+                const superVal = Math.round(Number(row.super || 0) * 100) / 100;
+                const ion = Math.round(Number(row.ion || 0) * 100) / 100;
+                const galonaje = Math.round(Number(row.galonaje || 0) * 100) / 100;
+                const venta = Math.round(Number(row.monto || 0) * 100) / 100;
+
+                const alertas = [];
+                if (galonaje === 0 && venta > 0) {
+                    alertas.push({ tipo: 'galonaje_incongruente', nivel: 'danger', texto: `Venta registrada ($${venta.toFixed(2)}) con 0.00 galones` });
+                } else if (galonaje > 0 && venta === 0) {
+                    alertas.push({ tipo: 'galonaje_incongruente', nivel: 'danger', texto: `Despacho de combustible (${galonaje.toFixed(2)} gal) con $0.00 en venta` });
+                } else if (galonaje === 0 && venta === 0) {
+                    alertas.push({ tipo: 'sin_despacho', nivel: 'info', texto: 'Sin despacho ni venta en pista' });
+                }
+
+                return {
+                    id_empresa: String(row.id_empresa),
+                    empresa: getCleanStationName(String(row.id_empresa), row.titulo),
+                    diesel,
+                    regular,
+                    super: superVal,
+                    ion,
+                    galonaje,
+                    venta,
+                    alertas,
+                    tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning')
+                };
+            });
 
         const sqlMargenes = `
             SELECT a.id_empresa, a.titulo, 
@@ -650,6 +704,23 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
         const resumenCierreLocal = (resumenCierreRows || []).map(r => {
             const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
             const venta = Number(r.total_venta) + Number(r.lubricantes);
+            const diferencia = Math.round((monto - venta) * 100) / 100;
+            const gastos = Math.round(Number(r.gastos) * 100) / 100;
+            const totVenta = Math.round(venta * 100) / 100;
+
+            const alertas = [];
+            if (diferencia < -0.05) {
+                alertas.push({ tipo: 'descuadre_cierre', nivel: 'danger', texto: `Faltante de cierre: -$${Math.abs(diferencia).toFixed(2)}` });
+            } else if (diferencia > 0.05) {
+                alertas.push({ tipo: 'descuadre_cierre', nivel: 'warning', texto: `Sobrante de cierre: +$${diferencia.toFixed(2)}` });
+            }
+            if (gastos > 150) {
+                alertas.push({ tipo: 'gasto_elevado', nivel: 'warning', texto: `Gastos de pista elevados: $${gastos.toFixed(2)}` });
+            }
+            if (totVenta === 0) {
+                alertas.push({ tipo: 'sin_venta', nivel: 'info', texto: 'Sin venta registrada en pista' });
+            }
+
             return {
                 id_empresa: r.id_empresa,
                 empresa: getCleanStationName(String(r.id_empresa), r.estacion),
@@ -658,16 +729,63 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
                 cheques: Math.round(Number(r.cheques) * 100) / 100,
                 tarjetas: Math.round(Number(r.tarjetas) * 100) / 100,
                 remesas: Math.round(Number(r.remesas) * 100) / 100,
-                gastos: Math.round(Number(r.gastos) * 100) / 100,
+                gastos,
                 lubricantes: Math.round(Number(r.lubricantes) * 100) / 100,
                 anticipos: Math.round(Number(r.anticipos) * 100) / 100,
                 pagos: Math.round(Number(r.pagos) * 100) / 100,
                 descuentos: Math.round(Number(r.descuentos) * 100) / 100,
                 suma: Math.round(monto * 100) / 100,
-                tot_venta: Math.round(venta * 100) / 100,
-                diferencia: Math.round((monto - venta) * 100) / 100
+                tot_venta: totVenta,
+                diferencia,
+                alertas,
+                tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning')
             };
         });
+
+        // Resumen global de auditoría e incongruencias
+        const auditoria = {
+            total_alertas: 0,
+            gastos_tiendas_count: 0,
+            gastos_tiendas_monto: 0,
+            descuadres_cortes_count: 0,
+            descuadres_cortes_monto: 0,
+            descuadres_pista_count: 0,
+            descuadres_pista_monto: 0,
+            galonajes_incongruentes_count: 0,
+            tiendas_sin_corte_count: 0
+        };
+
+        cortesTiendaLocal.forEach(c => {
+            if (c.gastos > 0) {
+                auditoria.gastos_tiendas_count += 1;
+                auditoria.gastos_tiendas_monto += c.gastos;
+            }
+            if (Math.abs(c.dif) > 0.01) {
+                auditoria.descuadres_cortes_count += 1;
+                auditoria.descuadres_cortes_monto += Math.abs(c.dif);
+            }
+            if (!c.tiene_corte) {
+                auditoria.tiendas_sin_corte_count += 1;
+            }
+        });
+
+        resumenCierreLocal.forEach(r => {
+            if (Math.abs(r.diferencia) > 0.05) {
+                auditoria.descuadres_pista_count += 1;
+                auditoria.descuadres_pista_monto += Math.abs(r.diferencia);
+            }
+        });
+
+        estacionesLocal.forEach(e => {
+            if ((e.galonaje === 0 && e.venta > 0) || (e.galonaje > 0 && e.venta === 0)) {
+                auditoria.galonajes_incongruentes_count += 1;
+            }
+        });
+
+        auditoria.gastos_tiendas_monto = Math.round(auditoria.gastos_tiendas_monto * 100) / 100;
+        auditoria.descuadres_cortes_monto = Math.round(auditoria.descuadres_cortes_monto * 100) / 100;
+        auditoria.descuadres_pista_monto = Math.round(auditoria.descuadres_pista_monto * 100) / 100;
+        auditoria.total_alertas = auditoria.gastos_tiendas_count + auditoria.descuadres_cortes_count + auditoria.descuadres_pista_count + auditoria.galonajes_incongruentes_count;
 
         res.json({
             tiendas: tiendasLocal,
@@ -676,6 +794,7 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
             resumen_cierre: resumenCierreLocal,
             margenes: margenesLocal,
             inventario: inventarioLocal,
+            auditoria,
             quincena: quincenaRow ? {
                 periodo_inicio: quincenaRow.periodo_inicio,
                 periodo_fin: quincenaRow.periodo_fin,
@@ -1577,11 +1696,16 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
                     [shiftIds]
                 ));
                 (expRows || []).forEach(e => {
+                    const desc = e.description || 'Gasto operativo';
+                    const esGenerico = isGenericDescription(desc);
                     detallesMovimientos.push({
                         tipo: 'G',
                         tipo_nombre: 'Gasto',
-                        descripcion: e.description || 'Gasto operativo',
-                        monto: Math.round(Number(e.amount || 0) * 100) / 100
+                        descripcion: desc,
+                        monto: Math.round(Number(e.amount || 0) * 100) / 100,
+                        es_generico: esGenerico,
+                        alerta: esGenerico ? 'Concepto no especificado o genérico' : null,
+                        alerta_gasto: 'Gasto no habitual en tienda de conveniencia'
                     });
                 });
 
@@ -1590,24 +1714,30 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
                     [shiftIds]
                 ));
                 (remRows || []).forEach(r => {
-                    const desc = (r.description || '').toLowerCase();
+                    const desc = r.description || '';
+                    const descLower = desc.toLowerCase();
                     const amt = Math.round(Number(r.amount || 0) * 100) / 100;
-                    const isCard = desc.includes('pos') || desc.includes('credomatic') || desc.includes('tarjeta') || desc.includes('voucher');
+                    const isCard = descLower.includes('pos') || descLower.includes('credomatic') || descLower.includes('tarjeta') || descLower.includes('voucher');
+                    const esGenerico = isGenericDescription(desc);
                     if (isCard) {
                         totalTarjetas += amt;
                         detallesMovimientos.push({
                             tipo: 'T',
                             tipo_nombre: 'Tarjeta',
-                            descripcion: r.description || 'Tarjeta / POS',
-                            monto: amt
+                            descripcion: desc || 'Tarjeta / POS',
+                            monto: amt,
+                            es_generico: esGenerico,
+                            alerta: esGenerico ? 'Concepto no especificado o genérico' : null
                         });
                     } else {
                         totalRemesado += amt;
                         detallesMovimientos.push({
                             tipo: 'R',
                             tipo_nombre: 'Remesa',
-                            descripcion: r.description || 'Remesa efectivo',
-                            monto: amt
+                            descripcion: desc || 'Remesa efectivo',
+                            monto: amt,
+                            es_generico: esGenerico,
+                            alerta: esGenerico ? 'Concepto no especificado o genérico' : null
                         });
                     }
                 });
@@ -1617,11 +1747,15 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
                     [shiftIds]
                 ));
                 (incRows || []).forEach(i => {
+                    const desc = i.description || 'Ingreso de caja';
+                    const esGenerico = isGenericDescription(desc);
                     detallesMovimientos.push({
                         tipo: 'I',
                         tipo_nombre: 'Ingreso',
-                        descripcion: i.description || 'Ingreso de caja',
-                        monto: Math.round(Number(i.amount || 0) * 100) / 100
+                        descripcion: desc,
+                        monto: Math.round(Number(i.amount || 0) * 100) / 100,
+                        es_generico: esGenerico,
+                        alerta: esGenerico ? 'Concepto no especificado o genérico' : null
                     });
                 });
             }
@@ -1657,6 +1791,19 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
                 porcentaje: sumLines > 0 ? Math.round((Number(l.monto || 0) / sumLines) * 10000) / 100 : 0
             }));
 
+            const cabeceraGastos = Math.round(totalGastos * 100) / 100;
+            const cabeceraDif = Math.round(totalDif * 100) / 100;
+            const saasIncongruencias = [];
+            if (cabeceraGastos > 0) {
+                saasIncongruencias.push({ tipo: 'gasto_tienda', nivel: 'warning', texto: `Registra gastos en tienda por $${cabeceraGastos.toFixed(2)}` });
+            }
+            if (Math.abs(cabeceraDif) > 0.01) {
+                saasIncongruencias.push({ tipo: 'descuadre', nivel: 'danger', texto: cabeceraDif < 0 ? `Faltante de caja por -$${Math.abs(cabeceraDif).toFixed(2)}` : `Sobrante de caja por +$${cabeceraDif.toFixed(2)}` });
+            }
+            if (detallesMovimientos.some(d => d.es_generico)) {
+                saasIncongruencias.push({ tipo: 'concepto_generico', nivel: 'warning', texto: 'Contiene conceptos de movimientos sin especificar o genéricos' });
+            }
+
             return res.json({
                 id_corte,
                 cabecera: {
@@ -1670,15 +1817,17 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
                     ingresos: Math.round(totalIngresos * 100) / 100,
                     tarjeta: Math.round(totalTarjetas * 100) / 100,
                     remesado: Math.round(totalRemesado * 100) / 100,
-                    gastos: Math.round(totalGastos * 100) / 100,
+                    gastos: cabeceraGastos,
                     retiros: 0,
                     saldo_f: Math.round(totalSaldoF * 100) / 100,
-                    dif: Math.round(totalDif * 100) / 100
+                    dif: cabeceraDif,
+                    incongruencias: saasIncongruencias,
+                    tiene_incongruencia: saasIncongruencias.length > 0
                 },
                 ventas_lineas: ventasLineas,
                 detalles_movimientos: detallesMovimientos,
                 totales: {
-                    gastos: Math.round(totalGastos * 100) / 100,
+                    gastos: cabeceraGastos,
                     tarjetas: Math.round(totalTarjetas * 100) / 100,
                     remesas: Math.round(totalRemesado * 100) / 100,
                     ingresos: Math.round(totalIngresos * 100) / 100
@@ -1718,6 +1867,32 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
         const totalTarjetas = (detalleRows || []).filter(d => d.tipo === 'T').reduce((acc, c) => acc + Number(c.monto || 0), 0);
         const totalIngresos = (detalleRows || []).filter(d => d.tipo === 'I').reduce((acc, c) => acc + Number(c.monto || 0), 0);
 
+        const legDetallesMovimientos = (detalleRows || []).map(d => {
+            const esGenerico = isGenericDescription(d.descripcion);
+            return {
+                tipo: d.tipo,
+                tipo_nombre: d.tipo === 'G' ? 'Gasto' : d.tipo === 'T' ? 'Tarjeta' : 'Ingreso',
+                descripcion: d.descripcion,
+                monto: Math.round(Number(d.monto || 0) * 100) / 100,
+                es_generico: esGenerico,
+                alerta: esGenerico ? 'Concepto no especificado o genérico' : null,
+                alerta_gasto: d.tipo === 'G' ? 'Gasto no habitual en tienda de conveniencia' : null
+            };
+        });
+
+        const legGastos = Math.round(totalGastos * 100) / 100;
+        const legDif = Number(cabecera.diferencia || 0);
+        const legIncongruencias = [];
+        if (legGastos > 0) {
+            legIncongruencias.push({ tipo: 'gasto_tienda', nivel: 'warning', texto: `Registra gastos en tienda por $${legGastos.toFixed(2)}` });
+        }
+        if (Math.abs(legDif) > 0.01) {
+            legIncongruencias.push({ tipo: 'descuadre', nivel: 'danger', texto: legDif < 0 ? `Faltante de caja por -$${Math.abs(legDif).toFixed(2)}` : `Sobrante de caja por +$${legDif.toFixed(2)}` });
+        }
+        if (legDetallesMovimientos.some(d => d.es_generico)) {
+            legIncongruencias.push({ tipo: 'concepto_generico', nivel: 'warning', texto: 'Contiene conceptos de movimientos sin especificar o genéricos' });
+        }
+
         res.json({
             id_corte,
             cabecera: {
@@ -1731,24 +1906,21 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
                 ingresos: Number(cabecera.tot_ingresos || 0),
                 tarjeta: Number(cabecera.tot_tarjeta || 0),
                 remesado: Number(cabecera.tot_remesado || 0),
-                gastos: Number(cabecera.tot_gastos || 0),
+                gastos: legGastos,
                 retiros: Number(cabecera.tot_retirado || 0),
                 saldo_f: Number(cabecera.efectivo || 0),
-                dif: Number(cabecera.diferencia || 0)
+                dif: legDif,
+                incongruencias: legIncongruencias,
+                tiene_incongruencia: legIncongruencias.length > 0
             },
             ventas_lineas: (ventasRows || []).map(v => ({
                 linea: v.linea,
                 monto: Math.round(Number(v.monto || 0) * 100) / 100,
                 porcentaje: Math.round(Number(v.porcentaje || 0) * 10000) / 100
             })),
-            detalles_movimientos: (detalleRows || []).map(d => ({
-                tipo: d.tipo,
-                tipo_nombre: d.tipo === 'G' ? 'Gasto' : d.tipo === 'T' ? 'Tarjeta' : 'Ingreso',
-                descripcion: d.descripcion,
-                monto: Math.round(Number(d.monto || 0) * 100) / 100
-            })),
+            detalles_movimientos: legDetallesMovimientos,
             totales: {
-                gastos: Math.round(totalGastos * 100) / 100,
+                gastos: legGastos,
                 tarjetas: Math.round(totalTarjetas * 100) / 100,
                 ingresos: Math.round(totalIngresos * 100) / 100
             }
@@ -1790,17 +1962,31 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                     WHERE c.fecha_turno = ? AND g.id_empresa = ?
                     ORDER BY g.id
                 `;
-                mapFn = (r) => ({
-                    id: r.id,
-                    fecha: r.fecha,
-                    documento: r.documento || '-',
-                    tipo_doc: (r.tipo_doc || '').toUpperCase(),
-                    codigo: r.cod_proveedor || '-',
-                    nombre: r.nombre || 'Sin nombre',
-                    valor: Math.round(Number(r.valor || 0) * 100) / 100,
-                    concepto: r.concepto || r.rubro || 'Gasto operativo',
-                    rubro: r.rubro || 'Gastos'
-                });
+                mapFn = (r) => {
+                    const conceptoStr = r.concepto || r.rubro || '';
+                    const esGenerico = isGenericDescription(conceptoStr);
+                    const docStr = (r.documento || '').trim();
+                    const faltaDocumento = !docStr || docStr === '-' || docStr === '0' || docStr === 'S/N' || docStr === 'SN';
+                    const alertas = [];
+                    if (esGenerico) alertas.push({ tipo: 'concepto_generico', texto: 'Concepto vago o poco descriptivo' });
+                    if (faltaDocumento) alertas.push({ tipo: 'sin_documento', texto: 'Sin número de comprobante o documento' });
+
+                    return {
+                        id: r.id,
+                        fecha: r.fecha,
+                        documento: r.documento || '-',
+                        tipo_doc: (r.tipo_doc || '').toUpperCase(),
+                        codigo: r.cod_proveedor || '-',
+                        nombre: r.nombre || 'Sin nombre',
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                        concepto: conceptoStr || 'Gasto operativo',
+                        rubro: r.rubro || 'Gastos',
+                        es_generico: esGenerico,
+                        falta_documento: faltaDocumento,
+                        es_incongruente: esGenerico || faltaDocumento,
+                        alertas
+                    };
+                };
                 break;
 
             case 'tarjetas':
@@ -2767,4 +2953,7 @@ router.get('/consultas/:type', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error executing SP' }); }
 });
 
+router.isGenericDescription = isGenericDescription;
+
 module.exports = router;
+

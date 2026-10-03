@@ -5,7 +5,8 @@ import {
     Layers, TrendingUp, BarChart3, LineChart,
     ArrowUpRight, ArrowDownRight, Sparkles, RefreshCw,
     Sliders, Save, Edit3, ChevronDown, ChevronUp, Eye,
-    CreditCard, Receipt, Banknote, Tag, Filter, CheckCircle2
+    CreditCard, Receipt, Banknote, Tag, Filter, CheckCircle2,
+    AlertTriangle, AlertCircle, ShieldAlert, CheckCircle
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -29,6 +30,8 @@ export default function VentasEstaciones() {
     const [dataMargenes, setDataMargenes] = useState([]);
     const [dataInventario, setDataInventario] = useState([]);
     const [infoQuincena, setInfoQuincena] = useState(null);
+    const [auditoriaData, setAuditoriaData] = useState(null);
+    const [soloIncongruencias, setSoloIncongruencias] = useState(false);
     const [showCostStructure, setShowCostStructure] = useState(false);
     const [loading, setLoading] = useState(false);
 
@@ -228,6 +231,7 @@ export default function VentasEstaciones() {
             setDataMargenes(res.data.margenes || []);
             setDataInventario(res.data.inventario || []);
             setInfoQuincena(res.data.quincena || null);
+            setAuditoriaData(res.data.auditoria || null);
             addToast('Datos diarios cargados exitosamente', 'success');
         } catch (error) {
             addToast(error.response?.data?.message || 'Error al cargar datos consolidados diarios', 'error');
@@ -833,8 +837,22 @@ export default function VentasEstaciones() {
         diferencia: acc.diferencia + (Number(curr.diferencia) || 0)
     }), { credito: 0, cupones: 0, cheques: 0, tarjetas: 0, remesas: 0, gastos: 0, lubricantes: 0, anticipos: 0, pagos: 0, descuentos: 0, suma: 0, tot_venta: 0, diferencia: 0 });
 
+    // --- CÁLCULO DE ANOMALÍAS Y AUDITORÍA EN TIEMPO REAL ---
+    const gTiendas = dataCortesTienda.filter(t => Number(t.gastos || 0) > 0);
+    const gTiendasMonto = gTiendas.reduce((acc, c) => acc + (Number(c.gastos) || 0), 0);
+    const difTiendas = dataCortesTienda.filter(t => Math.abs(Number(t.dif || 0)) > 0.01);
+    const difTiendasMonto = difTiendas.reduce((acc, c) => acc + Math.abs(Number(c.dif) || 0), 0);
+    const difPista = dataResumenCierre.filter(r => Math.abs(Number(r.diferencia || 0)) > 0.05);
+    const difPistaMonto = difPista.reduce((acc, c) => acc + Math.abs(Number(c.diferencia) || 0), 0);
+    const incongGal = dataEstaciones.filter(e => (Number(e.galonaje || 0) === 0 && Number(e.venta || 0) > 0) || (Number(e.galonaje || 0) > 0 && Number(e.venta || 0) === 0));
+    const totalAnomalias = (auditoriaData?.total_alertas !== undefined) ? auditoriaData.total_alertas : (gTiendas.length + difTiendas.length + difPista.length + incongGal.length);
+
+    const cortesTiendaAMostrar = soloIncongruencias ? dataCortesTienda.filter(t => t.tiene_incongruencia) : dataCortesTienda;
+    const resumenCierreAMostrar = soloIncongruencias ? dataResumenCierre.filter(r => r.tiene_incongruencia) : dataResumenCierre;
+    const estacionesAMostrar = soloIncongruencias ? dataEstaciones.filter(e => e.tiene_incongruencia) : dataEstaciones;
+
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             {/* Control Bar Diario */}
             <div className="card glass" style={{ display: 'flex', gap: '1rem', alignItems: 'center', padding: '1rem', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', overflow: 'hidden', padding: '0 0.5rem', background: 'var(--bg-color)' }}>
@@ -851,6 +869,199 @@ export default function VentasEstaciones() {
                     <Search size={16} /> {loading ? 'Cargando...' : 'Consultar'}
                 </button>
             </div>
+
+            {/* Panel de Control de Incongruencias y Auditoría Operativa */}
+            {totalAnomalias === 0 ? (
+                <div className="card glass" style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0.65rem 1rem',
+                    borderLeft: '4px solid #10B981',
+                    flexWrap: 'wrap',
+                    gap: '0.5rem'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <CheckCircle size={18} color="#10B981" />
+                        <span style={{ fontSize: '0.825rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                            Auditoría en orden: Sin anomalías ni descuadres operativos detectados para esta fecha.
+                        </span>
+                    </div>
+                    <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                        Tiendas sin gastos • Cierres de pista cuadrados • Galonajes consistentes
+                    </span>
+                </div>
+            ) : (
+                <div className="card glass" style={{
+                    padding: '0.85rem 1.1rem',
+                    borderLeft: '4px solid #EF4444',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.75rem'
+                }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                            <div style={{ padding: '6px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <ShieldAlert size={19} color="#EF4444" />
+                            </div>
+                            <div>
+                                <h4 style={{ margin: 0, fontSize: '0.925rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    Panel de Control de Incongruencias y Auditoría
+                                    <span style={{
+                                        fontSize: '0.7rem',
+                                        padding: '1px 7px',
+                                        borderRadius: '10px',
+                                        backgroundColor: '#EF4444',
+                                        color: '#fff',
+                                        fontWeight: 700
+                                    }}>
+                                        {totalAnomalias} {totalAnomalias === 1 ? 'Alerta' : 'Alertas'}
+                                    </span>
+                                </h4>
+                                <p style={{ margin: 0, fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                    Detección automática de gastos en tiendas, descuadres de caja y desajustes de galonaje.
+                                </p>
+                            </div>
+                        </div>
+
+                        <button
+                            type="button"
+                            className={`btn btn-sm ${soloIncongruencias ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setSoloIncongruencias(!soloIncongruencias)}
+                            style={{
+                                fontSize: '0.75rem',
+                                height: '32px',
+                                padding: '0 0.85rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.4rem'
+                            }}
+                        >
+                            <Filter size={14} />
+                            <span>{soloIncongruencias ? 'Mostrar Todas las Sucursales' : 'Filtrar sólo Sucursales con Alertas'}</span>
+                        </button>
+                    </div>
+
+                    {/* 4 Metric Chips */}
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                        gap: '0.65rem'
+                    }}>
+                        {/* Chip 1: Gastos en Tienda */}
+                        <div style={{
+                            padding: '0.55rem 0.75rem',
+                            borderRadius: '6px',
+                            background: gTiendas.length > 0 ? 'rgba(239, 68, 68, 0.06)' : 'var(--surface)',
+                            border: gTiendas.length > 0 ? '1px solid rgba(239, 68, 68, 0.25)' : '1px solid var(--border)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.2rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>🏪 Gastos en Tienda</span>
+                                {gTiendas.length > 0 ? (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#EF4444', backgroundColor: 'rgba(239, 68, 68, 0.15)', padding: '1px 5px', borderRadius: '4px' }}>
+                                        No Autorizado
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 600, color: '#10B981' }}>Normal ($0.00)</span>
+                                )}
+                            </div>
+                            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: gTiendas.length > 0 ? '#EF4444' : 'var(--text-main)' }}>
+                                {moneyFmt(gTiendasMonto)}
+                            </div>
+                            <span style={{ fontSize: '0.69rem', color: 'var(--text-muted)' }}>
+                                {gTiendas.length > 0 ? `${gTiendas.length} ${gTiendas.length === 1 ? 'sucursal registra' : 'sucursales registran'} salida de efectivo` : 'Sin gastos en caja de tienda'}
+                            </span>
+                        </div>
+
+                        {/* Chip 2: Descuadres Cortes Tienda */}
+                        <div style={{
+                            padding: '0.55rem 0.75rem',
+                            borderRadius: '6px',
+                            background: difTiendas.length > 0 ? 'rgba(245, 158, 11, 0.06)' : 'var(--surface)',
+                            border: difTiendas.length > 0 ? '1px solid rgba(245, 158, 11, 0.25)' : '1px solid var(--border)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.2rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>💵 Diferencia en Tienda</span>
+                                {difTiendas.length > 0 ? (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#D97706', backgroundColor: 'rgba(245, 158, 11, 0.15)', padding: '1px 5px', borderRadius: '4px' }}>
+                                        Descuadre Caja
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 600, color: '#10B981' }}>Cuadrado</span>
+                                )}
+                            </div>
+                            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: difTiendas.length > 0 ? '#D97706' : 'var(--text-main)' }}>
+                                {moneyFmt(difTiendasMonto)}
+                            </div>
+                            <span style={{ fontSize: '0.69rem', color: 'var(--text-muted)' }}>
+                                {difTiendas.length > 0 ? `${difTiendas.length} ${difTiendas.length === 1 ? 'corte con faltante o sobrante' : 'cortes con diferencia'}` : 'Todos los cortes cuadran con $0.00 dif'}
+                            </span>
+                        </div>
+
+                        {/* Chip 3: Descuadres Cierre Pista */}
+                        <div style={{
+                            padding: '0.55rem 0.75rem',
+                            borderRadius: '6px',
+                            background: difPista.length > 0 ? 'rgba(239, 68, 68, 0.06)' : 'var(--surface)',
+                            border: difPista.length > 0 ? '1px solid rgba(239, 68, 68, 0.25)' : '1px solid var(--border)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.2rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>⛽ Diferencia Cierre Pista</span>
+                                {difPista.length > 0 ? (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#EF4444', backgroundColor: 'rgba(239, 68, 68, 0.15)', padding: '1px 5px', borderRadius: '4px' }}>
+                                        Descuadre Turno
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 600, color: '#10B981' }}>Cuadrado</span>
+                                )}
+                            </div>
+                            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: difPista.length > 0 ? '#EF4444' : 'var(--text-main)' }}>
+                                {moneyFmt(difPistaMonto)}
+                            </div>
+                            <span style={{ fontSize: '0.69rem', color: 'var(--text-muted)' }}>
+                                {difPista.length > 0 ? `${difPista.length} ${difPista.length === 1 ? 'estación con diferencia en cierre' : 'estaciones con diferencia'}` : 'Suma de rubros coincide con venta'}
+                            </span>
+                        </div>
+
+                        {/* Chip 4: Galonajes Incongruentes */}
+                        <div style={{
+                            padding: '0.55rem 0.75rem',
+                            borderRadius: '6px',
+                            background: incongGal.length > 0 ? 'rgba(239, 68, 68, 0.06)' : 'var(--surface)',
+                            border: incongGal.length > 0 ? '1px solid rgba(239, 68, 68, 0.25)' : '1px solid var(--border)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.2rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>📊 Galonaje vs Ventas</span>
+                                {incongGal.length > 0 ? (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#EF4444', backgroundColor: 'rgba(239, 68, 68, 0.15)', padding: '1px 5px', borderRadius: '4px' }}>
+                                        Incongruencia
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 600, color: '#10B981' }}>Consistente</span>
+                                )}
+                            </div>
+                            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: incongGal.length > 0 ? '#EF4444' : 'var(--text-main)' }}>
+                                {incongGal.length} {incongGal.length === 1 ? 'Estación' : 'Estaciones'}
+                            </div>
+                            <span style={{ fontSize: '0.69rem', color: 'var(--text-muted)' }}>
+                                {incongGal.length > 0 ? 'Registra $ sin galones o despacho sin $' : 'Volumen de galones acorde a ventas en $'}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Table 1: Consulta de Cortes de Tienda (E-Market) */}
             <div className="card glass" style={{ padding: '0' }}>
@@ -910,10 +1121,15 @@ export default function VentasEstaciones() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {dataCortesTienda.map((t, i) => (
+                                {cortesTiendaAMostrar.map((t, i) => (
                                     <tr 
                                         key={i} 
-                                        style={{ borderBottom: '1px solid var(--border)', cursor: t.tiene_corte ? 'pointer' : 'default', transition: 'background-color 0.15s ease' }}
+                                        style={{ 
+                                            borderBottom: '1px solid var(--border)', 
+                                            cursor: t.tiene_corte ? 'pointer' : 'default', 
+                                            transition: 'background-color 0.15s ease',
+                                            backgroundColor: t.tiene_incongruencia ? 'rgba(239, 68, 68, 0.02)' : 'transparent'
+                                        }}
                                         onClick={() => t.tiene_corte && handleOpenCorteModal(t)}
                                         className={t.tiene_corte ? 'row-hover' : ''}
                                     >
@@ -921,6 +1137,24 @@ export default function VentasEstaciones() {
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                                 <Store size={14} color="var(--primary)" />
                                                 <span>{t.empresa}</span>
+                                                {t.tiene_incongruencia && (
+                                                    <span 
+                                                        style={{ 
+                                                            fontSize: '0.66rem', 
+                                                            padding: '1px 5px', 
+                                                            borderRadius: '4px', 
+                                                            backgroundColor: 'rgba(239, 68, 68, 0.12)', 
+                                                            color: '#EF4444', 
+                                                            fontWeight: 700, 
+                                                            display: 'inline-flex', 
+                                                            alignItems: 'center', 
+                                                            gap: '3px' 
+                                                        }} 
+                                                        title={(t.alertas || []).map(a => a.texto).join(' • ') || 'Alerta operativa detectada'}
+                                                    >
+                                                        <AlertTriangle size={11} /> Alerta
+                                                    </span>
+                                                )}
                                                 {String(t.id_corte || '').startsWith('SAAS_') && (
                                                     <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(59, 130, 246, 0.12)', color: '#3B82F6', fontWeight: 600 }} title="Datos cargados desde sys.sipesv.com">sys</span>
                                                 )}
@@ -941,8 +1175,26 @@ export default function VentasEstaciones() {
                                         <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.remesado > 0 ? '#10b981' : 'var(--text-muted)' }}>
                                             {moneyFmt(t.remesado)}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.gastos > 0 ? '#ef4444' : 'var(--text-muted)' }}>
-                                            {moneyFmt(t.gastos)}
+                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right' }}>
+                                            {Number(t.gastos || 0) > 0 ? (
+                                                <span 
+                                                    style={{ 
+                                                        color: '#EF4444', 
+                                                        fontWeight: 'bold', 
+                                                        backgroundColor: 'rgba(239, 68, 68, 0.12)', 
+                                                        padding: '2px 6px', 
+                                                        borderRadius: '4px',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '3px'
+                                                    }}
+                                                    title="Gasto en efectivo en tienda (no autorizado / inusual)"
+                                                >
+                                                    <AlertTriangle size={11} /> {moneyFmt(t.gastos)}
+                                                </span>
+                                            ) : (
+                                                <span style={{ color: 'var(--text-muted)' }}>$0.00</span>
+                                            )}
                                         </td>
                                         <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', color: t.retiros > 0 ? 'var(--text-main)' : 'var(--text-muted)' }}>
                                             {moneyFmt(t.retiros)}
@@ -957,8 +1209,14 @@ export default function VentasEstaciones() {
                                                 borderRadius: '4px',
                                                 fontWeight: 'bold',
                                                 backgroundColor: t.dif === 0 ? 'rgba(34, 197, 94, 0.15)' : t.dif < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                                                color: t.dif === 0 ? '#22c55e' : t.dif < 0 ? '#ef4444' : '#f59e0b'
-                                            }}>
+                                                color: t.dif === 0 ? '#22c55e' : t.dif < 0 ? '#ef4444' : '#f59e0b',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '3px'
+                                            }}
+                                            title={t.dif !== 0 ? (t.dif < 0 ? `Faltante de caja por -$${Math.abs(t.dif).toFixed(2)}` : `Sobrante de caja por +$${t.dif.toFixed(2)}`) : 'Corte de caja cuadrado'}
+                                            >
+                                                {t.dif !== 0 && <AlertTriangle size={11} />}
                                                 {moneyFmt(t.dif)}
                                             </span>
                                         </td>
@@ -1089,32 +1347,37 @@ export default function VentasEstaciones() {
                             </tr>
                         </thead>
                         <tbody>
-                            {dataResumenCierre.map((r, i) => {
+                            {resumenCierreAMostrar.map((r, i) => {
                                 const isExpanded = !!expandedStations[r.id_empresa];
                                 const renderDrillCell = (val, rubro, title) => {
                                     const num = Number(val || 0);
                                     if (num === 0) {
                                         return <span style={{ color: 'var(--text-muted)' }}>0.00</span>;
                                     }
+                                    const isHighExpense = rubro === 'gastos' && num > 150;
                                     return (
                                         <button
                                             type="button"
                                             onClick={() => handleOpenDrillDown(r.id_empresa, r.empresa, rubro, title)}
                                             style={{
-                                                background: 'transparent',
-                                                border: '1px solid transparent',
+                                                background: isHighExpense ? 'rgba(239, 68, 68, 0.12)' : 'transparent',
+                                                border: isHighExpense ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid transparent',
                                                 borderRadius: '4px',
                                                 padding: '2px 5px',
                                                 cursor: 'pointer',
                                                 fontSize: '0.78rem',
                                                 fontFamily: 'inherit',
                                                 color: rubro === 'gastos' ? '#ef4444' : rubro === 'tarjetas' ? '#3b82f6' : rubro === 'remesas' ? '#10b981' : 'var(--text-main)',
-                                                fontWeight: '500',
-                                                transition: 'all 0.15s ease'
+                                                fontWeight: isHighExpense ? 'bold' : '500',
+                                                transition: 'all 0.15s ease',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '2px'
                                             }}
                                             className="drill-btn"
-                                            title={`Clic para ver comprobantes de ${title} (${moneyFmt(num)})`}
+                                            title={`Clic para ver comprobantes de ${title} (${moneyFmt(num)})${isHighExpense ? ' - ¡Gasto elevado!' : ''}`}
                                         >
+                                            {isHighExpense && <AlertTriangle size={11} />}
                                             {moneyFmt(num)}
                                         </button>
                                     );
@@ -1125,31 +1388,51 @@ export default function VentasEstaciones() {
                                         <tr 
                                             style={{ 
                                                 borderBottom: '1px solid var(--border)',
-                                                backgroundColor: isExpanded ? 'rgba(59, 130, 246, 0.04)' : 'transparent',
+                                                backgroundColor: isExpanded ? 'rgba(59, 130, 246, 0.04)' : r.tiene_incongruencia ? 'rgba(239, 68, 68, 0.02)' : 'transparent',
                                                 transition: 'background-color 0.15s ease'
                                             }}
                                         >
                                             <td style={{ padding: '0.45rem 0.75rem', fontWeight: '600' }}>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => toggleStationExpand(r.id_empresa)}
-                                                    style={{
-                                                        background: 'none',
-                                                        border: 'none',
-                                                        display: 'inline-flex',
-                                                        alignItems: 'center',
-                                                        gap: '0.35rem',
-                                                        cursor: 'pointer',
-                                                        fontSize: '0.8rem',
-                                                        fontWeight: '600',
-                                                        color: 'var(--text-main)',
-                                                        padding: 0
-                                                    }}
-                                                    title="Clic para expandir / contraer opciones rápidas"
-                                                >
-                                                    {isExpanded ? <ChevronUp size={15} color="var(--primary)" /> : <ChevronDown size={15} color="var(--text-muted)" />}
-                                                    <span>{r.empresa}</span>
-                                                </button>
+                                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => toggleStationExpand(r.id_empresa)}
+                                                        style={{
+                                                            background: 'none',
+                                                            border: 'none',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.35rem',
+                                                            cursor: 'pointer',
+                                                            fontSize: '0.8rem',
+                                                            fontWeight: '600',
+                                                            color: 'var(--text-main)',
+                                                            padding: 0
+                                                        }}
+                                                        title="Clic para expandir / contraer opciones rápidas"
+                                                    >
+                                                        {isExpanded ? <ChevronUp size={15} color="var(--primary)" /> : <ChevronDown size={15} color="var(--text-muted)" />}
+                                                        <span>{r.empresa}</span>
+                                                    </button>
+                                                    {r.tiene_incongruencia && (
+                                                        <span 
+                                                            style={{ 
+                                                                fontSize: '0.66rem', 
+                                                                padding: '1px 5px', 
+                                                                borderRadius: '4px', 
+                                                                backgroundColor: 'rgba(239, 68, 68, 0.12)', 
+                                                                color: '#EF4444', 
+                                                                fontWeight: 700, 
+                                                                display: 'inline-flex', 
+                                                                alignItems: 'center', 
+                                                                gap: '2px' 
+                                                            }} 
+                                                            title={(r.alertas || []).map(a => a.texto).join(' • ') || 'Alerta operativa en pista'}
+                                                        >
+                                                            <AlertTriangle size={10} /> Alerta
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.credito, 'credito', 'Créditos')}</td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{renderDrillCell(r.cupones, 'cupones', 'Cupones')}</td>
@@ -1179,8 +1462,14 @@ export default function VentasEstaciones() {
                                                     borderRadius: '4px',
                                                     fontWeight: 'bold',
                                                     backgroundColor: r.diferencia === 0 ? 'rgba(34, 197, 94, 0.15)' : r.diferencia < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                                                    color: r.diferencia === 0 ? '#22c55e' : r.diferencia < 0 ? '#ef4444' : '#f59e0b'
-                                                }}>
+                                                    color: r.diferencia === 0 ? '#22c55e' : r.diferencia < 0 ? '#ef4444' : '#f59e0b',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '2px'
+                                                }}
+                                                title={r.diferencia !== 0 ? (r.diferencia < 0 ? `Faltante de cierre por -$${Math.abs(r.diferencia).toFixed(2)}` : `Sobrante de cierre por +$${r.diferencia.toFixed(2)}`) : 'Cierre cuadrado'}
+                                                >
+                                                    {r.diferencia !== 0 && <AlertTriangle size={10} />}
                                                     {moneyFmt(r.diferencia)}
                                                 </span>
                                             </td>
@@ -1347,19 +1636,92 @@ export default function VentasEstaciones() {
                             </tr>
                         </thead>
                         <tbody>
-                            {dataEstaciones.map((e, i) => (
-                                <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                                    <td style={{ padding: '0.5rem 1rem' }}>{e.empresa}</td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{numFmt(e.diesel)}</td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{numFmt(e.regular)}</td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{numFmt(e.super)}</td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>
-                                        {e.ion > 0 ? numFmt(e.ion) : <span style={{ color: 'var(--text-muted)' }}>-</span>}
-                                    </td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{numFmt(e.galonaje)}</td>
-                                    <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{moneyFmt(e.venta)}</td>
-                                </tr>
-                            ))}
+                            {estacionesAMostrar.map((e, i) => {
+                                const isGalZero = Number(e.galonaje || 0) === 0 && Number(e.venta || 0) > 0;
+                                const isVentaZero = Number(e.galonaje || 0) > 0 && Number(e.venta || 0) === 0;
+
+                                return (
+                                    <tr 
+                                        key={i} 
+                                        style={{ 
+                                            borderBottom: '1px solid var(--border)',
+                                            backgroundColor: (isGalZero || isVentaZero || e.tiene_incongruencia) ? 'rgba(239, 68, 68, 0.02)' : 'transparent'
+                                        }}
+                                    >
+                                        <td style={{ padding: '0.5rem 1rem' }}>
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                <span>{e.empresa}</span>
+                                                {(isGalZero || isVentaZero || e.tiene_incongruencia) && (
+                                                    <span 
+                                                        style={{ 
+                                                            fontSize: '0.66rem', 
+                                                            padding: '1px 5px', 
+                                                            borderRadius: '4px', 
+                                                            backgroundColor: 'rgba(239, 68, 68, 0.12)', 
+                                                            color: '#EF4444', 
+                                                            fontWeight: 700, 
+                                                            display: 'inline-flex', 
+                                                            alignItems: 'center', 
+                                                            gap: '2px' 
+                                                        }} 
+                                                        title={(e.alertas || []).map(a => a.texto).join(' • ') || 'Incongruencia entre galonaje y monto'}
+                                                    >
+                                                        <AlertTriangle size={10} /> Alerta
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{numFmt(e.diesel)}</td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{numFmt(e.regular)}</td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>{numFmt(e.super)}</td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>
+                                            {e.ion > 0 ? numFmt(e.ion) : <span style={{ color: 'var(--text-muted)' }}>-</span>}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>
+                                            {isGalZero ? (
+                                                <span 
+                                                    style={{ 
+                                                        color: '#EF4444', 
+                                                        fontWeight: 'bold', 
+                                                        backgroundColor: 'rgba(239, 68, 68, 0.12)', 
+                                                        padding: '1px 5px', 
+                                                        borderRadius: '4px',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '2px'
+                                                    }} 
+                                                    title="Incongruencia: Venta registrada en $ pero 0.00 galones despachados"
+                                                >
+                                                    <AlertTriangle size={11} /> 0.00 gal
+                                                </span>
+                                            ) : (
+                                                numFmt(e.galonaje)
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>
+                                            {isVentaZero ? (
+                                                <span 
+                                                    style={{ 
+                                                        color: '#EF4444', 
+                                                        fontWeight: 'bold', 
+                                                        backgroundColor: 'rgba(239, 68, 68, 0.12)', 
+                                                        padding: '1px 5px', 
+                                                        borderRadius: '4px',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '2px'
+                                                    }} 
+                                                    title="Incongruencia: Galones despachados pero $0.00 en venta"
+                                                >
+                                                    <AlertTriangle size={11} /> $0.00
+                                                </span>
+                                            ) : (
+                                                moneyFmt(e.venta)
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                             {dataEstaciones.length === 0 && !loading && (
                                 <tr><td colSpan="7" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>No hay datos para mostrar</td></tr>
                             )}
@@ -3185,6 +3547,24 @@ export default function VentasEstaciones() {
                             </div>
                         </div>
 
+                        {/* Incongruencias notice for gastos */}
+                        {drillDownModal.rubro === 'gastos' && (drillDownModal.data || []).some(r => r.es_incongruente) && (
+                            <div style={{
+                                padding: '0.5rem 0.75rem',
+                                borderRadius: '6px',
+                                backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                                border: '1px solid rgba(245, 158, 11, 0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                fontSize: '0.78rem',
+                                color: '#D97706'
+                            }}>
+                                <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                                <span>Se detectaron <strong>{(drillDownModal.data || []).filter(r => r.es_incongruente).length}</strong> registros con observaciones de auditoría (sin documento de respaldo o con concepto vago/genérico).</span>
+                            </div>
+                        )}
+
                         {/* Search filter input */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', maxWidth: '380px' }}>
                             <div style={{ position: 'relative', width: '100%' }}>
@@ -3340,7 +3720,15 @@ export default function VentasEstaciones() {
                                                                 </span>
                                                             </td>
                                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>{r.fecha}</td>
-                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>{r.documento}</td>
+                                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 500 }}>
+                                                                {r.falta_documento ? (
+                                                                    <span style={{ color: '#EF4444', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }} title="Sin número de comprobante o documento de respaldo">
+                                                                        <AlertTriangle size={12} /> {r.documento || 'S/D'}
+                                                                    </span>
+                                                                ) : (
+                                                                    r.documento
+                                                                )}
+                                                            </td>
                                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                                 <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{r.tipo_doc}</span>
                                                             </td>
@@ -3350,7 +3738,14 @@ export default function VentasEstaciones() {
                                                                 {moneyFmt(r.valor)}
                                                             </td>
                                                             <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-secondary)', maxWidth: '250px' }}>
-                                                                {r.concepto}
+                                                                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                                                    <span>{r.concepto}</span>
+                                                                    {r.es_generico && (
+                                                                        <span style={{ fontSize: '0.66rem', padding: '1px 5px', borderRadius: '3px', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#D97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '2px' }} title="Concepto vago o poco descriptivo">
+                                                                            <AlertCircle size={10} /> Vago
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                             </td>
                                                         </>
                                                     )}
@@ -3524,6 +3919,30 @@ export default function VentasEstaciones() {
                             </button>
                         </div>
 
+                        {/* Incongruencias y Observaciones de Auditoría */}
+                        {corteModal.cabecera?.tiene_incongruencia && (
+                            <div style={{
+                                padding: '0.65rem 0.9rem',
+                                borderRadius: '6px',
+                                backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.35rem'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', fontWeight: 600, color: '#EF4444' }}>
+                                    <AlertTriangle size={15} style={{ flexShrink: 0 }} /> Observaciones y Alertas de Auditoría en este Corte:
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', paddingLeft: '1.25rem' }}>
+                                    {(corteModal.cabecera.incongruencias || []).map((inc, i) => (
+                                        <span key={i} style={{ fontSize: '0.74rem', color: 'var(--text)', background: 'var(--bg-card)', padding: '0.15rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(239,68,68,0.2)' }}>
+                                            {inc}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {/* KPI Strip */}
                         <div style={{
                             display: 'grid',
@@ -3621,6 +4040,11 @@ export default function VentasEstaciones() {
                             >
                                 <Receipt size={15} />
                                 <span>Detalle de Movimientos ({corteModal.detalles_movimientos?.length || 0})</span>
+                                {(corteModal.detalles_movimientos || []).some(m => m.tipo === 'G' || m.es_generico) && (
+                                    <span style={{ fontSize: '0.68rem', padding: '1px 6px', borderRadius: '10px', background: '#EF4444', color: '#fff', fontWeight: 700 }} title="Contiene movimientos con observaciones de auditoría">
+                                        {(corteModal.detalles_movimientos || []).filter(m => m.tipo === 'G' || m.es_generico).length}
+                                    </span>
+                                )}
                             </button>
                         </div>
 
@@ -3679,6 +4103,7 @@ export default function VentasEstaciones() {
                                     <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                                         {[
                                             { key: 'ALL', label: 'Todos' },
+                                            { key: 'ALERTS', label: '⚠️ Con Observaciones' },
                                             { key: 'G', label: 'Gastos' },
                                             { key: 'T', label: 'Tarjetas' },
                                             { key: 'R', label: 'Remesas' },
@@ -3731,7 +4156,8 @@ export default function VentasEstaciones() {
                                     const q = (corteMovSearch || '').toLowerCase().trim();
                                     const fTipo = corteModal.filterTipo || 'ALL';
                                     const items = (corteModal.detalles_movimientos || []).filter(item => {
-                                        if (fTipo !== 'ALL' && item.tipo !== fTipo) return false;
+                                        if (fTipo === 'ALERTS' && !(item.tipo === 'G' || item.es_generico)) return false;
+                                        if (fTipo !== 'ALL' && fTipo !== 'ALERTS' && item.tipo !== fTipo) return false;
                                         if (q && !String(item.descripcion || '').toLowerCase().includes(q) && !String(item.tipo_nombre || '').toLowerCase().includes(q)) return false;
                                         return true;
                                     });
@@ -3761,7 +4187,21 @@ export default function VentasEstaciones() {
                                                                     {mov.tipo_nombre || mov.tipo}
                                                                 </span>
                                                             </td>
-                                                            <td style={{ padding: '0.45rem 0.6rem' }}>{mov.descripcion}</td>
+                                                            <td style={{ padding: '0.45rem 0.6rem' }}>
+                                                                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                                                    <span>{mov.descripcion}</span>
+                                                                    {mov.tipo === 'G' && (
+                                                                        <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#EF4444', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }} title="Gasto no habitual en tienda">
+                                                                            <AlertTriangle size={11} /> Gasto Tienda
+                                                                        </span>
+                                                                    )}
+                                                                    {mov.es_generico && (
+                                                                        <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.15)', color: '#D97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }} title="Descripción genérica o poco específica">
+                                                                            <AlertCircle size={11} /> Concepto Genérico
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </td>
                                                             <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontWeight: 600, color: mov.tipo === 'G' ? '#EF4444' : 'var(--text)' }}>
                                                                 {moneyFmt(mov.monto)}
                                                             </td>
