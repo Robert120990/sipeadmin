@@ -2552,22 +2552,18 @@ export default function PedidosCombustible() {
                                 </div>
                             )}
 
-                            {/* Detalles de Configuración y Solución Permanente */}
-                            <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.02)' }}>
+                            {/* Información para Usuarios del Portal Puma */}
+                            <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.45rem', background: 'rgba(59, 130, 246, 0.05)', borderLeft: '4px solid #3b82f6' }}>
                                 <div style={{ fontSize: '0.825rem', fontWeight: 'bold', color: 'var(--text-color)' }}>
-                                    Solución Permanente para no pedir 2FA ni bloquearse por IP:
+                                    Autenticación Directa como Usuario del Portal (Sin requerir permisos de administrador)
                                 </div>
                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
-                                    Para autorizar permanentemente el servidor en Salesforce y que nunca vuelva a requerir códigos por correo ni bloqueos de ubicación:
-                                    <ol style={{ margin: '0.4rem 0 0 1.2rem', padding: 0 }}>
-                                        <li>Inicie sesión en el portal de Puma / Salesforce con usuario administrador.</li>
-                                        <li>Vaya a <b>Setup (Configuración)</b> → busque <b>Network Access (Acceso a la Red)</b>.</li>
-                                        <li>Haga clic en <b>New (Nuevo)</b> y agregue el rango de IP de confianza:
-                                            <div style={{ margin: '0.3rem 0', fontFamily: 'monospace', background: 'rgba(0,0,0,0.06)', padding: '0.2rem 0.5rem', borderRadius: '4px', display: 'inline-block' }}>
-                                                IP inicial: <b>5.252.55.29</b> &nbsp;|&nbsp; IP final: <b>5.252.55.29</b>
-                                            </div>
-                                        </li>
-                                        <li>Guarde los cambios. Esto garantiza acceso ininterrumpido 24/7 sin solicitar 2FA.</li>
+                                    Como usuario del portal de clientes (<b>corina.sosah@sipesv.com</b>), <b>no necesita ningún acceso técnico de administrador en Puma o Salesforce</b>:
+                                    <ol style={{ margin: '0.35rem 0 0 1.2rem', padding: 0 }}>
+                                        <li>Ingrese la contraseña con la que ingresa Corina en <code>customerportal.energy-latam.com</code> en la sección de arriba y pulse <b>Guardar Credenciales</b>.</li>
+                                        <li>Haga clic en <b>Probar Conexión Ahora</b> para que el servidor inicie sesión.</li>
+                                        <li>Si Puma solicita verificación por correo, recibirá un código de 6 dígitos en <code>corina.sosah@sipesv.com</code>. Ingréselo en el recuadro superior y pulse <b>Verificar Código</b>.</li>
+                                        <li>La sesión quedará guardada de forma persistente en el servidor para sincronizar todos los pedidos y precios automáticamente.</li>
                                     </ol>
                                 </div>
                             </div>
