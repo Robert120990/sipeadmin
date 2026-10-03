@@ -3,17 +3,26 @@ const crypto = require('crypto');
 const { exec } = require('child_process');
 const path = require('path');
 
-const PORT = process.env.WEBHOOK_PORT || 7778;
-const SECRET = process.env.WEBHOOK_SECRET || 'sipeadmin-deploy-secret';
+const PORT = parseInt(process.env.WEBHOOK_PORT || '7778', 10);
+const SECRET = process.env.WEBHOOK_SECRET;
 const BRANCH = process.env.AUTO_UPDATE_BRANCH || 'main';
 const PROJECT_DIR = path.resolve(__dirname);
+
+if (!SECRET) {
+    console.error('ADVERTENCIA CRÍTICA: WEBHOOK_SECRET no está configurado en las variables de entorno. Los despliegues automáticos requerirán autenticación obligatoria.');
+}
 
 let isDeploying = false;
 
 const server = http.createServer((req, res) => {
     if (req.method !== 'POST') {
-        res.writeHead(405, { 'Content-Type': 'text/plain' });
-        return res.end('Method Not Allowed');
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+    }
+
+    if (!SECRET) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Webhook service misconfigured: WEBHOOK_SECRET is required' }));
     }
 
     let body = '';
@@ -27,13 +36,13 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
         const sig = req.headers['x-hub-signature-256'] || '';
 
-        if (process.env.WEBHOOK_SECRET) {
-            if (!sig) {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
-            }
+        if (!sig) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
+        }
 
-            const hmac = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET);
+        try {
+            const hmac = crypto.createHmac('sha256', SECRET);
             const digest = 'sha256=' + hmac.update(body).digest('hex');
             const sigBuffer = Buffer.from(sig, 'utf8');
             const digestBuffer = Buffer.from(digest, 'utf8');
@@ -42,6 +51,9 @@ const server = http.createServer((req, res) => {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
                 return res.end(JSON.stringify({ error: 'Invalid signature' }));
             }
+        } catch (cryptoErr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Signature verification failed' }));
         }
 
         try {
@@ -76,12 +88,12 @@ const server = http.createServer((req, res) => {
             });
 
         } catch (err) {
-            res.writeHead(400, { 'Content-Type': 'text/plain' });
-            res.end(`Bad Request: ${err.message}`);
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Bad Request: ${err.message}` }));
         }
     });
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-    console.log(`SIPE Admin Webhook listening on port ${PORT}`);
+    console.log(`SIPE Admin Webhook listening on 127.0.0.1:${PORT}`);
 });

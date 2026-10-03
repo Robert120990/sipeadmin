@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const crypto = require('crypto');
 const dotenv = require('dotenv');
 const { initDB } = require('./db');
 
@@ -54,7 +55,14 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
+
+// Assign unique Request ID for error tracing and audit logging
+app.use((req, res, next) => {
+    req.id = req.headers['x-request-id'] || crypto.randomUUID();
+    res.setHeader('X-Request-Id', req.id);
+    next();
+});
 
 // Inject io into request
 app.use((req, res, next) => {
@@ -183,10 +191,12 @@ app.get('/api/debug-db', authenticateToken, requireRole('Administrator'), async 
 
 // Global error handler sanitizado
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Express requires 4 args to detect error handlers
-    console.error('Unhandled error:', err);
+    const requestId = req?.id || 'no-id';
+    console.error(`[Unhandled Error][${requestId}]:`, err);
     const isDev = process.env.NODE_ENV !== 'production';
     res.status(err.status || 500).json({ 
         message: err.userMessage || 'Error interno del servidor',
+        requestId: req?.id,
         ...(isDev && err.message ? { debug: err.message } : {})
     });
 });

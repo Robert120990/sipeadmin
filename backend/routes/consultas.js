@@ -4,6 +4,67 @@ const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
+const ventasViewPerms = [
+    'view_ventas',
+    '/dashboard/consultas/estaciones/ventas',
+    '/dashboard/consultas/estaciones/resumen-cierre',
+    '/dashboard/estrategia/torre-control',
+    '/dashboard/estrategia/combustible',
+    '/dashboard/operaciones/pedidos',
+    '/dashboard/finanzas/resumen'
+];
+
+const fletesViewPerms = [
+    'manage_pedidos',
+    '/dashboard/operaciones/pedidos',
+    '/dashboard/estrategia/combustible'
+];
+
+const lubricantesViewPerms = [
+    '/dashboard/consultas/estaciones/lubricantes',
+    '/dashboard/estrategia/torre-control'
+];
+
+const cierreViewPerms = [
+    '/dashboard/consultas/estaciones/resumen-cierre',
+    '/dashboard/consultas/estaciones/ventas',
+    '/dashboard/estrategia/torre-control'
+];
+
+const preciosEstacionViewPerms = [
+    '/dashboard/consultas/estaciones/precios',
+    '/dashboard/consultas/estaciones/precios-competencia',
+    '/dashboard/estrategia/combustible',
+    '/dashboard/estrategia/torre-control'
+];
+
+const cumpleanosViewPerms = [
+    '/dashboard/consultas/otras/cumpleanos',
+    '/dashboard/rrhh/planillas'
+];
+
+const diferenciasViewPerms = [
+    '/dashboard/consultas/estaciones/diferencias-combustible',
+    '/dashboard/estrategia/mermas',
+    '/dashboard/estrategia/torre-control'
+];
+
+const preciosCompetenciaViewPerms = [
+    'manage_precios_competencia',
+    '/dashboard/consultas/estaciones/precios-competencia',
+    '/dashboard/consultas/estaciones/precios',
+    '/dashboard/estrategia/combustible'
+];
+
+const genericConsultasPerms = [
+    '/dashboard/consultas/otras/backup-db-check',
+    '/dashboard/consultas/estaciones/ventas',
+    '/dashboard/consultas/estaciones/resumen-cierre',
+    '/dashboard/estrategia/torre-control',
+    '/dashboard/bancos/reportes/saldos-bancos',
+    '/dashboard/bancos/reportes/saldos-chequera'
+];
+
 const getCleanStationName = (id, defaultTitulo) => {
     if (!defaultTitulo) return '';
     const upper = defaultTitulo.toUpperCase();
@@ -251,7 +312,7 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) =
 };
 
 // --- Ventas ---
-router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
+router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
     const { date } = req.params;
     try {
         const externalDb = await getExternalDb();
@@ -839,7 +900,7 @@ router.get('/ventas/consolidado/:date', authenticateToken, async (req, res) => {
 });
 
 // Obtener fletes de combustible por estación
-router.get('/ventas/combustibles/fletes', authenticateToken, async (req, res) => {
+router.get('/ventas/combustibles/fletes', authenticateToken, requirePermission(fletesViewPerms), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query('SELECT * FROM combustible_fletes_estacion ORDER BY id_estacion');
@@ -877,7 +938,7 @@ router.post('/ventas/combustibles/fletes', authenticateToken, requirePermission(
 });
 
 // Obtener todas las quincenas y precios por estación
-router.get('/ventas/combustibles/quincenas', authenticateToken, async (req, res) => {
+router.get('/ventas/combustibles/quincenas', authenticateToken, requirePermission(fletesViewPerms), async (req, res) => {
     try {
         const db = getDb();
         const [quincenas] = await db.query(`
@@ -1226,7 +1287,7 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
     };
 };
 
-router.get('/ventas/resumen-mensual/:periodo', authenticateToken, async (req, res) => {
+router.get('/ventas/resumen-mensual/:periodo', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
     try {
         const { periodo } = req.params;
         let year, month;
@@ -1249,7 +1310,7 @@ router.get('/ventas/resumen-mensual/:periodo', authenticateToken, async (req, re
     }
 });
 
-router.get('/ventas/resumen-mensual/:year/:month', authenticateToken, async (req, res) => {
+router.get('/ventas/resumen-mensual/:year/:month', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
     try {
         const { year, month } = req.params;
         const externalDb = await getExternalDb();
@@ -1547,7 +1608,7 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
     };
 };
 
-router.get('/ventas/comparativo-anual', authenticateToken, async (req, res) => {
+router.get('/ventas/comparativo-anual', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
     try {
         const { anioPrincipal, anioComparar, anio1, anio2, anio } = req.query;
         const pYear = anioPrincipal || anio1 || anio || new Date().getFullYear();
@@ -1568,7 +1629,7 @@ router.getCleanStationName = getCleanStationName;
 router.getCleanTiendaName = getCleanTiendaName;
 router.getCortesTiendaData = getCortesTiendaData;
 
-router.get('/ventas/lubricantes/:start/:end', authenticateToken, async (req, res) => {
+router.get('/ventas/lubricantes/:start/:end', authenticateToken, requirePermission(lubricantesViewPerms), async (req, res) => {
     const { start, end } = req.params;
     try {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
@@ -1597,7 +1658,7 @@ router.get('/ventas/lubricantes/:start/:end', authenticateToken, async (req, res
     }
 });
 
-router.get('/ventas/resumen-cierre/:date', authenticateToken, async (req, res) => {
+router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(cierreViewPerms), async (req, res) => {
     const { date } = req.params;
     try {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -1652,7 +1713,7 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, async (req, res) =
 });
 
 // Cortes de Tienda (Listado)
-router.get('/ventas/cortes-tienda/:date', authenticateToken, async (req, res) => {
+router.get('/ventas/cortes-tienda/:date', authenticateToken, requirePermission(cierreViewPerms), async (req, res) => {
     const { date } = req.params;
     try {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -1668,7 +1729,7 @@ router.get('/ventas/cortes-tienda/:date', authenticateToken, async (req, res) =>
 });
 
 // Detalle de un Corte de Tienda específico (Líneas de Venta + Movimientos de Tarjeta/Gastos)
-router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (req, res) => {
+router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requirePermission(cierreViewPerms), async (req, res) => {
     const { id_corte } = req.params;
     try {
         // 1. Manejo de cortes provenientes del nuevo sistema SaaS (sys.sipesv.com)
@@ -1959,7 +2020,7 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, async (r
 });
 
 // Detalle por Rubro de Cierre de Turno de Estación (Gastos, Tarjetas, Remesas, Crédito, etc.)
-router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticateToken, async (req, res) => {
+router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticateToken, requirePermission(cierreViewPerms), async (req, res) => {
     const { id_empresa, date, rubro } = req.params;
     try {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -2258,7 +2319,7 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
     }
 });
 
-router.get('/ventas/precios-estacion/:date', authenticateToken, async (req, res) => {
+router.get('/ventas/precios-estacion/:date', authenticateToken, requirePermission(preciosEstacionViewPerms), async (req, res) => {
     const { date } = req.params;
     try {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -2276,7 +2337,7 @@ router.get('/ventas/precios-estacion/:date', authenticateToken, async (req, res)
     }
 });
 
-router.get('/consultas/cumpleanos', authenticateToken, async (req, res) => {
+router.get('/consultas/cumpleanos', authenticateToken, requirePermission(cumpleanosViewPerms), async (req, res) => {
     try {
         const accountingDb = await getAccountingDb();
         const query = `
@@ -2301,7 +2362,7 @@ router.get('/consultas/cumpleanos', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken, async (req, res) => {
+router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken, requirePermission(diferenciasViewPerms), async (req, res) => {
     const { desde, hasta } = req.params;
     try {
         const externalDb = await getExternalDb();
@@ -2358,7 +2419,7 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
     } catch (error) { res.status(500).json({ message: 'Error fetching diferencias' }); }
 });
 
-router.get('/consultas/estaciones/precios-competencia', authenticateToken, async (req, res) => {
+router.get('/consultas/estaciones/precios-competencia', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const query = `SELECT c.titulo, a.estacion, a.modificacion, a.super_c, a.regular_c, a.ion_c, a.diesel_c, a.super_a, a.regular_a, a.ion_a, a.diesel_a, IFNULL(b.es_propia, 0) as es_propia FROM web_precios_competencia a INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION' ORDER BY c.titulo, b.es_propia DESC, a.estacion`;
@@ -2374,7 +2435,7 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, async
     }
 });
 
-router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, async (req, res) => {
+router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await withRetry(() => externalDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia'));
@@ -2384,7 +2445,7 @@ router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateT
     }
 });
 
-router.get('/consultas/estaciones/precios-competencia/catalogo', authenticateToken, async (req, res) => {
+router.get('/consultas/estaciones/precios-competencia/catalogo', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [estacionesSistema] = await withRetry(() => externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden, titulo"));
@@ -2514,7 +2575,7 @@ router.delete('/consultas/estaciones/precios-competencia/estaciones/:id', authen
     }
 });
 
-router.get('/consultas/estaciones/precios', authenticateToken, async (req, res) => {
+router.get('/consultas/estaciones/precios', authenticateToken, requirePermission(preciosEstacionViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const date = new Date().toISOString().split('T')[0];
@@ -2766,7 +2827,7 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
     } catch (error) { res.status(500).json({ message: 'Error updating precios competencia' }); }
 });
 
-router.get('/consultas/estaciones/precios-competencia/historial', authenticateToken, async (req, res) => {
+router.get('/consultas/estaciones/precios-competencia/historial', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
         const { desde, hasta, estacion } = req.query;
         const externalDb = await getExternalDb();
@@ -2804,7 +2865,7 @@ router.get('/consultas/estaciones/precios-competencia/historial', authenticateTo
     }
 });
 
-router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticateToken, async (req, res) => {
+router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         
@@ -2967,7 +3028,7 @@ router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticat
     }
 });
 
-router.get('/consultas/:type', authenticateToken, async (req, res) => {
+router.get('/consultas/:type', authenticateToken, requirePermission(genericConsultasPerms), async (req, res) => {
     const { type } = req.params;
     try {
         const externalDb = await getExternalDb();
@@ -2977,7 +3038,9 @@ router.get('/consultas/:type', authenticateToken, async (req, res) => {
         else if (type === 'saldos-chequera') [results] = await externalDb.query('CALL sp_saldo_en_chequera(?)', [today]);
         else return res.status(404).json({ message: 'Consulta no encontrada' });
         res.json(results[0] || []);
-    } catch (error) { res.status(500).json({ message: 'Error executing SP' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al ejecutar consulta'); 
+    }
 });
 
 router.isGenericDescription = isGenericDescription;

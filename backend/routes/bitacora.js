@@ -1,17 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
-function hasPermission(user, perm) {
-    return user.role_id === 1 || (user.permissions && user.permissions.includes(perm));
-}
+const bitacoraPerms = ['view_bitacora', '/dashboard/bitacora', '/dashboard/seguridad/bitacora'];
 
-router.get('/bitacora', authenticateToken, async (req, res) => {
+router.get('/bitacora', authenticateToken, requirePermission(bitacoraPerms), async (req, res) => {
     try {
-        if (!hasPermission(req.user, 'view_bitacora')) {
-            return res.status(403).json({ message: 'No tienes permiso para ver la bitácora' });
-        }
 
         const db = getDb();
         const {
@@ -72,17 +68,12 @@ router.get('/bitacora', authenticateToken, async (req, res) => {
             totalPages: Math.ceil(total / limitNum)
         });
     } catch (err) {
-        console.error('Error fetching bitacora:', err);
-        res.status(500).json({ message: 'Error al obtener bitácora' });
+        sendSafeError(res, err, 'Error al obtener bitácora');
     }
 });
 
-router.get('/bitacora/filtros', authenticateToken, async (req, res) => {
+router.get('/bitacora/filtros', authenticateToken, requirePermission(bitacoraPerms), async (req, res) => {
     try {
-        if (!hasPermission(req.user, 'view_bitacora')) {
-            return res.status(403).json({ message: 'No tienes permiso para ver la bitácora' });
-        }
-
         const db = getDb();
 
         const [entidades] = await db.query(
@@ -97,8 +88,7 @@ router.get('/bitacora/filtros', authenticateToken, async (req, res) => {
             acciones: acciones.map(r => r.accion)
         });
     } catch (err) {
-        console.error('Error fetching bitacora filters:', err);
-        res.status(500).json({ message: 'Error al obtener filtros' });
+        sendSafeError(res, err, 'Error al obtener filtros de bitácora');
     }
 });
 

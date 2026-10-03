@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "lint": "eslint .",
     "sync:dgehm": "node sync-dgehm-direct.js",
+    "backup:db": "node scripts/backup-db.js",
     "test": "node --test --test-force-exit"
   },
   "keywords": [],

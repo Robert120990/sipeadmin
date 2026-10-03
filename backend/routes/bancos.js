@@ -18,8 +18,25 @@ const toDBDate = (dateStr) => {
     return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
 };
 
+const bancosViewPerms = [
+    '/dashboard/bancos/cuentas',
+    '/dashboard/bancos/movimientos',
+    '/dashboard/bancos/conciliacion',
+    '/dashboard/bancos/cheques',
+    '/dashboard/bancos/reportes/saldos-bancos',
+    '/dashboard/bancos/reportes/saldos-chequera',
+    'manage_cuentas'
+];
+
+const movimientosViewPerms = [
+    '/dashboard/bancos/movimientos',
+    '/dashboard/bancos/conciliacion',
+    '/dashboard/bancos/reportes/movimientos-fecha',
+    'manage_movimientos'
+];
+
 // --- Cuentas Bancarias ---
-router.get('/catalogos', authenticateToken, async (req, res) => {
+router.get('/catalogos', authenticateToken, requirePermission(bancosViewPerms), async (req, res) => {
     const { id_empresa } = req.query;
     try {
         const db = getDb();
@@ -44,7 +61,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
 });
 
 // --- Gestión de Entidades Bancarias (Bancos) ---
-router.get('/entidades-banco', authenticateToken, async (req, res) => {
+router.get('/entidades-banco', authenticateToken, requirePermission(bancosViewPerms), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query(`
@@ -152,7 +169,7 @@ router.post('/entidades-banco', authenticateToken, requirePermission('/dashboard
     }
 });
 
-router.get('/cuentas', authenticateToken, async (req, res) => {
+router.get('/cuentas', authenticateToken, requirePermission(bancosViewPerms), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query(
@@ -235,7 +252,7 @@ router.delete('/cuentas/:id', authenticateToken, requirePermission('/dashboard/b
 });
 
 // --- Movimientos Bancarios ---
-router.get('/movimientos/catalogos', authenticateToken, async (req, res) => {
+router.get('/movimientos/catalogos', authenticateToken, requirePermission(movimientosViewPerms), async (req, res) => {
     const { id_empresa } = req.query;
     try {
         const db = getDb();
@@ -279,7 +296,7 @@ router.get('/movimientos/catalogos', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/movimientos', authenticateToken, async (req, res) => {
+router.get('/movimientos', authenticateToken, requirePermission(movimientosViewPerms), async (req, res) => {
     const { id_empresa, numero_cuenta, desde, hasta } = req.query;
     try {
         const db = getDb();
@@ -325,7 +342,7 @@ router.get('/movimientos', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/movimientos/reporte-fecha', authenticateToken, async (req, res) => {
+router.get('/movimientos/reporte-fecha', authenticateToken, requirePermission(movimientosViewPerms), async (req, res) => {
     const { cuenta_bancaria_id, numero_cuenta, desde, hasta, tipo } = req.query;
     try {
         if ((!cuenta_bancaria_id && !numero_cuenta) || !desde || !hasta) {

@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+
+const taskPerms = ['manage_tasks', '/dashboard/operaciones/tareas'];
 
 /**
  * Helper to emit real-time socket events for task changes
@@ -56,7 +58,7 @@ async function createAndEmitNotification(req, { userId, type, title, message, da
  * GET /api/tasks
  * List tasks with optional filters
  */
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const {
@@ -160,7 +162,7 @@ router.get('/', authenticateToken, async (req, res) => {
  * GET /api/tasks/kpis/summary
  * KPI summary metrics
  */
-router.get('/kpis/summary', authenticateToken, async (req, res) => {
+router.get('/kpis/summary', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const { assigned_to, solo_mias } = req.query;
@@ -210,7 +212,7 @@ router.get('/kpis/summary', authenticateToken, async (req, res) => {
  * GET /api/tasks/:id
  * Retrieve single task with comments
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
@@ -262,7 +264,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
  * POST /api/tasks
  * Create a new task
  */
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const {
@@ -371,7 +373,7 @@ router.post('/', authenticateToken, async (req, res) => {
  * PUT /api/tasks/:id
  * Full update of task
  */
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
@@ -496,7 +498,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
  * PATCH /api/tasks/:id/status
  * Fast status and order change (for Drag & Drop and quick actions)
  */
-router.patch('/:id/status', authenticateToken, async (req, res) => {
+router.patch('/:id/status', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
@@ -583,7 +585,7 @@ router.patch('/:id/status', authenticateToken, async (req, res) => {
  * PATCH /api/tasks/:id/checklist
  * Quick update of checklist items (marking subtasks)
  */
-router.patch('/:id/checklist', authenticateToken, async (req, res) => {
+router.patch('/:id/checklist', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
@@ -620,7 +622,7 @@ router.patch('/:id/checklist', authenticateToken, async (req, res) => {
  * DELETE /api/tasks/:id
  * Delete task (admin or creator)
  */
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
@@ -650,7 +652,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
  * POST /api/tasks/:id/comments
  * Add comment to task
  */
-router.post('/:id/comments', authenticateToken, async (req, res) => {
+router.post('/:id/comments', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;

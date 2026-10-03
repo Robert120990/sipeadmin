@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { GoogleGenAI } = require('@google/genai');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
-router.post('/pagos/chat', authenticateToken, async (req, res) => {
+const recordatoriosPerms = ['manage_recordatorios', '/dashboard/operaciones/recordatorios'];
+
+router.post('/pagos/chat', authenticateToken, requirePermission(recordatoriosPerms), async (req, res) => {
     try {
         const { prompt, context } = req.body;
         if (!process.env.GEMINI_API_KEY) {

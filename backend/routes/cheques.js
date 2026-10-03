@@ -4,6 +4,21 @@ const { getDb, getExternalDb, withTransaction } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
+const chequeViewPerms = [
+    'manage_cheques',
+    '/dashboard/bancos/cheques',
+    '/dashboard/bancos/cheques-contado',
+    '/dashboard/bancos/reportes/cheques-fecha',
+    '/dashboard/bancos/reportes/impresion-cheques',
+    '/dashboard/bancos/reportes/saldos-chequera',
+    '/dashboard/bancos/cuentas'
+];
+
+const contadoPerms = [
+    'manage_cheques_contado',
+    '/dashboard/bancos/cheques-contado'
+];
+
 const toDisplayDate = (dateVal) => {
     if (!dateVal) return null;
     const d = dateVal instanceof Date ? dateVal : new Date(dateVal + 'T12:00:00');
@@ -18,7 +33,7 @@ const toDBDate = (dateStr) => {
     return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
 };
 
-router.get('/catalogos', authenticateToken, async (req, res) => {
+router.get('/catalogos', authenticateToken, requirePermission(chequeViewPerms), async (req, res) => {
     try {
         const db = getDb();
         const [empresas] = await db.query('SELECT codigo as id, nombre FROM empresas ORDER BY nombre');
@@ -59,7 +74,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/rango', authenticateToken, async (req, res) => {
+router.get('/rango', authenticateToken, requirePermission(chequeViewPerms), async (req, res) => {
     const { cuenta_bancaria_id, desde_cheque, hasta_cheque } = req.query;
     try {
         if (!cuenta_bancaria_id || desde_cheque === undefined || hasta_cheque === undefined) {
@@ -96,7 +111,7 @@ router.get('/rango', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/reporte-fecha', authenticateToken, async (req, res) => {
+router.get('/reporte-fecha', authenticateToken, requirePermission(chequeViewPerms), async (req, res) => {
     const { cuenta_bancaria_id, desde, hasta, excluir_anulados, excluir_reservados } = req.query;
     try {
         if (!cuenta_bancaria_id || !desde || !hasta) {
@@ -144,7 +159,7 @@ router.get('/reporte-fecha', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, requirePermission(chequeViewPerms), async (req, res) => {
     const { id_empresa, numero_cuenta, desde, hasta } = req.query;
     try {
         const db = getDb();
@@ -284,7 +299,7 @@ router.delete('/:id', authenticateToken, requirePermission(['manage_cheques', '/
     }
 });
 
-router.get('/contado/estaciones', authenticateToken, async (req, res) => {
+router.get('/contado/estaciones', authenticateToken, requirePermission(contadoPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query(
@@ -292,11 +307,11 @@ router.get('/contado/estaciones', authenticateToken, async (req, res) => {
         );
         res.json(rows);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar estaciones' });
+        sendSafeError(res, error, 'Error al cargar estaciones');
     }
 });
 
-router.get('/contado/cuentas', authenticateToken, async (req, res) => {
+router.get('/contado/cuentas', authenticateToken, requirePermission(contadoPerms), async (req, res) => {
     try {
         const db = getDb();
         const [cuentas] = await db.query(
@@ -310,11 +325,11 @@ router.get('/contado/cuentas', authenticateToken, async (req, res) => {
         );
         res.json(cuentas);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar cuentas' });
+        sendSafeError(res, error, 'Error al cargar cuentas');
     }
 });
 
-router.get('/contado/solicitudes', authenticateToken, async (req, res) => {
+router.get('/contado/solicitudes', authenticateToken, requirePermission(contadoPerms), async (req, res) => {
     try {
         const { estacion, pendientes } = req.query;
         if (!estacion) return res.status(400).json({ message: 'Falta parametro estacion' });

@@ -13,4 +13,8 @@ TMP/
 dist/
 *.log
 backend/logs/
-
+backend/backups/
+backend/tmp_*.js
+backend/*_output.txt
+backend/keys.txt
+backend/scratch/
