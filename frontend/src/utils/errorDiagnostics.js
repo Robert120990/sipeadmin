@@ -34,14 +34,15 @@ export const recordDiagnosticLog = (entry) => {
     }
 };
 
-export const recordApiError = ({ method, url, status, message, data }) => {
+export const recordApiError = ({ method, url, status, message, data, requestId }) => {
     recordDiagnosticLog({
         type: 'API_ERROR',
         method: method || 'GET',
         url: url || '',
         status: status || 0,
         message: typeof message === 'string' ? message : JSON.stringify(message || 'Error de API'),
-        data: data ? (typeof data === 'object' ? JSON.stringify(data).slice(0, 300) : String(data).slice(0, 300)) : null
+        data: data ? (typeof data === 'object' ? JSON.stringify(data).slice(0, 300) : String(data).slice(0, 300)) : null,
+        requestId: requestId || null
     });
 };
 
@@ -56,6 +57,16 @@ export const recordGlobalError = (eventOrError) => {
 };
 
 export const getRecentErrorLogs = () => [...errorLogBuffer];
+
+/**
+ * Extrae y formatea el mensaje de error de una respuesta API, adjuntando el ID de rastreo si está disponible.
+ */
+export const formatApiErrorMessage = (error, defaultMsg = 'Ocurrió un error inesperado') => {
+    const data = error?.response?.data;
+    const msg = data?.message || error?.message || defaultMsg;
+    const reqId = data?.requestId || error?.requestId || error?.response?.headers?.['x-request-id'];
+    return reqId ? `${msg} (ID Rastreo: ${String(reqId).slice(0, 8)})` : msg;
+};
 
 /**
  * Genera un reporte formateado en Markdown con todos los parámetros técnicos
@@ -81,11 +92,16 @@ export const generateDiagnosticReport = ({ error, errorInfo, tabName, tabPath, e
         .filter(l => l.type === 'API_ERROR')
         .slice(0, 5);
 
+    const latestReqId = extraContext?.requestId || error?.requestId || recentApis.find(a => a.requestId)?.requestId || null;
+
     let md = `### 📋 Reporte de Error - SIPE Admin (${version})\n\n`;
     md += `**Contexto del Sistema:**\n`;
     md += `- **Versión:** \`${version}\`\n`;
     md += `- **Fecha/Hora:** \`${timestampIso}\` (${timestampLocal})\n`;
     md += `- **URL Actual:** \`${currentUrl}\`\n`;
+    if (latestReqId) {
+        md += `- **ID de Rastreo (Request ID):** \`${latestReqId}\`\n`;
+    }
     if (tabName || tabPath) {
         md += `- **Pestaña/Módulo Activo:** \`${tabName || 'N/A'}\` (\`${tabPath || 'N/A'}\`)\n`;
     }
@@ -114,7 +130,8 @@ export const generateDiagnosticReport = ({ error, errorInfo, tabName, tabPath, e
     if (recentApis.length > 0) {
         md += `**🌐 Últimas Peticiones API Fallidas:**\n`;
         recentApis.forEach(api => {
-            md += `- \`[${api.method}] ${api.url}\` -> Estado: **${api.status}** - ${api.message}\n`;
+            const reqIdStr = api.requestId ? ` [ID Rastreo: \`${api.requestId}\`]` : '';
+            md += `- \`[${api.method}] ${api.url}\` -> Estado: **${api.status}** - ${api.message}${reqIdStr}\n`;
             if (api.data) {
                 md += `  Respuesta servidor: \`${api.data}\`\n`;
             }

@@ -1,6 +1,6 @@
 import React from 'react';
 import { AlertTriangle, RefreshCw, LogOut, Copy, Check, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
-import { generateDiagnosticReport, copyDiagnosticToClipboard } from '../utils/errorDiagnostics';
+import { generateDiagnosticReport, copyDiagnosticToClipboard, getRecentErrorLogs } from '../utils/errorDiagnostics';
 
 export default class ErrorBoundary extends React.Component {
     constructor(props) {
@@ -93,11 +93,15 @@ export default class ErrorBoundary extends React.Component {
                 error?.message?.includes('Loading chunk') ||
                 error?.message?.includes('Failed to fetch');
 
+            const recentApis = getRecentErrorLogs().filter((l) => l.type === 'API_ERROR');
+            const reqId = error?.requestId || recentApis.find((a) => a.requestId)?.requestId || null;
+
             const report = generateDiagnosticReport({
                 error,
                 errorInfo,
                 tabName,
-                tabPath
+                tabPath,
+                extraContext: reqId ? { requestId: reqId } : {}
             });
 
             return (
@@ -169,10 +173,20 @@ export default class ErrorBoundary extends React.Component {
                                     fontFamily: 'monospace',
                                     color: '#ef4444',
                                     wordBreak: 'break-word',
-                                    lineHeight: 1.4
+                                    lineHeight: 1.4,
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.35rem'
                                 }}
                             >
-                                <strong>[{error.name || 'Error'}]:</strong> {error.message || 'Error desconocido'}
+                                <div>
+                                    <strong>[{error.name || 'Error'}]:</strong> {error.message || 'Error desconocido'}
+                                </div>
+                                {reqId && (
+                                    <div style={{ fontSize: '0.75rem', color: '#60a5fa' }}>
+                                        <span style={{ fontWeight: 600 }}>ID de Rastreo (Request ID):</span> <code>{reqId}</code>
+                                    </div>
+                                )}
                             </div>
                         )}
 

@@ -55,7 +55,25 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '1mb' }));
+// Dynamic body parser: 20MB for heavy data uploads / reconciliations, 1MB for all other endpoints
+const jsonParserDefault = express.json({ limit: '1mb' });
+const jsonParserLarge = express.json({ limit: '20mb' });
+const largePayloadPrefixes = [
+    '/api/consultas/estaciones/precios-competencia/upload',
+    '/api/bancos/conciliacion/parse-extracto',
+    '/api/bancos/conciliacion/crear-masivo-y-aplicar',
+    '/api/conciliacion/parse-extracto',
+    '/api/conciliacion/crear-masivo-y-aplicar'
+];
+
+app.use((req, res, next) => {
+    const url = req.originalUrl || req.url || '';
+    const isLarge = largePayloadPrefixes.some(p => url.startsWith(p));
+    if (isLarge) {
+        return jsonParserLarge(req, res, next);
+    }
+    return jsonParserDefault(req, res, next);
+});
 
 // Assign unique Request ID for error tracing and audit logging
 app.use((req, res, next) => {
@@ -185,7 +203,7 @@ app.get('/api/debug-db', authenticateToken, requireRole('Administrator'), async 
         res.json({ ok: true, result: rows[0] });
     } catch (e) {
         console.error('Debug DB Error:', e.message);
-        res.status(500).json({ ok: false, message: 'Fallo en comprobación de base de datos' });
+        res.status(500).json({ ok: false, message: 'Fallo en comprobación de base de datos', requestId: req.id });
     }
 });
 

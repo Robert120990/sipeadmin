@@ -23,9 +23,14 @@ const bancosViewPerms = [
     '/dashboard/bancos/movimientos',
     '/dashboard/bancos/conciliacion',
     '/dashboard/bancos/cheques',
+    '/dashboard/bancos/check-designer',
     '/dashboard/bancos/reportes/saldos-bancos',
     '/dashboard/bancos/reportes/saldos-chequera',
-    'manage_cuentas'
+    '/dashboard/operaciones/pedidos',
+    '/dashboard/rrhh/planillas',
+    'manage_cuentas',
+    'manage_pedidos',
+    'view_rrhh_planillas'
 ];
 
 const movimientosViewPerms = [

@@ -4,12 +4,20 @@ const { getDb } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
+const checkDesignerPerms = [
+    'manage_check_designer',
+    '/dashboard/bancos/check-designer',
+    '/dashboard/bancos/cheques',
+    '/dashboard/bancos/impresion-cheques',
+    'manage_cheques'
+];
+
 /**
  * @route GET /api/check-designer/formats
  * @desc Listar todos los formatos de cheque, opcionalmente filtrados por banco o estado.
  * @query {banco_id} Opcional. {banco_nombre} Opcional (descripción del banco). {is_active} Opcional ('true' o 'false').
  */
-router.get('/formats', authenticateToken, async (req, res) => {
+router.get('/formats', authenticateToken, requirePermission(checkDesignerPerms), async (req, res) => {
     const { banco_id, banco_nombre, is_active } = req.query;
     try {
         const db = getDb();
@@ -83,7 +91,7 @@ router.post('/formats', authenticateToken, requirePermission(['manage_check_desi
  * @route GET /api/check-designer/formats/:id
  * @desc Obtener un formato de cheque específico por su ID, incluyendo su diseño JSON.
  */
-router.get('/formats/:id', authenticateToken, async (req, res) => {
+router.get('/formats/:id', authenticateToken, requirePermission(checkDesignerPerms), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
@@ -219,7 +227,7 @@ router.delete('/formats/:id', authenticateToken, requirePermission(['manage_chec
  * @route GET /api/check-designer/calibrations
  * @desc Listar todas las calibraciones de impresoras.
  */
-router.get('/calibrations', authenticateToken, async (req, res) => {
+router.get('/calibrations', authenticateToken, requirePermission(checkDesignerPerms), async (req, res) => {
     try {
         const db = getDb();
         const [calibrations] = await db.query('SELECT * FROM printer_calibration ORDER BY printer_name ASC');
@@ -256,7 +264,7 @@ router.post('/calibrations', authenticateToken, requirePermission(['manage_check
  * @route GET /api/check-designer/bancos
  * @desc Listar todos los bancos para poblar el selector al crear/editar formatos.
  */
-router.get('/bancos', authenticateToken, async (req, res) => {
+router.get('/bancos', authenticateToken, requirePermission(checkDesignerPerms), async (req, res) => {
     try {
         const db = getDb();
         // Consolidar bancos: un banco existe una vez por empresa (bancos.empresa_id),

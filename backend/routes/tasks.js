@@ -6,6 +6,13 @@ const { sendSafeError } = require('../utils/errorHandler');
 
 const taskPerms = ['manage_tasks', '/dashboard/operaciones/tareas'];
 
+const hasTaskManagePerm = (user) => {
+    if (!user) return false;
+    if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    return perms.includes('manage_tasks') || perms.includes('/dashboard/operaciones/tareas');
+};
+
 /**
  * Helper to emit real-time socket events for task changes
  */
@@ -57,8 +64,9 @@ async function createAndEmitNotification(req, { userId, type, title, message, da
 /**
  * GET /api/tasks
  * List tasks with optional filters
+ * Non-managers only see tasks assigned to them
  */
-router.get('/', authenticateToken, requirePermission(taskPerms), async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const {
@@ -71,6 +79,8 @@ router.get('/', authenticateToken, requirePermission(taskPerms), async (req, res
             fecha_hasta,
             solo_mias
         } = req.query;
+
+        const isManager = hasTaskManagePerm(req.user);
 
         let query = `
             SELECT 
@@ -89,8 +99,8 @@ router.get('/', authenticateToken, requirePermission(taskPerms), async (req, res
 
         const params = [];
 
-        // If user explicitly asks for "solo_mias" or is non-admin and no other assigned_to filter
-        if (solo_mias === 'true' || (req.user.role_id !== 1 && !assigned_to && solo_mias !== 'false')) {
+        // If user is not manager or explicitly requests "solo_mias"
+        if (!isManager || solo_mias === 'true') {
             query += ' AND t.assigned_to = ?';
             params.push(req.user.id);
         } else if (assigned_to) {
@@ -162,15 +172,16 @@ router.get('/', authenticateToken, requirePermission(taskPerms), async (req, res
  * GET /api/tasks/kpis/summary
  * KPI summary metrics
  */
-router.get('/kpis/summary', authenticateToken, requirePermission(taskPerms), async (req, res) => {
+router.get('/kpis/summary', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const { assigned_to, solo_mias } = req.query;
+        const isManager = hasTaskManagePerm(req.user);
 
         let whereClause = 'WHERE 1=1';
         const params = [];
 
-        if (solo_mias === 'true' || (req.user.role_id !== 1 && !assigned_to && solo_mias !== 'false')) {
+        if (!isManager || solo_mias === 'true') {
             whereClause += ' AND assigned_to = ?';
             params.push(req.user.id);
         } else if (assigned_to) {
@@ -212,10 +223,11 @@ router.get('/kpis/summary', authenticateToken, requirePermission(taskPerms), asy
  * GET /api/tasks/:id
  * Retrieve single task with comments
  */
-router.get('/:id', authenticateToken, requirePermission(taskPerms), async (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
+        const isManager = hasTaskManagePerm(req.user);
 
         const [tasks] = await db.query(`
             SELECT 
@@ -237,6 +249,10 @@ router.get('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
         }
 
         const task = tasks[0];
+        if (!isManager && task.assigned_to !== req.user.id && task.created_by !== req.user.id) {
+            return res.status(403).json({ message: 'No tiene permisos para ver esta tarea.' });
+        }
+
         task.checklist = typeof task.checklist === 'string' ? JSON.parse(task.checklist) : (task.checklist || []);
 
         // Fetch comments
@@ -498,7 +514,7 @@ router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
  * PATCH /api/tasks/:id/status
  * Fast status and order change (for Drag & Drop and quick actions)
  */
-router.patch('/:id/status', authenticateToken, requirePermission(taskPerms), async (req, res) => {
+router.patch('/:id/status', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
@@ -585,7 +601,7 @@ router.patch('/:id/status', authenticateToken, requirePermission(taskPerms), asy
  * PATCH /api/tasks/:id/checklist
  * Quick update of checklist items (marking subtasks)
  */
-router.patch('/:id/checklist', authenticateToken, requirePermission(taskPerms), async (req, res) => {
+router.patch('/:id/checklist', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;

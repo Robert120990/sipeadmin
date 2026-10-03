@@ -102,8 +102,15 @@ const parseCSVorTSV = (text) => {
     return rows;
 };
 
+const conciliacionViewPerms = [
+    'manage_conciliacion_bancaria',
+    '/dashboard/bancos/conciliacion',
+    'manage_movimientos',
+    '/dashboard/bancos/movimientos'
+];
+
 // ── 1. Catálogos para la pantalla ─────────────────────────────────────────────
-router.get('/catalogos', authenticateToken, async (req, res) => {
+router.get('/catalogos', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
     try {
         const db = getDb();
         const [empresas] = await withRetry(() => db.query('SELECT id, codigo, nombre FROM empresas ORDER BY nombre'));
@@ -127,7 +134,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
 });
 
 // ── 2. Datos Principales de Conciliación ─────────────────────────────────────
-router.get('/data', authenticateToken, async (req, res) => {
+router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
     const { cuenta_id, desde, hasta } = req.query;
     if (!cuenta_id) {
         return res.status(400).json({ message: 'Debe especificar el ID de la cuenta bancaria.' });
@@ -362,7 +369,7 @@ router.post('/validar-saldo', authenticateToken, requirePermission(['manage_conc
 });
 
 // ── 5. Parser y Auto-Matcher de Extractos Bancarios ─────────────────────────
-router.post('/parse-extracto', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
+router.post('/parse-extracto', express.json({ limit: '20mb' }), authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const { cuenta_id, raw_data, banco_formato } = req.body;
     if (!cuenta_id || !raw_data) {
         return res.status(400).json({ message: 'Faltan datos requeridos (cuenta y datos de extracto).' });
@@ -665,7 +672,7 @@ router.post('/crear-y-aplicar', authenticateToken, requirePermission(['manage_co
 });
 
 // ── 5.2. Crear y Aplicar Movimientos Masivamente ───────────────────────────
-router.post('/crear-masivo-y-aplicar', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
+router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
     const { cuenta_bancaria_id, items, fecha_aplicado_general, aplicar_inmediatamente } = req.body;
     if (!cuenta_bancaria_id || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ message: 'Debe especificar la cuenta bancaria y al menos un movimiento.' });

@@ -3,6 +3,7 @@ const router = express.Router();
 const { execFile } = require('child_process');
 const path = require('path');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 
 const GITHUB_REPO = 'Robert120990/sipeadmin';
 const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/commits`;
@@ -432,8 +433,7 @@ router.get(
                 repo: GITHUB_REPO
             });
         } catch (err) {
-            console.error('Error in GET /api/seguridad/cambios-github:', err);
-            res.status(500).json({ message: 'Error al consultar cambios de GitHub' });
+            sendSafeError(res, err, 'Error al consultar cambios de GitHub');
         }
     }
 );

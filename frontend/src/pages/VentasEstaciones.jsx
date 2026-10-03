@@ -17,6 +17,7 @@ import ReportPreviewModal from '../components/ReportPreviewModal';
 import Modal from '../components/Modal';
 import DrillDownPistaModal from '../components/ventas/DrillDownPistaModal';
 import CorteTiendaModal from '../components/ventas/CorteTiendaModal';
+import { moneyFmt, numFmt } from '../utils/format';
 
 export default function VentasEstaciones() {
     // --- ESTADO DIARIO ---
@@ -188,9 +189,6 @@ export default function VentasEstaciones() {
         XLSX.writeFile(wb, `Comparativo_Anual_${anioPrincipal}_vs_${anioComparar}_${estacionFiltro}.xlsx`);
         addToast('Archivo Excel descargado exitosamente', 'success');
     };
-
-    const moneyFmt = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
-    const numFmt = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
 
     const formatMsDate = (msDateStr) => {
         if (!msDateStr) return '';

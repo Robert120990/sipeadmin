@@ -18,13 +18,19 @@ let isRedirecting = false;
 api.interceptors.response.use(
     (response) => response,
     (error) => {
+        const requestId = error.response?.data?.requestId || error.response?.headers?.['x-request-id'] || null;
+        if (requestId) {
+            error.requestId = requestId;
+        }
+
         // Registrar en buffer de diagnóstico para contexto de depuración
         recordApiError({
             method: error.config?.method?.toUpperCase() || 'GET',
             url: error.config?.url || '',
             status: error.response?.status || 0,
             message: error.response?.data?.message || error.message || 'Error de API',
-            data: error.response?.data
+            data: error.response?.data,
+            requestId
         });
 
         // 401: Sesión expirada o no autenticado

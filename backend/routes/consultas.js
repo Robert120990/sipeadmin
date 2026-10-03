@@ -16,7 +16,9 @@ const ventasViewPerms = [
 
 const fletesViewPerms = [
     'manage_pedidos',
+    'view_ventas',
     '/dashboard/operaciones/pedidos',
+    '/dashboard/consultas/estaciones/ventas',
     '/dashboard/estrategia/combustible'
 ];
 
@@ -894,8 +896,7 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
             } : null
         });
     } catch (error) { 
-        console.error('Error fetching consolidado:', error);
-        res.status(500).json({ message: 'Error fetching consolidado' }); 
+        sendSafeError(res, error, 'Error al consultar consolidado de ventas'); 
     }
 });
 
@@ -1653,8 +1654,7 @@ router.get('/ventas/lubricantes/:start/:end', authenticateToken, requirePermissi
         const [rows] = await externalDb.query(sql, [datesArray]);
         res.json(rows.map(r => ({ empresa: r.titulo, venta: Number(r.monto || 0) })));
     } catch (error) { 
-        console.error('Error fetching lubricantes:', error);
-        res.status(500).json({ message: 'Error fetching lubricantes' }); 
+        sendSafeError(res, error, 'Error al consultar ventas de lubricantes'); 
     }
 });
 
@@ -1707,8 +1707,7 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(
             };
         }));
     } catch (error) { 
-        console.error('Error fetching resumen:', error);
-        res.status(500).json({ message: 'Error fetching resumen' }); 
+        sendSafeError(res, error, 'Error al consultar resumen de cierre'); 
     }
 });
 
@@ -1723,8 +1722,7 @@ router.get('/ventas/cortes-tienda/:date', authenticateToken, requirePermission(c
         const cortes = await getCortesTiendaData(externalDb, date);
         res.json(cortes);
     } catch (error) {
-        console.error('Error fetching cortes tienda:', error);
-        res.status(500).json({ message: 'Error fetching cortes tienda' });
+        sendSafeError(res, error, 'Error al consultar cortes de tienda');
     }
 });
 
@@ -2014,8 +2012,7 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
             }
         });
     } catch (error) {
-        console.error('Error fetching detalle corte tienda:', error);
-        res.status(500).json({ message: 'Error fetching detalle corte tienda' });
+        sendSafeError(res, error, 'Error al consultar detalle del corte de tienda');
     }
 });
 
@@ -2332,8 +2329,7 @@ router.get('/ventas/precios-estacion/:date', authenticateToken, requirePermissio
         const [rows] = await externalDb.query(sql, [sysDate]);
         res.json(rows.map(r => ({ empresa: r.titulo, diesel_a: Number(r.diesel_a), regular_a: Number(r.regular_a), super_a: Number(r.super_a), diesel_c: Number(r.diesel_c), regular_c: Number(r.regular_c), super_c: Number(r.super_c), ion_diesel: Number(r.ion_diesel), master: Number(r.master) })));
     } catch (error) { 
-        console.error('Error fetching precios:', error);
-        res.status(500).json({ message: 'Error fetching precios' }); 
+        sendSafeError(res, error, 'Error al consultar precios de combustible'); 
     }
 });
 
@@ -2357,17 +2353,42 @@ router.get('/consultas/cumpleanos', authenticateToken, requirePermission(cumplea
         const [rows] = await accountingDb.query(query);
         res.json(rows);
     } catch (error) {
-        console.error('Error fetching cumpleanos:', error.message);
-        res.status(500).json({ message: 'Error fetching cumpleanos' });
+        sendSafeError(res, error, 'Error al consultar cumpleaños de empleados');
     }
 });
 
 router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken, requirePermission(diferenciasViewPerms), async (req, res) => {
     const { desde, hasta } = req.params;
     try {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
+            return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
+        }
+        const curr = new Date(desde + 'T12:00:00');
+        const endDate = new Date(hasta + 'T12:00:00');
+        if (isNaN(curr.getTime()) || isNaN(endDate.getTime())) {
+            return res.status(400).json({ message: 'Fechas inválidas' });
+        }
+        if (curr > endDate) {
+            return res.status(400).json({ message: 'La fecha inicial no puede ser mayor que la fecha final' });
+        }
+        const diffDays = Math.ceil((endDate.getTime() - curr.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays > 366) {
+            return res.status(400).json({ message: 'El rango de fechas no puede exceder 366 días' });
+        }
+
         const externalDb = await getExternalDb();
-        const datesArray = []; let curr = new Date(desde + 'T12:00:00');
-        while (curr <= new Date(hasta + 'T12:00:00')) { const day = String(curr.getDate()).padStart(2, '0'); const month = String(curr.getMonth() + 1).padStart(2, '0'); const year = curr.getFullYear(); datesArray.push(`${day}/${month}/${year}`); curr.setDate(curr.getDate() + 1); }
+        const datesArray = [];
+        const iter = new Date(curr);
+        while (iter <= endDate && datesArray.length < 366) {
+            const day = String(iter.getDate()).padStart(2, '0');
+            const month = String(iter.getMonth() + 1).padStart(2, '0');
+            const year = iter.getFullYear();
+            datesArray.push(`${day}/${month}/${year}`);
+            iter.setDate(iter.getDate() + 1);
+        }
+        if (datesArray.length === 0) {
+            return res.json([]);
+        }
         const sql1 = `select x.id_empresa, a.titulo as estacion, z.clasificacion as tipo, 0.0 as inicial, 0.0 as recargas, sum(y.total) as venta, 0.0 as final, 0.0 as suma, 0.0 as diferencia from cierre_turno x inner join cierre_turno_lecturas y on x.id_empresa = y.id_empresa and x.id = y.id_cierre_turno inner join cfg_combustibles z on y.id_empresa = z.id_empresa and y.id_producto = z.id_producto inner join web_consolidado a on x.id_empresa = a.id_empresa where x.fecha_turno IN (?) and a.grupo = 'ESTACION' group by x.id_empresa, a.titulo, z.clasificacion, a.orden order by a.orden, z.clasificacion`;
         const [dt_result] = await externalDb.query(sql1, [datesArray]);
         const sql2 = `
@@ -2416,7 +2437,9 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
             const suma = inicial + recargas - Number(fila.venta);
             return { empresa: fila.estacion, combustible: fila.tipo, inicial, recargas, venta: Number(fila.venta), final, suma, diferencia: final - suma };
         }));
-    } catch (error) { res.status(500).json({ message: 'Error fetching diferencias' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar diferencias de combustible'); 
+    }
 });
 
 router.get('/consultas/estaciones/precios-competencia', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
@@ -2766,7 +2789,7 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
     }
 });
 
-router.post('/consultas/estaciones/precios-competencia/upload', authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
+router.post('/consultas/estaciones/precios-competencia/upload', express.json({ limit: '20mb' }), authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
     try {
         const { data } = req.body;
         if (!Array.isArray(data) || data.length === 0) {
@@ -2824,7 +2847,9 @@ router.post('/consultas/estaciones/precios-competencia/upload', authenticateToke
         } finally {
             conn.release();
         }
-    } catch (error) { res.status(500).json({ message: 'Error updating precios competencia' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al actualizar precios de competencia'); 
+    }
 });
 
 router.get('/consultas/estaciones/precios-competencia/historial', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
@@ -2860,8 +2885,7 @@ router.get('/consultas/estaciones/precios-competencia/historial', authenticateTo
         const [rows] = await externalDb.query(query, params);
         res.json(rows);
     } catch (error) {
-        console.error('Error fetching historial:', error);
-        res.status(500).json({ message: 'Error al consultar historial de precios' });
+        sendSafeError(res, error, 'Error al consultar historial de precios');
     }
 });
 
@@ -3023,8 +3047,7 @@ router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticat
             insights
         });
     } catch (error) {
-        console.error('Error fetching BI analytics:', error);
-        res.status(500).json({ message: 'Error al generar análisis de BI' });
+        sendSafeError(res, error, 'Error al generar análisis de BI');
     }
 });
 

@@ -30,8 +30,51 @@ const calculatePMT = (principal, annualRate, termMonths, frequency = 'mensual') 
     return Math.round(pmt * 100) / 100;
 };
 
+const finanzasCatalogosPerms = [
+    'manage_finanzas_prestamos',
+    'manage_finanzas_inversiones',
+    'manage_finanzas_mantenimiento',
+    'manage_finanzas_asesor',
+    '/dashboard/finanzas/prestamos',
+    '/dashboard/finanzas/calculadora',
+    '/dashboard/finanzas/inversiones',
+    '/dashboard/finanzas/planes-mantenimiento',
+    '/dashboard/finanzas/asesor',
+    '/dashboard/finanzas/resumen'
+];
+
+const prestamosViewPerms = [
+    'manage_finanzas_prestamos',
+    '/dashboard/finanzas/prestamos',
+    '/dashboard/finanzas/calculadora',
+    '/dashboard/finanzas/resumen'
+];
+
+const resumenViewPerms = [
+    'manage_finanzas_prestamos',
+    'manage_finanzas_inversiones',
+    'manage_finanzas_mantenimiento',
+    '/dashboard/finanzas/resumen',
+    '/dashboard/finanzas/prestamos',
+    '/dashboard/finanzas/inversiones',
+    '/dashboard/finanzas/planes-mantenimiento',
+    '/dashboard/finanzas/asesor'
+];
+
+const proyectosViewPerms = [
+    'manage_finanzas_inversiones',
+    '/dashboard/finanzas/inversiones',
+    '/dashboard/finanzas/resumen'
+];
+
+const mantenimientoViewPerms = [
+    'manage_finanzas_mantenimiento',
+    '/dashboard/finanzas/planes-mantenimiento',
+    '/dashboard/finanzas/resumen'
+];
+
 // --- GET /catalogos ---
-router.get('/catalogos', authenticateToken, async (req, res) => {
+router.get('/catalogos', authenticateToken, requirePermission(finanzasCatalogosPerms), async (req, res) => {
     try {
         const db = getDb();
         const [empresas] = await db.query('SELECT id, codigo, nombre FROM empresas ORDER BY nombre ASC');
@@ -51,7 +94,7 @@ router.get('/catalogos', authenticateToken, async (req, res) => {
 });
 
 // --- GET /prestamos ---
-router.get('/prestamos', authenticateToken, async (req, res) => {
+router.get('/prestamos', authenticateToken, requirePermission(prestamosViewPerms), async (req, res) => {
     const { empresa_id, estado, search } = req.query;
     try {
         const db = getDb();
@@ -130,7 +173,7 @@ router.get('/prestamos', authenticateToken, async (req, res) => {
 });
 
 // --- GET /prestamos/:id ---
-router.get('/prestamos/:id', authenticateToken, async (req, res) => {
+router.get('/prestamos/:id', authenticateToken, requirePermission(prestamosViewPerms), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
@@ -562,7 +605,7 @@ router.delete('/pagos/:pagoId', authenticateToken, requirePermission(['manage_fi
 });
 
 // --- GET /resumen ---
-router.get('/resumen', authenticateToken, async (req, res) => {
+router.get('/resumen', authenticateToken, requirePermission(resumenViewPerms), async (req, res) => {
     try {
         const db = getDb();
 
@@ -687,7 +730,7 @@ router.get('/resumen', authenticateToken, async (req, res) => {
 // ==========================================
 
 // GET /proyectos
-router.get('/proyectos', authenticateToken, async (req, res) => {
+router.get('/proyectos', authenticateToken, requirePermission(proyectosViewPerms), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -732,7 +775,7 @@ router.get('/proyectos', authenticateToken, async (req, res) => {
 });
 
 // GET /proyectos/:id
-router.get('/proyectos/:id', authenticateToken, async (req, res) => {
+router.get('/proyectos/:id', authenticateToken, requirePermission(proyectosViewPerms), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);
@@ -921,7 +964,7 @@ router.delete('/proyectos/:id', authenticateToken, requirePermission(['manage_fi
 // ==========================================
 
 // GET /mantenimiento
-router.get('/mantenimiento', authenticateToken, async (req, res) => {
+router.get('/mantenimiento', authenticateToken, requirePermission(mantenimientoViewPerms), async (req, res) => {
     try {
         const db = getDb();
         await ensureFinanzasTables(db);

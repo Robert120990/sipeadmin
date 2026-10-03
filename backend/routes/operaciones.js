@@ -5,6 +5,29 @@ const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const energyLatamService = require('../services/energyLatamService');
 
+const vencimientosViewPerms = [
+    '/dashboard',
+    'view_dashboard',
+    'manage_recordatorios',
+    '/dashboard/operaciones/recordatorios',
+    '/dashboard/finanzas/resumen'
+];
+
+const pedidosViewPerms = [
+    'manage_pedidos',
+    '/dashboard/operaciones/pedidos',
+    '/dashboard/estrategia/torre-control',
+    '/dashboard/estrategia/combustible'
+];
+
+const recordatoriosViewPerms = [
+    'manage_recordatorios',
+    '/dashboard/operaciones/recordatorios',
+    '/dashboard',
+    'view_dashboard',
+    '/dashboard/finanzas/resumen'
+];
+
 /**
  * Parsea y sanitiza los parámetros de paginación para consultas de pedidos.
  * Por defecto limita a 10 transacciones para no sobrecargar el sistema.
@@ -117,7 +140,7 @@ function buildEstacionFilterClause(estacionInput) {
 }
 
 // --- Dashboard / Vencimientos ---
-router.get('/dashboard/vencimientos', authenticateToken, async (req, res) => {
+router.get('/dashboard/vencimientos', authenticateToken, requirePermission(vencimientosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const now = new Date();
@@ -135,29 +158,32 @@ router.get('/dashboard/vencimientos', authenticateToken, async (req, res) => {
         const [rows] = await externalDb.query(query, [toDate]);
         res.json(rows);
     } catch (error) { 
-        console.error('SERVER ERROR IN DASHBOARD:', error);
-        res.status(500).json({ message: 'Error' }); 
+        sendSafeError(res, error, 'Error al consultar vencimientos'); 
     }
 });
 
 // --- Pedidos de Combustible ---
-router.get('/operaciones/estaciones', authenticateToken, async (req, res) => {
+router.get('/operaciones/estaciones', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden");
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching estaciones' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar estaciones'); 
+    }
 });
 
-router.get('/operaciones/fecha-servidor', authenticateToken, async (req, res) => {
+router.get('/operaciones/fecha-servidor', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query("SELECT MAX(fecha) as fecha_servidor FROM lecturas_tanque");
         res.json({ fecha_servidor: rows[0]?.fecha_servidor || null });
-    } catch (error) { res.status(500).json({ message: 'Error fetching fecha servidor' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar fecha del servidor'); 
+    }
 });
 
-router.get('/operaciones/fecha-servidor-global', authenticateToken, async (req, res) => {
+router.get('/operaciones/fecha-servidor-global', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query("SELECT CURDATE() as fecha_actual, DATE_SUB(CURDATE(), INTERVAL 1 DAY) as fecha_ayer");
@@ -166,10 +192,12 @@ router.get('/operaciones/fecha-servidor-global', authenticateToken, async (req, 
         if (fechaActual instanceof Date) { fechaActual = fechaActual.toISOString().split('T')[0]; }
         if (fechaAyer instanceof Date) { fechaAyer = fechaAyer.toISOString().split('T')[0]; }
         res.json({ fecha_actual: fechaActual, fecha_ayer: fechaAyer });
-    } catch (error) { res.status(500).json({ message: 'Error fetching global server date' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar fecha global del servidor'); 
+    }
 });
 
-router.get('/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticateToken, async (req, res) => {
+router.get('/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const { id_empresa, fecha } = req.params;
         const externalDb = await getExternalDb();
@@ -287,10 +315,12 @@ router.get('/operaciones/pedidos/datos-tanque/:id_empresa/:fecha', authenticateT
         }
 
         res.json({ fecha: fecha, inventario: rows });
-    } catch (error) { res.status(500).json({ message: 'Error fetching datos-tanque' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar datos de tanque'); 
+    }
 });
 
-router.get('/operaciones/pedidos/promedios/:id_empresa/:fecha', authenticateToken, async (req, res) => {
+router.get('/operaciones/pedidos/promedios/:id_empresa/:fecha', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const { id_empresa, fecha } = req.params;
         const externalDb = await getExternalDb();
@@ -320,10 +350,12 @@ router.get('/operaciones/pedidos/promedios/:id_empresa/:fecha', authenticateToke
             }
         });
         res.json(agg);
-    } catch (error) { res.status(500).json({ message: 'Error fetching promedios' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar promedios de pedidos'); 
+    }
 });
 
-router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateToken, async (req, res) => {
+router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const { id_estacion, fecha } = req.params;
         const externalDb = await getExternalDb();
@@ -337,7 +369,9 @@ router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateT
         `;
         const [rows] = await externalDb.query(query, [id_estacion, fecha]);
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching pedidos programados' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar pedidos programados'); 
+    }
 });
 
 router.post('/operaciones/pedidos/agregar', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
@@ -407,15 +441,17 @@ router.post('/operaciones/pedidos/confirmar', authenticateToken, requirePermissi
 });
 
 // --- RECORDATORIOS / PAGOS ---
-router.get('/operaciones/recordatorios/ubicaciones', authenticateToken, async (req, res) => {
+router.get('/operaciones/recordatorios/ubicaciones', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query("SELECT id, descripcion FROM web_rc_ubicaciones ORDER BY descripcion");
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching ubicaciones' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar ubicaciones'); 
+    }
 });
 
-router.get('/operaciones/recordatorios', authenticateToken, async (req, res) => {
+router.get('/operaciones/recordatorios', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
     try {
         const { desde, hasta, estado, id_recordatorio } = req.query; 
         const externalDb = await getExternalDb();
@@ -441,20 +477,24 @@ router.get('/operaciones/recordatorios', authenticateToken, async (req, res) => 
         query += " ORDER BY a.vencimiento ";
         const [rows] = await externalDb.query(query, params);
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching recordatorios' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar recordatorios'); 
+    }
 });
 
-router.get('/operaciones/recordatorios/:id', authenticateToken, async (req, res) => {
+router.get('/operaciones/recordatorios/:id', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query("SELECT * FROM web_rc_recordatorios WHERE id = ?", [req.params.id]);
         if (rows.length === 0) return res.status(404).json({ message: 'Not found' });
         const [pagados] = await externalDb.query("SELECT COUNT(*) as cont FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ? AND estado = 'C'", [req.params.id]);
         res.json({ recordatorio: rows[0], pagados: pagados[0].cont });
-    } catch (error) { res.status(500).json({ message: 'Error fetching recordatorio detail' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al consultar detalle del recordatorio'); 
+    }
 });
 
-router.get('/operaciones/recordatorios/parents/buscar', authenticateToken, async (req, res) => {
+router.get('/operaciones/recordatorios/parents/buscar', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
         const query = `
@@ -466,7 +506,9 @@ router.get('/operaciones/recordatorios/parents/buscar', authenticateToken, async
         `;
         const [rows] = await externalDb.query(query);
         res.json(rows);
-    } catch (error) { res.status(500).json({ message: 'Error fetching parent recordatorios' }); }
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al buscar recordatorios principales'); 
+    }
 });
 
 function calculateRecurringDate(iniciarStr, n, repetirDesc) {
@@ -705,7 +747,7 @@ async function ensurePortalTablesAndSeed(db) {
 }
 
 // 1. Obtener listado de pedidos del portal
-router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) => {
+router.get('/operaciones/portal/pedidos', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const db = getDb();
         await ensurePortalTablesAndSeed(db);
@@ -794,7 +836,7 @@ router.get('/operaciones/portal/pedidos', authenticateToken, async (req, res) =>
 });
 
 // 2. Resumen de cuenta del portal (saldo disponible, crédito, etc.)
-router.get('/operaciones/portal/resumen-cuenta', authenticateToken, async (req, res) => {
+router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const db = getDb();
         await ensurePortalTablesAndSeed(db);
@@ -1013,7 +1055,7 @@ router.post('/operaciones/portal/desvincular-pago', authenticateToken, requirePe
 });
 
 // 7. Precios quincenales de combustibles
-router.get('/operaciones/portal/precios-combustible', authenticateToken, async (req, res) => {
+router.get('/operaciones/portal/precios-combustible', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await withRetry(() => db.query("SELECT * FROM combustible_precios_quincenales ORDER BY periodo_inicio DESC LIMIT 24"));

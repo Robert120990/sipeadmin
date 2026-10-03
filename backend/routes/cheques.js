@@ -363,7 +363,7 @@ router.get('/contado/solicitudes', authenticateToken, requirePermission(contadoP
 
         res.json(formatted);
     } catch (error) {
-        res.status(500).json({ message: 'Error al cargar solicitudes' });
+        sendSafeError(res, error, 'Error al cargar solicitudes de cheques');
     }
 });
 

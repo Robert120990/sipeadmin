@@ -12,6 +12,28 @@ if (process.env.NODE_ENV === 'production') {
 const JWT_SECRET = process.env.JWT_SECRET || 'sipeadmin_dev_jwt_secret_change_in_production';
 
 const revokedUsers = new Set();
+let lastSyncTime = 0;
+const SYNC_INTERVAL_MS = 60 * 1000;
+
+const syncRevokedUsersFromDb = async () => {
+    try {
+        const { getDb } = require('../db');
+        const db = getDb();
+        if (!db) return;
+        const [rows] = await db.query("SELECT id FROM users WHERE status = 'inactive'");
+        if (Array.isArray(rows)) {
+            rows.forEach(r => revokedUsers.add(Number(r.id)));
+        }
+        lastSyncTime = Date.now();
+    } catch (_) {
+        // Silently skip if DB not initialized or in isolated test
+    }
+};
+
+// Attempt initial sync on startup
+setTimeout(() => {
+    syncRevokedUsersFromDb();
+}, 2000);
 
 const revokeUser = (userId) => {
     if (userId) revokedUsers.add(Number(userId));
@@ -33,6 +55,11 @@ const authenticateToken = (req, res, next) => {
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.status(401).json({ message: 'Token inválido o expirado' });
+
+        // Periodically refresh inactive users list in background
+        if (Date.now() - lastSyncTime > SYNC_INTERVAL_MS) {
+            syncRevokedUsersFromDb();
+        }
 
         if (user.status === 'inactive' || isUserRevoked(user.id)) {
             return res.status(403).json({ message: 'Usuario inactivo o suspendido' });
@@ -102,6 +129,7 @@ module.exports = {
     JWT_SECRET,
     revokeUser,
     restoreUser,
-    isUserRevoked
+    isUserRevoked,
+    syncRevokedUsersFromDb
 };
 
