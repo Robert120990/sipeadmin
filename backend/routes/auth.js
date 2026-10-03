@@ -21,7 +21,11 @@ const withRetry = async (fn, retries = 2) => {
 
 // --- Login ---
 router.post('/login', async (req, res) => {
-    const { username, password } = req.body;
+    const { username, password } = req.body || {};
+    if (!username || typeof username !== 'string' || !username.trim() || !password || typeof password !== 'string') {
+        return res.status(400).json({ message: 'Usuario y contraseña son requeridos' });
+    }
+    const cleanUsername = username.trim();
     try {
         const db = getDb();
         const [rows] = await withRetry(() => db.query(`
@@ -29,7 +33,7 @@ router.post('/login', async (req, res) => {
             FROM users u 
             LEFT JOIN roles r ON u.role_id = r.id 
             WHERE u.username = ?
-        `, [username]));
+        `, [cleanUsername]));
 
         if (rows.length === 0) {
             return res.status(401).json({ message: 'Credenciales inválidas' });

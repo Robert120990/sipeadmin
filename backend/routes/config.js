@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const nodemailer = require('nodemailer');
-const { getDb } = require('../db');
+const { getDb, invalidateConfigCache } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
@@ -36,6 +36,7 @@ router.post('/config', authenticateToken, requireRole('Administrator'), async (r
                 [host, user, password, database_name, port || 3306]
             );
         }
+        invalidateConfigCache('main');
         res.json({ message: 'Configuración guardada y conexión exitosa' });
     } catch (error) {
         sendSafeError(res, error, 'Error al guardar configuración de base de datos principal', 400);
@@ -67,6 +68,7 @@ router.post('/accounting-config', authenticateToken, requireRole('Administrator'
         } else {
             await db.query("INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, ?, ?, 'accounting')", [host, user, password, database_name, port || 3306]);
         }
+        invalidateConfigCache('accounting');
         res.json({ message: 'Configuración de contabilidad guardada y probada exitosamente' });
     } catch (error) {
         sendSafeError(res, error, 'Error al conectar con la base de datos de contabilidad', 400);

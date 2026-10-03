@@ -34,7 +34,31 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(t3.includes('96/100 USD'));
     });
 
-    test('getEmpresas debe retornar el catálogo de empresas registradas en Sipe Web SaaS', async () => {
+    let dbAvailable = null;
+    const checkDb = async () => {
+        if (dbAvailable !== null) return dbAvailable;
+        try {
+            const db = await getAccountingDb();
+            const [rows] = await db.query('SELECT 1 as ok');
+            dbAvailable = !!(rows && rows[0]?.ok);
+        } catch (e) {
+            dbAvailable = false;
+        }
+        return dbAvailable;
+    };
+
+    const testWithDb = (title, fn) => {
+        test(title, async (t) => {
+            const available = await checkDb();
+            if (!available) {
+                t.skip('MySQL no disponible en este entorno');
+                return;
+            }
+            await fn(t);
+        });
+    };
+
+    testWithDb('getEmpresas debe retornar el catálogo de empresas registradas en Sipe Web SaaS', async () => {
         const empresas = await rhPlanillaService.getEmpresas();
         assert.ok(Array.isArray(empresas), 'Debe retornar un arreglo');
         assert.ok(empresas.length > 0, 'Debe contener al menos una empresa');
@@ -44,7 +68,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(typeof empAndelsa.razon_social === 'string');
     });
 
-    test('getPlanillasGrupos debe retornar los períodos agrupados y su estado general', async () => {
+    testWithDb('getPlanillasGrupos debe retornar los períodos agrupados y su estado general', async () => {
         const resultado = await rhPlanillaService.getPlanillasGrupos({
             companyId: 9,
             anio: 2026
@@ -62,7 +86,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(['pagada', 'pendiente'].includes(first.estado_general), 'estado_general debe ser pagada o pendiente');
     });
 
-    test('getPlanillaDetalle debe listar empleados con rubros desglosados', async () => {
+    testWithDb('getPlanillaDetalle debe listar empleados con rubros desglosados', async () => {
         const detalle = await rhPlanillaService.getPlanillaDetalle({
             companyId: 9,
             anio: 2026,
@@ -81,7 +105,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(primerEmp.rubros.length > 0, 'Empleado debe tener rubros itemizados');
     });
 
-    test('exportBancario debe generar CSV con BOM y formato ="cuenta",monto,nombre y TXT tabulado', async () => {
+    testWithDb('exportBancario debe generar CSV con BOM y formato ="cuenta",monto,nombre y TXT tabulado', async () => {
         const exportData = await rhPlanillaService.exportBancario({
             companyId: 9,
             anio: 2026,
@@ -101,7 +125,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(exportData.txt.includes('\t'), 'TXT debe ser tabulado');
     });
 
-    test('generatePlanillaReportePDF debe emitir un Buffer de PDF válido (Carta Horizontal)', async () => {
+    testWithDb('generatePlanillaReportePDF debe emitir un Buffer de PDF válido (Carta Horizontal)', async () => {
         const pdfBuffer = await rhPlanillaService.generatePlanillaReportePDF({
             companyId: 9,
             anio: 2026,
@@ -114,7 +138,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.equal(pdfBuffer.subarray(0, 4).toString(), '%PDF', 'Debe comenzar con la firma mágica %PDF');
     });
 
-    test('generateRecibosMasivosPDF debe emitir un Buffer de PDF válido con 2 recibos por página', async () => {
+    testWithDb('generateRecibosMasivosPDF debe emitir un Buffer de PDF válido con 2 recibos por página', async () => {
         const pdfBuffer = await rhPlanillaService.generateRecibosMasivosPDF({
             companyId: 9,
             anio: 2026,
@@ -127,7 +151,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.equal(pdfBuffer.subarray(0, 4).toString(), '%PDF', 'Debe comenzar con la firma mágica %PDF');
     });
 
-    test('generateReciboIndividualPDF debe emitir un Buffer de PDF válido para un empleado específico', async () => {
+    testWithDb('generateReciboIndividualPDF debe emitir un Buffer de PDF válido para un empleado específico', async () => {
         const detalle = await rhPlanillaService.getPlanillaDetalle({
             companyId: 9,
             anio: 2026,
@@ -146,7 +170,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.equal(pdfBuffer.subarray(0, 4).toString(), '%PDF', 'Debe comenzar con la firma mágica %PDF');
     });
 
-    test('getCuentasBancariasParaPago debe retornar cuentas bancarias activas y formas de pago', async () => {
+    testWithDb('getCuentasBancariasParaPago debe retornar cuentas bancarias activas y formas de pago', async () => {
         const resultado = await rhPlanillaService.getCuentasBancariasParaPago(9);
         assert.ok(Array.isArray(resultado.cuentas), 'cuentas debe ser un arreglo');
         assert.ok(resultado.cuentas.length > 0, 'Debe haber al menos una cuenta activa');
@@ -159,7 +183,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(cta.banco_nombre, 'Cuenta debe tener nombre de banco');
     });
 
-    test('registrarPagoPlanilla debe registrar múltiples formas de pago, afectar cuentas con fecha_aplicado NULL y permitir anulación', async () => {
+    testWithDb('registrarPagoPlanilla debe registrar múltiples formas de pago, afectar cuentas con fecha_aplicado NULL y permitir anulación', async () => {
         const adminDb = getDb();
         const saasDb = await getAccountingDb();
 
@@ -265,7 +289,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.equal(planillasRevertidas[0]?.estado, 'pendiente', 'Estado debe regresar a pendiente al anular todos los pagos');
     });
 
-    test('getPlanillasGrupos debe calcular timestamp de última modificación y conteo de anomalías', async () => {
+    testWithDb('getPlanillasGrupos debe calcular timestamp de última modificación y conteo de anomalías', async () => {
         const resultado = await rhPlanillaService.getPlanillasGrupos({
             companyId: 2,
             anio: 2026
@@ -279,7 +303,7 @@ describe('Módulo RRHH Planillas Unit & Integration Tests', () => {
         assert.ok(typeof grupo.total_anomalias === 'number', 'total_anomalias debe ser numérico');
     });
 
-    test('getPlanillaDetalle debe calcular auditoría, alertas comparativas y desglose por rubro', async () => {
+    testWithDb('getPlanillaDetalle debe calcular auditoría, alertas comparativas y desglose por rubro', async () => {
         const detalle = await rhPlanillaService.getPlanillaDetalle({
             companyId: 2,
             anio: 2026,

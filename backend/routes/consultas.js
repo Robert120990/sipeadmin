@@ -138,34 +138,49 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) =
                 b.dif += Number(sh.difference || 0);
             }
 
-            // Distinguir tarjetas y remesas analizando pos_shift_remesas
+            // Distinguir tarjetas y remesas analizando pos_shift_remesas en una sola consulta agrupada
+            const allShiftIds = [];
+            const shiftToBranch = {};
             for (const bId of Object.keys(saasByBranch)) {
                 const b = saasByBranch[bId];
-                if (b.shift_ids.length > 0) {
-                    try {
-                        const [remRows] = await withRetry(() => saasDb.query(
-                            "SELECT description, amount FROM pos_shift_remesas WHERE shift_id IN (?)",
-                            [b.shift_ids]
-                        ));
-                        let tarjetaTotal = 0;
-                        let remesaTotal = 0;
-                        for (const r of (remRows || [])) {
-                            const desc = (r.description || '').toLowerCase();
-                            const amt = Number(r.amount || 0);
-                            const isCard = desc.includes('pos') || desc.includes('credomatic') || desc.includes('tarjeta') || desc.includes('voucher');
-                            if (isCard) {
-                                tarjetaTotal += amt;
-                            } else {
-                                remesaTotal += amt;
-                            }
+                (b.shift_ids || []).forEach(sid => {
+                    allShiftIds.push(sid);
+                    shiftToBranch[sid] = bId;
+                });
+            }
+
+            if (allShiftIds.length > 0) {
+                try {
+                    const [remRows] = await withRetry(() => saasDb.query(
+                        "SELECT shift_id, description, amount FROM pos_shift_remesas WHERE shift_id IN (?)",
+                        [allShiftIds]
+                    ));
+                    const branchRemTotals = {};
+                    for (const r of (remRows || [])) {
+                        const bId = r.shift_id ? shiftToBranch[r.shift_id] : (Object.keys(saasByBranch).length === 1 ? Object.keys(saasByBranch)[0] : null);
+                        if (!bId) continue;
+                        if (!branchRemTotals[bId]) {
+                            branchRemTotals[bId] = { tarjeta: 0, remesado: 0, count: 0 };
                         }
-                        if (remRows && remRows.length > 0) {
-                            b.tarjeta = tarjetaTotal;
-                            b.remesado = remesaTotal;
+                        const desc = (r.description || '').toLowerCase();
+                        const amt = Number(r.amount || 0);
+                        const isCard = desc.includes('pos') || desc.includes('credomatic') || desc.includes('tarjeta') || desc.includes('voucher');
+                        if (isCard) {
+                            branchRemTotals[bId].tarjeta += amt;
+                        } else {
+                            branchRemTotals[bId].remesado += amt;
                         }
-                    } catch (remErr) {
-                        console.warn('[Cortes Tienda] Error leyendo pos_shift_remesas:', remErr.message);
+                        branchRemTotals[bId].count += 1;
                     }
+
+                    for (const bId of Object.keys(branchRemTotals)) {
+                        if (saasByBranch[bId] && branchRemTotals[bId].count > 0) {
+                            saasByBranch[bId].tarjeta = branchRemTotals[bId].tarjeta;
+                            saasByBranch[bId].remesado = branchRemTotals[bId].remesado;
+                        }
+                    }
+                } catch (remErr) {
+                    console.warn('[Cortes Tienda] Error leyendo pos_shift_remesas:', remErr.message);
                 }
             }
         }
@@ -2239,8 +2254,7 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
             registros: mapped
         });
     } catch (error) {
-        console.error(`Error fetching detalle cierre (${rubro}):`, error);
-        res.status(500).json({ message: `Error fetching detalle de ${rubro}: ${error.message}` });
+        sendSafeError(res, error, `Error al consultar detalle de ${rubro}`);
     }
 });
 

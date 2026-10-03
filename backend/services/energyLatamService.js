@@ -5,8 +5,8 @@ const { getDb, withRetry } = require('../db');
 
 // Secure portal configuration - backend only, never exposed to clients
 const PORTAL_URL = process.env.ENERGY_LATAM_URL || 'https://customerportal.energy-latam.com/generic/es/';
-const PORTAL_USER = process.env.ENERGY_LATAM_USER || 'corina.sosah@sipesv.com';
-const PORTAL_PASS = process.env.ENERGY_LATAM_PASS || 'Estaciones+19';
+const PORTAL_USER = process.env.ENERGY_LATAM_USER || '';
+const PORTAL_PASS = process.env.ENERGY_LATAM_PASS || '';
 
 let isSyncRunning = false;
 
@@ -360,6 +360,9 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
         await page.goto(PORTAL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         if (page.url().includes('/login')) {
+            if (!PORTAL_USER || !PORTAL_PASS) {
+                throw new Error('Credenciales de Energy Latam no configuradas. Por favor defina ENERGY_LATAM_USER y ENERGY_LATAM_PASS en .env');
+            }
             const emailEl = await page.waitForSelector('>>> input[type="email"]', { timeout: 30000 });
             const passEl = await page.waitForSelector('>>> input[type="password"]', { timeout: 30000 });
             const loginBtn = await page.waitForSelector('>>> button.slds-login', { timeout: 30000 });
@@ -632,6 +635,10 @@ async function checkPortalStatus() {
 
         if (!isLoggedIn && page.url().includes('/login')) {
             try {
+                if (!PORTAL_USER || !PORTAL_PASS) {
+                    console.warn('[checkPortalStatus] Credenciales de Energy Latam no configuradas en .env');
+                    return { connected: false, error: 'Credenciales de portal no configuradas en .env' };
+                }
                 const emailEl = await page.waitForSelector('>>> input[type="email"]', { timeout: 10000 });
                 const passEl = await page.waitForSelector('>>> input[type="password"]', { timeout: 10000 });
                 const loginBtn = await page.waitForSelector('>>> button.slds-login', { timeout: 10000 });

@@ -1040,16 +1040,45 @@ const getDb = () => {
     return pool;
 };
 
-const getExternalDb = async () => {
-    let configs = [];
+let configCache = {
+    main: { data: null, expiresAt: 0 },
+    accounting: { data: null, expiresAt: 0 }
+};
+
+const invalidateConfigCache = (type = null) => {
+    if (type && configCache[type]) {
+        configCache[type] = { data: null, expiresAt: 0 };
+    } else {
+        configCache = {
+            main: { data: null, expiresAt: 0 },
+            accounting: { data: null, expiresAt: 0 }
+        };
+    }
+};
+
+const fetchCachedExternalConfig = async (type) => {
+    const now = Date.now();
+    if (configCache[type] && configCache[type].data && configCache[type].expiresAt > now) {
+        return configCache[type].data;
+    }
     try {
         const mainPool = getDb();
-        [configs] = await withRetry(() => mainPool.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1"));
+        const [rows] = await withRetry(() => mainPool.query("SELECT * FROM external_configs WHERE type = ? ORDER BY created_at DESC LIMIT 1", [type]));
+        const config = (rows && rows.length > 0) ? rows[0] : null;
+        configCache[type] = {
+            data: config,
+            expiresAt: now + 60000 // 60 segundos de caché en memoria
+        };
+        return config;
     } catch (err) {
-        console.warn('Warning getting external_configs main:', err.message);
+        console.warn(`Warning getting external_configs ${type}:`, err.message);
+        return configCache[type]?.data || null;
     }
-    
-    const config = (configs && configs.length > 0) ? configs[0] : {
+};
+
+const getExternalDb = async () => {
+    const cachedConfig = await fetchCachedExternalConfig('main');
+    const config = cachedConfig || {
         host: process.env.EXTERNAL_DB_HOST || process.env.DB_HOST || '127.0.0.1',
         user: process.env.EXTERNAL_DB_USER || process.env.DB_USER || 'root',
         password: process.env.EXTERNAL_DB_PASSWORD || process.env.DB_PASSWORD || '',
@@ -1083,15 +1112,8 @@ const getExternalDb = async () => {
 };
 
 const getAccountingDb = async () => {
-    let configs = [];
-    try {
-        const mainPool = getDb();
-        [configs] = await withRetry(() => mainPool.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1"));
-    } catch (err) {
-        console.warn('Warning getting external_configs accounting:', err.message);
-    }
-    
-    const config = (configs && configs.length > 0) ? configs[0] : {
+    const cachedConfig = await fetchCachedExternalConfig('accounting');
+    const config = cachedConfig || {
         host: process.env.DB_HOST || '127.0.0.1',
         user: process.env.DB_USER || 'root',
         password: process.env.DB_PASSWORD || '',
@@ -1144,4 +1166,4 @@ const withTransaction = async (callback) => {
     }
 };
 
-module.exports = { initDB, getDb, getExternalDb, getAccountingDb, withRetry, withTransaction };
+module.exports = { initDB, getDb, getExternalDb, getAccountingDb, withRetry, withTransaction, invalidateConfigCache };
