@@ -3,10 +3,91 @@ const path = require('path');
 const fs = require('fs');
 const { getDb, withRetry } = require('../db');
 
-// Secure portal configuration - backend only, never exposed to clients
-const PORTAL_URL = process.env.ENERGY_LATAM_URL || 'https://customerportal.energy-latam.com/generic/es/';
-const PORTAL_USER = process.env.ENERGY_LATAM_USER || '';
-const PORTAL_PASS = process.env.ENERGY_LATAM_PASS || '';
+// Secure portal configuration - supports database storage (external_configs) with .env fallback
+const DEFAULT_PORTAL_URL = 'https://customerportal.energy-latam.com/generic/es/';
+
+let cachedCreds = null;
+let cachedCredsTimestamp = 0;
+const CREDS_CACHE_TTL = 30 * 1000; // 30 seconds
+
+async function getPortalCredentials() {
+    if (cachedCreds && (Date.now() - cachedCredsTimestamp) < CREDS_CACHE_TTL) {
+        return cachedCreds;
+    }
+
+    // 1. Check database first (configured via UI in external_configs)
+    try {
+        const db = getDb();
+        if (db) {
+            const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'energy_latam' ORDER BY id DESC LIMIT 1");
+            if (rows.length > 0 && rows[0].user && rows[0].password) {
+                cachedCreds = {
+                    url: rows[0].host || process.env.ENERGY_LATAM_URL || DEFAULT_PORTAL_URL,
+                    user: rows[0].user,
+                    pass: rows[0].password,
+                    source: 'database'
+                };
+                cachedCredsTimestamp = Date.now();
+                return cachedCreds;
+            }
+        }
+    } catch (e) {
+        console.warn('[energyLatamService] Error consultando external_configs para credenciales de portal:', e.message);
+    }
+
+    // 2. Fallback to process.env (dynamic check on every request)
+    const envUser = process.env.ENERGY_LATAM_USER || '';
+    const envPass = process.env.ENERGY_LATAM_PASS || '';
+    const envUrl = process.env.ENERGY_LATAM_URL || DEFAULT_PORTAL_URL;
+
+    cachedCreds = {
+        url: envUrl,
+        user: envUser,
+        pass: envPass,
+        source: (envUser && envPass) ? 'env' : 'none'
+    };
+    cachedCredsTimestamp = Date.now();
+    return cachedCreds;
+}
+
+async function savePortalCredentials({ user, password, url }) {
+    const db = getDb();
+    if (!db) throw new Error('Base de datos no inicializada');
+
+    const cleanUser = String(user || '').trim();
+    const cleanPass = String(password || '').trim();
+    const cleanUrl = String(url || '').trim() || DEFAULT_PORTAL_URL;
+
+    if (!cleanUser) throw new Error('El usuario o correo del portal es requerido');
+    if (!cleanPass) throw new Error('La contraseña del portal es requerida');
+
+    const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'energy_latam' LIMIT 1");
+    if (existing.length > 0) {
+        await db.query(
+            "UPDATE external_configs SET host = ?, user = ?, password = ?, database_name = 'portal_energy_latam', port = 443 WHERE id = ?",
+            [cleanUrl, cleanUser, cleanPass, existing[0].id]
+        );
+    } else {
+        await db.query(
+            "INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, 'portal_energy_latam', 443, 'energy_latam')",
+            [cleanUrl, cleanUser, cleanPass]
+        );
+    }
+
+    cachedCreds = {
+        url: cleanUrl,
+        user: cleanUser,
+        pass: cleanPass,
+        source: 'database'
+    };
+    cachedCredsTimestamp = Date.now();
+
+    return {
+        success: true,
+        message: 'Credenciales del portal Puma Energy-Latam guardadas exitosamente',
+        user: cleanUser
+    };
+}
 
 let isSyncRunning = false;
 
@@ -356,19 +437,21 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
             }
         });
 
+        const creds = await getPortalCredentials();
+
         // 1. Iniciar sesión
-        await page.goto(PORTAL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(creds.url || DEFAULT_PORTAL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         if (page.url().includes('/login')) {
-            if (!PORTAL_USER || !PORTAL_PASS) {
-                throw new Error('Credenciales de Energy Latam no configuradas. Por favor defina ENERGY_LATAM_USER y ENERGY_LATAM_PASS en .env');
+            if (!creds.user || !creds.pass) {
+                throw new Error('Credenciales de Energy Latam no configuradas. Por favor configure el usuario y contraseña en "Diagnóstico Portal" o defina ENERGY_LATAM_USER y ENERGY_LATAM_PASS en .env');
             }
             const emailEl = await page.waitForSelector('>>> input[type="email"]', { timeout: 30000 });
             const passEl = await page.waitForSelector('>>> input[type="password"]', { timeout: 30000 });
             const loginBtn = await page.waitForSelector('>>> button.slds-login', { timeout: 30000 });
 
-            await emailEl.type(PORTAL_USER, { delay: 20 });
-            await passEl.type(PORTAL_PASS, { delay: 20 });
+            await emailEl.type(creds.user, { delay: 20 });
+            await passEl.type(creds.pass, { delay: 20 });
             await loginBtn.click();
 
             for (let i = 0; i < 30; i++) {
@@ -594,6 +677,22 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
  * Diagnóstico interactivo de la conexión con el portal Salesforce / Puma Energy
  */
 async function checkPortalStatus() {
+    const creds = await getPortalCredentials();
+    const targetUrl = creds.url || DEFAULT_PORTAL_URL;
+
+    if (!creds.user || !creds.pass) {
+        return {
+            success: false,
+            status: 'CONFIG_REQUIRED',
+            message: 'Credenciales de acceso a Puma Energy / Energy Latam no configuradas. Por favor ingrese el correo y contraseña en la sección de Credenciales del Portal.',
+            serverIp: '5.252.55.29',
+            currentUrl: targetUrl,
+            requiresConfig: true,
+            credentialsConfigured: false,
+            testedAt: new Date().toISOString()
+        };
+    }
+
     let browser = null;
     try {
         const sessionDir = path.join(__dirname, '..', 'data', 'puppeteer_session');
@@ -629,22 +728,18 @@ async function checkPortalStatus() {
             }
         });
 
-        await page.goto(PORTAL_URL, { waitUntil: 'networkidle2', timeout: 35000 });
+        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
         let isLoggedIn = !page.url().includes('/login') && (latestDoGet?.sellToList?.length > 0 || reqHeaders);
 
         if (!isLoggedIn && page.url().includes('/login')) {
             try {
-                if (!PORTAL_USER || !PORTAL_PASS) {
-                    console.warn('[checkPortalStatus] Credenciales de Energy Latam no configuradas en .env');
-                    return { connected: false, error: 'Credenciales de portal no configuradas en .env' };
-                }
                 const emailEl = await page.waitForSelector('>>> input[type="email"]', { timeout: 10000 });
                 const passEl = await page.waitForSelector('>>> input[type="password"]', { timeout: 10000 });
                 const loginBtn = await page.waitForSelector('>>> button.slds-login', { timeout: 10000 });
 
-                await emailEl.type(PORTAL_USER, { delay: 15 });
-                await passEl.type(PORTAL_PASS, { delay: 15 });
+                await emailEl.type(creds.user, { delay: 15 });
+                await passEl.type(creds.pass, { delay: 15 });
                 await loginBtn.click();
 
                 for (let i = 0; i < 20; i++) {
@@ -703,6 +798,7 @@ async function checkPortalStatus() {
             pageTitle: title,
             requires2FA: is2FA,
             isIpBlocked: isBlocked,
+            credentialsConfigured: true,
             screenshot: screenshotBase64,
             accountsCount: latestDoGet?.sellToList?.length || 0,
             testedAt: new Date().toISOString()
@@ -730,13 +826,15 @@ async function submit2FACode(code) {
     if (!code || !String(code).trim()) {
         return { success: false, message: 'Debe ingresar el código de verificación' };
     }
+    const creds = await getPortalCredentials();
+    const targetUrl = creds.url || DEFAULT_PORTAL_URL;
     let browser = null;
     try {
         const sessionDir = path.join(__dirname, '..', 'data', 'puppeteer_session');
         browser = await launchBrowser(sessionDir);
 
         const page = await browser.newPage();
-        await page.goto(PORTAL_URL, { waitUntil: 'networkidle2', timeout: 35000 });
+        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
         const inputSelectors = [
             'input[type="text"]',
@@ -813,5 +911,7 @@ module.exports = {
     seedInitialPortalOrders,
     checkPortalStatus,
     submit2FACode,
+    getPortalCredentials,
+    savePortalCredentials,
     normalizeEstacion
 };

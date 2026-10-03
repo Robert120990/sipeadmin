@@ -3,7 +3,7 @@ import {
     Truck, CheckCircle, XCircle, RefreshCw, AlertTriangle, ExternalLink,
     CreditCard, DollarSign, FileText, CheckCircle2, Clock, Scale, Eye,
     TrendingUp, TrendingDown, Layers, ChevronRight, Filter, Sliders, CheckSquare, Plus,
-    Activity, ShieldCheck, Key, Copy
+    Activity, ShieldCheck, Key, Copy, Lock, EyeOff, Save
 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -125,6 +125,13 @@ export default function PedidosCombustible() {
     const [isLoadingDiagnostico, setIsLoadingDiagnostico] = useState(false);
     const [twoFactorCode, setTwoFactorCode] = useState('');
     const [isSubmittingCode, setIsSubmittingCode] = useState(false);
+
+    // Credenciales Portal Puma / Energy Latam
+    const [portalCredsData, setPortalCredsData] = useState(null);
+    const [inputPortalUser, setInputPortalUser] = useState('');
+    const [inputPortalPass, setInputPortalPass] = useState('');
+    const [showPortalPass, setShowPortalPass] = useState(false);
+    const [isSavingCreds, setIsSavingCreds] = useState(false);
 
     const [showNuevoPrecioModal, setShowNuevoPrecioModal] = useState(false);
     const [precioForm, setPrecioForm] = useState({
@@ -359,7 +366,50 @@ export default function PedidosCombustible() {
         }
     };
 
-    // Diagnóstico Portal Puma
+    // Diagnóstico y Credenciales Portal Puma
+    const fetchPortalCreds = async () => {
+        try {
+            const res = await api.get('/operaciones/portal/credenciales');
+            if (res.data?.success) {
+                setPortalCredsData(res.data);
+                if (res.data.user && !inputPortalUser) {
+                    setInputPortalUser(res.data.user);
+                }
+            }
+        } catch (e) {
+            console.warn('Error al obtener credenciales de portal:', e);
+        }
+    };
+
+    const handleSavePortalCreds = async (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        if (!inputPortalUser.trim()) {
+            return addToast('El usuario o correo electrónico del portal es obligatorio', 'warning');
+        }
+        if (!inputPortalPass.trim()) {
+            return addToast('La contraseña del portal es obligatoria', 'warning');
+        }
+        setIsSavingCreds(true);
+        try {
+            const res = await api.post('/operaciones/portal/credenciales', {
+                user: inputPortalUser.trim(),
+                password: inputPortalPass.trim()
+            });
+            if (res.data?.success) {
+                addToast('Credenciales guardadas exitosamente en el servidor', 'success');
+                setInputPortalPass('');
+                fetchPortalCreds();
+                fetchDiagnostico();
+            } else {
+                addToast(res.data?.error || 'No se pudieron guardar las credenciales', 'error');
+            }
+        } catch (e) {
+            addToast('Error al guardar credenciales: ' + (e.response?.data?.error || e.message), 'error');
+        } finally {
+            setIsSavingCreds(false);
+        }
+    };
+
     const fetchDiagnostico = async () => {
         setIsLoadingDiagnostico(true);
         try {
@@ -374,6 +424,7 @@ export default function PedidosCombustible() {
 
     const handleOpenDiagnosticoPortal = () => {
         setShowDiagnosticoModal(true);
+        fetchPortalCreds();
         fetchDiagnostico();
     };
 
@@ -2287,12 +2338,12 @@ export default function PedidosCombustible() {
             <Modal
                 isOpen={showDiagnosticoModal}
                 onClose={() => setShowDiagnosticoModal(false)}
-                title="Diagnóstico de Conexión — Portal Puma Energy-Latam"
+                title="Diagnóstico y Credenciales — Portal Puma Energy-Latam"
                 size="lg"
                 footer={
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.5rem' }}>
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            VPS IP: <code>5.252.55.29</code> • Usuario: <code>corina.sosah@sipesv.com</code>
+                            VPS IP: <code>5.252.55.29</code> • Usuario: <code>{portalCredsData?.user || inputPortalUser || 'corina.sosah@sipesv.com'}</code>
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <button
@@ -2318,6 +2369,74 @@ export default function PedidosCombustible() {
                 }
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.25rem 0' }}>
+                    {/* Tarjeta de Gestión de Credenciales del Portal */}
+                    <div className="card glass" style={{
+                        padding: '1rem',
+                        borderLeft: portalCredsData?.configured ? '4px solid #10b981' : '4px solid #f59e0b',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.75rem',
+                        background: 'rgba(0,0,0,0.02)'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <Lock size={16} color={portalCredsData?.configured ? '#10b981' : '#f59e0b'} />
+                                <span style={{ fontWeight: 'bold', fontSize: '0.875rem' }}>
+                                    Credenciales de Acceso a Salesforce / Puma Energy
+                                </span>
+                            </div>
+                            <span className={`badge ${portalCredsData?.configured ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}>
+                                {portalCredsData?.configured
+                                    ? (portalCredsData.source === 'database' ? 'Configurada en BD' : 'Configurada en Servidor')
+                                    : 'Pendiente de Configurar'}
+                            </span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                            Ingrese el usuario y contraseña del portal Puma Energy-Latam para sincronizar pedidos en vivo. Se guardan directamente en el servidor sin necesidad de acceder por consola SSH.
+                        </p>
+                        <form onSubmit={handleSavePortalCreds} style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: '1 1 210px' }}>
+                                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Usuario / Correo:</label>
+                                <input
+                                    type="text"
+                                    placeholder="corina.sosah@sipesv.com"
+                                    value={inputPortalUser}
+                                    onChange={e => setInputPortalUser(e.target.value)}
+                                    style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.825rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                                />
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: '1 1 210px' }}>
+                                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Contraseña:</label>
+                                <div style={{ display: 'flex', position: 'relative' }}>
+                                    <input
+                                        type={showPortalPass ? 'text' : 'password'}
+                                        placeholder={portalCredsData?.hasPassword ? '•••••••••••• (dejar vacío para mantener)' : 'Ingrese contraseña'}
+                                        value={inputPortalPass}
+                                        onChange={e => setInputPortalPass(e.target.value)}
+                                        style={{ height: '36px', padding: '0 2.2rem 0 0.75rem', fontSize: '0.825rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', width: '100%' }}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPortalPass(!showPortalPass)}
+                                        style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '4px' }}
+                                        title={showPortalPass ? 'Ocultar contraseña' : 'Ver contraseña'}
+                                    >
+                                        {showPortalPass ? <EyeOff size={15} /> : <Eye size={15} />}
+                                    </button>
+                                </div>
+                            </div>
+                            <button
+                                type="submit"
+                                className="btn-primary"
+                                disabled={isSavingCreds || !inputPortalUser.trim() || !inputPortalPass.trim()}
+                                style={{ height: '36px', padding: '0 1rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap' }}
+                            >
+                                {isSavingCreds ? <RefreshCw size={13} className="spin" /> : <Save size={14} />}
+                                Guardar Credenciales
+                            </button>
+                        </form>
+                    </div>
+
                     {isLoadingDiagnostico ? (
                         <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
                             <RefreshCw size={28} className="spin" color="var(--primary, #3b82f6)" />
@@ -2326,38 +2445,53 @@ export default function PedidosCombustible() {
                     ) : diagnosticoData ? (
                         <>
                             {/* Estado General */}
-                            <div style={{
-                                padding: '1rem',
-                                borderRadius: '6px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.75rem',
-                                background: diagnosticoData.status === 'CONECTADO'
-                                    ? 'rgba(34, 197, 94, 0.12)'
-                                    : diagnosticoData.status === 'REQUIRES_2FA'
-                                    ? 'rgba(245, 158, 11, 0.12)'
-                                    : 'rgba(239, 68, 68, 0.12)',
-                                border: `1px solid ${diagnosticoData.status === 'CONECTADO' ? '#22c55e' : diagnosticoData.status === 'REQUIRES_2FA' ? '#f59e0b' : '#ef4444'}`
-                            }}>
-                                {diagnosticoData.status === 'CONECTADO' ? (
-                                    <CheckCircle size={24} color="#22c55e" style={{ flexShrink: 0 }} />
-                                ) : diagnosticoData.status === 'REQUIRES_2FA' ? (
-                                    <Key size={24} color="#f59e0b" style={{ flexShrink: 0 }} />
-                                ) : (
-                                    <AlertTriangle size={24} color="#ef4444" style={{ flexShrink: 0 }} />
-                                )}
-                                <div>
-                                    <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>
-                                        {diagnosticoData.status === 'CONECTADO' && '¡Conexión Exitosa y Sesión Activa!'}
-                                        {diagnosticoData.status === 'REQUIRES_2FA' && 'Autenticación en Dos Pasos (2FA) Requerida'}
-                                        {diagnosticoData.status === 'IP_BLOCKED' && 'Acceso Bloqueado por Política de IP en Salesforce'}
-                                        {diagnosticoData.status === 'ERROR' && 'No se pudo conectar con el portal'}
+                            {(() => {
+                                const isConnected = diagnosticoData.status === 'CONECTADO' || diagnosticoData.status === 'CONNECTED';
+                                const is2FA = diagnosticoData.status === 'REQUIRES_2FA' || diagnosticoData.requires2FA;
+                                const isConfig = diagnosticoData.status === 'CONFIG_REQUIRED';
+                                const isInvalid = diagnosticoData.status === 'INVALID_CREDENTIALS';
+                                const isBlocked = diagnosticoData.status === 'IP_BLOCKED';
+
+                                return (
+                                    <div style={{
+                                        padding: '1rem',
+                                        borderRadius: '6px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.75rem',
+                                        background: isConnected
+                                            ? 'rgba(34, 197, 94, 0.12)'
+                                            : (is2FA || isConfig)
+                                            ? 'rgba(245, 158, 11, 0.12)'
+                                            : 'rgba(239, 68, 68, 0.12)',
+                                        border: `1px solid ${isConnected ? '#22c55e' : (is2FA || isConfig) ? '#f59e0b' : '#ef4444'}`
+                                    }}>
+                                        {isConnected ? (
+                                            <CheckCircle size={24} color="#22c55e" style={{ flexShrink: 0 }} />
+                                        ) : is2FA ? (
+                                            <Key size={24} color="#f59e0b" style={{ flexShrink: 0 }} />
+                                        ) : isConfig ? (
+                                            <Lock size={24} color="#f59e0b" style={{ flexShrink: 0 }} />
+                                        ) : (
+                                            <AlertTriangle size={24} color="#ef4444" style={{ flexShrink: 0 }} />
+                                        )}
+                                        <div>
+                                            <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>
+                                                {isConnected && '¡Conexión Exitosa y Sesión Activa!'}
+                                                {is2FA && 'Autenticación en Dos Pasos (2FA) Requerida'}
+                                                {isConfig && 'Credenciales de Acceso Requeridas'}
+                                                {isInvalid && 'Credenciales de Acceso Incorrectas'}
+                                                {isBlocked && 'Acceso Bloqueado por Política de IP en Salesforce'}
+                                                {diagnosticoData.status === 'ERROR' && 'No se pudo conectar con el portal'}
+                                                {diagnosticoData.status === 'LOGIN_PENDING' && 'Inicio de Sesión en Proceso'}
+                                            </div>
+                                            <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                                {diagnosticoData.message}
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                                        {diagnosticoData.message}
-                                    </div>
-                                </div>
-                            </div>
+                                );
+                            })()}
 
                             {/* Formulario 2FA si se requiere */}
                             {diagnosticoData.requires2FA && (
@@ -2366,7 +2500,7 @@ export default function PedidosCombustible() {
                                         <Key size={16} color="#f59e0b" /> Introducir Código de Verificación OTP
                                     </h4>
                                     <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                        Salesforce envió un código de 5 o 6 dígitos al correo de la cuenta (<b>corina.sosah@sipesv.com</b>). Ingréselo aquí para completar el inicio de sesión:
+                                        Salesforce envió un código de 5 o 6 dígitos al correo de la cuenta (<b>{portalCredsData?.user || inputPortalUser || 'corina.sosah@sipesv.com'}</b>). Ingréselo aquí para completar el inicio de sesión:
                                     </p>
                                     <form onSubmit={handleSubmit2FACode} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                                         <input
@@ -2439,14 +2573,16 @@ export default function PedidosCombustible() {
                             </div>
 
                             {/* Mini Captura del Navegador del Servidor */}
-                            {diagnosticoData.screenshotBase64 && (
+                            {(diagnosticoData.screenshot || diagnosticoData.screenshotBase64) && (
                                 <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                                     <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>
                                         Captura en vivo del navegador en el VPS:
                                     </div>
                                     <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '4px', background: '#000' }}>
                                         <img
-                                            src={`data:image/png;base64,${diagnosticoData.screenshotBase64}`}
+                                            src={(diagnosticoData.screenshot || diagnosticoData.screenshotBase64).startsWith('data:')
+                                                ? (diagnosticoData.screenshot || diagnosticoData.screenshotBase64)
+                                                : `data:image/png;base64,${diagnosticoData.screenshot || diagnosticoData.screenshotBase64}`}
                                             alt="Captura de pantalla de portal Puma"
                                             style={{ width: '100%', height: 'auto', display: 'block' }}
                                         />

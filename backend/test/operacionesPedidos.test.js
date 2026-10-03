@@ -1,7 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const { parsePedidosPagination, calculateHasMore, buildEstacionFilterClause } = require('../routes/operaciones');
-const { normalizeEstacion } = require('../services/energyLatamService');
+const { normalizeEstacion, getPortalCredentials, savePortalCredentials } = require('../services/energyLatamService');
 
 describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
     describe('parsePedidosPagination', () => {
@@ -111,6 +111,28 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
 
             const normLil = normalizeEstacion('INVERSIONES LIL SA DE CV - NON FUELS', { accountNumber: '3409797' });
             assert.strictEqual(normLil.id, '014');
+        });
+    });
+
+    describe('getPortalCredentials y savePortalCredentials', () => {
+        it('debe resolver credenciales con formato y estructura válidos', async () => {
+            const creds = await getPortalCredentials();
+            assert.ok(creds);
+            assert.ok(typeof creds.url === 'string');
+            assert.ok(typeof creds.user === 'string');
+            assert.ok(typeof creds.pass === 'string');
+            assert.ok(['database', 'env', 'none'].includes(creds.source));
+        });
+
+        it('debe rechazar guardado si falta usuario o contraseña', async () => {
+            await assert.rejects(
+                () => savePortalCredentials({ user: '', password: '123' }),
+                /usuario o correo del portal es requerido/
+            );
+            await assert.rejects(
+                () => savePortalCredentials({ user: 'test@example.com', password: '' }),
+                /contraseña del portal es requerida/
+            );
         });
     });
 });

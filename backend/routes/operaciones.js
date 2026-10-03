@@ -904,6 +904,40 @@ router.post('/operaciones/portal/verificar-codigo', authenticateToken, requirePe
     }
 });
 
+// 3d. Consultar estado y configuración de credenciales del portal Energy Latam
+router.get('/operaciones/portal/credenciales', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const creds = await energyLatamService.getPortalCredentials();
+        res.json({
+            success: true,
+            configured: Boolean(creds.user && creds.pass),
+            user: creds.user || '',
+            hasPassword: Boolean(creds.pass),
+            source: creds.source,
+            url: creds.url
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar credenciales del portal');
+    }
+});
+
+// 3e. Guardar credenciales de acceso al portal Energy Latam
+router.post('/operaciones/portal/credenciales', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const { user, password, url } = req.body;
+        if (!user || !String(user).trim()) {
+            return res.status(400).json({ error: 'El usuario o correo electrónico es obligatorio' });
+        }
+        if (!password || !String(password).trim()) {
+            return res.status(400).json({ error: 'La contraseña es obligatoria' });
+        }
+        const result = await energyLatamService.savePortalCredentials({ user, password, url });
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al guardar credenciales del portal');
+    }
+});
+
 // 4. Actualizar pedido individual
 router.post('/operaciones/portal/actualizar-pedido/:numero_orden', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
