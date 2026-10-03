@@ -57,6 +57,7 @@ import {
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 export default function DashboardLayout() {
     const navigate = useNavigate();
@@ -581,15 +582,17 @@ export default function DashboardLayout() {
                     >
                         {isMounted ? (
                             <React.Suspense fallback={<LoadingFallback message={`Cargando ${tab.name}...`} />}>
-                                {hasPermission(tab.path) || tab.path === '/dashboard' ? (
-                                    componentRegistry[tab.path] || <div className="card glass">Módulo no registrado: {tab.path}</div>
-                                ) : (
-                                    <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
-                                        <Shield size={48} color="var(--danger)" style={{ marginBottom: '1rem' }} />
-                                        <h2>Acceso Restringido</h2>
-                                        <p>No tiene permisos suficientes para ver el módulo {tab.path}.</p>
-                                    </div>
-                                )}
+                                <ErrorBoundary tabName={tab.name} tabPath={tab.path} isTabLevel>
+                                    {hasPermission(tab.path) || tab.path === '/dashboard' ? (
+                                        componentRegistry[tab.path] || <div className="card glass">Módulo no registrado: {tab.path}</div>
+                                    ) : (
+                                        <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
+                                            <Shield size={48} color="var(--danger)" style={{ marginBottom: '1rem' }} />
+                                            <h2>Acceso Restringido</h2>
+                                            <p>No tiene permisos suficientes para ver el módulo {tab.path}.</p>
+                                        </div>
+                                    )}
+                                </ErrorBoundary>
                             </React.Suspense>
                         ) : null}
                     </div>

@@ -2,7 +2,16 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
+import { recordGlobalError } from './utils/errorDiagnostics'
 import './index.css'
+
+// Registrar excepciones y rechazos globales en el buffer de diagnóstico
+window.addEventListener('error', (event) => {
+    recordGlobalError(event);
+});
+window.addEventListener('unhandledrejection', (event) => {
+    recordGlobalError(event);
+});
 
 // Manejar automáticamente errores de precarga de chunks de Vite al desplegar nueva versión
 window.addEventListener('vite:preloadError', () => {
