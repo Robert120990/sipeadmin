@@ -3934,11 +3934,15 @@ export default function VentasEstaciones() {
                                     <AlertTriangle size={15} style={{ flexShrink: 0 }} /> Observaciones y Alertas de Auditoría en este Corte:
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', paddingLeft: '1.25rem' }}>
-                                    {(corteModal.cabecera.incongruencias || []).map((inc, i) => (
-                                        <span key={i} style={{ fontSize: '0.74rem', color: 'var(--text)', background: 'var(--bg-card)', padding: '0.15rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(239,68,68,0.2)' }}>
-                                            {inc}
-                                        </span>
-                                    ))}
+                                    {((corteModal.cabecera?.incongruencias?.length ? corteModal.cabecera.incongruencias : corteModal.cabecera?.alertas) || []).map((inc, i) => {
+                                        const text = typeof inc === 'string' ? inc : (inc?.texto || inc?.descripcion || inc?.tipo || '');
+                                        if (!text) return null;
+                                        return (
+                                            <span key={i} style={{ fontSize: '0.74rem', color: 'var(--text)', background: 'var(--bg-card)', padding: '0.15rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(239,68,68,0.2)' }}>
+                                                {text}
+                                            </span>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         )}
@@ -4048,8 +4052,16 @@ export default function VentasEstaciones() {
                             </button>
                         </div>
 
-                        {/* Tab 1: Ventas por Línea */}
-                        {(corteModal.activeTab || 'lineas') === 'lineas' && (
+                        {/* Tab Content: Loading vs Content */}
+                        {corteModal.loading ? (
+                            <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                <RefreshCw size={26} className="spin" style={{ margin: '0 auto 0.75rem auto', display: 'block', color: 'var(--primary)' }} />
+                                <p style={{ fontSize: '0.85rem' }}>Cargando detalle del corte de tienda...</p>
+                            </div>
+                        ) : (
+                            <>
+                                {/* Tab 1: Ventas por Línea */}
+                                {(corteModal.activeTab || 'lineas') === 'lineas' && (
                             <div className="table-responsive" style={{ maxHeight: '380px', overflowY: 'auto' }}>
                                 <table className="table" style={{ width: '100%', minWidth: '550px', fontSize: '0.8rem' }}>
                                     <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-card)' }}>
@@ -4229,6 +4241,8 @@ export default function VentasEstaciones() {
                                 })}
                             </div>
                         )}
+                        </>
+                    )}
 
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
                             <button
