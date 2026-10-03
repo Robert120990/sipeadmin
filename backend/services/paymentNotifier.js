@@ -316,6 +316,12 @@ async function sendPaymentReminderNotification(options = {}) {
  * Initialize daily cron job scheduled at 08:00 AM (America/El_Salvador timezone)
  */
 function initPaymentScheduler() {
+    // Si corre bajo PM2 en modo clúster, solo la instancia primaria ('0') ejecuta el cron
+    if (process.env.NODE_APP_INSTANCE !== undefined && process.env.NODE_APP_INSTANCE !== '0') {
+        console.log(`[Payment Notifier] Instancia secundaria PM2 (#${process.env.NODE_APP_INSTANCE}) detectada. Cron omitido para prevenir duplicidad.`);
+        return null;
+    }
+
     // Schedule: 08:00 AM every day
     const cronExpression = '0 8 * * *';
 

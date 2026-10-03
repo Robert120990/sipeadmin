@@ -10,6 +10,16 @@ jobs:
   validate:
     runs-on: ubuntu-latest
 
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: db_sipe_admin
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,6 +46,13 @@ jobs:
 
       - name: Run Backend Automated Tests
         run: pnpm --filter backend test
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: ''
+          DB_NAME: db_sipe_admin
+          JWT_SECRET: test_ci_jwt_secret_entropy_32_chars_long
 
       - name: Test Frontend Production Build
         run: pnpm --filter frontend run build

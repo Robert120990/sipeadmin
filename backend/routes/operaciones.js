@@ -611,8 +611,15 @@ router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, r
 
 // --- PORTAL ENERGY-LATAM / PUMA ORDERS & BANK INTEGRATION ---
 
+let portalTablesInitialized = false;
+let portalInitPromise = null;
+
 async function ensurePortalTablesAndSeed(db) {
-    try {
+    if (portalTablesInitialized) return;
+    if (portalInitPromise) return portalInitPromise;
+
+    portalInitPromise = (async () => {
+        try {
         await db.query(`
             CREATE TABLE IF NOT EXISTS portal_pedidos (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -741,9 +748,15 @@ async function ensurePortalTablesAndSeed(db) {
             WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '015') 
               AND (estacion_nombre LIKE '%14 AVENIDA%' OR raw_data_json LIKE '%14 AVENIDA%')
         `);
-    } catch(err) {
-        console.warn('[ensurePortalTablesAndSeed] Note:', err.message);
-    }
+        portalTablesInitialized = true;
+        } catch(err) {
+            console.warn('[ensurePortalTablesAndSeed] Note:', err.message);
+        } finally {
+            portalInitPromise = null;
+        }
+    })();
+
+    return portalInitPromise;
 }
 
 // 1. Obtener listado de pedidos del portal

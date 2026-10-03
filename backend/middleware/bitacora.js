@@ -41,20 +41,27 @@ function sanitizeData(data, depth = 0) {
     return sanitized;
 }
 
+const MAX_DETAILS_LENGTH = 20000;
+const DEBUG_BITACORA = process.env.DEBUG_BITACORA === 'true';
+
 function autoLogMiddleware() {
     return (req, res, next) => {
         if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
 
-        console.log(`[BITACORA] Middleware reached: ${req.method} ${req.path}`);
+        if (DEBUG_BITACORA) {
+            console.log(`[BITACORA] Middleware reached: ${req.method} ${req.path}`);
+        }
 
         res.on('finish', () => {
-            console.log(`[BITACORA] Finish event: ${req.method} ${req.path} status=${res.statusCode} user=${req.user?.id || 'none'} db=${!!getDb()}`);
+            if (DEBUG_BITACORA) {
+                console.log(`[BITACORA] Finish event: ${req.method} ${req.path} status=${res.statusCode} user=${req.user?.id || 'none'} db=${!!getDb()}`);
+            }
 
-            if (!req.user) { console.log('[BITACORA] Skipping: no req.user'); return; }
-            if (res.statusCode < 200 || res.statusCode >= 300) { console.log('[BITACORA] Skipping: status not 2xx'); return; }
+            if (!req.user) return;
+            if (res.statusCode < 200 || res.statusCode >= 300) return;
 
             const db = getDb();
-            if (!db) { console.log('[BITACORA] Skipping: no db'); return; }
+            if (!db) return;
 
             const pathParts = req.path.replace(/^\/api\//, '').split('/');
             const entidad = pathParts.filter(p => !/^\d+$/.test(p)).join('.') || 'unknown';
@@ -82,14 +89,38 @@ function autoLogMiddleware() {
             let detalles = null;
             if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
                 try {
-                    const sanitized = sanitizeData(req.body);
-                    detalles = JSON.stringify(sanitized);
+                    let payloadToSanitize = req.body;
+                    if (Array.isArray(req.body) && req.body.length > 50) {
+                        payloadToSanitize = {
+                            _tipo: 'Arreglo masivo',
+                            total_elementos: req.body.length,
+                            muestra: req.body.slice(0, 5)
+                        };
+                    } else if (req.body.data && Array.isArray(req.body.data) && req.body.data.length > 50) {
+                        payloadToSanitize = {
+                            ...req.body,
+                            data: {
+                                _tipo: 'Arreglo masivo',
+                                total_elementos: req.body.data.length,
+                                muestra: req.body.data.slice(0, 5)
+                            }
+                        };
+                    }
+
+                    const sanitized = sanitizeData(payloadToSanitize);
+                    let str = JSON.stringify(sanitized);
+                    if (str.length > MAX_DETAILS_LENGTH) {
+                        str = str.slice(0, MAX_DETAILS_LENGTH) + '... [truncado por longitud]';
+                    }
+                    detalles = str;
                 } catch {
                     detalles = null;
                 }
             }
 
-            console.log(`[BITACORA] Logging: user=${req.user?.username} action=${accion} entity=${entidad} id=${entidadId}`);
+            if (DEBUG_BITACORA) {
+                console.log(`[BITACORA] Logging: user=${req.user?.username} action=${accion} entity=${entidad} id=${entidadId}`);
+            }
             logAction(db, req, accion, entidad, entidadId, detalles);
         });
 
