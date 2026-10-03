@@ -335,6 +335,8 @@ router.get('/contado/solicitudes', authenticateToken, requirePermission(contadoP
         if (!estacion) return res.status(400).json({ message: 'Falta parametro estacion' });
 
         const externalDb = await getExternalDb();
+        const db = getDb();
+
         let query = `SELECT a.llave, a.fecha, a.cod_proveedor, COALESCE(b.nombre,'') as nombre,
                      a.monto, a.fecha_entrega, a.num_ccf, a.num_cheque,
                      a.llave_cheque, a.cod_destino, a.tipo_destino, a.id_rubro,
@@ -353,15 +355,87 @@ router.get('/contado/solicitudes', authenticateToken, requirePermission(contadoP
         query += " ORDER BY a.fecha, b.nombre";
         const [rows] = await externalDb.query(query, params);
 
-        const formatted = rows.map(r => ({
-            ...r,
-            monto: Number(r.monto || 0),
-            num_cheque: r.num_cheque || '',
-            num_ccf: r.num_ccf || '',
-            fecha_entrega: r.fecha_entrega || ''
-        }));
+        // Cruce con cheques ya registrados en SIPE para detectar emitidos
+        let chequesLocal = [];
+        try {
+            const [empRows] = await db.query('SELECT id FROM empresas WHERE codigo = ?', [estacion]);
+            if (empRows.length > 0) {
+                const [chqRows] = await db.query(`
+                    SELECT ch.id, ch.llave, ch.cheque, ch.fecha, ch.valor, ch.a_nombre, cb.numero as numero_cuenta, b.descripcion as banco_nombre
+                    FROM cheques ch
+                    LEFT JOIN cuentas_bancarias cb ON ch.cuenta_bancaria_id = cb.id
+                    LEFT JOIN bancos b ON cb.banco_id = b.id
+                    WHERE ch.empresa_id = ? AND ch.cheque_anulado = FALSE
+                `, [empRows[0].id]);
+                chequesLocal = chqRows || [];
+            }
+        } catch (e) {
+            console.warn('[contado/solicitudes] Note checking local cheques:', e.message);
+        }
 
-        res.json(formatted);
+        const toSyncUpdates = [];
+        const formatted = rows.map(r => {
+            let numCheque = (r.num_cheque || '').trim();
+            let llaveCheque = (r.llave_cheque || '').trim();
+            let matchedLocal = false;
+
+            if (!numCheque && chequesLocal.length > 0) {
+                let match = null;
+                if (llaveCheque) {
+                    match = chequesLocal.find(c => c.llave === llaveCheque);
+                }
+                if (!match) {
+                    const rMonto = Number(r.monto || 0);
+                    const rFecha = r.fecha ? new Date(r.fecha).toISOString().split('T')[0] : '';
+                    const rNombre = (r.nombre || '').trim().toLowerCase();
+
+                    match = chequesLocal.find(c => {
+                        const cMonto = Number(c.valor || 0);
+                        if (Math.abs(cMonto - rMonto) > 0.01) return false;
+                        const cFecha = c.fecha ? new Date(c.fecha).toISOString().split('T')[0] : '';
+                        const cNombre = (c.a_nombre || '').trim().toLowerCase();
+
+                        if (rNombre && cNombre && (rNombre.includes(cNombre) || cNombre.includes(rNombre))) return true;
+                        if (rFecha && cFecha && rFecha === cFecha) return true;
+                        return false;
+                    });
+                }
+
+                if (match && match.cheque) {
+                    numCheque = String(match.cheque).trim();
+                    llaveCheque = match.llave || llaveCheque;
+                    matchedLocal = true;
+                    toSyncUpdates.push({ llave: r.llave, numCheque, llaveCheque });
+                }
+            }
+
+            return {
+                ...r,
+                monto: Number(r.monto || 0),
+                num_cheque: numCheque,
+                llave_cheque: llaveCheque,
+                num_ccf: r.num_ccf || '',
+                fecha_entrega: r.fecha_entrega || '',
+                matched_local: matchedLocal
+            };
+        });
+
+        // Actualizar en background para que quede guardado en externalDb
+        if (toSyncUpdates.length > 0) {
+            Promise.all(toSyncUpdates.map(u =>
+                externalDb.query(
+                    "UPDATE solicitud_chq_contado SET num_cheque = ?, llave_cheque = ? WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ?",
+                    [u.numCheque, u.llaveCheque, u.llave, u.llave, estacion]
+                ).catch(() => {})
+            )).catch(() => {});
+        }
+
+        // Si se solicitó solo pendientes, filtrar los que resultaron con num_cheque encontrado
+        const finalResults = pendientes === '1'
+            ? formatted.filter(r => !r.num_cheque || r.num_cheque.trim() === '')
+            : formatted;
+
+        res.json(finalResults);
     } catch (error) {
         sendSafeError(res, error, 'Error al cargar solicitudes de cheques');
     }
@@ -390,25 +464,162 @@ router.post('/contado/generar', authenticateToken, requirePermission(['manage_ch
         const cuentaBancariaId = cuentaRows[0].id;
 
         const [maxRow] = await db.query('SELECT MAX(id) as max_id FROM cheques');
-        const nextNum = (maxRow[0].max_id || 0) + 1;
+        const nextNum = (maxRow[0]?.max_id || 0) + 1;
         const llaveCheque = 'CHQ' + nextNum.toString().padStart(17, '0');
 
         const dbFecha = toDBDate(fecha) || new Date().toISOString().split('T')[0];
+        const cleanCheque = String(cheque_num).trim();
 
         await db.query(
             'INSERT INTO cheques (empresa_id, cuenta_bancaria_id, llave, fecha, cheque, valor, a_nombre, concepto, es_pago_contado, es_contabilizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)',
-            [empresaId, cuentaBancariaId, llaveCheque, dbFecha, cheque_num, Number(valor) || 0, a_nombre || '', (concepto || 'PAGO A PROVEEDOR (CONTADO)').toUpperCase()]
+            [empresaId, cuentaBancariaId, llaveCheque, dbFecha, cleanCheque, Number(valor) || 0, a_nombre || '', (concepto || 'PAGO A PROVEEDOR (CONTADO)').toUpperCase()]
         );
 
         const externalDb = await getExternalDb();
         await externalDb.query(
-            "UPDATE solicitud_chq_contado SET num_cheque = ?, llave_cheque = ? WHERE llave = ?",
-            [cheque_num, llaveCheque, llave]
+            "UPDATE solicitud_chq_contado SET num_cheque = ?, llave_cheque = ? WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ?",
+            [cleanCheque, llaveCheque, llave, llave, id_empresa]
         );
 
         res.json({ message: 'Cheque generado exitosamente', llaveCheque });
     } catch (error) {
         sendSafeError(res, error, 'Error al generar cheque');
+    }
+});
+
+// Marcar solicitud como ya emitida directamente asignando el número de cheque (sin duplicar en bancos)
+router.post('/contado/marcar-emitido', authenticateToken, requirePermission(['manage_cheques_contado', '/dashboard/bancos/cheques-contado']), async (req, res) => {
+    try {
+        const { llave, id_empresa, cheque_num, cuenta_bancaria_id, registrar_en_bancos } = req.body;
+        if (!llave || !id_empresa || !cheque_num || !String(cheque_num).trim()) {
+            return res.status(400).json({ message: 'Se requiere la llave de solicitud, estación y número de cheque' });
+        }
+
+        const cleanCheque = String(cheque_num).trim();
+        const externalDb = await getExternalDb();
+        const db = getDb();
+
+        let llaveCheque = null;
+
+        // Opcional: si el usuario pide registrarlo también en el libro de bancos
+        if (registrar_en_bancos && cuenta_bancaria_id) {
+            const [solRows] = await externalDb.query(
+                "SELECT * FROM solicitud_chq_contado WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ? LIMIT 1",
+                [llave, llave, id_empresa]
+            );
+            if (solRows.length > 0) {
+                const s = solRows[0];
+                const [empRows] = await db.query('SELECT id FROM empresas WHERE codigo = ?', [id_empresa]);
+                const empresaId = empRows[0]?.id;
+                if (empresaId) {
+                    const [maxRow] = await db.query('SELECT MAX(id) as max_id FROM cheques');
+                    const nextNum = (maxRow[0]?.max_id || 0) + 1;
+                    llaveCheque = 'CHQ' + nextNum.toString().padStart(17, '0');
+                    const dbFecha = s.fecha ? new Date(s.fecha).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+
+                    await db.query(
+                        'INSERT INTO cheques (empresa_id, cuenta_bancaria_id, llave, fecha, cheque, valor, a_nombre, concepto, es_pago_contado, es_contabilizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)',
+                        [empresaId, cuenta_bancaria_id, llaveCheque, dbFecha, cleanCheque, Number(s.monto) || 0, s.cod_proveedor || '', 'PAGO A PROVEEDOR (CONTADO)']
+                    );
+                }
+            }
+        }
+
+        await externalDb.query(
+            "UPDATE solicitud_chq_contado SET num_cheque = ?, llave_cheque = COALESCE(?, llave_cheque) WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ?",
+            [cleanCheque, llaveCheque, llave, llave, id_empresa]
+        );
+
+        res.json({ success: true, message: `Solicitud marcada exitosamente con el cheque #${cleanCheque}` });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al marcar cheque como emitido');
+    }
+});
+
+// Desvincular cheque y devolver solicitud a estado pendiente
+router.post('/contado/desvincular', authenticateToken, requirePermission(['manage_cheques_contado', '/dashboard/bancos/cheques-contado']), async (req, res) => {
+    try {
+        const { llave, id_empresa } = req.body;
+        if (!llave || !id_empresa) {
+            return res.status(400).json({ message: 'Se requiere la llave de solicitud y estación' });
+        }
+
+        const externalDb = await getExternalDb();
+        await externalDb.query(
+            "UPDATE solicitud_chq_contado SET num_cheque = NULL, llave_cheque = NULL WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ?",
+            [llave, llave, id_empresa]
+        );
+
+        res.json({ success: true, message: 'Solicitud devuelta a estado pendiente' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al desvincular cheque');
+    }
+});
+
+// Sincronizar masivamente solicitudes pendientes con cheques ya emitidos en el libro de bancos
+router.post('/contado/sincronizar-emitidos', authenticateToken, requirePermission(['manage_cheques_contado', '/dashboard/bancos/cheques-contado']), async (req, res) => {
+    try {
+        const { estacion } = req.body;
+        if (!estacion) return res.status(400).json({ message: 'Falta parametro estacion' });
+
+        const externalDb = await getExternalDb();
+        const db = getDb();
+
+        const [empRows] = await db.query('SELECT id FROM empresas WHERE codigo = ?', [estacion]);
+        if (empRows.length === 0) {
+            return res.json({ syncedCount: 0, message: 'No se encontró la empresa localmente' });
+        }
+        const empresaId = empRows[0].id;
+
+        const [chequesLocal] = await db.query(`
+            SELECT ch.id, ch.llave, ch.cheque, ch.fecha, ch.valor, ch.a_nombre
+            FROM cheques ch
+            WHERE ch.empresa_id = ? AND ch.cheque_anulado = FALSE
+        `, [empresaId]);
+
+        const [solicitudes] = await externalDb.query(`
+            SELECT a.llave, a.fecha, a.cod_proveedor, COALESCE(b.nombre,'') as nombre,
+                   a.monto, a.num_cheque, a.llave_cheque
+            FROM solicitud_chq_contado a
+            LEFT JOIN proveedores b ON a.id_empresa = b.id_empresa AND a.cod_proveedor = b.codigo
+            WHERE a.id_empresa = ? AND TRIM(COALESCE(a.num_cheque,'')) = ''
+        `, [estacion]);
+
+        let syncedCount = 0;
+        for (const sol of solicitudes) {
+            const rMonto = Number(sol.monto || 0);
+            const rFecha = sol.fecha ? new Date(sol.fecha).toISOString().split('T')[0] : '';
+            const rNombre = (sol.nombre || '').trim().toLowerCase();
+
+            const match = chequesLocal.find(c => {
+                const cMonto = Number(c.valor || 0);
+                if (Math.abs(cMonto - rMonto) > 0.01) return false;
+                const cFecha = c.fecha ? new Date(c.fecha).toISOString().split('T')[0] : '';
+                const cNombre = (c.a_nombre || '').trim().toLowerCase();
+
+                if (rNombre && cNombre && (rNombre.includes(cNombre) || cNombre.includes(rNombre))) return true;
+                if (rFecha && cFecha && rFecha === cFecha) return true;
+                return false;
+            });
+
+            if (match && match.cheque) {
+                await externalDb.query(
+                    "UPDATE solicitud_chq_contado SET num_cheque = ?, llave_cheque = ? WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ?",
+                    [String(match.cheque).trim(), match.llave, sol.llave, sol.llave, estacion]
+                );
+                syncedCount++;
+            }
+        }
+
+        res.json({
+            success: true,
+            syncedCount,
+            message: syncedCount > 0
+                ? `Se detectaron y sincronizaron ${syncedCount} cheques ya emitidos.`
+                : 'No se encontraron más cheques coincidentes pendientes de vincular.'
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al sincronizar cheques emitidos');
     }
 });
 
