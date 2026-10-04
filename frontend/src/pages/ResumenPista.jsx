@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Search, FileSpreadsheet, Printer, ClipboardList } from 'lucide-react';
+import { Calendar, Search, FileSpreadsheet, Printer, ClipboardList, AlertTriangle } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import ReportPreviewModal from '../components/ReportPreviewModal';
+import DiferenciaDescuadreModal from '../components/ventas/DiferenciaDescuadreModal';
 import api from '../services/api';
 import { todayStr } from '../utils/date';
 
@@ -23,6 +24,7 @@ export default function ResumenPista() {
     const [previewPdfBlob, setPreviewPdfBlob] = useState(null);
     const [previewTotalPages, setPreviewTotalPages] = useState(1);
     const [previewFileName, setPreviewFileName] = useState('Resumen_Pista.pdf');
+    const [diferenciaModal, setDiferenciaModal] = useState(null);
 
     const fetchData = async (isManual = false) => {
         setLoading(true);
@@ -205,8 +207,51 @@ export default function ResumenPista() {
                                     <RowCell val={row.descuentos || 0} />
                                     <RowCell val={row.suma || 0} />
                                     <RowCell val={row.tot_venta || 0} />
-                                    <td style={{ padding: '0.75rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap', color: (row.diferencia || 0) < 0 ? '#ef4444' : ((row.diferencia || 0) > 0 ? '#22c55e' : 'inherit'), fontWeight: (row.diferencia || 0) !== 0 ? 'bold' : 'normal' }}>
-                                        {moneyFmt(row.diferencia || 0)}
+                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setDiferenciaModal(row)}
+                                            style={{
+                                                background: 'none',
+                                                border: 'none',
+                                                padding: 0,
+                                                cursor: 'pointer',
+                                                textAlign: 'right',
+                                                display: 'inline-flex',
+                                                flexDirection: 'column',
+                                                alignItems: 'flex-end',
+                                                gap: '2px'
+                                            }}
+                                            title={row.explicacion_diferencia?.analisis_inteligente?.foco_turno?.texto || `Clic para ver diagnóstico de descuadre de ${moneyFmt(row.diferencia || 0)}`}
+                                        >
+                                            <span style={{
+                                                fontSize: '0.76rem',
+                                                padding: '2px 5px',
+                                                borderRadius: '4px',
+                                                fontWeight: 'bold',
+                                                backgroundColor: (row.diferencia || 0) === 0 ? 'rgba(34, 197, 94, 0.15)' : (row.diferencia || 0) < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                                color: (row.diferencia || 0) === 0 ? '#22c55e' : (row.diferencia || 0) < 0 ? '#ef4444' : '#f59e0b',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '2px',
+                                                textDecoration: 'underline dotted'
+                                            }}>
+                                                {(row.diferencia || 0) !== 0 && <AlertTriangle size={10} />}
+                                                {moneyFmt(row.diferencia || 0)}
+                                            </span>
+                                            {row.explicacion_diferencia?.analisis_inteligente?.foco_turno && Math.abs(row.diferencia || 0) > 50 && (
+                                                <span style={{
+                                                    fontSize: '0.64rem',
+                                                    fontWeight: 700,
+                                                    color: '#ef4444',
+                                                    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                                                    padding: '1px 4px',
+                                                    borderRadius: '3px'
+                                                }}>
+                                                    T{row.explicacion_diferencia.analisis_inteligente.foco_turno.turno}: {row.explicacion_diferencia.analisis_inteligente.foco_turno.porcentaje}
+                                                </span>
+                                            )}
+                                        </button>
                                     </td>
                                 </tr>
                             ))}
@@ -226,6 +271,13 @@ export default function ResumenPista() {
                 badge="CORTES"
                 totalPages={previewTotalPages}
                 fileName={previewFileName}
+            />
+
+            {/* Modal de Diagnóstico del Descuadre / Diferencia */}
+            <DiferenciaDescuadreModal
+                modalData={diferenciaModal}
+                onClose={() => setDiferenciaModal(null)}
+                fecha={fecha}
             />
         </div>
     );

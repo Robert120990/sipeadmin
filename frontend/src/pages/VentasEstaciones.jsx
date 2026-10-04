@@ -1372,9 +1372,13 @@ export default function VentasEstaciones() {
                                                         border: 'none',
                                                         padding: 0,
                                                         cursor: 'pointer',
-                                                        textAlign: 'right'
+                                                        textAlign: 'right',
+                                                        display: 'inline-flex',
+                                                        flexDirection: 'column',
+                                                        alignItems: 'flex-end',
+                                                        gap: '2px'
                                                     }}
-                                                    title={`Clic para ver por qué hay una diferencia de ${moneyFmt(r.diferencia)}`}
+                                                    title={r.explicacion_diferencia?.analisis_inteligente?.foco_turno?.texto || `Clic para ver diagnóstico de descuadre de ${moneyFmt(r.diferencia)}`}
                                                 >
                                                     <span style={{
                                                         fontSize: '0.74rem',
@@ -1391,6 +1395,20 @@ export default function VentasEstaciones() {
                                                         {r.diferencia !== 0 && <AlertTriangle size={10} />}
                                                         {moneyFmt(r.diferencia)}
                                                     </span>
+                                                    {r.explicacion_diferencia?.analisis_inteligente?.foco_turno && Math.abs(r.diferencia) > 50 && (
+                                                        <span style={{
+                                                            fontSize: '0.64rem',
+                                                            fontWeight: 700,
+                                                            color: '#ef4444',
+                                                            lineHeight: 1,
+                                                            letterSpacing: '0.02em',
+                                                            backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                                                            padding: '1px 4px',
+                                                            borderRadius: '3px'
+                                                        }}>
+                                                            T{r.explicacion_diferencia.analisis_inteligente.foco_turno.turno}: {r.explicacion_diferencia.analisis_inteligente.foco_turno.porcentaje}
+                                                        </span>
+                                                    )}
                                                 </button>
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>

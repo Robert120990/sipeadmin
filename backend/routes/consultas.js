@@ -3,6 +3,7 @@ const router = express.Router();
 const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { GoogleGenAI } = require('@google/genai');
 
 const ventasViewPerms = [
     'view_ventas',
@@ -126,6 +127,410 @@ const formatYMD = (val) => {
     }
     const s = String(val).trim();
     return s.split('T')[0].split(' ')[0];
+};
+
+/**
+ * Motor heurístico experto para análisis forense y diagnóstico automático de descuadres de cierre de pista.
+ */
+const generarAnalisisDescuadre = ({
+    estacion,
+    fecha,
+    totVenta = 0,
+    noEfectivo = 0,
+    efectivoEsperado = 0,
+    efectivoDescargado = 0,
+    desgloseDescargos = {},
+    diferencia = 0,
+    turnos = []
+}) => {
+    const dif = Math.round(Number(diferencia || 0) * 100) / 100;
+    const absDif = Math.abs(dif);
+    const isCuadrado = absDif <= 0.05;
+    const isFaltante = dif < -0.05;
+    const isSobrante = dif > 0.05;
+
+    // 1. Severidad y Nivel de Riesgo
+    let severidad = 'cuadrado';
+    let nivelRiesgo = 'ok';
+    let etiquetaSeveridad = 'Cuadrado';
+
+    if (isFaltante) {
+        if (absDif >= 1000) {
+            severidad = 'critica';
+            nivelRiesgo = 'danger';
+            etiquetaSeveridad = `Faltante Crítico (-$${absDif.toFixed(2)})`;
+        } else if (absDif >= 300) {
+            severidad = 'alta';
+            nivelRiesgo = 'warning';
+            etiquetaSeveridad = `Faltante Alto (-$${absDif.toFixed(2)})`;
+        } else if (absDif >= 50) {
+            severidad = 'media';
+            nivelRiesgo = 'warning';
+            etiquetaSeveridad = `Faltante Moderado (-$${absDif.toFixed(2)})`;
+        } else {
+            severidad = 'baja';
+            nivelRiesgo = 'info';
+            etiquetaSeveridad = `Faltante Menor (-$${absDif.toFixed(2)})`;
+        }
+    } else if (isSobrante) {
+        if (absDif >= 1000) {
+            severidad = 'critica';
+            nivelRiesgo = 'warning';
+            etiquetaSeveridad = `Sobrante Atípico (+$${absDif.toFixed(2)})`;
+        } else if (absDif >= 300) {
+            severidad = 'alta';
+            nivelRiesgo = 'warning';
+            etiquetaSeveridad = `Sobrante Significativo (+$${absDif.toFixed(2)})`;
+        } else {
+            severidad = 'media';
+            nivelRiesgo = 'info';
+            etiquetaSeveridad = `Sobrante Menor (+$${absDif.toFixed(2)})`;
+        }
+    }
+
+    // 2. Diagnóstico Conciso
+    let diagnosticoPrincipal = '';
+    const remesasTot = Number(desgloseDescargos.remesas || 0);
+    const gastosPagosTot = Number(desgloseDescargos.gastos || 0) + Number(desgloseDescargos.pagos || 0) + Number(desgloseDescargos.descuentos || 0) + Number(desgloseDescargos.anticipos || 0);
+
+    if (isCuadrado) {
+        diagnosticoPrincipal = `Cierre de pista cuadrado al centavo. Todo el efectivo cobrado en pista ($${efectivoEsperado.toFixed(2)}) coincide exactamente con las remesas bancarias y descargos autorizados.`;
+    } else if (isFaltante) {
+        diagnosticoPrincipal = `Se identificó un faltante de -$${absDif.toFixed(2)} en la liquidación de efectivo. De $${efectivoEsperado.toFixed(2)} que ingresaron en efectivo tras descontar tarjetas y créditos sobre la venta de $${totVenta.toFixed(2)}, únicamente se justificaron $${remesasTot.toFixed(2)} en remesas bancarias y $${gastosPagosTot.toFixed(2)} en gastos/pagos. Faltan $${absDif.toFixed(2)} por ingresar al banco o justificar formalmente.`;
+    } else {
+        diagnosticoPrincipal = `Se reportó un excedente de +$${absDif.toFixed(2)} en la liquidación de pista. Los descargos reportados ($${efectivoDescargado.toFixed(2)}) superan el efectivo esperado por ventas ($${efectivoEsperado.toFixed(2)}), sugiriendo remesas de turnos previos o ingresos no registrados en las lecturas de mangueras.`;
+    }
+
+    // 3. Concentración por Turno y Responsable
+    let focoTurno = null;
+    let turnosAnalisis = [];
+    if (turnos && turnos.length > 0) {
+        turnosAnalisis = turnos.map(t => {
+            const tDif = Math.round(Number(t.diferencia || 0) * 100) / 100;
+            const pct = absDif > 0 ? Math.min(100, Math.round((Math.abs(tDif) / absDif) * 100)) : 0;
+            return {
+                ...t,
+                diferencia: tDif,
+                porcentaje_impacto: pct
+            };
+        }).sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
+
+        const principal = turnosAnalisis[0];
+        if (principal && Math.abs(principal.diferencia) > 0.05) {
+            const pctConcentracion = absDif > 0 ? ((Math.abs(principal.diferencia) / absDif) * 100).toFixed(1) : '100';
+            focoTurno = {
+                turno: principal.turno,
+                id_cierre: principal.id,
+                responsable: principal.responsable || 'Sin asignar',
+                diferencia: principal.diferencia,
+                porcentaje: `${pctConcentracion}%`,
+                texto: `El ${pctConcentracion}% del descuadre ($${Math.abs(principal.diferencia).toFixed(2)}) se concentró en el Turno ${principal.turno} a cargo de ${principal.responsable || 'Sin asignar'}.`
+            };
+        }
+    }
+
+    // 4. Hipótesis Operativas y Causas Probables
+    const hipotesis = [];
+    if (isFaltante) {
+        if (absDif >= 1000) {
+            hipotesis.push({
+                titulo: 'Remesa física no asentada o en caja fuerte',
+                probabilidad: 'Alta',
+                descripcion: `Un faltante de $${absDif.toFixed(2)} equivale al monto típico de un depósito completo. Es altamente probable que el depósito ya se haya preparado o entregado al camión de valores/banco pero la boleta aún no ha sido digitada en el sistema.`,
+                icono: 'banknote'
+            });
+        }
+        if (turnos && turnos.some(t => t.turno >= 2 && Math.abs(t.diferencia) > 400)) {
+            hipotesis.push({
+                titulo: 'Desfase bancario de turno nocturno / fin de semana',
+                probabilidad: 'Media-Alta',
+                descripcion: 'Los depósitos del segundo o tercer turno suelen realizarse en buzón nocturno o procesarse con fecha del siguiente día contable.',
+                icono: 'clock'
+            });
+        }
+        if ((desgloseDescargos.gastos || 0) < 50 && absDif > 200) {
+            hipotesis.push({
+                titulo: 'Comprobantes de gastos operativos pendientes de entrega',
+                probabilidad: 'Media',
+                descripcion: 'Compras locales de pista, calibraciones o pagos menores hechos en efectivo que el encargado no ha reportado ni anexado al cierre.',
+                icono: 'receipt'
+            });
+        }
+        hipotesis.push({
+            titulo: 'Faltante real en arqueo de cajero/bombero',
+            probabilidad: absDif < 300 ? 'Alta' : 'Media',
+            descripcion: focoTurno
+                ? `Descuadre directo en gaveta a cargo de ${focoTurno.responsable} en Turno ${focoTurno.turno}. Requiere confrontación inmediata del arqueo físico.`
+                : 'Posible error de cobro, falta de entrega de efectivo o dinero retenido por bomberos de pista.',
+            icono: 'alert-triangle'
+        });
+    } else if (isSobrante) {
+        hipotesis.push({
+            titulo: 'Remesa de turno anterior aplicada al día actual',
+            probabilidad: 'Alta',
+            descripcion: `Se incluyó un depósito de $${absDif.toFixed(2)} que físicamente correspondía a ventas de días anteriores.`,
+            icono: 'banknote'
+        });
+        hipotesis.push({
+            titulo: 'Abono o recuperación de cartera no identificado',
+            probabilidad: 'Media',
+            descripcion: 'Ingreso recibido en gaveta por cobro de crédito o vales que no se registró en su rubro correspondiente.',
+            icono: 'dollar-sign'
+        });
+    } else {
+        hipotesis.push({
+            titulo: 'Liquidación en perfecto equilibrio',
+            probabilidad: 'Confirmada',
+            descripcion: 'Todas las mangueras, cobros electrónicos y depósitos bancarios están 100% justificados y conciliados.',
+            icono: 'check-circle'
+        });
+    }
+
+    // 5. Checklist de Auditoría
+    const checklist = [];
+    if (isFaltante) {
+        checklist.push({
+            paso: 1,
+            accion: `Verificar caja fuerte de ${estacion}`,
+            detalle: 'Revisar físicamente si existen bolsas de remesa, sobres con efectivo o cheques resguardados en bóveda.'
+        });
+        checklist.push({
+            paso: 2,
+            accion: 'Cotejar boletas de remesa bancaria',
+            detalle: 'Solicitar al encargado copia o foto de las boletas de depósito o recibo del camión blindado.'
+        });
+        if (focoTurno) {
+            checklist.push({
+                paso: 3,
+                accion: `Entrevistar a ${focoTurno.responsable} (Turno ${focoTurno.turno})`,
+                detalle: `El Turno ${focoTurno.turno} concentra $${Math.abs(focoTurno.diferencia).toFixed(2)} del faltante. Solicitar liquidación detallada.`
+            });
+        }
+        checklist.push({
+            paso: 4,
+            accion: 'Revisar vouchers de tarjetas POS duplicados o pendientes',
+            detalle: 'Comprobar que todas las transacciones electrónicas de las terminales bancarias hayan sido digitadas como tarjetas y no como efectivo.'
+        });
+        checklist.push({
+            paso: 5,
+            accion: 'Inspeccionar estado de cuenta bancario al día siguiente',
+            detalle: 'Verificar si el dinero ingresó a la cuenta bancaria en la fecha valor posterior.'
+        });
+    } else if (isSobrante) {
+        checklist.push({
+            paso: 1,
+            accion: 'Validar fechas de las boletas de remesa',
+            detalle: 'Revisar si alguna boleta tiene fecha anterior a este cierre.'
+        });
+        checklist.push({
+            paso: 2,
+            accion: 'Auditar totalizador de lecturas de mangueras',
+            detalle: 'Verificar si alguna lectura inicial/final fue registrada con error en galonaje o monto.'
+        });
+    }
+
+    // 6. Mensaje Redactado para WhatsApp / Encargado
+    const formatoMoneda = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val || 0);
+    const mensajeWhatsApp = [
+        `🚨 *AUDITORÍA SIPE: DESCUADRE DE CIERRE*`,
+        `⛽ *Estación:* ${estacion}`,
+        `📅 *Fecha de Turno:* ${fecha}`,
+        ``,
+        `⚠️ *Estado:* ${etiquetaSeveridad}`,
+        `💵 *Diferencia Neta:* ${formatoMoneda(dif)}`,
+        `📊 *Venta Total:* ${formatoMoneda(totVenta)} (Combustible + Lubricantes)`,
+        `💳 *Cobros No Efectivo:* -${formatoMoneda(noEfectivo)} (Tarjetas/Créditos/Vales)`,
+        `💰 *Efectivo Esperado:* ${formatoMoneda(efectivoEsperado)}`,
+        `🏦 *Remesas al Banco:* -${formatoMoneda(remesasTot)}`,
+        `🧾 *Gastos/Pagos:* -${formatoMoneda(gastosPagosTot)}`,
+        ``,
+        focoTurno ? `🎯 *Foco Principal:* Turno ${focoTurno.turno} (${focoTurno.responsable}) -> Dif: ${formatoMoneda(focoTurno.diferencia)} (${focoTurno.porcentaje} del total)` : null,
+        ``,
+        `📋 *Acciones Requeridas:*`,
+        isFaltante ? `1. Arqueo físico en caja fuerte de estación.\n2. Enviar fotos de boletas de depósito bancario.\n3. Descargo firmado por ${focoTurno?.responsable || 'el encargado'}.` : `1. Verificar fechas de boletas y lecturas de mangueras.`,
+        ``,
+        `_Generado automáticamente por SIPE Admin_`
+    ].filter(Boolean).join('\n');
+
+    return {
+        severidad,
+        nivel_riesgo: nivelRiesgo,
+        etiqueta_severidad: etiquetaSeveridad,
+        diagnostico_principal: diagnosticoPrincipal,
+        foco_turno: focoTurno,
+        hipotesis_probables: hipotesis,
+        checklist_auditoria: checklist,
+        mensaje_whatsapp: mensajeWhatsApp,
+        turnos_analisis: turnosAnalisis
+    };
+};
+
+/**
+ * Consulta y agrupa los turnos individuales de pista de todas las estaciones para una fecha.
+ */
+const getTurnosPorEmpresa = async (externalDb, sysDate) => {
+    const turnosPorEmpresa = {};
+    try {
+        const sqlTurnos = `
+            SELECT c.id, c.id_empresa, c.turno, c.responsable,
+                   IFNULL(SUM(l.monto), 0.0) as venta,
+                   (SELECT IFNULL(SUM(r.efectivo + r.monedas + r.transferencia), 0.0) FROM cierre_turno_remesa r WHERE r.id_cierre_turno = c.id AND r.id_empresa = c.id_empresa) as remesas,
+                   (SELECT IFNULL(SUM(t.valor), 0.0) FROM cierre_turno_tarjeta t WHERE t.id_cierre_turno = c.id AND t.id_empresa = c.id_empresa) as tarjetas,
+                   (SELECT IFNULL(SUM(g.valor), 0.0) FROM cierre_turno_gastos g WHERE g.id_cierre_turno = c.id AND g.id_empresa = c.id_empresa) as gastos,
+                   (SELECT IFNULL(SUM(p.valor), 0.0) FROM cierre_turno_pagos p WHERE p.id_cierre_turno = c.id AND p.id_empresa = c.id_empresa) as pagos,
+                   (SELECT IFNULL(SUM(d.valor * d.cantidad), 0.0) FROM cierre_turno_descuentos d WHERE d.id_cierre_turno = c.id AND d.id_empresa = c.id_empresa) as descuentos,
+                   (SELECT IFNULL(SUM(cp.valor), 0.0) FROM cierre_turno_cupones cp WHERE cp.id_cierre_turno = c.id AND cp.id_empresa = c.id_empresa) as cupones,
+                   (SELECT IFNULL(SUM(cr.total_descuento), 0.0) FROM cierre_turno_credito cr WHERE cr.id_cierre_turno = c.id AND cr.id_empresa = c.id_empresa) as creditos,
+                   (SELECT IFNULL(SUM(ch.valor), 0.0) FROM cierre_turno_cheques ch WHERE ch.id_cierre_turno = c.id AND ch.id_empresa = c.id_empresa) as cheques,
+                   (SELECT IFNULL(SUM(a.valor), 0.0) FROM cierre_turno_anticipos a WHERE a.id_cierre_turno = c.id AND a.id_empresa = c.id_empresa) as anticipos
+            FROM cierre_turno c
+            LEFT JOIN cierre_turno_lecturas l ON c.id = l.id_cierre_turno AND c.id_empresa = l.id_empresa
+            WHERE c.fecha_turno = ?
+            GROUP BY c.id, c.id_empresa, c.turno, c.responsable
+            ORDER BY c.id_empresa, c.turno
+        `;
+        const [shiftRows] = await withRetry(() => externalDb.query(sqlTurnos, [sysDate]));
+        (shiftRows || []).forEach(sh => {
+            const empId = String(sh.id_empresa);
+            if (!turnosPorEmpresa[empId]) turnosPorEmpresa[empId] = [];
+            const vta = Math.round(Number(sh.venta || 0) * 100) / 100;
+            const rem = Math.round(Number(sh.remesas || 0) * 100) / 100;
+            const tarj = Math.round(Number(sh.tarjetas || 0) * 100) / 100;
+            const gst = Math.round(Number(sh.gastos || 0) * 100) / 100;
+            const pag = Math.round(Number(sh.pagos || 0) * 100) / 100;
+            const desc = Math.round(Number(sh.descuentos || 0) * 100) / 100;
+            const cup = Math.round(Number(sh.cupones || 0) * 100) / 100;
+            const cred = Math.round(Number(sh.creditos || 0) * 100) / 100;
+            const chq = Math.round(Number(sh.cheques || 0) * 100) / 100;
+            const ant = Math.round(Number(sh.anticipos || 0) * 100) / 100;
+            const sumaTurno = Math.round((rem + tarj + gst + pag + desc + cup + cred + chq + ant) * 100) / 100;
+            const difTurno = Math.round((sumaTurno - vta) * 100) / 100;
+
+            turnosPorEmpresa[empId].push({
+                id: sh.id,
+                turno: sh.turno,
+                responsable: sh.responsable || 'Sin asignar',
+                venta: vta,
+                remesas: rem,
+                tarjetas: tarj,
+                gastos: gst,
+                pagos: pag,
+                descuentos: desc,
+                cupones: cup,
+                creditos: cred,
+                cheques: chq,
+                anticipos: ant,
+                suma: sumaTurno,
+                diferencia: difTurno
+            });
+        });
+    } catch (turnosErr) {
+        console.warn('[Consolidado Ventas] Error consultando turnos detallados:', turnosErr.message);
+    }
+    return turnosPorEmpresa;
+};
+
+/**
+ * Mapea una fila de resumen de cierre de turno incorporando la conciliación de efectivo y el análisis inteligente.
+ */
+const mapCierreRowConExplicacion = (r, turnosPorEmpresa, sysDate) => {
+    const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
+    const venta = Number(r.total_venta) + Number(r.lubricantes);
+    const diferencia = Math.round((monto - venta) * 100) / 100;
+    const gastos = Math.round(Number(r.gastos) * 100) / 100;
+    const totVenta = Math.round(venta * 100) / 100;
+
+    const alertas = [];
+    if (diferencia < -0.05) {
+        alertas.push({ tipo: 'descuadre_cierre', nivel: 'danger', texto: `Faltante de cierre: -$${Math.abs(diferencia).toFixed(2)}` });
+    } else if (diferencia > 0.05) {
+        alertas.push({ tipo: 'descuadre_cierre', nivel: 'warning', texto: `Sobrante de cierre: +$${diferencia.toFixed(2)}` });
+    }
+    if (gastos > 150) {
+        alertas.push({ tipo: 'gasto_elevado', nivel: 'warning', texto: `Gastos de pista elevados: $${gastos.toFixed(2)}` });
+    }
+    if (totVenta === 0) {
+        alertas.push({ tipo: 'sin_venta', nivel: 'info', texto: 'Sin venta registrada en pista' });
+    }
+
+    const noEfectivo = Math.round(((Number(r.tarjetas || 0)) + (Number(r.cupones || 0)) + (Number(r.cheques || 0)) + (Number(r.creditos || 0))) * 100) / 100;
+    const efectivoEsperado = Math.round((totVenta - noEfectivo) * 100) / 100;
+    const efectivoDescargado = Math.round(((Number(r.remesas || 0)) + gastos + (Number(r.pagos || 0)) + (Number(r.anticipos || 0)) + (Number(r.descuentos || 0))) * 100) / 100;
+
+    const cleanEmpresa = getCleanStationName(String(r.id_empresa), r.estacion);
+    const stationTurnos = (turnosPorEmpresa && turnosPorEmpresa[String(r.id_empresa)]) || [];
+
+    const desgloseDesc = {
+        remesas: Math.round(Number(r.remesas || 0) * 100) / 100,
+        gastos: gastos,
+        pagos: Math.round(Number(r.pagos || 0) * 100) / 100,
+        descuentos: Math.round(Number(r.descuentos || 0) * 100) / 100,
+        anticipos: Math.round(Number(r.anticipos || 0) * 100) / 100
+    };
+
+    const desgloseNoEf = {
+        tarjetas: Math.round(Number(r.tarjetas || 0) * 100) / 100,
+        cupones: Math.round(Number(r.cupones || 0) * 100) / 100,
+        cheques: Math.round(Number(r.cheques || 0) * 100) / 100,
+        credito: Math.round(Number(r.creditos || 0) * 100) / 100
+    };
+
+    const analisisInteligente = generarAnalisisDescuadre({
+        id_empresa: r.id_empresa,
+        estacion: cleanEmpresa,
+        fecha: sysDate,
+        totVenta,
+        ventaCombustible: Math.round(Number(r.total_venta || 0) * 100) / 100,
+        lubricantes: Math.round(Number(r.lubricantes || 0) * 100) / 100,
+        noEfectivo,
+        desgloseNoEfectivo: desgloseNoEf,
+        efectivoEsperado,
+        efectivoDescargado,
+        desgloseDescargos: desgloseDesc,
+        diferencia,
+        turnos: stationTurnos
+    });
+
+    const explicacion = {
+        tot_venta: totVenta,
+        venta_combustible: Math.round(Number(r.total_venta || 0) * 100) / 100,
+        lubricantes: Math.round(Number(r.lubricantes || 0) * 100) / 100,
+        no_efectivo: noEfectivo,
+        desglose_no_efectivo: desgloseNoEf,
+        efectivo_esperado: efectivoEsperado,
+        efectivo_descargado: efectivoDescargado,
+        desglose_descargos: desgloseDesc,
+        diferencia,
+        tipo: diferencia < -0.05 ? 'faltante' : (diferencia > 0.05 ? 'sobrante' : 'cuadrado'),
+        mensaje: diferencia < -0.05
+            ? `Faltante de caja por -$${Math.abs(diferencia).toFixed(2)}: De los $${efectivoEsperado.toFixed(2)} cobrados en efectivo, solo se han justificado $${efectivoDescargado.toFixed(2)} en remesas y descargos (quedan $${Math.abs(diferencia).toFixed(2)} pendientes de remesar al banco o liquidar).`
+            : (diferencia > 0.05
+                ? `Sobrante de caja por +$${diferencia.toFixed(2)}: Se justificaron $${efectivoDescargado.toFixed(2)} en remesas y descargos, superando el efectivo esperado de $${efectivoEsperado.toFixed(2)}.`
+                : 'Cierre de pista cuadrado al centavo.'),
+        analisis_inteligente: analisisInteligente
+    };
+
+    return {
+        id_empresa: r.id_empresa,
+        empresa: cleanEmpresa,
+        credito: Math.round(Number(r.creditos) * 100) / 100,
+        cupones: Math.round(Number(r.cupones) * 100) / 100,
+        cheques: Math.round(Number(r.cheques) * 100) / 100,
+        tarjetas: Math.round(Number(r.tarjetas) * 100) / 100,
+        remesas: Math.round(Number(r.remesas) * 100) / 100,
+        gastos,
+        lubricantes: Math.round(Number(r.lubricantes) * 100) / 100,
+        anticipos: Math.round(Number(r.anticipos) * 100) / 100,
+        pagos: Math.round(Number(r.pagos) * 100) / 100,
+        descuentos: Math.round(Number(r.descuentos) * 100) / 100,
+        suma: Math.round(monto * 100) / 100,
+        tot_venta: totVenta,
+        diferencia,
+        alertas,
+        tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning'),
+        explicacion_diferencia: explicacion,
+        turnos: stationTurnos
+    };
 };
 
 const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefined) => {
@@ -795,141 +1200,10 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
             FROM web_consolidado x WHERE x.grupo = 'ESTACION' AND x.id_empresa != '004' ORDER BY x.orden
         `;
         // Obtener detalle por turnos de cada estación para análisis de descuadres
-        const turnosPorEmpresa = {};
-        try {
-            const sqlTurnos = `
-                SELECT c.id, c.id_empresa, c.turno, c.responsable,
-                       IFNULL(SUM(l.monto), 0.0) as venta,
-                       (SELECT IFNULL(SUM(r.efectivo + r.monedas + r.transferencia), 0.0) FROM cierre_turno_remesa r WHERE r.id_cierre_turno = c.id AND r.id_empresa = c.id_empresa) as remesas,
-                       (SELECT IFNULL(SUM(t.valor), 0.0) FROM cierre_turno_tarjeta t WHERE t.id_cierre_turno = c.id AND t.id_empresa = c.id_empresa) as tarjetas,
-                       (SELECT IFNULL(SUM(g.valor), 0.0) FROM cierre_turno_gastos g WHERE g.id_cierre_turno = c.id AND g.id_empresa = c.id_empresa) as gastos,
-                       (SELECT IFNULL(SUM(p.valor), 0.0) FROM cierre_turno_pagos p WHERE p.id_cierre_turno = c.id AND p.id_empresa = c.id_empresa) as pagos,
-                       (SELECT IFNULL(SUM(d.valor * d.cantidad), 0.0) FROM cierre_turno_descuentos d WHERE d.id_cierre_turno = c.id AND d.id_empresa = c.id_empresa) as descuentos,
-                       (SELECT IFNULL(SUM(cp.valor), 0.0) FROM cierre_turno_cupones cp WHERE cp.id_cierre_turno = c.id AND cp.id_empresa = c.id_empresa) as cupones,
-                       (SELECT IFNULL(SUM(cr.total_descuento), 0.0) FROM cierre_turno_credito cr WHERE cr.id_cierre_turno = c.id AND cr.id_empresa = c.id_empresa) as creditos,
-                       (SELECT IFNULL(SUM(ch.valor), 0.0) FROM cierre_turno_cheques ch WHERE ch.id_cierre_turno = c.id AND ch.id_empresa = c.id_empresa) as cheques,
-                       (SELECT IFNULL(SUM(a.valor), 0.0) FROM cierre_turno_anticipos a WHERE a.id_cierre_turno = c.id AND a.id_empresa = c.id_empresa) as anticipos
-                FROM cierre_turno c
-                LEFT JOIN cierre_turno_lecturas l ON c.id = l.id_cierre_turno AND c.id_empresa = l.id_empresa
-                WHERE c.fecha_turno = ?
-                GROUP BY c.id, c.id_empresa, c.turno, c.responsable
-                ORDER BY c.id_empresa, c.turno
-            `;
-            const [shiftRows] = await withRetry(() => externalDb.query(sqlTurnos, [sysDate]));
-            (shiftRows || []).forEach(sh => {
-                const empId = String(sh.id_empresa);
-                if (!turnosPorEmpresa[empId]) turnosPorEmpresa[empId] = [];
-                const vta = Math.round(Number(sh.venta || 0) * 100) / 100;
-                const rem = Math.round(Number(sh.remesas || 0) * 100) / 100;
-                const tarj = Math.round(Number(sh.tarjetas || 0) * 100) / 100;
-                const gst = Math.round(Number(sh.gastos || 0) * 100) / 100;
-                const pag = Math.round(Number(sh.pagos || 0) * 100) / 100;
-                const desc = Math.round(Number(sh.descuentos || 0) * 100) / 100;
-                const cup = Math.round(Number(sh.cupones || 0) * 100) / 100;
-                const cred = Math.round(Number(sh.creditos || 0) * 100) / 100;
-                const chq = Math.round(Number(sh.cheques || 0) * 100) / 100;
-                const ant = Math.round(Number(sh.anticipos || 0) * 100) / 100;
-                const sumaTurno = Math.round((rem + tarj + gst + pag + desc + cup + cred + chq + ant) * 100) / 100;
-                const difTurno = Math.round((sumaTurno - vta) * 100) / 100;
-
-                turnosPorEmpresa[empId].push({
-                    id: sh.id,
-                    turno: sh.turno,
-                    responsable: sh.responsable || 'Sin asignar',
-                    venta: vta,
-                    remesas: rem,
-                    tarjetas: tarj,
-                    gastos: gst,
-                    pagos: pag,
-                    descuentos: desc,
-                    cupones: cup,
-                    creditos: cred,
-                    cheques: chq,
-                    anticipos: ant,
-                    suma: sumaTurno,
-                    diferencia: difTurno
-                });
-            });
-        } catch (turnosErr) {
-            console.warn('[Consolidado Ventas] Error consultando turnos detallados:', turnosErr.message);
-        }
+        const turnosPorEmpresa = await getTurnosPorEmpresa(externalDb, sysDate);
 
         const [resumenCierreRows] = await externalDb.query(sqlCierreTurno, Array(11).fill(sysDate));
-        const resumenCierreLocal = (resumenCierreRows || []).map(r => {
-            const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
-            const venta = Number(r.total_venta) + Number(r.lubricantes);
-            const diferencia = Math.round((monto - venta) * 100) / 100;
-            const gastos = Math.round(Number(r.gastos) * 100) / 100;
-            const totVenta = Math.round(venta * 100) / 100;
-
-            const alertas = [];
-            if (diferencia < -0.05) {
-                alertas.push({ tipo: 'descuadre_cierre', nivel: 'danger', texto: `Faltante de cierre: -$${Math.abs(diferencia).toFixed(2)}` });
-            } else if (diferencia > 0.05) {
-                alertas.push({ tipo: 'descuadre_cierre', nivel: 'warning', texto: `Sobrante de cierre: +$${diferencia.toFixed(2)}` });
-            }
-            if (gastos > 150) {
-                alertas.push({ tipo: 'gasto_elevado', nivel: 'warning', texto: `Gastos de pista elevados: $${gastos.toFixed(2)}` });
-            }
-            if (totVenta === 0) {
-                alertas.push({ tipo: 'sin_venta', nivel: 'info', texto: 'Sin venta registrada en pista' });
-            }
-
-            const noEfectivo = Math.round(((Number(r.tarjetas || 0)) + (Number(r.cupones || 0)) + (Number(r.cheques || 0)) + (Number(r.creditos || 0))) * 100) / 100;
-            const efectivoEsperado = Math.round((totVenta - noEfectivo) * 100) / 100;
-            const efectivoDescargado = Math.round(((Number(r.remesas || 0)) + gastos + (Number(r.pagos || 0)) + (Number(r.anticipos || 0)) + (Number(r.descuentos || 0))) * 100) / 100;
-
-            const explicacion = {
-                tot_venta: totVenta,
-                venta_combustible: Math.round(Number(r.total_venta || 0) * 100) / 100,
-                lubricantes: Math.round(Number(r.lubricantes || 0) * 100) / 100,
-                no_efectivo: noEfectivo,
-                desglose_no_efectivo: {
-                    tarjetas: Math.round(Number(r.tarjetas || 0) * 100) / 100,
-                    cupones: Math.round(Number(r.cupones || 0) * 100) / 100,
-                    cheques: Math.round(Number(r.cheques || 0) * 100) / 100,
-                    credito: Math.round(Number(r.creditos || 0) * 100) / 100
-                },
-                efectivo_esperado: efectivoEsperado,
-                efectivo_descargado: efectivoDescargado,
-                desglose_descargos: {
-                    remesas: Math.round(Number(r.remesas || 0) * 100) / 100,
-                    gastos: gastos,
-                    pagos: Math.round(Number(r.pagos || 0) * 100) / 100,
-                    descuentos: Math.round(Number(r.descuentos || 0) * 100) / 100,
-                    anticipos: Math.round(Number(r.anticipos || 0) * 100) / 100
-                },
-                diferencia,
-                tipo: diferencia < -0.05 ? 'faltante' : (diferencia > 0.05 ? 'sobrante' : 'cuadrado'),
-                mensaje: diferencia < -0.05
-                    ? `Faltante de caja por -$${Math.abs(diferencia).toFixed(2)}: De los $${efectivoEsperado.toFixed(2)} cobrados en efectivo, solo se han justificado $${efectivoDescargado.toFixed(2)} en remesas y descargos (quedan $${Math.abs(diferencia).toFixed(2)} pendientes de remesar al banco o liquidar).`
-                    : (diferencia > 0.05
-                        ? `Sobrante de caja por +$${diferencia.toFixed(2)}: Se justificaron $${efectivoDescargado.toFixed(2)} en remesas y descargos, superando el efectivo esperado de $${efectivoEsperado.toFixed(2)}.`
-                        : 'Cierre de pista cuadrado al centavo.')
-            };
-
-            return {
-                id_empresa: r.id_empresa,
-                empresa: getCleanStationName(String(r.id_empresa), r.estacion),
-                credito: Math.round(Number(r.creditos) * 100) / 100,
-                cupones: Math.round(Number(r.cupones) * 100) / 100,
-                cheques: Math.round(Number(r.cheques) * 100) / 100,
-                tarjetas: Math.round(Number(r.tarjetas) * 100) / 100,
-                remesas: Math.round(Number(r.remesas) * 100) / 100,
-                gastos,
-                lubricantes: Math.round(Number(r.lubricantes) * 100) / 100,
-                anticipos: Math.round(Number(r.anticipos) * 100) / 100,
-                pagos: Math.round(Number(r.pagos) * 100) / 100,
-                descuentos: Math.round(Number(r.descuentos) * 100) / 100,
-                suma: Math.round(monto * 100) / 100,
-                tot_venta: totVenta,
-                diferencia,
-                alertas,
-                tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning'),
-                explicacion_diferencia: explicacion,
-                turnos: turnosPorEmpresa[String(r.id_empresa)] || []
-            };
-        });
+        const resumenCierreLocal = (resumenCierreRows || []).map(r => mapCierreRowConExplicacion(r, turnosPorEmpresa, sysDate));
 
         // Resumen global de auditoría e incongruencias
         const auditoria = {
@@ -1787,28 +2061,11 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(
             FROM web_consolidado x WHERE x.grupo = 'ESTACION' ORDER BY x.titulo
         `;
         const params = Array(11).fill(sysDate);
-        const [rows] = await externalDb.query(sql, params);
-        res.json(rows.map(r => {
-            const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
-            const venta = Number(r.total_venta) + Number(r.lubricantes);
-            return { 
-                id_empresa: r.id_empresa,
-                empresa: r.estacion, 
-                credito: Number(r.creditos), 
-                cupones: Number(r.cupones), 
-                cheques: Number(r.cheques), 
-                tarjetas: Number(r.tarjetas), 
-                remesas: Number(r.remesas), 
-                gastos: Number(r.gastos), 
-                lubricantes: Number(r.lubricantes), 
-                anticipos: Number(r.anticipos), 
-                pagos: Number(r.pagos), 
-                descuentos: Number(r.descuentos), 
-                suma: Math.round(monto * 100) / 100, 
-                tot_venta: Math.round(venta * 100) / 100, 
-                diferencia: Math.round((monto - venta) * 100) / 100 
-            };
-        }));
+        const [rows, turnosPorEmpresa] = await Promise.all([
+            externalDb.query(sql, params).then(([r]) => r),
+            getTurnosPorEmpresa(externalDb, sysDate)
+        ]);
+        res.json((rows || []).map(r => mapCierreRowConExplicacion(r, turnosPorEmpresa, sysDate)));
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar resumen de cierre'); 
     }
@@ -2417,6 +2674,134 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
         });
     } catch (error) {
         sendSafeError(res, error, `Error al consultar detalle de ${rubro}`);
+    }
+});
+
+// Dictamen Forense con IA para Descuadres de Cierre de Pista
+router.post('/ventas/cierre-turno/analisis-ia', authenticateToken, requirePermission(cierreViewPerms), async (req, res) => {
+    const { id_empresa, fecha, station_name, explicacion_diferencia, turnos } = req.body;
+    try {
+        const stationName = station_name || `Estación ${id_empresa}`;
+        const exp = explicacion_diferencia || {};
+        const dif = Number(exp.diferencia || 0);
+        const totVenta = Number(exp.tot_venta || 0);
+        const noEfectivo = Number(exp.no_efectivo || 0);
+        const efectivoEsperado = Number(exp.efectivo_esperado || 0);
+        const remesas = Number(exp.desglose_descargos?.remesas || 0);
+        const gastos = Number(exp.desglose_descargos?.gastos || 0);
+        const pagos = Number(exp.desglose_descargos?.pagos || 0);
+        const turnosList = Array.isArray(turnos) ? turnos : [];
+
+        // 1. Si hay clave GEMINI_API_KEY disponible en el entorno
+        if (process.env.GEMINI_API_KEY) {
+            try {
+                const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+                const prompt = `Eres un Auditor Forense Senior y Controller Financiero Corporativo de Estaciones de Servicio de Combustibles (Gasolineras) de Grupo SIPE.
+Tu trabajo es auditar un cierre de turno de pista que presenta una diferencia o descuadre de efectivo.
+
+DATOS DEL CIERRE AUDITADO:
+- Estación: ${stationName} (Código: ${id_empresa})
+- Fecha del Turno: ${fecha}
+- Venta Total Pista (Combustible + Lubricantes): $${totVenta.toFixed(2)}
+- Cobros en Medios Electrónicos / No Efectivo (Tarjetas POS, Cupones, Crédito): -$${noEfectivo.toFixed(2)}
+- Efectivo Físico que Debió Ingresar a Gaveta de Bomberos (Efectivo Esperado): $${efectivoEsperado.toFixed(2)}
+- Remesas Depositadas en Banco: $${remesas.toFixed(2)}
+- Comprobantes de Gastos y Pagos Autorizados: $${(gastos + pagos).toFixed(2)}
+- Descuadre Neto de Cierre: $${dif.toFixed(2)} (${dif < -0.05 ? 'FALTANTE DE EFECTIVO' : (dif > 0.05 ? 'SOBRANTE DE EFECTIVO' : 'CUADRADO')})
+
+DESGLOSE POR TURNOS DE PISTA:
+${turnosList.map(t => `• Turno ${t.turno} (ID: ${t.id}) - Responsable: ${t.responsable || 'Sin asignar'} | Venta: $${Number(t.venta || 0).toFixed(2)} | Remesas: $${Number(t.remesas || 0).toFixed(2)} | Tarjetas: $${Number(t.tarjetas || 0).toFixed(2)} | Gastos/Pagos: $${(Number(t.gastos || 0) + Number(t.pagos || 0)).toFixed(2)} | Diferencia Turno: $${Number(t.diferencia || 0).toFixed(2)}`).join('\n') || 'No se registraron turnos individuales'}
+
+INSTRUCCIÓN:
+Emite un dictamen pericial forense riguroso, objetivo y en español profesional. Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura exacta:
+{
+    "nivel_criticidad": "CRITICO" | "ALTO" | "MEDIO" | "BAJO" | "NORMAL",
+    "dictamen_ejecutivo": "Texto pericial explicando claramente el origen matemático y físico de la discrepancia...",
+    "foco_responsabilidad": "Identificación precisa del turno y bombero donde se concentró el descuadre con % de concentración...",
+    "hipotesis_forenses": [
+        "Hipótesis 1: ...",
+        "Hipótesis 2: ..."
+    ],
+    "preguntas_interrogatorio": [
+        "Pregunta 1 para el responsable del turno...",
+        "Pregunta 2..."
+    ],
+    "acciones_inmediatas": [
+        "Paso 1: ...",
+        "Paso 2: ..."
+    ],
+    "recomendaciones_control_interno": [
+        "Recomendación 1: ...",
+        "Recomendación 2: ..."
+    ]
+}`;
+
+                const result = await ai.models.generateContent({
+                    model: 'gemini-2.0-flash',
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    config: {
+                        temperature: 0.2,
+                        responseMimeType: 'application/json'
+                    }
+                });
+
+                const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+                const parsed = JSON.parse(rawText);
+
+                return res.json({
+                    success: true,
+                    fuente: 'gemini-2.0-flash',
+                    data: parsed
+                });
+            } catch (aiErr) {
+                console.warn('[Cierre Turno IA] Error invocando Gemini, utilizando fallback heurístico:', aiErr.message);
+            }
+        }
+
+        // 2. Fallback Heurístico Experto si no hay API Key o falla Gemini
+        const analisisHeuristico = exp.analisis_inteligente || generarAnalisisDescuadre({
+            id_empresa,
+            estacion: stationName,
+            fecha,
+            totVenta,
+            noEfectivo,
+            efectivoEsperado,
+            efectivoDescargado: exp.efectivo_descargado || (remesas + gastos + pagos),
+            desgloseDescargos: exp.desglose_descargos || { remesas, gastos, pagos },
+            diferencia: dif,
+            turnos: turnosList
+        });
+
+        const fallbackData = {
+            nivel_criticidad: dif < -1000 ? 'CRITICO' : (dif < -300 ? 'ALTO' : (dif < -50 ? 'MEDIO' : (dif > 0.05 ? 'ALTO' : 'NORMAL'))),
+            dictamen_ejecutivo: analisisHeuristico.diagnostico_principal,
+            foco_responsabilidad: analisisHeuristico.foco_turno
+                ? analisisHeuristico.foco_turno.texto
+                : (turnosList.length > 0 ? 'No se evidencia concentración en un solo turno.' : 'No hay detalle individual de turnos para aislar al responsable.'),
+            hipotesis_forenses: (analisisHeuristico.hipotesis_probables || []).map(h => `${h.titulo} (${h.probabilidad}): ${h.descripcion}`),
+            preguntas_interrogatorio: [
+                analisisHeuristico.foco_turno
+                    ? `¿Tiene el responsable ${analisisHeuristico.foco_turno.responsable} en su poder la boleta de remesa física o sobre de seguridad con los $${Math.abs(analisisHeuristico.foco_turno.diferencia).toFixed(2)} faltantes?`
+                    : '¿Se verificó el contenido físico de la caja fuerte de la estación al momento del corte?',
+                '¿Se realizaron pagos o gastos en efectivo durante el turno que no hayan sido facturados o entregados a administración?',
+                '¿Existen comprobantes de tarjetas de crédito o vales de combustible archivados que no se hayan digitado en el sistema?'
+            ],
+            acciones_inmediatas: (analisisHeuristico.checklist_auditoria || []).map(c => `${c.accion}: ${c.detalle}`),
+            recomendaciones_control_interno: [
+                'Exigir que ninguna entrega de turno se firme sin que la boleta de remesa bancaria coincida con el arqueo de gaveta.',
+                'Auditar en un plazo máximo de 24 horas los depósitos en tránsito o buzón nocturno con el estado de cuenta del banco.',
+                'Establecer tope máximo de efectivo en gaveta para obligar a remesas parciales durante el turno.'
+            ]
+        };
+
+        return res.json({
+            success: true,
+            fuente: 'heuristica_experta',
+            data: fallbackData
+        });
+
+    } catch (err) {
+        sendSafeError(res, err, 'Error generando análisis IA de descuadre');
     }
 });
 
@@ -3171,6 +3556,9 @@ router.get('/consultas/:type', authenticateToken, requirePermission(genericConsu
 });
 
 router.isGenericDescription = isGenericDescription;
+router.generarAnalisisDescuadre = generarAnalisisDescuadre;
+router.getTurnosPorEmpresa = getTurnosPorEmpresa;
+router.mapCierreRowConExplicacion = mapCierreRowConExplicacion;
 
 module.exports = router;
 
