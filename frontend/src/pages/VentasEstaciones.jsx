@@ -17,6 +17,7 @@ import ReportPreviewModal from '../components/ReportPreviewModal';
 import Modal from '../components/Modal';
 import DrillDownPistaModal from '../components/ventas/DrillDownPistaModal';
 import CorteTiendaModal from '../components/ventas/CorteTiendaModal';
+import DiferenciaDescuadreModal, { ConciliacionEfectivoCard } from '../components/ventas/DiferenciaDescuadreModal';
 import { moneyFmt, numFmt } from '../utils/format';
 
 export default function VentasEstaciones() {
@@ -42,6 +43,7 @@ export default function VentasEstaciones() {
     const [expandedStations, setExpandedStations] = useState({});
     const [drillDownModal, setDrillDownModal] = useState(null);
     const [corteModal, setCorteModal] = useState(null);
+    const [diferenciaModal, setDiferenciaModal] = useState(null);
     const [vistaTiendasModo, setVistaTiendasModo] = useState('cortes'); // 'cortes' | 'promedios'
 
     // --- ESTADO MENSUAL ---
@@ -1227,7 +1229,7 @@ export default function VentasEstaciones() {
                         </span>
                     </div>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        💡 Haz clic en cualquier estación o valor (Gastos, Tarjetas, Remesas, etc.) para expandir el detalle
+                        💡 Haz clic en la columna <strong>Dif.</strong> o en <strong>Ver Más</strong> para ver el origen del descuadre, la conciliación de efectivo y el desglose por turno
                     </span>
                 </div>
 
@@ -1362,22 +1364,34 @@ export default function VentasEstaciones() {
                                                 </button>
                                             </td>
                                             <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right' }}>
-                                                <span style={{
-                                                    fontSize: '0.74rem',
-                                                    padding: '2px 5px',
-                                                    borderRadius: '4px',
-                                                    fontWeight: 'bold',
-                                                    backgroundColor: r.diferencia === 0 ? 'rgba(34, 197, 94, 0.15)' : r.diferencia < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                                                    color: r.diferencia === 0 ? '#22c55e' : r.diferencia < 0 ? '#ef4444' : '#f59e0b',
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                    gap: '2px'
-                                                }}
-                                                title={r.diferencia !== 0 ? (r.diferencia < 0 ? `Faltante de cierre por -$${Math.abs(r.diferencia).toFixed(2)}` : `Sobrante de cierre por +$${r.diferencia.toFixed(2)}`) : 'Cierre cuadrado'}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setDiferenciaModal(r)}
+                                                    style={{
+                                                        background: 'none',
+                                                        border: 'none',
+                                                        padding: 0,
+                                                        cursor: 'pointer',
+                                                        textAlign: 'right'
+                                                    }}
+                                                    title={`Clic para ver por qué hay una diferencia de ${moneyFmt(r.diferencia)}`}
                                                 >
-                                                    {r.diferencia !== 0 && <AlertTriangle size={10} />}
-                                                    {moneyFmt(r.diferencia)}
-                                                </span>
+                                                    <span style={{
+                                                        fontSize: '0.74rem',
+                                                        padding: '2px 5px',
+                                                        borderRadius: '4px',
+                                                        fontWeight: 'bold',
+                                                        backgroundColor: r.diferencia === 0 ? 'rgba(34, 197, 94, 0.15)' : r.diferencia < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                                        color: r.diferencia === 0 ? '#22c55e' : r.diferencia < 0 ? '#ef4444' : '#f59e0b',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '2px',
+                                                        textDecoration: 'underline dotted'
+                                                    }}>
+                                                        {r.diferencia !== 0 && <AlertTriangle size={10} />}
+                                                        {moneyFmt(r.diferencia)}
+                                                    </span>
+                                                </button>
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                 <button
@@ -1405,6 +1419,14 @@ export default function VentasEstaciones() {
                                                                 Selecciona cualquier rubro para inspeccionar todos los comprobantes individuales
                                                             </span>
                                                         </div>
+
+                                                        {/* Tarjeta de Diagnóstico y Conciliación del Descuadre */}
+                                                        <ConciliacionEfectivoCard
+                                                            station={r}
+                                                            fecha={fecha}
+                                                            onOpenModal={setDiferenciaModal}
+                                                            onOpenDrillDown={handleOpenDrillDown}
+                                                        />
 
                                                         <div style={{
                                                             display: 'grid',
@@ -3401,6 +3423,14 @@ export default function VentasEstaciones() {
             <CorteTiendaModal
                 corteModal={corteModal}
                 onClose={() => setCorteModal(null)}
+            />
+
+            {/* Modal de Diagnóstico del Descuadre / Diferencia */}
+            <DiferenciaDescuadreModal
+                modalData={diferenciaModal}
+                onClose={() => setDiferenciaModal(null)}
+                fecha={fecha}
+                onOpenDrillDown={handleOpenDrillDown}
             />
         </div>
     );

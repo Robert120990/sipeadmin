@@ -794,6 +794,66 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                    (SELECT IFNULL(SUM(b.monto),0.0) FROM cierre_turno a INNER JOIN cierre_turno_lecturas b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS total_venta
             FROM web_consolidado x WHERE x.grupo = 'ESTACION' AND x.id_empresa != '004' ORDER BY x.orden
         `;
+        // Obtener detalle por turnos de cada estación para análisis de descuadres
+        const turnosPorEmpresa = {};
+        try {
+            const sqlTurnos = `
+                SELECT c.id, c.id_empresa, c.turno, c.responsable,
+                       IFNULL(SUM(l.monto), 0.0) as venta,
+                       (SELECT IFNULL(SUM(r.efectivo + r.monedas + r.transferencia), 0.0) FROM cierre_turno_remesa r WHERE r.id_cierre_turno = c.id AND r.id_empresa = c.id_empresa) as remesas,
+                       (SELECT IFNULL(SUM(t.valor), 0.0) FROM cierre_turno_tarjeta t WHERE t.id_cierre_turno = c.id AND t.id_empresa = c.id_empresa) as tarjetas,
+                       (SELECT IFNULL(SUM(g.valor), 0.0) FROM cierre_turno_gastos g WHERE g.id_cierre_turno = c.id AND g.id_empresa = c.id_empresa) as gastos,
+                       (SELECT IFNULL(SUM(p.valor), 0.0) FROM cierre_turno_pagos p WHERE p.id_cierre_turno = c.id AND p.id_empresa = c.id_empresa) as pagos,
+                       (SELECT IFNULL(SUM(d.valor * d.cantidad), 0.0) FROM cierre_turno_descuentos d WHERE d.id_cierre_turno = c.id AND d.id_empresa = c.id_empresa) as descuentos,
+                       (SELECT IFNULL(SUM(cp.valor), 0.0) FROM cierre_turno_cupones cp WHERE cp.id_cierre_turno = c.id AND cp.id_empresa = c.id_empresa) as cupones,
+                       (SELECT IFNULL(SUM(cr.total_descuento), 0.0) FROM cierre_turno_credito cr WHERE cr.id_cierre_turno = c.id AND cr.id_empresa = c.id_empresa) as creditos,
+                       (SELECT IFNULL(SUM(ch.valor), 0.0) FROM cierre_turno_cheques ch WHERE ch.id_cierre_turno = c.id AND ch.id_empresa = c.id_empresa) as cheques,
+                       (SELECT IFNULL(SUM(a.valor), 0.0) FROM cierre_turno_anticipos a WHERE a.id_cierre_turno = c.id AND a.id_empresa = c.id_empresa) as anticipos
+                FROM cierre_turno c
+                LEFT JOIN cierre_turno_lecturas l ON c.id = l.id_cierre_turno AND c.id_empresa = l.id_empresa
+                WHERE c.fecha_turno = ?
+                GROUP BY c.id, c.id_empresa, c.turno, c.responsable
+                ORDER BY c.id_empresa, c.turno
+            `;
+            const [shiftRows] = await withRetry(() => externalDb.query(sqlTurnos, [sysDate]));
+            (shiftRows || []).forEach(sh => {
+                const empId = String(sh.id_empresa);
+                if (!turnosPorEmpresa[empId]) turnosPorEmpresa[empId] = [];
+                const vta = Math.round(Number(sh.venta || 0) * 100) / 100;
+                const rem = Math.round(Number(sh.remesas || 0) * 100) / 100;
+                const tarj = Math.round(Number(sh.tarjetas || 0) * 100) / 100;
+                const gst = Math.round(Number(sh.gastos || 0) * 100) / 100;
+                const pag = Math.round(Number(sh.pagos || 0) * 100) / 100;
+                const desc = Math.round(Number(sh.descuentos || 0) * 100) / 100;
+                const cup = Math.round(Number(sh.cupones || 0) * 100) / 100;
+                const cred = Math.round(Number(sh.creditos || 0) * 100) / 100;
+                const chq = Math.round(Number(sh.cheques || 0) * 100) / 100;
+                const ant = Math.round(Number(sh.anticipos || 0) * 100) / 100;
+                const sumaTurno = Math.round((rem + tarj + gst + pag + desc + cup + cred + chq + ant) * 100) / 100;
+                const difTurno = Math.round((sumaTurno - vta) * 100) / 100;
+
+                turnosPorEmpresa[empId].push({
+                    id: sh.id,
+                    turno: sh.turno,
+                    responsable: sh.responsable || 'Sin asignar',
+                    venta: vta,
+                    remesas: rem,
+                    tarjetas: tarj,
+                    gastos: gst,
+                    pagos: pag,
+                    descuentos: desc,
+                    cupones: cup,
+                    creditos: cred,
+                    cheques: chq,
+                    anticipos: ant,
+                    suma: sumaTurno,
+                    diferencia: difTurno
+                });
+            });
+        } catch (turnosErr) {
+            console.warn('[Consolidado Ventas] Error consultando turnos detallados:', turnosErr.message);
+        }
+
         const [resumenCierreRows] = await externalDb.query(sqlCierreTurno, Array(11).fill(sysDate));
         const resumenCierreLocal = (resumenCierreRows || []).map(r => {
             const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
@@ -815,6 +875,39 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                 alertas.push({ tipo: 'sin_venta', nivel: 'info', texto: 'Sin venta registrada en pista' });
             }
 
+            const noEfectivo = Math.round(((Number(r.tarjetas || 0)) + (Number(r.cupones || 0)) + (Number(r.cheques || 0)) + (Number(r.creditos || 0))) * 100) / 100;
+            const efectivoEsperado = Math.round((totVenta - noEfectivo) * 100) / 100;
+            const efectivoDescargado = Math.round(((Number(r.remesas || 0)) + gastos + (Number(r.pagos || 0)) + (Number(r.anticipos || 0)) + (Number(r.descuentos || 0))) * 100) / 100;
+
+            const explicacion = {
+                tot_venta: totVenta,
+                venta_combustible: Math.round(Number(r.total_venta || 0) * 100) / 100,
+                lubricantes: Math.round(Number(r.lubricantes || 0) * 100) / 100,
+                no_efectivo: noEfectivo,
+                desglose_no_efectivo: {
+                    tarjetas: Math.round(Number(r.tarjetas || 0) * 100) / 100,
+                    cupones: Math.round(Number(r.cupones || 0) * 100) / 100,
+                    cheques: Math.round(Number(r.cheques || 0) * 100) / 100,
+                    credito: Math.round(Number(r.creditos || 0) * 100) / 100
+                },
+                efectivo_esperado: efectivoEsperado,
+                efectivo_descargado: efectivoDescargado,
+                desglose_descargos: {
+                    remesas: Math.round(Number(r.remesas || 0) * 100) / 100,
+                    gastos: gastos,
+                    pagos: Math.round(Number(r.pagos || 0) * 100) / 100,
+                    descuentos: Math.round(Number(r.descuentos || 0) * 100) / 100,
+                    anticipos: Math.round(Number(r.anticipos || 0) * 100) / 100
+                },
+                diferencia,
+                tipo: diferencia < -0.05 ? 'faltante' : (diferencia > 0.05 ? 'sobrante' : 'cuadrado'),
+                mensaje: diferencia < -0.05
+                    ? `Faltante de caja por -$${Math.abs(diferencia).toFixed(2)}: De los $${efectivoEsperado.toFixed(2)} cobrados en efectivo, solo se han justificado $${efectivoDescargado.toFixed(2)} en remesas y descargos (quedan $${Math.abs(diferencia).toFixed(2)} pendientes de remesar al banco o liquidar).`
+                    : (diferencia > 0.05
+                        ? `Sobrante de caja por +$${diferencia.toFixed(2)}: Se justificaron $${efectivoDescargado.toFixed(2)} en remesas y descargos, superando el efectivo esperado de $${efectivoEsperado.toFixed(2)}.`
+                        : 'Cierre de pista cuadrado al centavo.')
+            };
+
             return {
                 id_empresa: r.id_empresa,
                 empresa: getCleanStationName(String(r.id_empresa), r.estacion),
@@ -832,7 +925,9 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                 tot_venta: totVenta,
                 diferencia,
                 alertas,
-                tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning')
+                tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning'),
+                explicacion_diferencia: explicacion,
+                turnos: turnosPorEmpresa[String(r.id_empresa)] || []
             };
         });
 
