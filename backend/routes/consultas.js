@@ -128,7 +128,7 @@ const formatYMD = (val) => {
     return s.split('T')[0].split(' ')[0];
 };
 
-const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) => {
+const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefined) => {
     // 1. Obtener cortes del sistema legado (cort_cabecera)
     const sqlCortesTienda = `
         SELECT 
@@ -157,17 +157,21 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = null) =
     // 2. Consultar turnos de tiendas en db_sistema_saas (sys.sipesv.com)
     const saasByBranch = {};
     try {
-        const saasDb = accountingDbParam || await getAccountingDb();
+        const saasDb = accountingDbParam !== undefined
+            ? accountingDbParam
+            : (process.env.NODE_ENV === 'test' ? null : await getAccountingDb().catch(() => null));
         if (saasDb) {
             const [saasShifts] = await withRetry(() => saasDb.query(`
                 SELECT s.id, s.branch_id, b.nombre as branch_nombre, p.nombre as pos_nombre,
                        s.total_sales, s.total_incomes, s.card_sales, s.total_remesas, s.total_expenses,
-                       s.actual_cash, s.difference, s.shift_number, u.nombre as seller_nombre
+                       s.actual_cash, s.difference, s.shift_number,
+                       COALESCE(sel.nombre, u.nombre) as seller_nombre
                 FROM pos_shifts s
                 JOIN branches b ON s.branch_id = b.id
                 JOIN points_of_sale p ON s.pos_id = p.id
+                LEFT JOIN sellers sel ON s.seller_id = sel.id
                 LEFT JOIN users u ON s.seller_id = u.id
-                WHERE s.shift_date = ?
+                WHERE DATE(s.shift_date) = ?
                   AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
                 ORDER BY s.branch_id, s.id
             `, [date]));
@@ -1027,7 +1031,7 @@ const normalizeStationName = (name) => {
         .trim();
 };
 
-const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDbParam = null) => {
+const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDbParam = undefined) => {
     const y = parseInt(yearNum, 10);
     const m = parseInt(monthNum, 10);
     if (isNaN(y) || isNaN(m) || m < 1 || m > 12 || y < 2000 || y > 2100) {
@@ -1039,8 +1043,12 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
     const startDate = `${y}-${monthStr}-01`;
     const endDate = `${y}-${monthStr}-${String(daysInMonth).padStart(2, '0')}`;
 
-    // 1. Si se inyecta accountingDbParam explícitamente (ej. en pruebas unitarias), procesar SaaS
-    if (accountingDbParam) {
+    // 1. Obtener base contable / SaaS (accountingDb) si no fue inyectada explícitamente
+    const accountingDb = accountingDbParam !== undefined
+        ? accountingDbParam
+        : (process.env.NODE_ENV === 'test' ? null : await getAccountingDb().catch(() => null));
+
+    if (accountingDb) {
         try {
             const sqlSaasEstaciones = `
                 SELECT 
@@ -1060,7 +1068,7 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                 GROUP BY b.id, b.nombre
                 ORDER BY b.id
             `;
-            const [saasEstRows] = await withRetry(() => accountingDbParam.query(sqlSaasEstaciones, [startDate, endDate]));
+            const [saasEstRows] = await withRetry(() => accountingDb.query(sqlSaasEstaciones, [startDate, endDate]));
 
             if (saasEstRows && saasEstRows.length > 0) {
                 const sqlSaasTiendas = `
@@ -1077,7 +1085,7 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                     GROUP BY b.id, b.nombre
                     ORDER BY b.id
                 `;
-                const [saasTiendasRows] = await withRetry(() => accountingDbParam.query(sqlSaasTiendas, [startDate, endDate, startDate, endDate]));
+                const [saasTiendasRows] = await withRetry(() => accountingDb.query(sqlSaasTiendas, [startDate, endDate, startDate, endDate]));
 
                 const estacionesLocal = saasEstRows.map(row => ({
                     id_empresa: String(row.id_empresa),
@@ -1753,11 +1761,12 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
             const [shifts] = await withRetry(() => saasDb.query(`
                 SELECT s.id, s.shift_number, s.total_sales, s.total_incomes, s.card_sales,
                        s.total_remesas, s.total_expenses, s.actual_cash, s.difference,
-                       u.nombre as seller_nombre
+                       COALESCE(sel.nombre, u.nombre) as seller_nombre
                 FROM pos_shifts s
                 JOIN points_of_sale p ON s.pos_id = p.id
+                LEFT JOIN sellers sel ON s.seller_id = sel.id
                 LEFT JOIN users u ON s.seller_id = u.id
-                WHERE s.branch_id = ? AND s.shift_date = ?
+                WHERE s.branch_id = ? AND DATE(s.shift_date) = ?
                   AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
             `, [branchId, date]));
 
