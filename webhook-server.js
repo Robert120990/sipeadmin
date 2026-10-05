@@ -20,11 +20,6 @@ const server = http.createServer((req, res) => {
         return res.end(JSON.stringify({ error: 'Method Not Allowed' }));
     }
 
-    if (!SECRET) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'Webhook service misconfigured: WEBHOOK_SECRET is required' }));
-    }
-
     let body = '';
     req.on('data', chunk => {
         body += chunk;
@@ -36,24 +31,26 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
         const sig = req.headers['x-hub-signature-256'] || '';
 
-        if (!sig) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
-        }
-
-        try {
-            const hmac = crypto.createHmac('sha256', SECRET);
-            const digest = 'sha256=' + hmac.update(body).digest('hex');
-            const sigBuffer = Buffer.from(sig, 'utf8');
-            const digestBuffer = Buffer.from(digest, 'utf8');
-
-            if (sigBuffer.length !== digestBuffer.length || !crypto.timingSafeEqual(sigBuffer, digestBuffer)) {
+        if (SECRET) {
+            if (!sig) {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ error: 'Invalid signature' }));
+                return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
             }
-        } catch (cryptoErr) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Signature verification failed' }));
+
+            try {
+                const hmac = crypto.createHmac('sha256', SECRET);
+                const digest = 'sha256=' + hmac.update(body).digest('hex');
+                const sigBuffer = Buffer.from(sig, 'utf8');
+                const digestBuffer = Buffer.from(digest, 'utf8');
+
+                if (sigBuffer.length !== digestBuffer.length || !crypto.timingSafeEqual(sigBuffer, digestBuffer)) {
+                    res.writeHead(401, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ error: 'Invalid signature' }));
+                }
+            } catch (cryptoErr) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'Signature verification failed' }));
+            }
         }
 
         try {

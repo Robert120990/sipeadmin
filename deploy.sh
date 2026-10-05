@@ -3,7 +3,7 @@ set -e
 
 echo "=== [$(date)] Iniciando despliegue de SIPE Admin ==="
 
-PROJECT_DIR="/opt/sipeadmin"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
 echo ">> 1. Actualizando código desde git..."
