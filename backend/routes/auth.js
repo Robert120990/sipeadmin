@@ -65,8 +65,8 @@ router.get('/verify', authenticateToken, (req, res) => {
     res.json({ valid: true, user: req.user });
 });
 
-// --- Users Management ---
-router.get('/users', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
+// --- Users Management & Directory ---
+router.get('/users', authenticateToken, requirePermission(['/dashboard/users', '/dashboard/operaciones/tareas', 'manage_tasks']), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query(`

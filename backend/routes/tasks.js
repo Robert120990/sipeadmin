@@ -6,13 +6,6 @@ const { sendSafeError } = require('../utils/errorHandler');
 
 const taskPerms = ['manage_tasks', '/dashboard/operaciones/tareas'];
 
-const hasTaskManagePerm = (user) => {
-    if (!user) return false;
-    if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
-    const perms = Array.isArray(user.permissions) ? user.permissions : [];
-    return perms.includes('manage_tasks') || perms.includes('/dashboard/operaciones/tareas');
-};
-
 /**
  * Helper to emit real-time socket events for task changes
  */
@@ -62,9 +55,37 @@ async function createAndEmitNotification(req, { userId, type, title, message, da
 }
 
 /**
+ * GET /api/tasks/collaborators
+ * Retrieve all active collaborators/users available for task assignment
+ * Accessible to any authenticated user
+ */
+router.get('/collaborators', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const [rows] = await db.query(`
+            SELECT 
+                u.id, 
+                u.username, 
+                u.nombre, 
+                u.email, 
+                u.status, 
+                u.role_id, 
+                r.name as role_name 
+            FROM users u 
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.status = 'active' OR u.status IS NULL
+            ORDER BY COALESCE(NULLIF(u.nombre, ''), u.username) ASC
+        `);
+        res.json(rows);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener colaboradores para asignación de tareas');
+    }
+});
+
+/**
  * GET /api/tasks
  * List tasks with optional filters
- * Non-managers only see tasks assigned to them
+ * Allows all collaborators to collaborate and see team tasks or filter by assigned_to / solo_mias
  */
 router.get('/', authenticateToken, async (req, res) => {
     try {
@@ -79,8 +100,6 @@ router.get('/', authenticateToken, async (req, res) => {
             fecha_hasta,
             solo_mias
         } = req.query;
-
-        const isManager = hasTaskManagePerm(req.user);
 
         let query = `
             SELECT 
@@ -99,10 +118,10 @@ router.get('/', authenticateToken, async (req, res) => {
 
         const params = [];
 
-        // If user is not manager or explicitly requests "solo_mias"
-        if (!isManager || solo_mias === 'true') {
-            query += ' AND t.assigned_to = ?';
-            params.push(req.user.id);
+        // If "solo_mias" is true, show tasks assigned to or created by the current user
+        if (solo_mias === 'true') {
+            query += ' AND (t.assigned_to = ? OR t.created_by = ?)';
+            params.push(req.user.id, req.user.id);
         } else if (assigned_to) {
             query += ' AND t.assigned_to = ?';
             params.push(assigned_to);
@@ -176,14 +195,13 @@ router.get('/kpis/summary', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const { assigned_to, solo_mias } = req.query;
-        const isManager = hasTaskManagePerm(req.user);
 
         let whereClause = 'WHERE 1=1';
         const params = [];
 
-        if (!isManager || solo_mias === 'true') {
-            whereClause += ' AND assigned_to = ?';
-            params.push(req.user.id);
+        if (solo_mias === 'true') {
+            whereClause += ' AND (assigned_to = ? OR created_by = ?)';
+            params.push(req.user.id, req.user.id);
         } else if (assigned_to) {
             whereClause += ' AND assigned_to = ?';
             params.push(assigned_to);
@@ -227,7 +245,6 @@ router.get('/:id', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
         const taskId = req.params.id;
-        const isManager = hasTaskManagePerm(req.user);
 
         const [tasks] = await db.query(`
             SELECT 
@@ -249,10 +266,6 @@ router.get('/:id', authenticateToken, async (req, res) => {
         }
 
         const task = tasks[0];
-        if (!isManager && task.assigned_to !== req.user.id && task.created_by !== req.user.id) {
-            return res.status(403).json({ message: 'No tiene permisos para ver esta tarea.' });
-        }
-
         task.checklist = typeof task.checklist === 'string' ? JSON.parse(task.checklist) : (task.checklist || []);
 
         // Fetch comments

@@ -66,7 +66,7 @@ export default function Tareas() {
     const [filterPrioridad, setFilterPrioridad] = useState('todas');
     const [filterCategoria, setFilterCategoria] = useState('todas');
     const [filterUser, setFilterUser] = useState('');
-    const [soloMias, setSoloMias] = useState(!isAdmin);
+    const [soloMias, setSoloMias] = useState(false);
 
     // Modals
     const [showModalForm, setShowModalForm] = useState(false);
@@ -125,10 +125,17 @@ export default function Tareas() {
 
     const fetchUsers = useCallback(async () => {
         try {
-            const res = await api.get('/users');
-            setUsersList(res.data || []);
+            const res = await api.get('/tasks/collaborators');
+            const data = Array.isArray(res.data) ? res.data : [];
+            setUsersList(data);
         } catch (error) {
-            console.error('Error fetching users:', error);
+            console.error('Error fetching collaborators from /tasks/collaborators:', error);
+            try {
+                const fallbackRes = await api.get('/users');
+                setUsersList(Array.isArray(fallbackRes.data) ? fallbackRes.data : []);
+            } catch (fbErr) {
+                console.error('Error fetching users fallback:', fbErr);
+            }
         }
     }, []);
 
@@ -371,6 +378,9 @@ export default function Tareas() {
 
     // Open Modal Form for Create or Edit
     const handleOpenForm = (task = null) => {
+        if (usersList.length === 0) {
+            fetchUsers();
+        }
         if (task) {
             setEditingTask(task);
             setFormData({
@@ -738,20 +748,22 @@ export default function Tareas() {
                         }}
                     >
                         <User size={14} />
-                        <span>{soloMias ? 'Solo Mis Tareas' : 'Todas las Tareas'}</span>
+                        <span>{soloMias ? 'Mis Tareas (Asignadas / Creadas)' : 'Todas las Tareas'}</span>
                     </button>
 
-                    {/* Filter User (for Admins) */}
-                    {isAdmin && !soloMias && (
+                    {/* Filter User */}
+                    {!soloMias && (
                         <select
                             className="form-control"
                             value={filterUser}
                             onChange={(e) => setFilterUser(e.target.value)}
-                            style={{ height: '36px', width: '180px', fontSize: '0.825rem' }}
+                            style={{ height: '36px', width: '200px', fontSize: '0.825rem' }}
                         >
                             <option value="">-- Todos los colaboradores --</option>
                             {usersList.map(u => (
-                                <option key={u.id} value={u.id}>{u.nombre || u.username}</option>
+                                <option key={u.id} value={u.id}>
+                                    {u.nombre || u.username} {u.role_name ? `(${u.role_name})` : ''}
+                                </option>
                             ))}
                         </select>
                     )}
@@ -1301,12 +1313,16 @@ export default function Tareas() {
                             onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
                             style={{ height: '36px', fontSize: '0.825rem' }}
                         >
-                            <option value="">-- Seleccione colaborador --</option>
-                            {usersList.map(u => (
-                                <option key={u.id} value={u.id}>
-                                    {u.nombre || u.username} ({u.role_name || u.role || 'Usuario'})
-                                </option>
-                            ))}
+                            <option value="">-- Seleccionar colaborador --</option>
+                            {usersList.length === 0 ? (
+                                <option value="" disabled>Cargando colaboradores...</option>
+                            ) : (
+                                usersList.map(u => (
+                                    <option key={u.id} value={u.id}>
+                                        {u.nombre || u.username} {u.role_name ? `(${u.role_name})` : ''}
+                                    </option>
+                                ))
+                            )}
                         </select>
                     </div>
 
