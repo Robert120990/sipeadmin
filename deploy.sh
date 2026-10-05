@@ -102,11 +102,6 @@ for pid in $SERVER_PIDS; do
         echo "Terminando server.js PID $pid ($CMD_LINE)..." >> "$DEBUG_FILE"
         kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
     fi
-done
-
-echo ">> 5. Recargando Caddy (si está disponible)..."
-caddy reload --config /etc/caddy/Caddyfile >> "$DEBUG_FILE" 2>&1 || true
-
 echo "Fecha fin: $(date)" >> "$DEBUG_FILE"
 echo "=== Despliegue completado con éxito ===" >> "$DEBUG_FILE"
 
