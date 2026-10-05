@@ -74,7 +74,13 @@ const server = http.createServer((req, res) => {
 
             console.log(`[${new Date().toISOString()}] GitHub Webhook triggered for ${BRANCH}. Running deploy.sh...`);
 
-            exec(`bash "${path.join(PROJECT_DIR, 'deploy.sh')}"`, (error, stdout, stderr) => {
+            const deployEnv = {
+                ...process.env,
+                HOME: process.env.HOME || '/home/sistemas',
+                PATH: `/home/sistemas/.local/share/pnpm:/home/sistemas/.pnpm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}`
+            };
+
+            exec(`bash "${path.join(PROJECT_DIR, 'deploy.sh')}"`, { env: deployEnv, cwd: PROJECT_DIR }, (error, stdout, stderr) => {
                 isDeploying = false;
                 if (error) {
                     console.error(`Deploy error: ${error.message}`);

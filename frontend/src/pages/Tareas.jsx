@@ -127,35 +127,39 @@ export default function Tareas() {
     const fetchUsers = useCallback(async () => {
         setUsersLoading(true);
         try {
-            const res = await api.get('/tasks/collaborators');
-            const data = Array.isArray(res.data) ? res.data : [];
-            if (data.length > 0) {
-                setUsersList(data);
-                return;
+            try {
+                const res = await api.get('/tasks/collaborators');
+                const data = Array.isArray(res.data) ? res.data : [];
+                if (data.length > 0) {
+                    setUsersList(data);
+                    return;
+                }
+            } catch (error) {
+                console.error('Error fetching collaborators from /tasks/collaborators:', error);
             }
-        } catch (error) {
-            console.error('Error fetching collaborators from /tasks/collaborators:', error);
-        }
 
-        try {
-            const fallbackRes = await api.get('/users');
-            const fbData = Array.isArray(fallbackRes.data) ? fallbackRes.data : [];
-            if (fbData.length > 0) {
-                setUsersList(fbData);
-                return;
+            try {
+                const fallbackRes = await api.get('/users');
+                const fbData = Array.isArray(fallbackRes.data) ? fallbackRes.data : [];
+                if (fbData.length > 0) {
+                    setUsersList(fbData);
+                    return;
+                }
+            } catch (fbErr) {
+                console.error('Error fetching users fallback:', fbErr);
             }
-        } catch (fbErr) {
-            console.error('Error fetching users fallback:', fbErr);
-        }
 
-        // Si la carga falla o está en curso, garantizar que al menos el usuario en sesión pueda auto-asignarse
-        if (currentUser && currentUser.id) {
-            setUsersList([{
-                id: currentUser.id,
-                username: currentUser.username || 'usuario',
-                nombre: currentUser.nombre || currentUser.username || 'Mi Usuario',
-                role_name: currentUser.role_name || currentUser.role || 'Colaborador'
-            }]);
+            // Si la carga falla o está en curso, garantizar que al menos el usuario en sesión pueda auto-asignarse
+            if (currentUser && currentUser.id) {
+                setUsersList([{
+                    id: currentUser.id,
+                    username: currentUser.username || 'usuario',
+                    nombre: currentUser.nombre || currentUser.username || 'Mi Usuario',
+                    role_name: currentUser.role_name || currentUser.role || 'Colaborador'
+                }]);
+            }
+        } finally {
+            setUsersLoading(false);
         }
     }, [currentUser]);
 

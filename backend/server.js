@@ -207,6 +207,15 @@ app.get('/api/debug-db', authenticateToken, requireRole('Administrator'), async 
     }
 });
 
+// Endpoint administrativo para reiniciar el proceso backend limpiamente (PM2 lo revivirá de inmediato)
+app.post('/api/admin/restart-backend', authenticateToken, requireRole('Administrator'), (req, res) => {
+    res.json({ ok: true, message: 'Reiniciando proceso backend en 1 segundo...' });
+    setTimeout(() => {
+        console.log('Reinicio solicitado por administrador autenticado. Saliendo para que PM2 reinicie el proceso...');
+        process.exit(0);
+    }, 1000);
+});
+
 // Global error handler sanitizado
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Express requires 4 args to detect error handlers
     const requestId = req?.id || 'no-id';
