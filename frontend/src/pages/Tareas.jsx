@@ -57,6 +57,7 @@ export default function Tareas() {
     const [tasks, setTasks] = useState([]);
     const [kpis, setKpis] = useState({ total: 0, pendientes: 0, en_proceso: 0, en_revision: 0, completadas: 0, vencidas: 0, vence_hoy: 0 });
     const [usersList, setUsersList] = useState([]);
+    const [usersLoading, setUsersLoading] = useState(false);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [viewMode, setViewMode] = useState('kanban'); // 'kanban' | 'table'
@@ -124,20 +125,39 @@ export default function Tareas() {
     }, [soloMias, filterUser, filterPrioridad, filterCategoria, searchTerm, addToast]);
 
     const fetchUsers = useCallback(async () => {
+        setUsersLoading(true);
         try {
             const res = await api.get('/tasks/collaborators');
             const data = Array.isArray(res.data) ? res.data : [];
-            setUsersList(data);
+            if (data.length > 0) {
+                setUsersList(data);
+                return;
+            }
         } catch (error) {
             console.error('Error fetching collaborators from /tasks/collaborators:', error);
-            try {
-                const fallbackRes = await api.get('/users');
-                setUsersList(Array.isArray(fallbackRes.data) ? fallbackRes.data : []);
-            } catch (fbErr) {
-                console.error('Error fetching users fallback:', fbErr);
-            }
         }
-    }, []);
+
+        try {
+            const fallbackRes = await api.get('/users');
+            const fbData = Array.isArray(fallbackRes.data) ? fallbackRes.data : [];
+            if (fbData.length > 0) {
+                setUsersList(fbData);
+                return;
+            }
+        } catch (fbErr) {
+            console.error('Error fetching users fallback:', fbErr);
+        }
+
+        // Si la carga falla o está en curso, garantizar que al menos el usuario en sesión pueda auto-asignarse
+        if (currentUser && currentUser.id) {
+            setUsersList([{
+                id: currentUser.id,
+                username: currentUser.username || 'usuario',
+                nombre: currentUser.nombre || currentUser.username || 'Mi Usuario',
+                role_name: currentUser.role_name || currentUser.role || 'Colaborador'
+            }]);
+        }
+    }, [currentUser]);
 
     useEffect(() => {
         fetchUsers();
@@ -1303,9 +1323,30 @@ export default function Tareas() {
 
                     {/* Asignado A */}
                     <div>
-                        <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                            Asignar a Colaborador *
-                        </label>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                Asignar a Colaborador *
+                            </label>
+                            <button
+                                type="button"
+                                onClick={() => fetchUsers()}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: 'var(--primary)',
+                                    fontSize: '0.72rem',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    padding: '0 0.2rem'
+                                }}
+                                title="Recargar colaboradores"
+                            >
+                                <RefreshCw size={11} className={usersLoading ? 'spin' : ''} />
+                                Recargar
+                            </button>
+                        </div>
                         <select
                             required
                             className="form-control"
@@ -1314,8 +1355,10 @@ export default function Tareas() {
                             style={{ height: '36px', fontSize: '0.825rem' }}
                         >
                             <option value="">-- Seleccionar colaborador --</option>
-                            {usersList.length === 0 ? (
+                            {usersLoading && usersList.length === 0 ? (
                                 <option value="" disabled>Cargando colaboradores...</option>
+                            ) : usersList.length === 0 ? (
+                                <option value="" disabled>No se encontraron colaboradores</option>
                             ) : (
                                 usersList.map(u => (
                                     <option key={u.id} value={u.id}>

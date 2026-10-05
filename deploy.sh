@@ -17,7 +17,7 @@ echo ">> 3. Compilando frontend SPA para producción..."
 pnpm --filter frontend run build
 
 echo ">> 4. Reiniciando backend en PM2..."
-pm2 reload ecosystem.config.cjs || pm2 start ecosystem.config.cjs
+pm2 restart sipeadmin-backend --update-env || pm2 restart ecosystem.config.cjs --update-env || pm2 restart all
 pm2 save
 
 echo ">> 5. Recargando Caddy..."
