@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { execFile } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
@@ -364,13 +365,21 @@ async function fetchCommitDetail(sha) {
     });
 }
 
-// Read current system version from frontend package.json
-let cachedVersion = '1.0.58';
-try {
-    const pkg = require('../../frontend/package.json');
-    if (pkg && pkg.version) cachedVersion = pkg.version;
-} catch {
-    // fallback
+// Read current system version dynamically from frontend package.json
+function getCurrentSystemVersion() {
+    try {
+        const pkgPath = path.resolve(__dirname, '../../frontend/package.json');
+        if (fs.existsSync(pkgPath)) {
+            const raw = fs.readFileSync(pkgPath, 'utf8');
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.version) {
+                return parsed.version;
+            }
+        }
+    } catch (e) {
+        console.warn('Error reading frontend/package.json for version:', e.message);
+    }
+    return '1.0.108';
 }
 
 /**
@@ -395,7 +404,8 @@ router.get(
             const shouldForce = force === 'true' || force === '1';
             const { commits, source } = await fetchGithubCommits(shouldForce);
 
-            const kpis = computeCommitKpis(commits, cachedVersion);
+            const currentVersion = getCurrentSystemVersion();
+            const kpis = computeCommitKpis(commits, currentVersion);
 
             // Extract unique authors for filter options
             const authorSet = new Set();

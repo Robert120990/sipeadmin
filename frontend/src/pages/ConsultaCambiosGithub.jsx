@@ -30,6 +30,7 @@ import api from '../services/api';
 import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import { useToast } from '../components/Toast';
+import pkg from '../../package.json';
 
 /**
  * Semantic type styling configuration
@@ -137,9 +138,11 @@ export default function ConsultaCambiosGithub() {
         choreCount: 0,
         otherCount: 0,
         lastDeploy: null,
-        currentVersion: '1.0.0',
+        currentVersion: (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) || pkg?.version || '1.0.0',
         authorsCount: 0
     });
+
+    const activeVersion = (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) || pkg?.version || kpis.currentVersion || '1.0.0';
     const [authors, setAuthors] = useState([]);
     const [repoName, setRepoName] = useState('Robert120990/sipeadmin');
     const [dataSource, setDataSource] = useState('github');
@@ -274,7 +277,7 @@ export default function ConsultaCambiosGithub() {
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Historial_Cambios');
 
-        const fileName = `Cambios_GitHub_${repoName.replace(/\//g, '_')}_v${kpis.currentVersion}_${new Date().toISOString().split('T')[0]}.xlsx`;
+        const fileName = `Cambios_GitHub_${repoName.replace(/\//g, '_')}_v${activeVersion}_${new Date().toISOString().split('T')[0]}.xlsx`;
         XLSX.writeFile(wb, fileName);
         addToast('Historial de cambios exportado a Excel correctamente', 'success');
     };
@@ -309,7 +312,7 @@ export default function ConsultaCambiosGithub() {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(8.5);
         doc.setTextColor(203, 213, 225);
-        doc.text(`Repositorio Oficial: https://github.com/${repoName} | Versión Activa: v${kpis.currentVersion}`, 14, 18);
+        doc.text(`Repositorio Oficial: https://github.com/${repoName} | Versión Activa: v${activeVersion}`, 14, 18);
         doc.text(`Generado: ${new Date().toLocaleString('es-ES')} | Usuario: Auditoría SIPE`, 14, 22);
 
         // Subheader summary boxes
@@ -379,7 +382,7 @@ export default function ConsultaCambiosGithub() {
         setPreviewPdfBlob(blob);
         setPreviewPages(totalPdfPages);
         setPreviewTitle('Auditoría de Cambios y Versiones GitHub');
-        setPreviewSubtitle(`Repositorio: ${repoName} | ${commits.length} registros | Versión v${kpis.currentVersion}`);
+        setPreviewSubtitle(`Repositorio: ${repoName} | ${commits.length} registros | Versión v${activeVersion}`);
         setPreviewModalOpen(true);
     };
 
@@ -473,7 +476,7 @@ export default function ConsultaCambiosGithub() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: '0.2rem' }}>
                         <span style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-color)' }}>
-                            v{kpis.currentVersion}
+                            v{activeVersion}
                         </span>
                         <span style={{
                             fontSize: '0.68rem',
@@ -1118,7 +1121,7 @@ export default function ConsultaCambiosGithub() {
                 subtitle={previewSubtitle}
                 badge="SEGURIDAD"
                 pdfSource={previewPdfBlob}
-                fileName={`Auditoria_Cambios_GitHub_v${kpis.currentVersion}.pdf`}
+                fileName={`Auditoria_Cambios_GitHub_v${activeVersion}.pdf`}
                 totalPages={previewPages}
                 footerInfo="Informe Oficial de Auditoría y Versiones SIPE Admin - Tamaño Carta"
             />

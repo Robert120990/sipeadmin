@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase, Users as UsersIcon, Palette } from 'lucide-react';
+import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase, Users as UsersIcon, Palette, GitCommit } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import NotificationBell from '../components/NotificationBell';
@@ -647,10 +647,66 @@ export default function DashboardLayout() {
                         <LogOut size={20} />
                         {!isCollapsed && <span>Cerrar Sesión</span>}
                     </button>
-                    {!isCollapsed && (
-                        <div style={{ padding: '0.1rem 0.1rem', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: 'var(--primary)', opacity: 0.9 }}>
-                            version: {pkg.version}
-                        </div>
+                    {isCollapsed ? (
+                        <button
+                            onClick={() => openTab({ name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: GitCommit })}
+                            title={`Versión ${pkg.version} - Ver historial de cambios`}
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: '0.4rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '100%',
+                                color: 'var(--primary)',
+                                borderRadius: '6px',
+                                transition: 'background-color 0.15s ease'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.12)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                        >
+                            <GitCommit size={18} />
+                        </button>
+                    ) : (
+                        <button
+                            onClick={() => openTab({ name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: GitCommit })}
+                            title="Ver historial de cambios y actualizaciones (GitHub)"
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: '0.3rem 0.5rem',
+                                textAlign: 'center',
+                                fontSize: '0.875rem',
+                                fontWeight: 600,
+                                color: 'var(--primary)',
+                                opacity: 0.95,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.4rem',
+                                width: '100%',
+                                borderRadius: '6px',
+                                transition: 'all 0.15s ease'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.12)';
+                                e.currentTarget.style.textDecoration = 'underline';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                                e.currentTarget.style.textDecoration = 'none';
+                            }}
+                        >
+                            <GitCommit size={15} style={{ opacity: 0.85 }} />
+                            <span>version: {pkg.version}</span>
+                        </button>
                     )}
                 </div>
             </aside>
@@ -761,9 +817,34 @@ export default function DashboardLayout() {
                             <LogOut size={18} />
                             Cerrar Sesión
                         </button>
-                        <div style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--primary)', opacity: 0.9, marginTop: '0.75rem', fontWeight: 500 }}>
-                            version: {pkg.version}
-                        </div>
+                        <button
+                            onClick={() => {
+                                openTab({ name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: GitCommit });
+                                setDrawerOpen(false);
+                            }}
+                            title="Ver historial de cambios y actualizaciones (GitHub)"
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                textAlign: 'center',
+                                fontSize: '0.825rem',
+                                color: 'var(--primary)',
+                                opacity: 0.95,
+                                marginTop: '0.75rem',
+                                fontWeight: 600,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.4rem',
+                                width: '100%',
+                                padding: '0.4rem 0.5rem',
+                                borderRadius: '6px'
+                            }}
+                        >
+                            <GitCommit size={15} style={{ opacity: 0.85 }} />
+                            <span>version: {pkg.version}</span>
+                        </button>
                     </div>
                 </div>
             )}
