@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
-const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { authenticateToken, requirePermission, isAdminUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
 const taskPerms = ['manage_tasks', '/dashboard/operaciones/tareas'];
@@ -413,7 +413,7 @@ router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
         }
 
         const taskRow = existingTasks[0];
-        if (req.user.role_id !== 1 && req.user.role !== 'Administrator' && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
+        if (!isAdminUser(req.user) && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
             return res.status(403).json({ message: 'No tiene permisos para modificar esta tarea.' });
         }
 
@@ -539,7 +539,7 @@ router.patch('/:id/status', authenticateToken, async (req, res) => {
         }
 
         const taskRow = existingTasks[0];
-        if (req.user.role_id !== 1 && req.user.role !== 'Administrator' && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
+        if (!isAdminUser(req.user) && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
             return res.status(403).json({ message: 'No tiene permisos para cambiar el estado de esta tarea.' });
         }
 
@@ -626,7 +626,7 @@ router.patch('/:id/checklist', authenticateToken, async (req, res) => {
         }
 
         const taskRow = existingTasks[0];
-        if (req.user.role_id !== 1 && req.user.role !== 'Administrator' && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
+        if (!isAdminUser(req.user) && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
             return res.status(403).json({ message: 'No tiene permisos para modificar la lista de verificación de esta tarea.' });
         }
 
@@ -663,7 +663,7 @@ router.delete('/:id', authenticateToken, requirePermission(taskPerms), async (re
 
         const task = tasks[0];
         // Allow deletion if Administrator, creator or assigned
-        if (req.user.role_id !== 1 && req.user.role !== 'Administrator' && task.created_by !== req.user.id) {
+        if (!isAdminUser(req.user) && task.created_by !== req.user.id) {
             return res.status(403).json({ message: 'No tiene permisos para eliminar esta tarea.' });
         }
 

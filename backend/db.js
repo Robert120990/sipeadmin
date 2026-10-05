@@ -774,6 +774,31 @@ const initDB = async () => {
         }
 
         // ==============================================================
+        // MIGRATION: Permisos de Seguridad (Gestión de Usuarios y Roles)
+        // ==============================================================
+        try {
+            const securityPerms = [
+                ['manage_users', 'Can create, edit, and delete users'],
+                ['/dashboard/users', 'Acceso a Gestión de Usuarios'],
+                ['manage_roles', 'Can manage roles and permissions'],
+                ['/dashboard/permissions', 'Acceso a Gestión de Permisos y Roles']
+            ];
+            for (const [name, desc] of securityPerms) {
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
+            }
+
+            const [adminRoles] = await pool.query("SELECT id FROM roles WHERE name IN ('admin', 'Administrator', 'Administrador', 'Super Admin', 'Superadmin', 'Super Administrador') OR id = 1");
+            const [allSecPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('manage_users', '/dashboard/users', 'manage_roles', '/dashboard/permissions')");
+            for (const r of adminRoles) {
+                for (const p of allSecPerms) {
+                    await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, p.id]);
+                }
+            }
+        } catch (e) {
+            console.error('Migration user/roles security permissions:', e.message);
+        }
+
+        // ==============================================================
         // MIGRATION: Portal Energy-Latam / Pedidos & Precios Combustible
         // ==============================================================
         try {

@@ -66,7 +66,7 @@ router.get('/verify', authenticateToken, (req, res) => {
 });
 
 // --- Users Management & Directory ---
-router.get('/users', authenticateToken, requirePermission(['/dashboard/users', '/dashboard/operaciones/tareas', 'manage_tasks']), async (req, res) => {
+router.get('/users', authenticateToken, requirePermission(['/dashboard/users', 'manage_users', '/dashboard/operaciones/tareas', 'manage_tasks']), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query(`
@@ -80,18 +80,45 @@ router.get('/users', authenticateToken, requirePermission(['/dashboard/users', '
     }
 });
 
-router.post('/users', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
-    const { username, nombre, email, password, role_id } = req.body;
+router.post('/users', authenticateToken, requirePermission(['/dashboard/users', 'manage_users']), async (req, res) => {
+    const { username, nombre, email, password, role_id, status } = req.body || {};
     if (!username || typeof username !== 'string' || !username.trim()) {
         return res.status(400).json({ message: 'El nombre de usuario es requerido.' });
     }
+    const cleanUsername = username.trim();
+
+    if (!nombre || typeof nombre !== 'string' || !nombre.trim()) {
+        return res.status(400).json({ message: 'El nombre completo es requerido.' });
+    }
+    const cleanNombre = nombre.trim();
+
     if (!password || typeof password !== 'string' || password.length < 8) {
         return res.status(400).json({ message: 'La contraseña debe tener al menos 8 caracteres.' });
     }
+
+    if (role_id === undefined || role_id === null || role_id === '') {
+        return res.status(400).json({ message: 'Debe seleccionar un rol para el usuario.' });
+    }
+    const cleanRoleId = parseInt(role_id, 10);
+    if (isNaN(cleanRoleId)) {
+        return res.status(400).json({ message: 'El rol seleccionado no es válido.' });
+    }
+
+    const cleanEmail = (email && typeof email === 'string' && email.trim()) ? email.trim() : null;
+    const cleanStatus = status === 'inactive' ? 'inactive' : 'active';
+
     try {
         const db = getDb();
+        const [roleRows] = await db.query('SELECT id FROM roles WHERE id = ?', [cleanRoleId]);
+        if (roleRows.length === 0) {
+            return res.status(400).json({ message: 'El rol seleccionado no existe en el sistema.' });
+        }
+
         const hashedPassword = await bcrypt.hash(password, 10);
-        await db.query('INSERT INTO users (username, nombre, email, password, role_id) VALUES (?, ?, ?, ?, ?)', [username.trim(), nombre || null, email || null, hashedPassword, role_id]);
+        await db.query(
+            'INSERT INTO users (username, nombre, email, password, role_id, status) VALUES (?, ?, ?, ?, ?, ?)',
+            [cleanUsername, cleanNombre, cleanEmail, hashedPassword, cleanRoleId, cleanStatus]
+        );
         res.status(201).json({ message: 'Usuario creado exitosamente' });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El nombre de usuario ya existe' });
@@ -99,9 +126,9 @@ router.post('/users', authenticateToken, requirePermission('/dashboard/users'), 
     }
 });
 
-router.put('/users/:id', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
+router.put('/users/:id', authenticateToken, requirePermission(['/dashboard/users', 'manage_users']), async (req, res) => {
     const { id } = req.params;
-    const { username, nombre, email, password, status, role_id } = req.body;
+    const { username, nombre, email, password, status, role_id } = req.body || {};
     if (password !== undefined && password !== null && password !== '') {
         if (typeof password !== 'string' || password.length < 8) {
             return res.status(400).json({ message: 'La contraseña debe tener al menos 8 caracteres.' });
@@ -110,16 +137,44 @@ router.put('/users/:id', authenticateToken, requirePermission('/dashboard/users'
     if (status && !['active', 'inactive'].includes(status)) {
         return res.status(400).json({ message: 'Estado inválido. Debe ser "active" o "inactive".' });
     }
+
+    let cleanRoleId = undefined;
+    if (role_id !== undefined && role_id !== null && role_id !== '') {
+        cleanRoleId = parseInt(role_id, 10);
+        if (isNaN(cleanRoleId)) {
+            return res.status(400).json({ message: 'El rol seleccionado no es válido.' });
+        }
+    }
+
     try {
         const db = getDb();
-        let query = 'UPDATE users SET status = ?, role_id = ?, nombre = ?, email = ?';
-        let params = [status, role_id, nombre || null, email || null];
+        if (cleanRoleId !== undefined) {
+            const [roleRows] = await db.query('SELECT id FROM roles WHERE id = ?', [cleanRoleId]);
+            if (roleRows.length === 0) {
+                return res.status(400).json({ message: 'El rol seleccionado no existe en el sistema.' });
+            }
+        }
 
-        if (username) {
+        let query = 'UPDATE users SET status = COALESCE(?, status)';
+        let params = [status || null];
+
+        if (cleanRoleId !== undefined) {
+            query += ', role_id = ?';
+            params.push(cleanRoleId);
+        }
+        if (nombre !== undefined) {
+            query += ', nombre = ?';
+            params.push((nombre && typeof nombre === 'string' && nombre.trim()) ? nombre.trim() : null);
+        }
+        if (email !== undefined) {
+            query += ', email = ?';
+            params.push((email && typeof email === 'string' && email.trim()) ? email.trim() : null);
+        }
+        if (username && typeof username === 'string' && username.trim()) {
             query += ', username = ?';
             params.push(username.trim());
         }
-        if (password) {
+        if (password && typeof password === 'string' && password.trim()) {
             const hashedPassword = await bcrypt.hash(password, 10);
             query += ', password = ?';
             params.push(hashedPassword);
@@ -136,15 +191,16 @@ router.put('/users/:id', authenticateToken, requirePermission('/dashboard/users'
         }
         res.json({ message: 'Usuario actualizado exitosamente' });
     } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El nombre de usuario ya existe' });
         sendSafeError(res, error, 'Error al actualizar usuario');
     }
 });
 
-router.delete('/users/:id', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
+router.delete('/users/:id', authenticateToken, requirePermission(['/dashboard/users', 'manage_users']), async (req, res) => {
     const { id } = req.params;
     try {
         const db = getDb();
-        if (req.user.id === parseInt(id)) {
+        if (Number(req.user.id) === parseInt(id, 10)) {
             return res.status(400).json({ message: 'No puedes eliminar tu propio usuario' });
         }
         await db.query('DELETE FROM users WHERE id = ?', [id]);
@@ -155,11 +211,14 @@ router.delete('/users/:id', authenticateToken, requirePermission('/dashboard/use
     }
 });
 
-router.put('/users/:id/status', authenticateToken, requirePermission('/dashboard/users'), async (req, res) => {
+router.put('/users/:id/status', authenticateToken, requirePermission(['/dashboard/users', 'manage_users']), async (req, res) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status } = req.body || {};
     if (!status || !['active', 'inactive'].includes(status)) {
         return res.status(400).json({ message: 'Estado inválido. Debe ser "active" o "inactive".' });
+    }
+    if (Number(req.user.id) === parseInt(id, 10) && status === 'inactive') {
+        return res.status(400).json({ message: 'No puedes desactivar tu propio usuario' });
     }
     try {
         const db = getDb();
@@ -176,7 +235,7 @@ router.put('/users/:id/status', authenticateToken, requirePermission('/dashboard
 });
 
 // --- Roles Management ---
-router.get('/roles', authenticateToken, requireRole('Administrator'), async (req, res) => {
+router.get('/roles', authenticateToken, requirePermission(['/dashboard/users', 'manage_users', 'manage_roles', '/dashboard/permissions']), async (req, res) => {
     try {
         const db = getDb();
         const [roles] = await db.query('SELECT * FROM roles ORDER BY id ASC');

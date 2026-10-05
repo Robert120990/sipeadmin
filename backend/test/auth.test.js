@@ -1,7 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
-const { authenticateToken, requirePermission, requireRole, JWT_SECRET, revokeUser, restoreUser } = require('../middleware/auth');
+const { authenticateToken, requirePermission, requireRole, isAdminUser, JWT_SECRET, revokeUser, restoreUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const { sanitizeData } = require('../middleware/bitacora');
 
@@ -121,6 +121,26 @@ describe('Auth Middleware & Security Tests', () => {
             assert.strictEqual(nextCalled, true);
         });
 
+        it('should allow Super Admin (role: "Super Admin", role_id > 1) regardless of explicit permission list', () => {
+            const req = { user: { id: 2, username: 'superadmin', role: 'Super Admin', role_id: 2, permissions: [] } };
+            const res = createMockRes();
+            let nextCalled = false;
+
+            requirePermission('/dashboard/users')(req, res, () => { nextCalled = true; });
+
+            assert.strictEqual(nextCalled, true);
+        });
+
+        it('should allow Administrador (Spanish role name) regardless of explicit permission list', () => {
+            const req = { user: { id: 3, username: 'admin_es', role: 'Administrador', role_id: 3, permissions: [] } };
+            const res = createMockRes();
+            let nextCalled = false;
+
+            requirePermission('/dashboard/users')(req, res, () => { nextCalled = true; });
+
+            assert.strictEqual(nextCalled, true);
+        });
+
         it('should allow user with required permission', () => {
             const req = { 
                 user: { 
@@ -134,6 +154,23 @@ describe('Auth Middleware & Security Tests', () => {
             let nextCalled = false;
 
             requirePermission('/dashboard/users')(req, res, () => { nextCalled = true; });
+
+            assert.strictEqual(nextCalled, true);
+        });
+
+        it('should allow user matching any permission in an array (e.g. manage_users fallback)', () => {
+            const req = { 
+                user: { 
+                    id: 6, 
+                    username: 'user_manager', 
+                    role_id: 4, 
+                    permissions: ['manage_users'] 
+                } 
+            };
+            const res = createMockRes();
+            let nextCalled = false;
+
+            requirePermission(['/dashboard/users', 'manage_users'])(req, res, () => { nextCalled = true; });
 
             assert.strictEqual(nextCalled, true);
         });
@@ -169,6 +206,16 @@ describe('Auth Middleware & Security Tests', () => {
             assert.strictEqual(nextCalled, true);
         });
 
+        it('should allow Super Admin in requireRole("Administrator")', () => {
+            const req = { user: { role: 'Super Admin', role_id: 2 } };
+            const res = createMockRes();
+            let nextCalled = false;
+
+            requireRole('Administrator')(req, res, () => { nextCalled = true; });
+
+            assert.strictEqual(nextCalled, true);
+        });
+
         it('should deny 403 when user role is not permitted', () => {
             const req = { user: { role: 'User', role_id: 2 } };
             const res = createMockRes();
@@ -178,6 +225,27 @@ describe('Auth Middleware & Security Tests', () => {
 
             assert.strictEqual(res.statusCode, 403);
             assert.strictEqual(nextCalled, false);
+        });
+    });
+
+    describe('isAdminUser helper', () => {
+        it('should return true for role_id 1 (number or string)', () => {
+            assert.strictEqual(isAdminUser({ role_id: 1 }), true);
+            assert.strictEqual(isAdminUser({ role_id: '1' }), true);
+        });
+
+        it('should return true for Super Admin, Administrador, Admin, etc.', () => {
+            assert.strictEqual(isAdminUser({ role: 'Super Admin' }), true);
+            assert.strictEqual(isAdminUser({ role: 'superadmin' }), true);
+            assert.strictEqual(isAdminUser({ role_name: 'Super Administrador' }), true);
+            assert.strictEqual(isAdminUser({ role: 'Administrador' }), true);
+            assert.strictEqual(isAdminUser({ role: 'Administrator' }), true);
+        });
+
+        it('should return false for regular roles or empty user', () => {
+            assert.strictEqual(isAdminUser(null), false);
+            assert.strictEqual(isAdminUser({ role: 'Operador', role_id: 3 }), false);
+            assert.strictEqual(isAdminUser({ role: 'Auditor', role_id: 4 }), false);
         });
     });
 

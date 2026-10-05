@@ -70,16 +70,23 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const isAdminUser = (user) => {
+    if (!user) return false;
+    if (Number(user.role_id) === 1) return true;
+    const role = String(user.role || user.role_name || '').trim().toLowerCase();
+    return /^(admin|administrator|administrador|super\s*admin|super\s*administrador)$/i.test(role);
+};
+
 /**
  * Middleware para validar que el usuario cuente con un permiso específico
- * Los administradores (role_id === 1) siempre tienen acceso
+ * Los administradores y super administradores siempre tienen acceso total
  */
 const requirePermission = (permission) => {
     return (req, res, next) => {
         if (!req.user) {
             return res.status(401).json({ message: 'Usuario no autenticado' });
         }
-        if (req.user.role_id === 1 || req.user.role === 'Administrator' || req.user.role_name === 'Administrator') {
+        if (isAdminUser(req.user)) {
             return next();
         }
 
@@ -99,6 +106,7 @@ const requirePermission = (permission) => {
 
 /**
  * Middleware para validar que el usuario tenga un rol específico
+ * Los administradores y super administradores siempre son autorizados para roles de administrador
  */
 const requireRole = (allowedRoles) => {
     const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
@@ -107,9 +115,15 @@ const requireRole = (allowedRoles) => {
             return res.status(401).json({ message: 'Usuario no autenticado' });
         }
 
+        if (isAdminUser(req.user)) {
+            return next();
+        }
+
         const isAllowed = roles.some(r => {
-            if (typeof r === 'number') return req.user.role_id === r;
-            return req.user.role === r || req.user.role_name === r || (r === 'Administrator' && req.user.role_id === 1);
+            if (typeof r === 'number') return Number(req.user.role_id) === r;
+            const rLower = String(r).trim().toLowerCase();
+            const userRole = String(req.user.role || req.user.role_name || '').trim().toLowerCase();
+            return userRole === rLower || (rLower === 'administrator' && isAdminUser(req.user));
         });
 
         if (isAllowed) {
@@ -126,6 +140,7 @@ module.exports = {
     authenticateToken, 
     requirePermission, 
     requireRole, 
+    isAdminUser,
     JWT_SECRET,
     revokeUser,
     restoreUser,
