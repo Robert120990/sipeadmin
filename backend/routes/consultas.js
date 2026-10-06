@@ -95,8 +95,27 @@ const saasBranchMap = {
     '006': 3, // Chalchuapa -> Shell Chalchuapa
     '009': 6, // El Pedregal -> Super El Pedregal
     '002': 4, // Miraflores -> Puma Miraflores
-    '008': 8  // Costa del Sol -> Puma Costa del Sol
+    '008': 8, // Costa del Sol -> Puma Costa del Sol
+    'E-1': 8, // Costa del Sol alias
+    '015': 2  // Shell 14 Avenida
 };
+
+const branchToEmpId = {
+    1: '014',
+    2: '015',
+    3: '006',
+    4: '002',
+    8: '008',
+    6: '009'
+};
+
+const OFFICIAL_ESTACIONES = [
+    { id_empresa: '002', branch_id: 4, saas_branch_id: 4, titulo: 'Puma Miraflores', orden: 1 },
+    { id_empresa: '006', branch_id: 3, saas_branch_id: 3, titulo: 'Shell Chalchuapa', orden: 2 },
+    { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
+    { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
+    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 }
+];
 
 // Tokens y conceptos genéricos para auditoría de movimientos sin descripción suficiente
 const GENERIC_TOKENS = new Set([
@@ -368,8 +387,74 @@ const generarAnalisisDescuadre = ({
 /**
  * Consulta y agrupa los turnos individuales de pista de todas las estaciones para una fecha.
  */
-const getTurnosPorEmpresa = async (externalDb, sysDate) => {
+const getTurnosPorEmpresa = async (externalDb, sysDate, accountingDb = null, dateIso = null) => {
     const turnosPorEmpresa = {};
+    if (accountingDb && dateIso) {
+        try {
+            const sqlTurnosSaas = `
+                SELECT 
+                    c.id,
+                    c.branch_id,
+                    c.numero_turno as turno,
+                    c.seller_name as responsable,
+                    (SELECT IFNULL(SUM(r.monto), 0.0) FROM gas_station_closeout_readings r WHERE r.closeout_id = c.id) as venta,
+                    (SELECT IFNULL(SUM(rem.monto), 0.0) FROM gas_station_closeout_remesas rem WHERE rem.closeout_id = c.id) as remesas,
+                    (SELECT IFNULL(SUM(tar.monto), 0.0) FROM gas_station_closeout_tarjetas tar WHERE tar.closeout_id = c.id) as tarjetas,
+                    (SELECT IFNULL(SUM(g.valor), 0.0) FROM gas_station_closeout_expenses g WHERE g.closeout_id = c.id) as gastos,
+                    (SELECT IFNULL(SUM(d.total), 0.0) FROM gas_station_closeout_descuentos d WHERE d.closeout_id = c.id) as descuentos,
+                    (SELECT IFNULL(SUM(cp.monto), 0.0) FROM gas_station_closeout_cupones cp WHERE cp.closeout_id = c.id) as cupones,
+                    (SELECT IFNULL(SUM(cr.monto), 0.0) FROM gas_station_closeout_creditos cr WHERE cr.closeout_id = c.id) as creditos,
+                    (SELECT IFNULL(SUM(ad.monto), 0.0) FROM gas_station_closeout_adelantos ad WHERE ad.closeout_id = c.id) as anticipos,
+                    (SELECT IFNULL(SUM(l.total), 0.0) FROM gas_station_closeout_lubricant_readings l WHERE l.closeout_id = c.id) as lubricantes
+                FROM gas_station_closeouts c
+                WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
+                ORDER BY c.branch_id, c.numero_turno
+            `;
+            const [shiftRows] = await withRetry(() => accountingDb.query(sqlTurnosSaas, [dateIso]));
+            if (shiftRows && shiftRows.length > 0) {
+                shiftRows.forEach(sh => {
+                    const empId = branchToEmpId[sh.branch_id] || String(sh.branch_id).padStart(3, '0');
+                    if (!turnosPorEmpresa[empId]) turnosPorEmpresa[empId] = [];
+                    const vta = Math.round(Number(sh.venta || 0) * 100) / 100;
+                    const rem = Math.round(Number(sh.remesas || 0) * 100) / 100;
+                    const tarj = Math.round(Number(sh.tarjetas || 0) * 100) / 100;
+                    const gst = Math.round(Number(sh.gastos || 0) * 100) / 100;
+                    const pag = 0;
+                    const desc = Math.round(Number(sh.descuentos || 0) * 100) / 100;
+                    const cup = Math.round(Number(sh.cupones || 0) * 100) / 100;
+                    const cred = Math.round(Number(sh.creditos || 0) * 100) / 100;
+                    const chq = 0;
+                    const ant = Math.round(Number(sh.anticipos || 0) * 100) / 100;
+                    const sumaTurno = Math.round((rem + tarj + gst + pag + desc + cup + cred + chq + ant) * 100) / 100;
+                    const difTurno = Math.round((sumaTurno - vta) * 100) / 100;
+
+                    turnosPorEmpresa[empId].push({
+                        id: sh.id,
+                        turno: Number(sh.turno) || 1,
+                        responsable: sh.responsable || 'Sin asignar',
+                        venta: vta,
+                        remesas: rem,
+                        tarjetas: tarj,
+                        gastos: gst,
+                        pagos: pag,
+                        descuentos: desc,
+                        cupones: cup,
+                        creditos: cred,
+                        cheques: chq,
+                        anticipos: ant,
+                        suma: sumaTurno,
+                        diferencia: difTurno
+                    });
+                });
+                return turnosPorEmpresa;
+            }
+        } catch (turnosErr) {
+            console.warn('[Consolidado Ventas SaaS] Error consultando turnos SaaS:', turnosErr.message);
+        }
+    }
+
+    if (!externalDb) return turnosPorEmpresa;
+
     try {
         const sqlTurnos = `
             SELECT c.id, c.id_empresa, c.turno, c.responsable,
@@ -577,6 +662,7 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefin
                 LEFT JOIN sellers sel ON s.seller_id = sel.id
                 LEFT JOIN users u ON s.seller_id = u.id
                 WHERE DATE(s.shift_date) = ?
+                  AND s.status = 'closed'
                   AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
                 ORDER BY s.branch_id, s.id
             `, [date]));
@@ -726,9 +812,40 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefin
 router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
     const { date } = req.params;
     try {
-        const externalDb = await getExternalDb();
-        
-        const [stations] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden");
+        let externalDb = null;
+        try {
+            externalDb = await getExternalDb();
+        } catch (e) {
+            console.warn('[Consolidado Ventas] externalDb no disponible:', e.message);
+        }
+
+        let accountingDb = null;
+        let useSaas = false;
+        try {
+            accountingDb = await getAccountingDb();
+            if (accountingDb) {
+                const [saasCheck] = await withRetry(() => accountingDb.query(
+                    "SELECT COUNT(*) as count FROM gas_station_closeouts WHERE fecha_turno = ? AND estado = 'cerrado'",
+                    [date]
+                ));
+                if (saasCheck && saasCheck[0]?.count > 0) {
+                    useSaas = true;
+                }
+            }
+        } catch (saasErr) {
+            console.warn('[Consolidado Ventas] Error verificando SaaS:', saasErr.message);
+        }
+
+        let stations = OFFICIAL_ESTACIONES;
+        if (externalDb) {
+            try {
+                const [stRows] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden");
+                if (stRows && stRows.length > 0) stations = stRows;
+            } catch (stErr) {
+                console.warn('[Consolidado Ventas] Error cargando web_consolidado:', stErr.message);
+            }
+        }
+
         const toSystemDate = (dStr) => {
             const parts = dStr.split('-');
             return `${parts[2]}/${parts[1]}/${parts[0]}`;
@@ -738,47 +855,64 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
         const cInicio = new Date(date + 'T12:00:00');
         cInicio.setDate(cInicio.getDate() - 15);
         const cInicioStr = cInicio.toISOString().split('T')[0];
-        
-        const sqlTiendas = `
-            SELECT a.id_empresa, a.titulo, 
-                   SUM(IF(b.fecha = ?, IFNULL(b.monto, 0.0), 0.0)) as monto, 
-                   AVG(IFNULL(b.monto, 0.0)) as promedio 
-            FROM web_consolidado a 
-            LEFT JOIN ventas_tienda b ON a.id_empresa = b.id_empresa AND b.fecha BETWEEN ? AND ?
-            WHERE a.grupo = 'TIENDA' 
-            GROUP BY a.id_empresa, a.titulo, a.orden 
-            ORDER BY a.orden
-        `;
-        const [tiendasRows] = await externalDb.query(sqlTiendas, [date, cInicioStr, date]);
-        const tiendasLocal = (tiendasRows || [])
-            .filter(r => r.id_empresa !== '004')
-            .map(row => ({
-                fecha: date,
-                empresa: getCleanTiendaName(String(row.id_empresa), row.titulo),
-                venta: Math.round(Number(row.monto || 0) * 100) / 100,
-                promedio: Math.round(Number(row.promedio || 0) * 100) / 100
-            }));
 
-        const sqlEstaciones = `
-            SELECT a.id_empresa, a.titulo, 
-                   IFNULL(SUM(IF(d.clasificacion = 'D', b.total, 0.0)), 0.0) as diesel, 
-                   IFNULL(SUM(IF(d.clasificacion = 'R', b.total, 0.0)), 0.0) as regular, 
-                   IFNULL(SUM(IF(d.clasificacion = 'S', b.total, 0.0)), 0.0) as super, 
-                   IFNULL(SUM(IF(d.clasificacion = 'I', b.total, 0.0)), 0.0) as ion, 
-                   IFNULL(SUM(b.total), 0.0) as galonaje, 
-                   IFNULL(SUM(b.total * b.precio), 0.0) as monto
-            FROM web_consolidado a 
-            LEFT JOIN cierre_turno_lecturas b ON a.id_empresa = b.id_empresa 
-            INNER JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto 
-            INNER JOIN cierre_turno c ON b.id_cierre_turno = c.id AND b.id_empresa = c.id_empresa AND c.fecha_turno = ? 
-            WHERE a.grupo = 'ESTACION' 
-            GROUP BY a.id_empresa, a.titulo, a.orden 
-            ORDER BY a.orden
-        `;
-        const [estacionesRows] = await externalDb.query(sqlEstaciones, [sysDate]);
-        const estacionesLocal = (estacionesRows || [])
-            .filter(r => r.id_empresa !== '004')
-            .map(row => {
+        let tiendasLocal = [];
+        if (externalDb) {
+            try {
+                const sqlTiendas = `
+                    SELECT a.id_empresa, a.titulo, 
+                           SUM(IF(b.fecha = ?, IFNULL(b.monto, 0.0), 0.0)) as monto, 
+                           AVG(IFNULL(b.monto, 0.0)) as promedio 
+                    FROM web_consolidado a 
+                    LEFT JOIN ventas_tienda b ON a.id_empresa = b.id_empresa AND b.fecha BETWEEN ? AND ?
+                    WHERE a.grupo = 'TIENDA' 
+                    GROUP BY a.id_empresa, a.titulo, a.orden 
+                    ORDER BY a.orden
+                `;
+                const [tiendasRows] = await externalDb.query(sqlTiendas, [date, cInicioStr, date]);
+                tiendasLocal = (tiendasRows || [])
+                    .filter(r => r.id_empresa !== '004')
+                    .map(row => ({
+                        fecha: date,
+                        empresa: getCleanTiendaName(String(row.id_empresa), row.titulo),
+                        venta: Math.round(Number(row.monto || 0) * 100) / 100,
+                        promedio: Math.round(Number(row.promedio || 0) * 100) / 100
+                    }));
+            } catch (tErr) {
+                console.warn('[Consolidado Ventas] Error consultando ventas_tienda:', tErr.message);
+            }
+        }
+
+        let estacionesLocal = [];
+        let margenesRows = [];
+        let inventarioLocal = [];
+        let resumenCierreLocal = [];
+        let turnosPorEmpresa = {};
+
+        if (useSaas) {
+            // 1. Resumen de Ventas Estaciones (SaaS, solo turnos cerrados)
+            const sqlSaasEstaciones = `
+                SELECT 
+                    c.branch_id,
+                    SUM(CASE WHEN r.descripcion_producto LIKE '%REGULAR%' THEN r.diferencia ELSE 0 END) as regular,
+                    SUM(CASE WHEN r.descripcion_producto LIKE '%SUPER%' THEN r.diferencia ELSE 0 END) as super,
+                    SUM(CASE WHEN (r.descripcion_producto LIKE '%DIESEL%' AND r.descripcion_producto NOT LIKE '%ION%') THEN r.diferencia ELSE 0 END) as diesel,
+                    SUM(CASE WHEN r.descripcion_producto LIKE '%ION%' THEN r.diferencia ELSE 0 END) as ion,
+                    SUM(r.diferencia) as galonaje,
+                    SUM(r.monto) as monto
+                FROM gas_station_closeouts c
+                JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
+                WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
+                GROUP BY c.branch_id
+            `;
+            const [saasSalesRows] = await withRetry(() => accountingDb.query(sqlSaasEstaciones, [date]));
+            const saasEstMap = {};
+            (saasSalesRows || []).forEach(r => {
+                saasEstMap[r.branch_id] = r;
+            });
+
+            estacionesLocal = OFFICIAL_ESTACIONES.map(st => {
+                const row = saasEstMap[st.branch_id] || {};
                 const diesel = Math.round(Number(row.diesel || 0) * 100) / 100;
                 const regular = Math.round(Number(row.regular || 0) * 100) / 100;
                 const superVal = Math.round(Number(row.super || 0) * 100) / 100;
@@ -796,8 +930,8 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                 }
 
                 return {
-                    id_empresa: String(row.id_empresa),
-                    empresa: getCleanStationName(String(row.id_empresa), row.titulo),
+                    id_empresa: st.id_empresa,
+                    empresa: getCleanStationName(st.id_empresa, st.titulo),
                     diesel,
                     regular,
                     super: superVal,
@@ -805,35 +939,324 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                     galonaje,
                     venta,
                     alertas,
-                    tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning')
+                    tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning'),
+                    fuente: 'db_sistema_saas (sys.sipesv.com)'
                 };
             });
 
-        const sqlMargenes = `
-            SELECT a.id_empresa, a.titulo, 
-                   SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as diesel_a, 
-                   SUM(IFNULL(IF(b.clasificacion = 'R' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as regular_a, 
-                   SUM(IFNULL(IF(b.clasificacion = 'S' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as super_a, 
-                   SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as diesel_c, 
-                   SUM(IFNULL(IF(b.clasificacion = 'R' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as regular_c, 
-                   SUM(IFNULL(IF(b.clasificacion = 'S' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as super_c, 
-                   SUM(IFNULL(IF(b.clasificacion = 'I', c.precio, 0.0), 0.0)) as ion_diesel, 
-                   SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'M', c.precio, 0.0), 0.0)) as master 
-            FROM web_consolidado a 
-            LEFT JOIN cfg_combustibles b ON a.id_empresa = b.id_empresa 
-            LEFT JOIN ( 
-                 SELECT a.id_empresa, a.id_producto, a.codigo_producto, a.nom_producto, precio 
-                 FROM cierre_turno_lecturas a 
-                 INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa 
-                 WHERE b.fecha_turno = ? 
-                   AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa = b.id_empresa AND x.fecha_turno = b.fecha_turno) 
-                 GROUP BY codigo_producto, a.id_empresa, a.id_producto, a.nom_producto, precio 
-            ) c ON b.id_empresa = c.id_empresa AND b.codigo = c.codigo_producto 
-            WHERE a.grupo = 'ESTACION' 
-            GROUP BY a.id_empresa, a.titulo, a.orden 
-            ORDER BY a.orden
-        `;
-        const [margenesRows] = await externalDb.query(sqlMargenes, [sysDate]);
+            // 2. Precios para márgenes (último turno cerrado de la fecha)
+            const sqlSaasPrecios = `
+                SELECT 
+                    c.branch_id,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%DIESEL AUTO%' OR (r.descripcion_producto LIKE '%DIESEL%' AND r.descripcion_producto NOT LIKE '%FULL%' AND r.descripcion_producto NOT LIKE '%COMPLETO%' AND r.descripcion_producto NOT LIKE '%ION%') THEN r.precio ELSE 0 END) as diesel_a,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%REGULAR%AUTO%' OR (r.descripcion_producto LIKE '%REGULAR%' AND r.descripcion_producto NOT LIKE '%FULL%' AND r.descripcion_producto NOT LIKE '%COMPLETO%') THEN r.precio ELSE 0 END) as regular_a,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%SUPER%AUTO%' OR (r.descripcion_producto LIKE '%SUPER%' AND r.descripcion_producto NOT LIKE '%FULL%' AND r.descripcion_producto NOT LIKE '%COMPLETO%') THEN r.precio ELSE 0 END) as super_a,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%DIESEL%FULL%' OR r.descripcion_producto LIKE '%DIESEL%COMPLETO%' THEN r.precio ELSE 0 END) as diesel_c,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%REGULAR%FULL%' OR r.descripcion_producto LIKE '%REGULAR%COMPLETO%' THEN r.precio ELSE 0 END) as regular_c,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%SUPER%FULL%' OR r.descripcion_producto LIKE '%SUPER%COMPLETO%' THEN r.precio ELSE 0 END) as super_c,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%ION%' THEN r.precio ELSE 0 END) as ion_diesel,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%MASTER%' THEN r.precio ELSE 0 END) as master
+                FROM gas_station_closeouts c
+                JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
+                WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
+                  AND c.numero_turno = (
+                      SELECT MAX(x.numero_turno) 
+                      FROM gas_station_closeouts x 
+                      WHERE x.branch_id = c.branch_id AND x.fecha_turno = c.fecha_turno AND x.estado = 'cerrado'
+                  )
+                GROUP BY c.branch_id
+            `;
+            const [saasPreciosRows] = await withRetry(() => accountingDb.query(sqlSaasPrecios, [date]));
+            const saasMargenMap = {};
+            (saasPreciosRows || []).forEach(r => {
+                saasMargenMap[r.branch_id] = r;
+            });
+            margenesRows = OFFICIAL_ESTACIONES.map(st => {
+                const row = saasMargenMap[st.branch_id] || {};
+                return {
+                    id_empresa: st.id_empresa,
+                    titulo: st.titulo,
+                    diesel_a: Number(row.diesel_a || 0),
+                    regular_a: Number(row.regular_a || 0),
+                    super_a: Number(row.super_a || 0),
+                    diesel_c: Number(row.diesel_c || 0),
+                    regular_c: Number(row.regular_c || 0),
+                    super_c: Number(row.super_c || 0),
+                    ion_diesel: Number(row.ion_diesel || 0),
+                    master: Number(row.master || 0)
+                };
+            });
+
+            // 3. Inventario de tanques (último turno cerrado) y promedios 7 días cerrados
+            const cDesde7d = new Date(date + 'T12:00:00');
+            cDesde7d.setDate(cDesde7d.getDate() - 6);
+            const dateDesde7d = cDesde7d.toISOString().split('T')[0];
+
+            const [saasTankRows, saas7dRows] = await Promise.all([
+                withRetry(() => accountingDb.query(`
+                    SELECT 
+                        c.branch_id,
+                        t.tipo_combustible,
+                        t.descripcion,
+                        (tr.lectura_actual - COALESCE(t.reserva, 0)) as inventario_neto
+                    FROM gas_station_closeouts c
+                    JOIN gas_station_closeout_tank_readings tr ON tr.closeout_id = c.id
+                    JOIN gas_station_tanks t ON t.id = tr.tank_id
+                    WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
+                      AND c.numero_turno = (
+                          SELECT MAX(x.numero_turno) 
+                          FROM gas_station_closeouts x 
+                          WHERE x.branch_id = c.branch_id AND x.fecha_turno = c.fecha_turno AND x.estado = 'cerrado'
+                      )
+                `, [date])),
+                withRetry(() => accountingDb.query(`
+                    SELECT 
+                        c.branch_id,
+                        CASE 
+                            WHEN r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
+                            WHEN r.descripcion_producto LIKE '%SUPER%' THEN 'S'
+                            WHEN r.descripcion_producto LIKE '%ION%' THEN 'I'
+                            ELSE 'D'
+                        END as tipo_combustible,
+                        SUM(r.diferencia) as total_7d
+                    FROM gas_station_closeouts c
+                    JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
+                    WHERE c.fecha_turno BETWEEN ? AND ? AND c.estado = 'cerrado'
+                    GROUP BY c.branch_id, tipo_combustible
+                `, [dateDesde7d, date]))
+            ]);
+
+            const tankList = saasTankRows[0] || [];
+            const promedios7d = saas7dRows[0] || [];
+
+            inventarioLocal = OFFICIAL_ESTACIONES.map(s => {
+                const bId = s.branch_id;
+                const bTanks = tankList.filter(t => t.branch_id === bId);
+                const getInv = (fuelCode) => {
+                    return bTanks.filter(t => {
+                        if (fuelCode === 'R') return t.tipo_combustible === 1 || (t.descripcion || '').toUpperCase().includes('REGULAR');
+                        if (fuelCode === 'S') return t.tipo_combustible === 2 || (t.descripcion || '').toUpperCase().includes('SUPER');
+                        if (fuelCode === 'I') return t.tipo_combustible === 4 || (t.descripcion || '').toUpperCase().includes('ION');
+                        return (t.tipo_combustible === 3 || t.tipo_combustible === 5 || (t.descripcion || '').toUpperCase().includes('DIESEL')) && !(t.descripcion || '').toUpperCase().includes('ION');
+                    }).reduce((acc, curr) => acc + Math.max(0, Number(curr.inventario_neto || 0)), 0);
+                };
+
+                const nD = Math.round(getInv('D') * 100) / 100;
+                const nR = Math.round(getInv('R') * 100) / 100;
+                const nS = Math.round(getInv('S') * 100) / 100;
+                const nI = Math.round(getInv('I') * 100) / 100;
+
+                const getProm = (tipo) => {
+                    const row = promedios7d.find(p => p.branch_id === bId && p.tipo_combustible === tipo);
+                    return (Number(row?.total_7d || 0) / 7);
+                };
+                const pD = getProm('D'), pR = getProm('R'), pS = getProm('S'), pI = getProm('I');
+
+                return {
+                    empresa: s.titulo,
+                    diesel: nD,
+                    regular: nR,
+                    super: nS,
+                    iondiesel: nI,
+                    duracion_diesel: pD > 0 ? Math.round((nD / pD) * 10) / 10 : 0,
+                    duracion_regular: pR > 0 ? Math.round((nR / pR) * 10) / 10 : 0,
+                    duracion_super: pS > 0 ? Math.round((nS / pS) * 10) / 10 : 0,
+                    duracion_ion: pI > 0 ? Math.round((nI / pI) * 10) / 10 : 0
+                };
+            });
+
+            // 4. Detalle de turnos por estación y resumen de cierre pista (cerrados únicamente)
+            turnosPorEmpresa = await getTurnosPorEmpresa(externalDb, sysDate, accountingDb, date);
+
+            const sqlSaasCierre = `
+                SELECT 
+                    c.branch_id,
+                    SUM((SELECT IFNULL(SUM(cr.monto), 0.0) FROM gas_station_closeout_creditos cr WHERE cr.closeout_id = c.id)) as creditos,
+                    SUM((SELECT IFNULL(SUM(cp.monto), 0.0) FROM gas_station_closeout_cupones cp WHERE cp.closeout_id = c.id)) as cupones,
+                    0.0 as cheques,
+                    SUM((SELECT IFNULL(SUM(tar.monto), 0.0) FROM gas_station_closeout_tarjetas tar WHERE tar.closeout_id = c.id)) as tarjetas,
+                    SUM((SELECT IFNULL(SUM(rem.monto), 0.0) FROM gas_station_closeout_remesas rem WHERE rem.closeout_id = c.id)) as remesas,
+                    SUM((SELECT IFNULL(SUM(g.valor), 0.0) FROM gas_station_closeout_expenses g WHERE g.closeout_id = c.id)) as gastos,
+                    SUM((SELECT IFNULL(SUM(l.total), 0.0) FROM gas_station_closeout_lubricant_readings l WHERE l.closeout_id = c.id)) as lubricantes,
+                    SUM((SELECT IFNULL(SUM(ad.monto), 0.0) FROM gas_station_closeout_adelantos ad WHERE ad.closeout_id = c.id)) as anticipos,
+                    0.0 as pagos,
+                    SUM((SELECT IFNULL(SUM(d.total), 0.0) FROM gas_station_closeout_descuentos d WHERE d.closeout_id = c.id)) as descuentos,
+                    SUM((SELECT IFNULL(SUM(r.monto), 0.0) FROM gas_station_closeout_readings r WHERE r.closeout_id = c.id)) as total_venta
+                FROM gas_station_closeouts c
+                WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
+                GROUP BY c.branch_id
+            `;
+            const [saasCierreRows] = await withRetry(() => accountingDb.query(sqlSaasCierre, [date]));
+            const saasCierreMap = {};
+            (saasCierreRows || []).forEach(r => {
+                saasCierreMap[r.branch_id] = r;
+            });
+
+            resumenCierreLocal = OFFICIAL_ESTACIONES.map(st => {
+                const raw = saasCierreMap[st.branch_id] || {
+                    creditos: 0,
+                    cupones: 0,
+                    cheques: 0,
+                    tarjetas: 0,
+                    remesas: 0,
+                    gastos: 0,
+                    lubricantes: 0,
+                    anticipos: 0,
+                    pagos: 0,
+                    descuentos: 0,
+                    total_venta: 0
+                };
+                return mapCierreRowConExplicacion({
+                    id_empresa: st.id_empresa,
+                    estacion: st.titulo,
+                    ...raw
+                }, turnosPorEmpresa, date);
+            });
+        } else if (externalDb) {
+            // Modo legado (db_system_rrs)
+            const sqlEstaciones = `
+                SELECT a.id_empresa, a.titulo, 
+                       IFNULL(SUM(IF(d.clasificacion = 'D', b.total, 0.0)), 0.0) as diesel, 
+                       IFNULL(SUM(IF(d.clasificacion = 'R', b.total, 0.0)), 0.0) as regular, 
+                       IFNULL(SUM(IF(d.clasificacion = 'S', b.total, 0.0)), 0.0) as super, 
+                       IFNULL(SUM(IF(d.clasificacion = 'I', b.total, 0.0)), 0.0) as ion, 
+                       IFNULL(SUM(b.total), 0.0) as galonaje, 
+                       IFNULL(SUM(b.total * b.precio), 0.0) as monto
+                FROM web_consolidado a 
+                LEFT JOIN cierre_turno_lecturas b ON a.id_empresa = b.id_empresa 
+                INNER JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto 
+                INNER JOIN cierre_turno c ON b.id_cierre_turno = c.id AND b.id_empresa = c.id_empresa AND c.fecha_turno = ? 
+                WHERE a.grupo = 'ESTACION' 
+                GROUP BY a.id_empresa, a.titulo, a.orden 
+                ORDER BY a.orden
+            `;
+            const [estacionesRows] = await externalDb.query(sqlEstaciones, [sysDate]);
+            estacionesLocal = (estacionesRows || [])
+                .filter(r => r.id_empresa !== '004')
+                .map(row => {
+                    const diesel = Math.round(Number(row.diesel || 0) * 100) / 100;
+                    const regular = Math.round(Number(row.regular || 0) * 100) / 100;
+                    const superVal = Math.round(Number(row.super || 0) * 100) / 100;
+                    const ion = Math.round(Number(row.ion || 0) * 100) / 100;
+                    const galonaje = Math.round(Number(row.galonaje || 0) * 100) / 100;
+                    const venta = Math.round(Number(row.monto || 0) * 100) / 100;
+
+                    const alertas = [];
+                    if (galonaje === 0 && venta > 0) {
+                        alertas.push({ tipo: 'galonaje_incongruente', nivel: 'danger', texto: `Venta registrada ($${venta.toFixed(2)}) con 0.00 galones` });
+                    } else if (galonaje > 0 && venta === 0) {
+                        alertas.push({ tipo: 'galonaje_incongruente', nivel: 'danger', texto: `Despacho de combustible (${galonaje.toFixed(2)} gal) con $0.00 en venta` });
+                    } else if (galonaje === 0 && venta === 0) {
+                        alertas.push({ tipo: 'sin_despacho', nivel: 'info', texto: 'Sin despacho ni venta en pista' });
+                    }
+
+                    return {
+                        id_empresa: String(row.id_empresa),
+                        empresa: getCleanStationName(String(row.id_empresa), row.titulo),
+                        diesel,
+                        regular,
+                        super: superVal,
+                        ion,
+                        galonaje,
+                        venta,
+                        alertas,
+                        tiene_incongruencia: alertas.some(a => a.nivel === 'danger' || a.nivel === 'warning')
+                    };
+                });
+
+            const sqlMargenes = `
+                SELECT a.id_empresa, a.titulo, 
+                       SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as diesel_a, 
+                       SUM(IFNULL(IF(b.clasificacion = 'R' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as regular_a, 
+                       SUM(IFNULL(IF(b.clasificacion = 'S' AND b.tipo = 'A', c.precio, 0.0), 0.0)) as super_a, 
+                       SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as diesel_c, 
+                       SUM(IFNULL(IF(b.clasificacion = 'R' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as regular_c, 
+                       SUM(IFNULL(IF(b.clasificacion = 'S' AND b.tipo = 'F', c.precio, 0.0), 0.0)) as super_c, 
+                       SUM(IFNULL(IF(b.clasificacion = 'I', c.precio, 0.0), 0.0)) as ion_diesel, 
+                       SUM(IFNULL(IF(b.clasificacion = 'D' AND b.tipo = 'M', c.precio, 0.0), 0.0)) as master 
+                FROM web_consolidado a 
+                LEFT JOIN cfg_combustibles b ON a.id_empresa = b.id_empresa 
+                LEFT JOIN ( 
+                     SELECT a.id_empresa, a.id_producto, a.codigo_producto, a.nom_producto, precio 
+                     FROM cierre_turno_lecturas a 
+                     INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa 
+                     WHERE b.fecha_turno = ? 
+                       AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa = b.id_empresa AND x.fecha_turno = b.fecha_turno) 
+                     GROUP BY codigo_producto, a.id_empresa, a.id_producto, a.nom_producto, precio 
+                ) c ON b.id_empresa = c.id_empresa AND b.codigo = c.codigo_producto 
+                WHERE a.grupo = 'ESTACION' 
+                GROUP BY a.id_empresa, a.titulo, a.orden 
+                ORDER BY a.orden
+            `;
+            const [mRows] = await externalDb.query(sqlMargenes, [sysDate]);
+            margenesRows = mRows || [];
+
+            const cDesde = new Date(date + 'T12:00:00'); cDesde.setDate(cDesde.getDate() - 6);
+            const promediosDates = []; let pCurr = new Date(cDesde);
+            while (pCurr <= new Date(date + 'T12:00:00')) { const d = String(pCurr.getDate()).padStart(2, '0'); const m = String(pCurr.getMonth() + 1).padStart(2, '0'); const y = pCurr.getFullYear(); promediosDates.push(`${d}/${m}/${y}`); pCurr.setDate(pCurr.getDate() + 1); }
+
+            const lecturasTanquesQ = `
+                SELECT 
+                    b.lectura, 
+                    CASE 
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03')) THEN 86
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01')) THEN 86
+                        WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02')) THEN 
+                            IF(a.id LIKE '%-T', 105, c.galones_reserva)
+                        ELSE COALESCE(c.galones_reserva, 0)
+                    END AS galones_reserva,
+                    CASE 
+                        WHEN a.id_empresa = '008' THEN 
+                            CASE 
+                                WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                                WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                                WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                                ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                            END
+                        ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                    END AS tipo_combustible, 
+                    a.id_empresa 
+                FROM lecturas_tanque a 
+                INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa 
+                LEFT JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa 
+                WHERE a.fecha = ? AND a.turno = (SELECT MAX(x.turno) FROM lecturas_tanque x WHERE x.id_empresa = a.id_empresa AND x.fecha = a.fecha)
+            `;
+
+            const [lecturasRows, promediosRows] = await Promise.all([
+                externalDb.query(lecturasTanquesQ, [date]),
+                externalDb.query(`SELECT a.id_empresa, IF(a.id_empresa = '004' AND a.codigo_producto = '0007','I', LEFT(a.nom_producto,1)) AS tipo_combustible, SUM(a.total) as total_7d FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa WHERE b.fecha_turno IN (?) GROUP BY a.id_empresa, tipo_combustible`, [promediosDates])
+            ]);
+            const lecturas = lecturasRows[0] || [], promedios = promediosRows[0] || [];
+            inventarioLocal = stations.map(s => {
+                const id = s.id_empresa;
+                const getInv = (tipo) => lecturas.filter(l => l.id_empresa === id && l.tipo_combustible === tipo).reduce((acc, curr) => acc + (Number(curr.lectura || 0) - Number(curr.galones_reserva || 0)), 0);
+                const nD = getInv('D'), nR = getInv('R'), nS = getInv('S'), nI = getInv('I');
+                const getProm = (tipo) => { const row = promedios.find(p => p.id_empresa === id && p.tipo_combustible === tipo); return (Number(row?.total_7d || 0) / 7); };
+                const pD = getProm('D'), pR = getProm('R'), pS = getProm('S'), pI = getProm('I');
+                return { empresa: s.titulo, diesel: nD, regular: nR, super: nS, iondiesel: nI, duracion_diesel: pD > 0 ? Math.round((nD / pD) * 10) / 10 : 0, duracion_regular: pR > 0 ? Math.round((nR / pR) * 10) / 10 : 0, duracion_super: pS > 0 ? Math.round((nS / pS) * 10) / 10 : 0, duracion_ion: pI > 0 ? Math.round((nI / pI) * 10) / 10 : 0 };
+            });
+
+            // Resumen Cierre de Turno Pista (cierre_turno)
+            const sqlCierreTurno = `
+                SELECT x.id_empresa,
+                       x.titulo AS estacion,
+                       (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS creditos,
+                       (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cupones b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cupones,
+                       (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cheques b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cheques,
+                       (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_tarjeta b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS tarjetas,
+                       (SELECT IFNULL(SUM(b.efectivo),0.0) + IFNULL(SUM(b.monedas),0.0) + IFNULL(SUM(b.transferencia),0.0) FROM cierre_turno a INNER JOIN cierre_turno_remesa b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS remesas,
+                       (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_gastos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS gastos,
+                       (SELECT IFNULL(SUM(precio_total),0.0) FROM inventario_lubricantes WHERE id_empresa=x.id_empresa AND fecha_turno=?) AS lubricantes,
+                       (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_anticipos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS anticipos,
+                       (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_pagos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS pagos,
+                       (SELECT IFNULL(SUM(b.valor*b.cantidad),0.0) FROM cierre_turno a INNER JOIN cierre_turno_descuentos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS descuentos,
+                       (SELECT IFNULL(SUM(b.monto),0.0) FROM cierre_turno a INNER JOIN cierre_turno_lecturas b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS total_venta
+                FROM web_consolidado x WHERE x.grupo = 'ESTACION' AND x.id_empresa != '004' ORDER BY x.orden
+            `;
+            turnosPorEmpresa = await getTurnosPorEmpresa(externalDb, sysDate);
+            const [resumenCierreRows] = await externalDb.query(sqlCierreTurno, Array(11).fill(sysDate));
+            resumenCierreLocal = (resumenCierreRows || []).map(r => mapCierreRowConExplicacion(r, turnosPorEmpresa, sysDate));
+        }
 
         // Obtener costos de combustibles vigentes para la quincena de la fecha consultada
         let quincenaRow = null;
@@ -1124,53 +1547,8 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                 };
             });
 
-        const cDesde = new Date(date + 'T12:00:00'); cDesde.setDate(cDesde.getDate() - 6);
-        const promediosDates = []; let pCurr = new Date(cDesde);
-        while (pCurr <= new Date(date + 'T12:00:00')) { const d = String(pCurr.getDate()).padStart(2, '0'); const m = String(pCurr.getMonth() + 1).padStart(2, '0'); const y = pCurr.getFullYear(); promediosDates.push(`${d}/${m}/${y}`); pCurr.setDate(pCurr.getDate() + 1); }
-
-        const lecturasTanquesQ = `
-            SELECT 
-                b.lectura, 
-                CASE 
-                    WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03')) THEN 86
-                    WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01')) THEN 86
-                    WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02')) THEN 
-                        IF(a.id LIKE '%-T', 105, c.galones_reserva)
-                    ELSE COALESCE(c.galones_reserva, 0)
-                END AS galones_reserva,
-                CASE 
-                    WHEN a.id_empresa = '008' THEN 
-                        CASE 
-                            WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
-                            WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
-                            WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
-                            ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
-                        END
-                    ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
-                END AS tipo_combustible, 
-                a.id_empresa 
-            FROM lecturas_tanque a 
-            INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa 
-            LEFT JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa 
-            WHERE a.fecha = ? AND a.turno = (SELECT MAX(x.turno) FROM lecturas_tanque x WHERE x.id_empresa = a.id_empresa AND x.fecha = a.fecha)
-        `;
-
-        const [lecturasRows, promediosRows] = await Promise.all([
-            externalDb.query(lecturasTanquesQ, [date]),
-            externalDb.query(`SELECT a.id_empresa, IF(a.id_empresa = '004' AND a.codigo_producto = '0007','I', LEFT(a.nom_producto,1)) AS tipo_combustible, SUM(a.total) as total_7d FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa = b.id_empresa WHERE b.fecha_turno IN (?) GROUP BY a.id_empresa, tipo_combustible`, [promediosDates])
-        ]);
-        const lecturas = lecturasRows[0], promedios = promediosRows[0];
-        const inventarioLocal = stations.map(s => {
-            const id = s.id_empresa;
-            const getInv = (tipo) => lecturas.filter(l => l.id_empresa === id && l.tipo_combustible === tipo).reduce((acc, curr) => acc + (Number(curr.lectura || 0) - Number(curr.galones_reserva || 0)), 0);
-            const nD = getInv('D'), nR = getInv('R'), nS = getInv('S'), nI = getInv('I');
-            const getProm = (tipo) => { const row = promedios.find(p => p.id_empresa === id && p.tipo_combustible === tipo); return (Number(row?.total_7d || 0) / 7); };
-            const pD = getProm('D'), pR = getProm('R'), pS = getProm('S'), pI = getProm('I');
-            return { empresa: s.titulo, diesel: nD, regular: nR, super: nS, iondiesel: nI, duracion_diesel: pD > 0 ? Math.round((nD / pD) * 10) / 10 : 0, duracion_regular: pR > 0 ? Math.round((nR / pR) * 10) / 10 : 0, duracion_super: pS > 0 ? Math.round((nS / pS) * 10) / 10 : 0, duracion_ion: pI > 0 ? Math.round((nI / pI) * 10) / 10 : 0 };
-        });
-
         // Cortes de Tienda detallados (combinando legado cort_cabecera y nuevo sistema SaaS pos_shifts)
-        const cortesTiendaLocal = await getCortesTiendaData(externalDb, date);
+        const cortesTiendaLocal = await getCortesTiendaData(externalDb, date, accountingDb);
 
         // Si alguna tienda no tenía venta en ventas_tienda pero sí en cortes de tienda, complementar
         tiendasLocal.forEach(t => {
@@ -1181,29 +1559,6 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                 }
             }
         });
-
-        // Resumen Cierre de Turno Pista (cierre_turno)
-        const sqlCierreTurno = `
-            SELECT x.id_empresa,
-                   x.titulo AS estacion,
-                   (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS creditos,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cupones b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cupones,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_cheques b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS cheques,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_tarjeta b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS tarjetas,
-                   (SELECT IFNULL(SUM(b.efectivo),0.0) + IFNULL(SUM(b.monedas),0.0) + IFNULL(SUM(b.transferencia),0.0) FROM cierre_turno a INNER JOIN cierre_turno_remesa b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS remesas,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_gastos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS gastos,
-                   (SELECT IFNULL(SUM(precio_total),0.0) FROM inventario_lubricantes WHERE id_empresa=x.id_empresa AND fecha_turno=?) AS lubricantes,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_anticipos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS anticipos,
-                   (SELECT IFNULL(SUM(b.valor),0.0) FROM cierre_turno a INNER JOIN cierre_turno_pagos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS pagos,
-                   (SELECT IFNULL(SUM(b.valor*b.cantidad),0.0) FROM cierre_turno a INNER JOIN cierre_turno_descuentos b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS descuentos,
-                   (SELECT IFNULL(SUM(b.monto),0.0) FROM cierre_turno a INNER JOIN cierre_turno_lecturas b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS total_venta
-            FROM web_consolidado x WHERE x.grupo = 'ESTACION' AND x.id_empresa != '004' ORDER BY x.orden
-        `;
-        // Obtener detalle por turnos de cada estación para análisis de descuadres
-        const turnosPorEmpresa = await getTurnosPorEmpresa(externalDb, sysDate);
-
-        const [resumenCierreRows] = await externalDb.query(sqlCierreTurno, Array(11).fill(sysDate));
-        const resumenCierreLocal = (resumenCierreRows || []).map(r => mapCierreRowConExplicacion(r, turnosPorEmpresa, sysDate));
 
         // Resumen global de auditoría e incongruencias
         const auditoria = {
@@ -2384,10 +2739,294 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
             return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
         }
+        const cleanId = String(id_empresa).padStart(3, '0');
+        const saasBranchId = saasBranchMap[cleanId] || saasBranchMap[id_empresa];
+        let saasHasClosedShifts = false;
+        let accountingDb = null;
+        if (saasBranchId) {
+            try {
+                accountingDb = await getAccountingDb();
+                if (accountingDb) {
+                    const [chk] = await withRetry(() => accountingDb.query(
+                        "SELECT COUNT(*) as count FROM gas_station_closeouts WHERE branch_id = ? AND fecha_turno = ? AND estado = 'cerrado'",
+                        [saasBranchId, date]
+                    ));
+                    if (chk && chk[0]?.count > 0) {
+                        saasHasClosedShifts = true;
+                    }
+                }
+            } catch (sErr) {
+                console.warn('[Detalle Cierre SaaS] Error verificando SaaS:', sErr.message);
+            }
+        }
+
+        if (saasHasClosedShifts) {
+            const stOfficial = OFFICIAL_ESTACIONES.find(s => s.id_empresa === cleanId || s.branch_id === saasBranchId);
+            const estacionNombre = stOfficial?.titulo || `Estación ${cleanId}`;
+            let rows = [];
+            let mapFn = (row) => row;
+
+            switch (rubro.toLowerCase()) {
+                case 'gastos': {
+                    const [gRows] = await withRetry(() => accountingDb.query(`
+                        SELECT g.id, g.closeout_id, g.fecha, g.documento, g.tipo as tipo_doc,
+                               g.provider_id as cod_proveedor, COALESCE(g.proveedor, 'Sin proveedor') as nombre,
+                               g.valor, g.comentario as concepto, g.rubro
+                        FROM gas_station_closeout_expenses g
+                        JOIN gas_station_closeouts c ON g.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY g.id
+                    `, [saasBranchId, date]));
+                    rows = gRows || [];
+                    mapFn = (r) => {
+                        const conceptoStr = r.concepto || r.rubro || '';
+                        const esGenerico = isGenericDescription(conceptoStr);
+                        const docStr = (r.documento || '').trim();
+                        const faltaDocumento = !docStr || docStr === '-' || docStr === '0' || docStr === 'S/N' || docStr === 'SN';
+                        const alertas = [];
+                        if (esGenerico) alertas.push({ tipo: 'concepto_generico', texto: 'Concepto vago o poco descriptivo' });
+                        if (faltaDocumento) alertas.push({ tipo: 'sin_documento', texto: 'Sin número de comprobante o documento' });
+
+                        return {
+                            id: r.id,
+                            fecha: formatYMD(r.fecha) || date,
+                            documento: r.documento || '-',
+                            tipo_doc: (r.tipo_doc || '').toUpperCase(),
+                            codigo: r.cod_proveedor || '-',
+                            nombre: r.nombre || 'Sin nombre',
+                            valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                            concepto: conceptoStr || 'Gasto operativo',
+                            rubro: r.rubro || 'Gastos',
+                            es_generico: esGenerico,
+                            falta_documento: faltaDocumento,
+                            es_incongruente: esGenerico || faltaDocumento,
+                            alertas
+                        };
+                    };
+                    break;
+                }
+
+                case 'tarjetas': {
+                    const [tRows] = await withRetry(() => accountingDb.query(`
+                        SELECT t.id, t.closeout_id, c.fecha_turno as fecha, t.num_tarjeta, t.num_autorizacion,
+                               COALESCE(p.nombre, 'POS / Terminal') as banco_nombre, t.monto as valor, t.tipo_operacion
+                        FROM gas_station_closeout_tarjetas t
+                        JOIN gas_station_closeouts c ON t.closeout_id = c.id
+                        LEFT JOIN gas_station_pos_types p ON t.pos_type_id = p.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY t.id
+                    `, [saasBranchId, date]));
+                    rows = tRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        tarjeta: r.num_tarjeta || '****',
+                        autorizacion: r.num_autorizacion || '-',
+                        banco: r.banco_nombre || 'POS / Terminal',
+                        tipo_operacion: (r.tipo_operacion || 'VTA').toUpperCase(),
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100
+                    });
+                    break;
+                }
+
+                case 'remesas': {
+                    const [remRows] = await withRetry(() => accountingDb.query(`
+                        SELECT r.id, r.closeout_id, c.fecha_turno as fecha, r.documento,
+                               COALESCE(r.descripcion, 'Remesa General') as banco_nombre,
+                               r.monto as efectivo, 0 as monedas, 0 as transferencia, r.monto as total,
+                               r.codigo as num_voucher, r.tipo_operacion
+                        FROM gas_station_closeout_remesas r
+                        JOIN gas_station_closeouts c ON r.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY r.id
+                    `, [saasBranchId, date]));
+                    rows = remRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        banco: r.banco_nombre || 'Remesa General',
+                        efectivo: Math.round(Number(r.efectivo || 0) * 100) / 100,
+                        monedas: 0,
+                        transferencia: 0,
+                        total: Math.round(Number(r.total || 0) * 100) / 100,
+                        voucher: (r.num_voucher || '').trim() || '-',
+                        tipo_operacion: (r.tipo_operacion || 'VTA').toUpperCase()
+                    });
+                    break;
+                }
+
+                case 'credito':
+                case 'creditos': {
+                    const [crRows] = await withRetry(() => accountingDb.query(`
+                        SELECT cr.id, cr.closeout_id, c.fecha_turno as fecha, cr.documento, cr.tipo_documento as tipo_doc,
+                               cr.cliente_id as cod_cliente, cr.cliente_nombre,
+                               cr.producto_codigo as cod_producto, cr.producto_descripcion,
+                               cr.cantidad, cr.precio, cr.monto as valor, cr.placa, cr.kilometraje
+                        FROM gas_station_closeout_creditos cr
+                        JOIN gas_station_closeouts c ON cr.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY cr.id
+                    `, [saasBranchId, date]));
+                    rows = crRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        tipo_doc: r.tipo_doc || 'CCF',
+                        codigo: r.cod_cliente || '-',
+                        cliente: r.cliente_nombre || 'Cliente Crédito',
+                        producto: r.producto_descripcion || r.cod_producto || '-',
+                        cantidad: Math.round(Number(r.cantidad || 0) * 100) / 100,
+                        precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                        placa: r.placa || '-',
+                        kilometraje: Number(r.kilometraje || 0)
+                    });
+                    break;
+                }
+
+                case 'lubricantes': {
+                    const [lRows] = await withRetry(() => accountingDb.query(`
+                        SELECT l.producto_codigo as id_producto, l.producto_descripcion as nom_producto,
+                               l.lectura_inicial as inicial, l.recarga as complemento, l.lectura_final as final,
+                               l.ventas, l.precio as precio_unitario, l.total as precio_total
+                        FROM gas_station_closeout_lubricant_readings l
+                        JOIN gas_station_closeouts c ON l.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                          AND (l.lectura_inicial > 0 OR l.ventas > 0 OR l.recarga > 0)
+                        ORDER BY l.producto_descripcion
+                    `, [saasBranchId, date]));
+                    rows = lRows || [];
+                    mapFn = (r) => ({
+                        codigo: r.id_producto || '-',
+                        producto: r.nom_producto || 'Lubricante',
+                        inicial: Number(r.inicial || 0),
+                        complemento: Number(r.complemento || 0),
+                        final: Number(r.final || 0),
+                        ventas: Number(r.ventas || 0),
+                        precio_unitario: Math.round(Number(r.precio_unitario || 0) * 100) / 100,
+                        precio_total: Math.round(Number(r.precio_total || 0) * 100) / 100
+                    });
+                    break;
+                }
+
+                case 'lecturas':
+                case 'tot_venta':
+                case 'total_venta': {
+                    const [lecRows] = await withRetry(() => accountingDb.query(`
+                        SELECT r.id, r.closeout_id, c.numero_turno as turno,
+                               r.codigo_producto, r.descripcion_producto as nom_producto,
+                               r.diferencia as galones, r.precio, r.monto
+                        FROM gas_station_closeout_readings r
+                        JOIN gas_station_closeouts c ON r.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY c.numero_turno, r.descripcion_producto
+                    `, [saasBranchId, date]));
+                    rows = lecRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        turno: r.turno || 1,
+                        codigo: r.codigo_producto || '-',
+                        producto: r.nom_producto || 'Combustible',
+                        galones: Math.round(Number(r.galones || 0) * 100) / 100,
+                        precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
+                        monto: Math.round(Number(r.monto || 0) * 100) / 100
+                    });
+                    break;
+                }
+
+                case 'cupones': {
+                    const [cupRows] = await withRetry(() => accountingDb.query(`
+                        SELECT cp.id, cp.closeout_id, c.fecha_turno as fecha, cp.cupon as documento,
+                               COALESCE(cp.distribuidora_nombre, 'Distribuidora') as distribuidora,
+                               cp.producto_descripcion as cod_producto, cp.monto as valor
+                        FROM gas_station_closeout_cupones cp
+                        JOIN gas_station_closeouts c ON cp.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY cp.id
+                    `, [saasBranchId, date]));
+                    rows = cupRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        distribuidora: r.distribuidora || '-',
+                        producto: r.cod_producto || '-',
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100
+                    });
+                    break;
+                }
+
+                case 'anticipos': {
+                    const [antRows] = await withRetry(() => accountingDb.query(`
+                        SELECT a.id, a.closeout_id, '-' as id_cajero, a.empleado as id_empleado, a.monto as valor
+                        FROM gas_station_closeout_adelantos a
+                        JOIN gas_station_closeouts c ON a.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY a.id
+                    `, [saasBranchId, date]));
+                    rows = antRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        cajero: r.id_cajero || '-',
+                        empleado: r.id_empleado || '-',
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100
+                    });
+                    break;
+                }
+
+                case 'descuentos': {
+                    const [descRows] = await withRetry(() => accountingDb.query(`
+                        SELECT d.id, d.closeout_id, c.fecha_turno as fecha, d.documento,
+                               d.cliente_nombre, d.producto_descripcion as cod_producto,
+                               d.cantidad, d.valor, d.total
+                        FROM gas_station_closeout_descuentos d
+                        JOIN gas_station_closeouts c ON d.closeout_id = c.id
+                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY d.id
+                    `, [saasBranchId, date]));
+                    rows = descRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        cliente: r.cliente_nombre || '-',
+                        producto: r.cod_producto || '-',
+                        cantidad: Number(r.cantidad || 0),
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                        total: Math.round(Number(r.total || 0) * 100) / 100
+                    });
+                    break;
+                }
+
+                case 'cheques':
+                case 'pagos':
+                    rows = [];
+                    break;
+
+                default:
+                    return res.status(400).json({ message: `Rubro '${rubro}' no soportado` });
+            }
+
+            const mapped = (rows || []).map(mapFn);
+            const total = mapped.reduce((acc, curr) => acc + Number(curr.valor || curr.total || curr.monto || curr.precio_total || 0), 0);
+
+            return res.json({
+                id_empresa: cleanId,
+                estacion_nombre: estacionNombre,
+                rubro,
+                fecha: date,
+                fecha_turno: date,
+                total: Math.round(total * 100) / 100,
+                registros: mapped,
+                fuente: 'db_sistema_saas (sys.sipesv.com)'
+            });
+        }
+
         const externalDb = await getExternalDb();
         const parts = date.split('-');
         const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
-        const cleanId = String(id_empresa).padStart(3, '0');
 
         const [stRows] = await externalDb.query("SELECT titulo FROM web_consolidado WHERE id_empresa = ?", [cleanId]);
         const estacionNombre = stRows[0]?.titulo ? getCleanStationName(cleanId, stRows[0].titulo) : `Estación ${cleanId}`;
