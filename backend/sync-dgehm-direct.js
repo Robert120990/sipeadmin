@@ -8,7 +8,7 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const { getExternalDb } = require('./db');
+const { getDb } = require('./db');
 
 const logFile = path.join(__dirname, 'logs', 'dgehm_sync.log');
 const ensureLogDir = () => {
@@ -98,8 +98,8 @@ async function syncDGEHM() {
     }
 
     writeLog(`4. Estaciones parseadas de DGEHM: ${parsedRows.length}`);
-    const externalDb = await getExternalDb();
-    const [mappedStations] = await externalDb.query('SELECT competencia FROM web_estaciones_competencia');
+    const localDb = await getDb();
+    const [mappedStations] = await localDb.query('SELECT competencia FROM web_estaciones_competencia');
 
     const norm = str => (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
     const mappedMap = new Map();
@@ -144,7 +144,7 @@ async function syncDGEHM() {
     };
 
     const today = new Date().toISOString().split('T')[0];
-    const conn = await externalDb.getConnection();
+    const conn = await localDb.getConnection();
     await conn.beginTransaction();
     try {
         // 1. Update snapshot

@@ -197,14 +197,19 @@ const fetchDgehmPrices = async () => {
 /**
  * Synchronize DGEHM prices with database (updates snapshot and appends history).
  */
-const syncDgehmWithDatabase = async (externalDb) => {
+const syncDgehmWithDatabase = async (targetDb = null) => {
+    let db = targetDb;
+    if (!db) {
+        const { getDb } = require('../db');
+        db = await getDb();
+    }
     const rawData = await fetchDgehmPrices();
     if (!rawData || rawData.length === 0) {
         throw new Error('No se obtuvieron datos de la DGEHM.');
     }
 
     // Get configured competitor stations from DB
-    const [dbEstaciones] = await externalDb.query('SELECT competencia, id_estacion FROM web_estaciones_competencia');
+    const [dbEstaciones] = await db.query('SELECT competencia, id_estacion FROM web_estaciones_competencia');
     
     // Map normalized names
     const dbMap = new Map();
@@ -259,7 +264,7 @@ const syncDgehmWithDatabase = async (externalDb) => {
     }
 
     const today = new Date().toISOString().split('T')[0];
-    const conn = await externalDb.getConnection();
+    const conn = await db.getConnection();
     await conn.beginTransaction();
 
     try {

@@ -80,14 +80,14 @@ const getCleanStationName = (id, defaultTitulo) => {
 };
 
 const getCleanTiendaName = (id, defaultTitulo) => {
-    if (!defaultTitulo) return '';
-    const upper = defaultTitulo.toUpperCase();
-    if (id === '002' && upper.includes('MIRAFLORES')) return 'E-Market Miraflores';
-    if (id === '006' && upper.includes('CHALCHUAPA')) return 'E-Market Chalchuapa';
-    if (id === '008' && upper.includes('COSTA')) return 'Super 7 Costa';
-    if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA'))) return 'E-Market San Martin';
-    if (id === '009' && upper.includes('PEDREGAL')) return 'Super El Pedregal';
-    return defaultTitulo;
+    const cleanId = String(id || '');
+    const upper = (defaultTitulo || '').toUpperCase();
+    if (upper.includes('MIRAFLORES') || ((cleanId === '002' || cleanId === '4') && (upper.includes('E-MARKET') || upper === '002' || !upper))) return 'E-Market Miraflores';
+    if (upper.includes('CHALCHUAPA') || ((cleanId === '006' || cleanId === '3') && (upper.includes('E-MARKET') || upper === '006' || !upper))) return 'E-Market Chalchuapa';
+    if (upper.includes('COSTA') || ((cleanId === '008' || cleanId === '8') && (upper.includes('SUPER') || upper === '008' || !upper))) return 'Super 7 Costa';
+    if (upper.includes('SAN MARTIN') || upper.includes('LA LOMA') || ((cleanId === '014' || cleanId === '1') && (upper.includes('E-MARKET') || upper === '014' || !upper))) return 'E-Market San Martin';
+    if (upper.includes('PEDREGAL') || ((cleanId === '009' || cleanId === '6') && (upper.includes('SUPER') || upper === '009' || !upper))) return 'Super El Pedregal';
+    return defaultTitulo || `Tienda ${cleanId}`;
 };
 
 const saasBranchMap = {
@@ -620,29 +620,37 @@ const mapCierreRowConExplicacion = (r, turnosPorEmpresa, sysDate) => {
 
 const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefined) => {
     // 1. Obtener cortes del sistema legado (cort_cabecera)
-    const sqlCortesTienda = `
-        SELECT 
-            b.id_empresa,
-            b.titulo as tienda_nombre,
-            a.id as id_corte,
-            DATE_FORMAT(COALESCE(a.fecha, ?), '%Y-%m-%d') as fecha,
-            COALESCE(a.turno, 0) as turno,
-            COALESCE(a.responsable, '') as responsable,
-            COALESCE(a.tot_ventas, 0.0) as venta,
-            COALESCE(a.tot_ingresos, 0.0) as ingresos,
-            COALESCE(a.tot_tarjeta, 0.0) as tarjeta,
-            COALESCE(a.tot_remesado, 0.0) as remesado,
-            COALESCE(a.tot_gastos, 0.0) as gastos,
-            COALESCE(a.tot_retirado, 0.0) as retiros,
-            COALESCE(a.efectivo, 0.0) as saldo_f,
-            COALESCE(a.diferencia, 0.0) as dif,
-            CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END as tiene_corte
-        FROM web_consolidado b
-        LEFT JOIN cort_cabecera a ON b.id_empresa = a.id_empresa AND a.fecha = ?
-        WHERE b.grupo = 'TIENDA' AND b.id_empresa NOT IN ('004', '022')
-        ORDER BY b.orden
-    `;
-    const [legacyRows] = await externalDb.query(sqlCortesTienda, [date, date]);
+    let legacyRows = [];
+    if (externalDb && typeof externalDb.query === 'function') {
+        try {
+            const sqlCortesTienda = `
+                SELECT 
+                    b.id_empresa,
+                    b.titulo as tienda_nombre,
+                    a.id as id_corte,
+                    DATE_FORMAT(COALESCE(a.fecha, ?), '%Y-%m-%d') as fecha,
+                    COALESCE(a.turno, 0) as turno,
+                    COALESCE(a.responsable, '') as responsable,
+                    COALESCE(a.tot_ventas, 0.0) as venta,
+                    COALESCE(a.tot_ingresos, 0.0) as ingresos,
+                    COALESCE(a.tot_tarjeta, 0.0) as tarjeta,
+                    COALESCE(a.tot_remesado, 0.0) as remesado,
+                    COALESCE(a.tot_gastos, 0.0) as gastos,
+                    COALESCE(a.tot_retirado, 0.0) as retiros,
+                    COALESCE(a.efectivo, 0.0) as saldo_f,
+                    COALESCE(a.diferencia, 0.0) as dif,
+                    CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END as tiene_corte
+                FROM web_consolidado b
+                LEFT JOIN cort_cabecera a ON b.id_empresa = a.id_empresa AND a.fecha = ?
+                WHERE b.grupo = 'TIENDA' AND b.id_empresa NOT IN ('004', '022')
+                ORDER BY b.orden
+            `;
+            const [rows] = await externalDb.query(sqlCortesTienda, [date, date]);
+            legacyRows = rows || [];
+        } catch (e) {
+            console.warn('[Cortes Tienda] Error leyendo legacy cort_cabecera:', e.message);
+        }
+    }
 
     // 2. Consultar turnos de tiendas en db_sistema_saas (sys.sipesv.com)
     const saasByBranch = {};
@@ -746,13 +754,40 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefin
         console.warn('[Cortes Tienda] Error consultando SaaS pos_shifts:', saasErr.message);
     }
 
-    // 3. Fusionar datos respetando histórico legado y complementando con SaaS
+    if (!legacyRows || legacyRows.length === 0) {
+        const storeEntries = [
+            { id_empresa: '014', tienda_nombre: 'E-MARKET SAN MARTIN' },
+            { id_empresa: '006', tienda_nombre: 'E-MARKET CHALCHUAPA' },
+            { id_empresa: '002', tienda_nombre: 'E-MARKET MIRAFLORES' },
+            { id_empresa: '008', tienda_nombre: 'SUPER 7 COSTA' },
+            { id_empresa: '009', tienda_nombre: 'SUPER EL PEDREGAL' }
+        ];
+        legacyRows = storeEntries.map(s => ({
+            id_empresa: s.id_empresa,
+            tienda_nombre: s.tienda_nombre,
+            id_corte: null,
+            fecha: date,
+            turno: 0,
+            responsable: '',
+            venta: 0,
+            ingresos: 0,
+            tarjeta: 0,
+            remesado: 0,
+            gastos: 0,
+            retiros: 0,
+            saldo_f: 0,
+            dif: 0,
+            tiene_corte: 0
+        }));
+    }
+
+    // 3. Priorizar datos de SaaS (cerrados) y complementar con histórico legado
     return (legacyRows || []).map(r => {
         const saasBranchId = saasBranchMap[r.id_empresa];
         const saasData = saasBranchId ? saasByBranch[saasBranchId] : null;
 
-        // Si el sistema legado no tiene corte o registra $0.00 y SaaS tiene datos reales, usar SaaS
-        if ((!r.tiene_corte || Number(r.venta || 0) === 0) && saasData && saasData.venta > 0) {
+        // Si SaaS tiene turnos cerrados para esta sucursal, usar SaaS prioritariamente
+        if (saasData && (saasData.shift_ids.length > 0 || saasData.venta > 0)) {
             const row = {
                 id_corte: `SAAS_${saasBranchId}_${date}`,
                 id_empresa: r.id_empresa,
@@ -1780,10 +1815,10 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                     b.nombre as empresa,
                     COALESCE(SUM(r.diferencia), 0.0) as galonaje,
                     COALESCE(SUM(r.monto), 0.0) as venta_estacion,
-                    COALESCE(SUM(CASE WHEN (r.codigo_producto LIKE '%DIE%' AND r.codigo_producto NOT LIKE '%ION%') OR p.tipo_combustible = 3 THEN r.diferencia ELSE 0 END), 0.0) as diesel,
-                    COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%REG%' OR p.tipo_combustible = 1 THEN r.diferencia ELSE 0 END), 0.0) as regular,
-                    COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%SUP%' OR p.tipo_combustible = 2 THEN r.diferencia ELSE 0 END), 0.0) as super,
-                    COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN r.diferencia ELSE 0 END), 0.0) as ion
+                    COALESCE(SUM(CASE WHEN (r.codigo_producto LIKE '%DIE%' AND r.codigo_producto NOT LIKE '%ION%') OR p.tipo_combustible IN (3, 5) OR (p.nombre LIKE '%DIESEL%' AND p.nombre NOT LIKE '%ION%') THEN r.diferencia ELSE 0 END), 0.0) as diesel,
+                    COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%REG%' OR p.tipo_combustible = 1 OR p.nombre LIKE '%REGULAR%' THEN r.diferencia ELSE 0 END), 0.0) as regular,
+                    COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%SUP%' OR p.tipo_combustible = 2 OR p.nombre LIKE '%SUPER%' THEN r.diferencia ELSE 0 END), 0.0) as super,
+                    COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%ION%' OR p.tipo_combustible = 4 OR p.nombre LIKE '%ION%' THEN r.diferencia ELSE 0 END), 0.0) as ion
                 FROM branches b
                 JOIN gas_station_closeouts c ON b.id = c.branch_id
                 JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
@@ -1799,40 +1834,81 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                     SELECT 
                         b.id as id_empresa,
                         b.nombre as empresa,
-                        COALESCE(SUM(sh.total_pagar), 0.0) as venta,
-                        COUNT(DISTINCT sh.fecha_emision) as dias_con_venta,
-                        IFNULL(AVG(sh.total_pagar), 0.0) as promedio_diario
+                        COALESCE(SUM(s.total_sales), 0.0) as venta,
+                        COUNT(DISTINCT DATE(s.shift_date)) as dias_con_venta,
+                        IFNULL(AVG(s.total_sales), 0.0) as promedio_diario
                     FROM branches b
-                    LEFT JOIN sales_headers sh ON b.id = sh.branch_id AND (sh.estado = 'emitido' OR sh.estado IS NULL) AND sh.fecha_emision BETWEEN ? AND ?
-                    WHERE b.id IN (SELECT DISTINCT branch_id FROM gas_station_closeouts WHERE estado = 'cerrado' AND fecha_turno BETWEEN ? AND ?)
-                       OR sh.total_pagar > 0
+                    JOIN pos_shifts s ON b.id = s.branch_id
+                    JOIN points_of_sale p ON s.pos_id = p.id
+                    WHERE s.status = 'closed' 
+                      AND s.shift_date BETWEEN ? AND ?
+                      AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
                     GROUP BY b.id, b.nombre
                     ORDER BY b.id
                 `;
-                const [saasTiendasRows] = await withRetry(() => accountingDb.query(sqlSaasTiendas, [startDate, endDate, startDate, endDate]));
+                let [saasTiendasRows] = await withRetry(() => accountingDb.query(sqlSaasTiendas, [startDate, endDate])).catch(() => [[]]);
+                if (!saasTiendasRows || saasTiendasRows.length === 0) {
+                    try {
+                        const sqlSaasTiendasFallback = `
+                            SELECT 
+                                b.id as id_empresa,
+                                b.nombre as empresa,
+                                COALESCE(SUM(sh.total), 0.0) as venta,
+                                COUNT(DISTINCT DATE(sh.fecha_emision)) as dias_con_venta,
+                                IFNULL(AVG(sh.total), 0.0) as promedio_diario
+                            FROM branches b
+                            JOIN sales_headers sh ON b.id = sh.branch_id
+                            WHERE sh.fecha_emision BETWEEN ? AND ?
+                            GROUP BY b.id, b.nombre
+                            ORDER BY b.id
+                        `;
+                        const [fallbackRows] = await withRetry(() => accountingDb.query(sqlSaasTiendasFallback, [startDate, endDate]));
+                        if (fallbackRows && fallbackRows.length > 0) {
+                            saasTiendasRows = fallbackRows;
+                        }
+                    } catch {
+                        /* ignore */
+                    }
+                }
 
-                const estacionesLocal = saasEstRows.map(row => ({
-                    id_empresa: String(row.id_empresa),
-                    empresa: row.empresa,
-                    diesel: Math.round(Number(row.diesel || 0) * 100) / 100,
-                    regular: Math.round(Number(row.regular || 0) * 100) / 100,
-                    super: Math.round(Number(row.super || 0) * 100) / 100,
-                    ion: Math.round(Number(row.ion || 0) * 100) / 100,
-                    galonaje: Math.round(Number(row.galonaje || 0) * 100) / 100,
-                    venta: Math.round(Number(row.venta_estacion || 0) * 100) / 100
-                }));
+                const estacionesLocal = saasEstRows.map(row => {
+                    const matchedOfficial = OFFICIAL_ESTACIONES.find(st => st.branch_id === Number(row.id_empresa) || String(st.id_empresa) === String(row.id_empresa));
+                    const cleanName = getCleanStationName(String(row.id_empresa), row.empresa) || (matchedOfficial ? matchedOfficial.titulo : row.empresa);
+                    return {
+                        id_empresa: String(matchedOfficial ? matchedOfficial.id_empresa : row.id_empresa),
+                        empresa: cleanName,
+                        diesel: Math.round(Number(row.diesel || 0) * 100) / 100,
+                        regular: Math.round(Number(row.regular || 0) * 100) / 100,
+                        super: Math.round(Number(row.super || 0) * 100) / 100,
+                        ion: Math.round(Number(row.ion || 0) * 100) / 100,
+                        galonaje: Math.round(Number(row.galonaje || 0) * 100) / 100,
+                        venta: Math.round(Number(row.venta_estacion || 0) * 100) / 100
+                    };
+                });
 
-                const tiendasLocal = (saasTiendasRows || []).map(row => ({
-                    id_empresa: String(row.id_empresa),
-                    empresa: row.empresa,
-                    venta: Math.round(Number(row.venta || 0) * 100) / 100,
-                    dias_con_venta: Number(row.dias_con_venta || 0),
-                    promedio_diario: Math.round(Number(row.promedio_diario || 0) * 100) / 100
-                }));
+                const tiendasLocal = (saasTiendasRows || []).map(row => {
+                    const empId = branchToEmpId[row.id_empresa] || String(row.id_empresa);
+                    const storeName = getCleanTiendaName(empId, row.empresa) || row.empresa;
+                    return {
+                        id_empresa: empId,
+                        empresa: storeName,
+                        venta: Math.round(Number(row.venta || 0) * 100) / 100,
+                        dias_con_venta: Number(row.dias_con_venta || 0),
+                        promedio_diario: Math.round(Number(row.promedio_diario || 0) * 100) / 100
+                    };
+                });
 
+                const matchedTiendaIds = new Set();
                 const consolidadoLocal = estacionesLocal.map(e => {
-                    const t = tiendasLocal.find(tienda => String(tienda.id_empresa) === String(e.id_empresa));
+                    let t = tiendasLocal.find(tienda => String(tienda.id_empresa) === String(e.id_empresa) && !matchedTiendaIds.has(tienda.id_empresa));
+                    if (!t) {
+                        const eNorm = normalizeStationName(e.empresa);
+                        if (eNorm.length >= 3) {
+                            t = tiendasLocal.find(tienda => !matchedTiendaIds.has(tienda.id_empresa) && normalizeStationName(tienda.empresa) === eNorm);
+                        }
+                    }
                     const vTienda = t ? t.venta : 0;
+                    if (t) matchedTiendaIds.add(t.id_empresa);
                     return {
                         id_empresa: e.id_empresa,
                         empresa: e.empresa,
@@ -1846,6 +1922,25 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                         venta_tienda: vTienda,
                         venta_total: Math.round((e.venta + vTienda) * 100) / 100
                     };
+                });
+
+                tiendasLocal.forEach(t => {
+                    if (!matchedTiendaIds.has(t.id_empresa) && t.venta > 0) {
+                        consolidadoLocal.push({
+                            id_empresa: t.id_empresa,
+                            empresa: t.empresa,
+                            tienda_nombre: t.empresa,
+                            diesel: 0,
+                            regular: 0,
+                            super: 0,
+                            ion: 0,
+                            galonaje: 0,
+                            venta_estacion: 0,
+                            venta_tienda: t.venta,
+                            venta_total: t.venta,
+                            es_tienda_solo: true
+                        });
+                    }
                 });
 
                 const totales = {
@@ -2035,8 +2130,9 @@ router.get('/ventas/resumen-mensual/:periodo', authenticateToken, requirePermiss
             return res.status(400).json({ message: 'Formato de período inválido. Debe ser YYYY-MM' });
         }
 
-        const externalDb = await getExternalDb();
-        const data = await getResumenMensualData(externalDb, year, month);
+        const externalDb = await getExternalDb().catch(() => null);
+        const accountingDb = await getAccountingDb().catch(() => null);
+        const data = await getResumenMensualData(externalDb, year, month, accountingDb);
         res.json(data);
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar resumen mensual de ventas');
@@ -2046,15 +2142,16 @@ router.get('/ventas/resumen-mensual/:periodo', authenticateToken, requirePermiss
 router.get('/ventas/resumen-mensual/:year/:month', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
     try {
         const { year, month } = req.params;
-        const externalDb = await getExternalDb();
-        const data = await getResumenMensualData(externalDb, year, month);
+        const externalDb = await getExternalDb().catch(() => null);
+        const accountingDb = await getAccountingDb().catch(() => null);
+        const data = await getResumenMensualData(externalDb, year, month, accountingDb);
         res.json(data);
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar resumen mensual de ventas');
     }
 });
 
-const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompararParam) => {
+const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompararParam, accountingDbParam = undefined) => {
     const currentYear = new Date().getFullYear();
     const anioPrincipal = parseInt(anioPrincipalParam || currentYear, 10);
     const anioComparar = parseInt(anioCompararParam || (anioPrincipal - 1), 10);
@@ -2066,79 +2163,219 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
     const strPrincipal = String(anioPrincipal);
     const strComparar = String(anioComparar);
 
+    const accountingDb = accountingDbParam !== undefined
+        ? accountingDbParam
+        : (process.env.NODE_ENV === 'test' ? null : await getAccountingDb().catch(() => null));
+
     // 1. Obtener lista de estaciones activas (excluyendo 004 El Desvío)
-    const [stationRows] = await withRetry(() => externalDb.query(
-        "SELECT id_empresa, titulo, orden FROM web_consolidado WHERE grupo = 'ESTACION' AND id_empresa != '004' ORDER BY orden"
-    ));
-
-    const estaciones = (stationRows || []).map(s => ({
+    let estaciones = OFFICIAL_ESTACIONES.map(s => ({
         id_empresa: String(s.id_empresa),
-        nombre: getCleanStationName(String(s.id_empresa), s.titulo)
+        nombre: s.titulo
     }));
+    if (externalDb && typeof externalDb.query === 'function') {
+        try {
+            const [stationRows] = await withRetry(() => externalDb.query(
+                "SELECT id_empresa, titulo, orden FROM web_consolidado WHERE grupo = 'ESTACION' AND id_empresa != '004' ORDER BY orden"
+            ));
+            if (stationRows && stationRows.length > 0) {
+                estaciones = stationRows.map(s => ({
+                    id_empresa: String(s.id_empresa),
+                    nombre: getCleanStationName(String(s.id_empresa), s.titulo)
+                }));
+            }
+        } catch {
+            /* ignore */
+        }
+    }
 
-    // 2. Consultar combustibles para ambos años
-    const sqlCombustibles = `
-        SELECT 
-            RIGHT(ct.fecha_turno, 4) as anio,
-            CAST(SUBSTRING(ct.fecha_turno, 4, 2) AS UNSIGNED) AS mes,
-            ct_l.id_empresa,
-            IFNULL(SUM(IF(d.clasificacion = 'D', ct_l.total, 0.0)), 0.0) as diesel,
-            IFNULL(SUM(IF(d.clasificacion = 'R', ct_l.total, 0.0)), 0.0) as regular,
-            IFNULL(SUM(IF(d.clasificacion = 'S', ct_l.total, 0.0)), 0.0) as super,
-            IFNULL(SUM(IF(d.clasificacion = 'I', ct_l.total, 0.0)), 0.0) as ion,
-            IFNULL(SUM(ct_l.total), 0.0) as galonaje,
-            COALESCE(SUM(ct_l.monto), SUM(ct_l.total * ct_l.precio), 0.0) as venta_estacion
-        FROM cierre_turno ct
-        INNER JOIN cierre_turno_lecturas ct_l 
-            ON ct.id = ct_l.id_cierre_turno AND ct.id_empresa = ct_l.id_empresa
-        LEFT JOIN cfg_combustibles d 
-            ON ct_l.id_empresa = d.id_empresa AND ct_l.id_producto = d.id_producto
-        WHERE RIGHT(ct.fecha_turno, 4) IN (?, ?)
-          AND ct.id_empresa != '004'
-        GROUP BY anio, mes, ct_l.id_empresa
-        ORDER BY anio, mes, ct_l.id_empresa
-    `;
-    const [fuelRows] = await withRetry(() => externalDb.query(sqlCombustibles, [strPrincipal, strComparar]));
+    // Helper para consultar datos de combustible por año (SaaS cerrado con fallback a legado)
+    const getFuelRowsForYear = async (targetYearStr) => {
+        if (accountingDb) {
+            try {
+                const [saasCheck] = await withRetry(() => accountingDb.query(
+                    "SELECT COUNT(*) as cnt FROM gas_station_closeouts WHERE YEAR(fecha_turno) = ? AND estado = 'cerrado'",
+                    [targetYearStr]
+                ));
+                if (saasCheck?.[0]?.cnt > 0) {
+                    const sqlSaas = `
+                        SELECT 
+                            YEAR(c.fecha_turno) as anio,
+                            MONTH(c.fecha_turno) as mes,
+                            c.branch_id,
+                            COALESCE(SUM(CASE WHEN (r.codigo_producto LIKE '%DIE%' AND r.codigo_producto NOT LIKE '%ION%') OR p.tipo_combustible IN (3, 5) OR (p.nombre LIKE '%DIESEL%' AND p.nombre NOT LIKE '%ION%') THEN r.diferencia ELSE 0 END), 0.0) as diesel,
+                            COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%REG%' OR p.tipo_combustible = 1 OR p.nombre LIKE '%REGULAR%' THEN r.diferencia ELSE 0 END), 0.0) as regular,
+                            COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%SUP%' OR p.tipo_combustible = 2 OR p.nombre LIKE '%SUPER%' THEN r.diferencia ELSE 0 END), 0.0) as super,
+                            COALESCE(SUM(CASE WHEN r.codigo_producto LIKE '%ION%' OR p.tipo_combustible = 4 OR p.nombre LIKE '%ION%' THEN r.diferencia ELSE 0 END), 0.0) as ion,
+                            COALESCE(SUM(r.diferencia), 0.0) as galonaje,
+                            COALESCE(SUM(r.monto), 0.0) as venta_estacion
+                        FROM gas_station_closeouts c
+                        JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
+                        LEFT JOIN products p ON r.product_id = p.id
+                        WHERE c.estado = 'cerrado' AND YEAR(c.fecha_turno) = ?
+                        GROUP BY anio, mes, c.branch_id
+                        ORDER BY anio, mes, c.branch_id
+                    `;
+                    const [saasRows] = await withRetry(() => accountingDb.query(sqlSaas, [targetYearStr]));
+                    return (saasRows || []).map(r => ({
+                        anio: String(r.anio),
+                        mes: Number(r.mes),
+                        id_empresa: branchToEmpId[r.branch_id] || String(r.branch_id),
+                        diesel: Number(r.diesel || 0),
+                        regular: Number(r.regular || 0),
+                        super: Number(r.super || 0),
+                        ion: Number(r.ion || 0),
+                        galonaje: Number(r.galonaje || 0),
+                        venta_estacion: Number(r.venta_estacion || 0)
+                    }));
+                }
+            } catch (errSaasFuel) {
+                console.warn(`[Comparativo Anual] Error consultando SaaS combustible para ${targetYearStr}:`, errSaasFuel.message);
+            }
+        }
 
-    // 3. Consultar ventas de tienda para ambos años
-    const sqlTiendas = `
-        SELECT 
-            CAST(YEAR(fecha) AS CHAR) as anio,
-            MONTH(fecha) as mes,
-            id_empresa,
-            IFNULL(SUM(monto), 0.0) as venta_tienda
-        FROM ventas_tienda
-        WHERE YEAR(fecha) IN (?, ?) AND id_empresa != '004'
-        GROUP BY anio, mes, id_empresa
-        ORDER BY anio, mes, id_empresa
-    `;
-    const [tiendaRows] = await withRetry(() => externalDb.query(sqlTiendas, [anioPrincipal, anioComparar]));
+        // Fallback a db_system_rrs
+        if (!externalDb || typeof externalDb.query !== 'function') return [];
+        const sqlLegacy = `
+            SELECT 
+                RIGHT(ct.fecha_turno, 4) as anio,
+                CAST(SUBSTRING(ct.fecha_turno, 4, 2) AS UNSIGNED) AS mes,
+                ct_l.id_empresa,
+                IFNULL(SUM(IF(d.clasificacion = 'D', ct_l.total, 0.0)), 0.0) as diesel,
+                IFNULL(SUM(IF(d.clasificacion = 'R', ct_l.total, 0.0)), 0.0) as regular,
+                IFNULL(SUM(IF(d.clasificacion = 'S', ct_l.total, 0.0)), 0.0) as super,
+                IFNULL(SUM(IF(d.clasificacion = 'I', ct_l.total, 0.0)), 0.0) as ion,
+                IFNULL(SUM(ct_l.total), 0.0) as galonaje,
+                COALESCE(SUM(ct_l.monto), SUM(ct_l.total * ct_l.precio), 0.0) as venta_estacion
+            FROM cierre_turno ct
+            INNER JOIN cierre_turno_lecturas ct_l 
+                ON ct.id = ct_l.id_cierre_turno AND ct.id_empresa = ct_l.id_empresa
+            LEFT JOIN cfg_combustibles d 
+                ON ct_l.id_empresa = d.id_empresa AND ct_l.id_producto = d.id_producto
+            WHERE RIGHT(ct.fecha_turno, 4) = ?
+              AND ct.id_empresa != '004'
+            GROUP BY anio, mes, ct_l.id_empresa
+            ORDER BY anio, mes, ct_l.id_empresa
+        `;
+        const [legRows] = await withRetry(() => externalDb.query(sqlLegacy, [targetYearStr]));
+        return (legRows || []).map(r => ({
+            anio: String(r.anio),
+            mes: Number(r.mes),
+            id_empresa: String(r.id_empresa),
+            diesel: Number(r.diesel || 0),
+            regular: Number(r.regular || 0),
+            super: Number(r.super || 0),
+            ion: Number(r.ion || 0),
+            galonaje: Number(r.galonaje || 0),
+            venta_estacion: Number(r.venta_estacion || 0)
+        }));
+    };
+
+    // Helper para consultar datos de tienda por año (SaaS cerrado con fallback a legado)
+    const getStoreRowsForYear = async (targetYearNum) => {
+        const targetYearStr = String(targetYearNum);
+        if (accountingDb) {
+            try {
+                const [saasCheck] = await withRetry(() => accountingDb.query(
+                    "SELECT COUNT(*) as cnt FROM pos_shifts WHERE YEAR(shift_date) = ? AND status = 'closed'",
+                    [targetYearStr]
+                ));
+                if (saasCheck?.[0]?.cnt > 0) {
+                    const sqlSaas = `
+                        SELECT 
+                            YEAR(s.shift_date) as anio,
+                            MONTH(s.shift_date) as mes,
+                            s.branch_id,
+                            COALESCE(SUM(s.total_sales), 0.0) as venta_tienda
+                        FROM pos_shifts s
+                        JOIN points_of_sale p ON s.pos_id = p.id
+                        WHERE s.status = 'closed' AND YEAR(s.shift_date) = ?
+                          AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
+                        GROUP BY anio, mes, s.branch_id
+                        ORDER BY anio, mes, s.branch_id
+                    `;
+                    const [saasRows] = await withRetry(() => accountingDb.query(sqlSaas, [targetYearStr]));
+                    return (saasRows || []).map(r => ({
+                        anio: String(r.anio),
+                        mes: Number(r.mes),
+                        id_empresa: branchToEmpId[r.branch_id] || String(r.branch_id),
+                        venta_tienda: Number(r.venta_tienda || 0)
+                    }));
+                }
+            } catch (errSaasStore) {
+                console.warn(`[Comparativo Anual] Error consultando SaaS tienda para ${targetYearStr}:`, errSaasStore.message);
+            }
+        }
+
+        // Fallback a db_system_rrs
+        if (!externalDb || typeof externalDb.query !== 'function') return [];
+        const sqlLegacy = `
+            SELECT 
+                CAST(YEAR(fecha) AS CHAR) as anio,
+                MONTH(fecha) as mes,
+                id_empresa,
+                IFNULL(SUM(monto), 0.0) as venta_tienda
+            FROM ventas_tienda
+            WHERE YEAR(fecha) = ? AND id_empresa != '004'
+            GROUP BY anio, mes, id_empresa
+            ORDER BY anio, mes, id_empresa
+        `;
+        const [legRows] = await withRetry(() => externalDb.query(sqlLegacy, [targetYearNum]));
+        return (legRows || []).map(r => ({
+            anio: String(r.anio),
+            mes: Number(r.mes),
+            id_empresa: String(r.id_empresa),
+            venta_tienda: Number(r.venta_tienda || 0)
+        }));
+    };
+
+    const [fuelPrincipal, fuelComparar, storePrincipal, storeComparar] = await Promise.all([
+        getFuelRowsForYear(strPrincipal),
+        getFuelRowsForYear(strComparar),
+        getStoreRowsForYear(anioPrincipal),
+        getStoreRowsForYear(anioComparar)
+    ]);
+
+    const fuelRows = [...fuelPrincipal, ...fuelComparar];
+    const tiendaRows = [...storePrincipal, ...storeComparar];
 
     // 4. Obtener años disponibles en la base de datos
-    let aniosDisponibles = [anioPrincipal, anioComparar];
-    try {
-        const [yearsRows] = await withRetry(() => externalDb.query(`
-            SELECT DISTINCT anio FROM (
-                SELECT DISTINCT RIGHT(fecha_turno, 4) as anio 
-                FROM cierre_turno 
-                WHERE fecha_turno IS NOT NULL AND LENGTH(fecha_turno) = 10
-                UNION
-                SELECT DISTINCT CAST(YEAR(fecha) AS CHAR) as anio 
-                FROM ventas_tienda 
-                WHERE fecha IS NOT NULL
-            ) t 
-            WHERE anio REGEXP '^[0-9]{4}$' AND anio >= '2020' AND anio <= '2030'
-            ORDER BY anio DESC
-        `));
-        if (yearsRows && yearsRows.length > 0) {
-            const set = new Set(yearsRows.map(r => parseInt(r.anio, 10)).filter(y => !isNaN(y)));
-            set.add(anioPrincipal);
-            set.add(anioComparar);
-            aniosDisponibles = Array.from(set).sort((a, b) => b - a);
+    const yearsSet = new Set([anioPrincipal, anioComparar]);
+    if (accountingDb) {
+        try {
+            const [saasYears] = await withRetry(() => accountingDb.query(
+                "SELECT DISTINCT YEAR(fecha_turno) as anio FROM gas_station_closeouts WHERE estado = 'cerrado'"
+            ));
+            (saasYears || []).forEach(r => { if (r.anio) yearsSet.add(parseInt(r.anio, 10)); });
+        } catch {
+            /* ignore */
         }
-    } catch {
-        // Fallback a los años consultados si la subconsulta fallara
     }
+    if (externalDb && typeof externalDb.query === 'function') {
+        try {
+            const [yearsRows] = await withRetry(() => externalDb.query(`
+                SELECT DISTINCT anio FROM (
+                    SELECT DISTINCT RIGHT(fecha_turno, 4) as anio 
+                    FROM cierre_turno 
+                    WHERE fecha_turno IS NOT NULL AND LENGTH(fecha_turno) = 10
+                    UNION
+                    SELECT DISTINCT CAST(YEAR(fecha) AS CHAR) as anio 
+                    FROM ventas_tienda 
+                    WHERE fecha IS NOT NULL
+                ) t 
+                WHERE anio REGEXP '^[0-9]{4}$' AND anio >= '2020' AND anio <= '2030'
+                ORDER BY anio DESC
+            `));
+            if (yearsRows && yearsRows.length > 0) {
+                yearsRows.forEach(r => {
+                    const yr = parseInt(r.anio, 10);
+                    if (!isNaN(yr)) yearsSet.add(yr);
+                });
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+    const aniosDisponibles = Array.from(yearsSet).sort((a, b) => b - a);
 
     // 5. Nombres de meses
     const mesesInfo = [
@@ -2347,8 +2584,9 @@ router.get('/ventas/comparativo-anual', authenticateToken, requirePermission(ven
         const pYear = anioPrincipal || anio1 || anio || new Date().getFullYear();
         const cYear = anioComparar || anio2 || (parseInt(pYear, 10) - 1);
 
-        const externalDb = await getExternalDb();
-        const data = await getComparativoAnualData(externalDb, pYear, cYear);
+        const externalDb = await getExternalDb().catch(() => null);
+        const accountingDb = await getAccountingDb().catch(() => null);
+        const data = await getComparativoAnualData(externalDb, pYear, cYear, accountingDb);
         res.json(data);
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar comparativo anual de ventas');
@@ -2368,7 +2606,38 @@ router.get('/ventas/lubricantes/:start/:end', authenticateToken, requirePermissi
         if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
             return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
         }
+        const accountingDb = await getAccountingDb();
+        if (accountingDb) {
+            const [saasCheck] = await withRetry(() => accountingDb.query(
+                "SELECT COUNT(*) as cnt FROM gas_station_closeouts WHERE fecha_turno BETWEEN ? AND ? AND estado = 'cerrado'",
+                [start, end]
+            ));
+            if (saasCheck[0]?.cnt > 0) {
+                const sql = `
+                    SELECT 
+                        c.branch_id,
+                        COALESCE(SUM(l.total), 0.0) as venta
+                    FROM gas_station_closeouts c
+                    JOIN gas_station_closeout_lubricant_readings l ON l.closeout_id = c.id
+                    WHERE c.fecha_turno BETWEEN ? AND ? AND c.estado = 'cerrado'
+                    GROUP BY c.branch_id
+                `;
+                const [saasRows] = await withRetry(() => accountingDb.query(sql, [start, end]));
+                const saasMap = {};
+                (saasRows || []).forEach(r => { saasMap[r.branch_id] = r; });
+                const result = OFFICIAL_ESTACIONES.map(st => {
+                    const row = saasMap[st.branch_id] || {};
+                    return {
+                        empresa: st.titulo,
+                        venta: Math.round(Number(row.venta || 0) * 100) / 100
+                    };
+                });
+                return res.json(result);
+            }
+        }
+
         const externalDb = await getExternalDb();
+        if (!externalDb) return res.json([]);
         const datesArray = []; 
         let curr = new Date(start + 'T12:00:00');
         const endDate = new Date(end + 'T12:00:00');
@@ -2383,7 +2652,7 @@ router.get('/ventas/lubricantes/:start/:end', authenticateToken, requirePermissi
             return res.json([]);
         }
         const sql = `SELECT a.id_empresa, a.titulo, IFNULL(SUM(b.precio_total), 0.0) as monto FROM web_consolidado a LEFT JOIN inventario_lubricantes b ON a.id_empresa = b.id_empresa AND b.fecha_turno IN (?) WHERE a.grupo = 'ESTACION' GROUP BY id_empresa ORDER BY a.orden`;
-        const [rows] = await externalDb.query(sql, [datesArray]);
+        const [rows] = await withRetry(() => externalDb.query(sql, [datesArray]));
         res.json(rows.map(r => ({ empresa: r.titulo, venta: Number(r.monto || 0) })));
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar ventas de lubricantes'); 
@@ -2396,9 +2665,69 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
             return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
         }
-        const externalDb = await getExternalDb();
         const parts = date.split('-'); 
         const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+        const accountingDb = await getAccountingDb();
+        const externalDb = await getExternalDb();
+
+        if (accountingDb) {
+            const [saasCheck] = await withRetry(() => accountingDb.query(
+                "SELECT COUNT(*) as cnt FROM gas_station_closeouts WHERE fecha_turno = ? AND estado = 'cerrado'",
+                [date]
+            ));
+            if (saasCheck[0]?.cnt > 0) {
+                const turnosPorEmpresa = await getTurnosPorEmpresa(externalDb, sysDate, accountingDb, date);
+
+                const sqlSaasCierre = `
+                    SELECT 
+                        c.branch_id,
+                        SUM((SELECT IFNULL(SUM(cr.monto), 0.0) FROM gas_station_closeout_creditos cr WHERE cr.closeout_id = c.id)) as creditos,
+                        SUM((SELECT IFNULL(SUM(cp.monto), 0.0) FROM gas_station_closeout_cupones cp WHERE cp.closeout_id = c.id)) as cupones,
+                        0.0 as cheques,
+                        SUM((SELECT IFNULL(SUM(tar.monto), 0.0) FROM gas_station_closeout_tarjetas tar WHERE tar.closeout_id = c.id)) as tarjetas,
+                        SUM((SELECT IFNULL(SUM(rem.monto), 0.0) FROM gas_station_closeout_remesas rem WHERE rem.closeout_id = c.id)) as remesas,
+                        SUM((SELECT IFNULL(SUM(g.valor), 0.0) FROM gas_station_closeout_expenses g WHERE g.closeout_id = c.id)) as gastos,
+                        SUM((SELECT IFNULL(SUM(l.total), 0.0) FROM gas_station_closeout_lubricant_readings l WHERE l.closeout_id = c.id)) as lubricantes,
+                        SUM((SELECT IFNULL(SUM(ad.monto), 0.0) FROM gas_station_closeout_adelantos ad WHERE ad.closeout_id = c.id)) as anticipos,
+                        0.0 as pagos,
+                        SUM((SELECT IFNULL(SUM(d.total), 0.0) FROM gas_station_closeout_descuentos d WHERE d.closeout_id = c.id)) as descuentos,
+                        SUM((SELECT IFNULL(SUM(r.monto), 0.0) FROM gas_station_closeout_readings r WHERE r.closeout_id = c.id)) as total_venta
+                    FROM gas_station_closeouts c
+                    WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
+                    GROUP BY c.branch_id
+                `;
+                const [saasCierreRows] = await withRetry(() => accountingDb.query(sqlSaasCierre, [date]));
+                const saasCierreMap = {};
+                (saasCierreRows || []).forEach(r => {
+                    saasCierreMap[r.branch_id] = r;
+                });
+
+                const resumenCierreLocal = OFFICIAL_ESTACIONES.map(st => {
+                    const raw = saasCierreMap[st.branch_id] || {
+                        creditos: 0,
+                        cupones: 0,
+                        cheques: 0,
+                        tarjetas: 0,
+                        remesas: 0,
+                        gastos: 0,
+                        lubricantes: 0,
+                        anticipos: 0,
+                        pagos: 0,
+                        descuentos: 0,
+                        total_venta: 0
+                    };
+                    return mapCierreRowConExplicacion({
+                        id_empresa: st.id_empresa,
+                        estacion: st.titulo,
+                        ...raw
+                    }, turnosPorEmpresa, date);
+                });
+
+                return res.json(resumenCierreLocal);
+            }
+        }
+
+        if (!externalDb) return res.json([]);
         const sql = `
             SELECT x.titulo AS estacion,
                    (SELECT IFNULL(SUM(b.total_descuento),0.0) FROM cierre_turno a INNER JOIN cierre_turno_credito b ON a.id=b.id_cierre_turno AND a.id_empresa=b.id_empresa WHERE a.fecha_turno = ? AND a.id_empresa = x.id_empresa) AS creditos,
@@ -2433,8 +2762,9 @@ router.get('/ventas/cortes-tienda/:date', authenticateToken, requirePermission(c
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
             return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
         }
-        const externalDb = await getExternalDb();
-        const cortes = await getCortesTiendaData(externalDb, date);
+        const externalDb = await getExternalDb().catch(() => null);
+        const accountingDb = await getAccountingDb().catch(() => null);
+        const cortes = await getCortesTiendaData(externalDb, date, accountingDb);
         res.json(cortes);
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar cortes de tienda');
@@ -2464,7 +2794,7 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
             };
             const storeName = storeNames[branchId] || branchNombre;
 
-            // Turnos de tienda
+            // Turnos de tienda (solo turnos cerrados)
             const [shifts] = await withRetry(() => saasDb.query(`
                 SELECT s.id, s.shift_number, s.total_sales, s.total_incomes, s.card_sales,
                        s.total_remesas, s.total_expenses, s.actual_cash, s.difference,
@@ -2474,6 +2804,7 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
                 LEFT JOIN sellers sel ON s.seller_id = sel.id
                 LEFT JOIN users u ON s.seller_id = u.id
                 WHERE s.branch_id = ? AND DATE(s.shift_date) = ?
+                  AND s.status = 'closed'
                   AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
             `, [branchId, date]));
 
@@ -3444,18 +3775,73 @@ Emite un dictamen pericial forense riguroso, objetivo y en español profesional.
     }
 });
 
+const getPreciosEstacionData = async (date) => {
+    const parts = date.split('-'); 
+    const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+    const accountingDb = await getAccountingDb();
+
+    if (accountingDb) {
+        const [saasCheck] = await withRetry(() => accountingDb.query(
+            "SELECT COUNT(*) as cnt FROM gas_station_closeouts WHERE fecha_turno = ? AND estado = 'cerrado'",
+            [date]
+        ));
+        if (saasCheck[0]?.cnt > 0) {
+            const sqlSaasPrecios = `
+                SELECT 
+                    c.branch_id,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%DIESEL AUTO%' OR (r.descripcion_producto LIKE '%DIESEL%' AND r.descripcion_producto NOT LIKE '%FULL%' AND r.descripcion_producto NOT LIKE '%COMPLETO%' AND r.descripcion_producto NOT LIKE '%ION%') THEN r.precio ELSE 0 END) as diesel_a,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%REGULAR%AUTO%' OR (r.descripcion_producto LIKE '%REGULAR%' AND r.descripcion_producto NOT LIKE '%FULL%' AND r.descripcion_producto NOT LIKE '%COMPLETO%') THEN r.precio ELSE 0 END) as regular_a,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%SUPER%AUTO%' OR (r.descripcion_producto LIKE '%SUPER%' AND r.descripcion_producto NOT LIKE '%FULL%' AND r.descripcion_producto NOT LIKE '%COMPLETO%') THEN r.precio ELSE 0 END) as super_a,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%DIESEL%FULL%' OR r.descripcion_producto LIKE '%DIESEL%COMPLETO%' THEN r.precio ELSE 0 END) as diesel_c,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%REGULAR%FULL%' OR r.descripcion_producto LIKE '%REGULAR%COMPLETO%' THEN r.precio ELSE 0 END) as regular_c,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%SUPER%FULL%' OR r.descripcion_producto LIKE '%SUPER%COMPLETO%' THEN r.precio ELSE 0 END) as super_c,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%ION%' THEN r.precio ELSE 0 END) as ion_diesel,
+                    MAX(CASE WHEN r.descripcion_producto LIKE '%MASTER%' THEN r.precio ELSE 0 END) as master
+                FROM gas_station_closeouts c
+                JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
+                WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
+                  AND c.numero_turno = (
+                      SELECT MAX(x.numero_turno) 
+                      FROM gas_station_closeouts x 
+                      WHERE x.branch_id = c.branch_id AND x.fecha_turno = c.fecha_turno AND x.estado = 'cerrado'
+                  )
+                GROUP BY c.branch_id
+            `;
+            const [saasPreciosRows] = await withRetry(() => accountingDb.query(sqlSaasPrecios, [date]));
+            const saasPreciosMap = {};
+            (saasPreciosRows || []).forEach(r => { saasPreciosMap[r.branch_id] = r; });
+            return OFFICIAL_ESTACIONES.map(st => {
+                const row = saasPreciosMap[st.branch_id] || {};
+                return {
+                    empresa: st.titulo,
+                    diesel_a: Number(row.diesel_a || 0),
+                    regular_a: Number(row.regular_a || 0),
+                    super_a: Number(row.super_a || 0),
+                    diesel_c: Number(row.diesel_c || 0),
+                    regular_c: Number(row.regular_c || 0),
+                    super_c: Number(row.super_c || 0),
+                    ion_diesel: Number(row.ion_diesel || 0),
+                    master: Number(row.master || 0)
+                };
+            });
+        }
+    }
+
+    const externalDb = await getExternalDb();
+    if (!externalDb) return [];
+    const sql = `select a.id_empresa,a.titulo, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'A',c.precio,0.0),0.0)) as diesel_a,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'A',c.precio,0.0),0.0)) as regular_a,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'A',c.precio,0.0),0.0)) as super_a, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'F',c.precio,0.0),0.0)) as diesel_c,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'F',c.precio,0.0),0.0)) as regular_c,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'F',c.precio,0.0),0.0)) as super_c, sum(ifnull(if(b.clasificacion = 'I',c.precio,0.0),0.0)) as ion_diesel,sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'M',c.precio,0.0),0.0)) as master from web_consolidado a left join cfg_combustibles b on a.id_empresa = b.id_empresa left join ( SELECT a.id_empresa,a.id_producto, a.codigo_producto,a.nom_producto,precio FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa WHERE b.fecha_turno = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) GROUP BY codigo_producto,a.id_empresa order by id_empresa,codigo_producto) c on b.id_empresa = c.id_empresa and b.codigo = c.codigo_producto where a.grupo = 'ESTACION' group by id_empresa order by orden`;
+    const [rows] = await withRetry(() => externalDb.query(sql, [sysDate]));
+    return (rows || []).map(r => ({ empresa: r.titulo, diesel_a: Number(r.diesel_a), regular_a: Number(r.regular_a), super_a: Number(r.super_a), diesel_c: Number(r.diesel_c), regular_c: Number(r.regular_c), super_c: Number(r.super_c), ion_diesel: Number(r.ion_diesel), master: Number(r.master) }));
+};
+
 router.get('/ventas/precios-estacion/:date', authenticateToken, requirePermission(preciosEstacionViewPerms), async (req, res) => {
     const { date } = req.params;
     try {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
             return res.status(400).json({ message: 'Formato de fecha inválido (debe ser YYYY-MM-DD)' });
         }
-        const externalDb = await getExternalDb();
-        const parts = date.split('-'); 
-        const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
-        const sql = `select a.id_empresa,a.titulo, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'A',c.precio,0.0),0.0)) as diesel_a,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'A',c.precio,0.0),0.0)) as regular_a,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'A',c.precio,0.0),0.0)) as super_a, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'F',c.precio,0.0),0.0)) as diesel_c,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'F',c.precio,0.0),0.0)) as regular_c,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'F',c.precio,0.0),0.0)) as super_c, sum(ifnull(if(b.clasificacion = 'I',c.precio,0.0),0.0)) as ion_diesel,sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'M',c.precio,0.0),0.0)) as master from web_consolidado a left join cfg_combustibles b on a.id_empresa = b.id_empresa left join ( SELECT a.id_empresa,a.id_producto, a.codigo_producto,a.nom_producto,precio FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa WHERE b.fecha_turno = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) GROUP BY codigo_producto,a.id_empresa order by id_empresa,codigo_producto) c on b.id_empresa = c.id_empresa and b.codigo = c.codigo_producto where a.grupo = 'ESTACION' group by id_empresa order by orden`;
-        const [rows] = await externalDb.query(sql, [sysDate]);
-        res.json(rows.map(r => ({ empresa: r.titulo, diesel_a: Number(r.diesel_a), regular_a: Number(r.regular_a), super_a: Number(r.super_a), diesel_c: Number(r.diesel_c), regular_c: Number(r.regular_c), super_c: Number(r.super_c), ion_diesel: Number(r.ion_diesel), master: Number(r.master) })));
+        const data = await getPreciosEstacionData(date);
+        res.json(data);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar precios de combustible'); 
     }
@@ -3504,7 +3890,117 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
             return res.status(400).json({ message: 'El rango de fechas no puede exceder 366 días' });
         }
 
+        const accountingDb = await getAccountingDb();
+        if (accountingDb) {
+            const [saasCheck] = await withRetry(() => accountingDb.query(
+                "SELECT COUNT(*) as cnt FROM gas_station_closeouts WHERE fecha_turno BETWEEN ? AND ? AND estado = 'cerrado'",
+                [desde, hasta]
+            ));
+            if (saasCheck[0]?.cnt > 0) {
+                const sqlVentas = `
+                    SELECT 
+                        c.branch_id,
+                        CASE 
+                            WHEN r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
+                            WHEN r.descripcion_producto LIKE '%SUPER%' THEN 'S'
+                            WHEN r.descripcion_producto LIKE '%ION%' THEN 'I'
+                            ELSE 'D'
+                        END as tipo,
+                        COALESCE(SUM(r.diferencia), 0.0) as venta
+                    FROM gas_station_closeouts c
+                    JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
+                    WHERE c.fecha_turno BETWEEN ? AND ? AND c.estado = 'cerrado'
+                    GROUP BY c.branch_id, tipo
+                `;
+                const [ventasRows] = await withRetry(() => accountingDb.query(sqlVentas, [desde, hasta]));
+
+                const sqlTanques = `
+                    SELECT 
+                        c.branch_id,
+                        c.fecha_turno,
+                        c.numero_turno,
+                        tr.tank_id,
+                        CASE 
+                            WHEN t.tipo_combustible = 1 OR tr.descripcion_tanque LIKE '%REGULAR%' THEN 'R'
+                            WHEN t.tipo_combustible = 2 OR tr.descripcion_tanque LIKE '%SUPER%' THEN 'S'
+                            WHEN t.tipo_combustible = 4 OR tr.descripcion_tanque LIKE '%ION%' THEN 'I'
+                            ELSE 'D'
+                        END as tipo,
+                        tr.lectura_anterior,
+                        tr.recarga,
+                        tr.lectura_actual
+                    FROM gas_station_closeouts c
+                    JOIN gas_station_closeout_tank_readings tr ON tr.closeout_id = c.id
+                    LEFT JOIN gas_station_tanks t ON tr.tank_id = t.id
+                    WHERE c.fecha_turno BETWEEN ? AND ? AND c.estado = 'cerrado'
+                    ORDER BY c.branch_id, tipo, c.fecha_turno ASC, c.numero_turno ASC, tr.id ASC
+                `;
+                const [tankRows] = await withRetry(() => accountingDb.query(sqlTanques, [desde, hasta]));
+
+                const groups = {};
+                (tankRows || []).forEach(r => {
+                    const key = `${r.branch_id}_${r.tipo}_${r.tank_id}`;
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(r);
+                });
+
+                const stationFuelTotals = {};
+                for (const [key, rows] of Object.entries(groups)) { // eslint-disable-line no-unused-vars
+                    const first = rows[0];
+                    const last = rows[rows.length - 1];
+                    const bId = first.branch_id;
+                    const tipo = first.tipo;
+                    const tankKey = `${bId}_${tipo}`;
+                    if (!stationFuelTotals[tankKey]) {
+                        stationFuelTotals[tankKey] = {
+                            branch_id: bId,
+                            tipo,
+                            inicial: 0,
+                            recargas: 0,
+                            final: 0
+                        };
+                    }
+                    stationFuelTotals[tankKey].inicial += Number(first.lectura_anterior || 0);
+                    stationFuelTotals[tankKey].final += Number(last.lectura_actual || 0);
+                    stationFuelTotals[tankKey].recargas += rows.reduce((acc, curr) => acc + Number(curr.recarga || 0), 0);
+                }
+
+                const finalResults = [];
+                OFFICIAL_ESTACIONES.forEach(st => {
+                    ['D', 'R', 'S', 'I'].forEach(tipo => {
+                        const tankKey = `${st.branch_id}_${tipo}`;
+                        const tData = stationFuelTotals[tankKey] || { inicial: 0, recargas: 0, final: 0 };
+                        const vRow = (ventasRows || []).find(v => v.branch_id === st.branch_id && v.tipo === tipo);
+                        const venta = Number(vRow?.venta || 0);
+
+                        if (tData.inicial === 0 && tData.final === 0 && venta === 0) return;
+
+                        const inicial = Math.round(tData.inicial * 100) / 100;
+                        const recargas = Math.round(tData.recargas * 100) / 100;
+                        const vFinal = Math.round(tData.final * 100) / 100;
+                        const vRound = Math.round(venta * 100) / 100;
+                        const suma = Math.round((inicial + recargas - vRound) * 100) / 100;
+                        const diferencia = Math.round((vFinal - suma) * 100) / 100;
+
+                        finalResults.push({
+                            empresa: st.titulo,
+                            combustible: tipo,
+                            inicial,
+                            recargas,
+                            venta: vRound,
+                            final: vFinal,
+                            suma,
+                            diferencia
+                        });
+                    });
+                });
+
+                return res.json(finalResults);
+            }
+        }
+
         const externalDb = await getExternalDb();
+        if (!externalDb) return res.json([]);
         const datesArray = [];
         const iter = new Date(curr);
         while (iter <= endDate && datesArray.length < 366) {
@@ -3518,7 +4014,7 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
             return res.json([]);
         }
         const sql1 = `select x.id_empresa, a.titulo as estacion, z.clasificacion as tipo, 0.0 as inicial, 0.0 as recargas, sum(y.total) as venta, 0.0 as final, 0.0 as suma, 0.0 as diferencia from cierre_turno x inner join cierre_turno_lecturas y on x.id_empresa = y.id_empresa and x.id = y.id_cierre_turno inner join cfg_combustibles z on y.id_empresa = z.id_empresa and y.id_producto = z.id_producto inner join web_consolidado a on x.id_empresa = a.id_empresa where x.fecha_turno IN (?) and a.grupo = 'ESTACION' group by x.id_empresa, a.titulo, z.clasificacion, a.orden order by a.orden, z.clasificacion`;
-        const [dt_result] = await externalDb.query(sql1, [datesArray]);
+        const [dt_result] = await withRetry(() => externalDb.query(sql1, [datesArray]));
         const sql2 = `
             SELECT 
                 a.id_empresa,
@@ -3557,25 +4053,34 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
                 a.turno 
             ORDER BY a.id_empresa, a.fecha, a.turno
         `;
-        const [dt_movi] = await externalDb.query(sql2, [desde, hasta]);
-        res.json(dt_result.map(fila => {
-            let inicial = 0.0, final = 0.0; const FindRow = dt_movi.filter(m => String(m.id_empresa) === String(fila.id_empresa) && String(m.tipo_combustible) === String(fila.tipo));
+        const [dt_movi] = await withRetry(() => externalDb.query(sql2, [desde, hasta]));
+        res.json((dt_result || []).map(fila => {
+            let inicial = 0.0, final = 0.0; const FindRow = (dt_movi || []).filter(m => String(m.id_empresa) === String(fila.id_empresa) && String(m.tipo_combustible) === String(fila.tipo));
             if (FindRow.length > 0) { inicial = Number(FindRow[0].anterior) || 0.0; final = Number(FindRow[FindRow.length - 1].lectura) || 0.0; }
             const recargas = FindRow.reduce((sum, current) => sum + (Number(current.recarga) || 0), 0);
             const suma = inicial + recargas - Number(fila.venta);
-            return { empresa: fila.estacion, combustible: fila.tipo, inicial, recargas, venta: Number(fila.venta), final, suma, diferencia: final - suma };
+            return {
+                empresa: fila.estacion,
+                combustible: fila.tipo,
+                inicial,
+                recargas,
+                venta: Number(fila.venta),
+                final,
+                suma,
+                diferencia: final - suma
+            };
         }));
-    } catch (error) { 
-        sendSafeError(res, error, 'Error al consultar diferencias de combustible'); 
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar diferencias de combustible');
     }
 });
 
 router.get('/consultas/estaciones/precios-competencia', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
-        const externalDb = await getExternalDb();
+        const localDb = await getDb();
         const query = `SELECT c.titulo, a.estacion, a.modificacion, a.super_c, a.regular_c, a.ion_c, a.diesel_c, a.super_a, a.regular_a, a.ion_a, a.diesel_a, IFNULL(b.es_propia, 0) as es_propia FROM web_precios_competencia a INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION' ORDER BY c.titulo, b.es_propia DESC, a.estacion`;
-        const [rows] = await withRetry(() => externalDb.query(query));
-        const [meta] = await withRetry(() => externalDb.query('SELECT MAX(created_at) as ultima_validacion FROM web_precios_competencia_historial'));
+        const [rows] = await withRetry(() => localDb.query(query));
+        const [meta] = await withRetry(() => localDb.query('SELECT MAX(created_at) as ultima_validacion FROM web_precios_competencia_historial'));
         res.json({
             data: rows,
             ultimaValidacion: meta[0]?.ultima_validacion || null,
@@ -3588,8 +4093,8 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, requi
 
 router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
-        const externalDb = await getExternalDb();
-        const [rows] = await withRetry(() => externalDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia'));
+        const localDb = await getDb();
+        const [rows] = await withRetry(() => localDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia'));
         res.json(rows);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar estaciones de competencia'); 
@@ -3598,9 +4103,9 @@ router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateT
 
 router.get('/consultas/estaciones/precios-competencia/catalogo', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
-        const externalDb = await getExternalDb();
-        const [estacionesSistema] = await withRetry(() => externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden, titulo"));
-        const [estacionesMonitoreadas] = await withRetry(() => externalDb.query(`
+        const localDb = await getDb();
+        const [estacionesSistema] = await withRetry(() => localDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden, titulo"));
+        const [estacionesMonitoreadas] = await withRetry(() => localDb.query(`
             SELECT a.ID as id, a.id_estacion, b.titulo as estacion_sistema, a.competencia, IFNULL(a.es_propia, 0) as es_propia 
             FROM web_estaciones_competencia a 
             LEFT JOIN web_consolidado b ON a.id_estacion = b.id_empresa AND b.grupo = 'ESTACION'
@@ -3619,8 +4124,8 @@ router.get('/consultas/estaciones/precios-competencia/catalogo', authenticateTok
             estaciones_monitoreadas: estacionesMonitoreadas,
             catalogo_dgehm: catalogoDgehm
         });
-    } catch (error) {
-        sendSafeError(res, error, 'Error al cargar catálogo de estaciones de competencia');
+    } catch (error) { 
+        sendSafeError(res, error, 'Error al cargar catálogo de estaciones de competencia'); 
     }
 });
 
@@ -3631,12 +4136,12 @@ router.post('/consultas/estaciones/precios-competencia/estaciones', authenticate
             return res.status(400).json({ message: 'La estación del sistema y el nombre de la estación son requeridos.' });
         }
 
-        const externalDb = await getExternalDb();
+        const localDb = await getDb();
         const compTrimmed = competencia.trim();
         const isPropiaNum = (es_propia === 1 || es_propia === true || es_propia === '1') ? 1 : 0;
 
         // Validar que no exista ya para la misma estación del sistema
-        const [existing] = await withRetry(() => externalDb.query(
+        const [existing] = await withRetry(() => localDb.query(
             'SELECT ID FROM web_estaciones_competencia WHERE id_estacion = ? AND UPPER(competencia) = UPPER(?)',
             [id_estacion, compTrimmed]
         ));
@@ -3646,13 +4151,13 @@ router.post('/consultas/estaciones/precios-competencia/estaciones', authenticate
 
         // Si se marca como propia, desmarcar cualquier otra estación propia previa en la misma sucursal
         if (isPropiaNum === 1) {
-            await withRetry(() => externalDb.query(
+            await withRetry(() => localDb.query(
                 'UPDATE web_estaciones_competencia SET es_propia = 0 WHERE id_estacion = ?',
                 [id_estacion]
             ));
         }
 
-        const [result] = await withRetry(() => externalDb.query(
+        const [result] = await withRetry(() => localDb.query(
             'INSERT INTO web_estaciones_competencia (id_estacion, competencia, es_propia) VALUES (?, ?, ?)',
             [id_estacion, compTrimmed, isPropiaNum]
         ));
@@ -3673,8 +4178,8 @@ router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authentic
     const { id } = req.params;
     const { competencia, es_propia, id_estacion } = req.body;
     try {
-        const externalDb = await getExternalDb();
-        const [current] = await withRetry(() => externalDb.query('SELECT * FROM web_estaciones_competencia WHERE ID = ?', [id]));
+        const localDb = await getDb();
+        const [current] = await withRetry(() => localDb.query('SELECT * FROM web_estaciones_competencia WHERE ID = ?', [id]));
         if (current.length === 0) {
             return res.status(404).json({ message: 'Estación no encontrada' });
         }
@@ -3685,13 +4190,13 @@ router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authentic
 
         // Si se marca como propia (1), desmarcar cualquier otra estación propia para la misma sucursal
         if (newPropia === 1) {
-            await withRetry(() => externalDb.query(
+            await withRetry(() => localDb.query(
                 'UPDATE web_estaciones_competencia SET es_propia = 0 WHERE id_estacion = ? AND ID != ?',
                 [newIdEstacion, id]
             ));
         }
 
-        await withRetry(() => externalDb.query(
+        await withRetry(() => localDb.query(
             'UPDATE web_estaciones_competencia SET competencia = ?, es_propia = ?, id_estacion = ? WHERE ID = ?',
             [newComp, newPropia, newIdEstacion, id]
         ));
@@ -3705,19 +4210,19 @@ router.put('/consultas/estaciones/precios-competencia/estaciones/:id', authentic
 router.delete('/consultas/estaciones/precios-competencia/estaciones/:id', authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
     const { id } = req.params;
     try {
-        const externalDb = await getExternalDb();
-        const [rows] = await withRetry(() => externalDb.query('SELECT * FROM web_estaciones_competencia WHERE ID = ?', [id]));
+        const localDb = await getDb();
+        const [rows] = await withRetry(() => localDb.query('SELECT * FROM web_estaciones_competencia WHERE ID = ?', [id]));
         if (rows.length === 0) {
             return res.status(404).json({ message: 'Estación no encontrada' });
         }
         const stationName = rows[0].competencia;
 
-        await withRetry(() => externalDb.query('DELETE FROM web_estaciones_competencia WHERE ID = ?', [id]));
+        await withRetry(() => localDb.query('DELETE FROM web_estaciones_competencia WHERE ID = ?', [id]));
 
         // Si la estación ya no figura en ninguna sucursal, limpiar de web_precios_competencia
-        const [stillExists] = await withRetry(() => externalDb.query('SELECT ID FROM web_estaciones_competencia WHERE competencia = ?', [stationName]));
+        const [stillExists] = await withRetry(() => localDb.query('SELECT ID FROM web_estaciones_competencia WHERE competencia = ?', [stationName]));
         if (stillExists.length === 0) {
-            await withRetry(() => externalDb.query('DELETE FROM web_precios_competencia WHERE estacion = ?', [stationName]));
+            await withRetry(() => localDb.query('DELETE FROM web_precios_competencia WHERE estacion = ?', [stationName]));
         }
 
         res.json({ message: `Estación "${stationName}" quitada correctamente` });
@@ -3728,12 +4233,9 @@ router.delete('/consultas/estaciones/precios-competencia/estaciones/:id', authen
 
 router.get('/consultas/estaciones/precios', authenticateToken, requirePermission(preciosEstacionViewPerms), async (req, res) => {
     try {
-        const externalDb = await getExternalDb();
         const date = new Date().toISOString().split('T')[0];
-        const parts = date.split('-'); const sysDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
-        const sql = `select a.id_empresa,a.titulo, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'A',c.precio,0.0),0.0)) as diesel_a,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'A',c.precio,0.0),0.0)) as regular_a,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'A',c.precio,0.0),0.0)) as super_a, sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'F',c.precio,0.0),0.0)) as diesel_c,sum(ifnull(if(b.clasificacion = 'R' and b.tipo = 'F',c.precio,0.0),0.0)) as regular_c,sum(ifnull(if(b.clasificacion = 'S' and b.tipo = 'F',c.precio,0.0),0.0)) as super_c, sum(ifnull(if(b.clasificacion = 'I',c.precio,0.0),0.0)) as ion_diesel,sum(ifnull(if(b.clasificacion = 'D' and b.tipo = 'M',c.precio,0.0),0.0)) as master from web_consolidado a left join cfg_combustibles b on a.id_empresa = b.id_empresa left join ( SELECT a.id_empresa,a.id_producto, a.codigo_producto,a.nom_producto,precio FROM cierre_turno_lecturas a INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa WHERE b.fecha_turno = ? AND b.turno = (SELECT MAX(x.turno) FROM cierre_turno x WHERE x.id_empresa=b.id_empresa AND x.fecha_turno=b.fecha_turno) GROUP BY codigo_producto,a.id_empresa order by id_empresa,codigo_producto) c on b.id_empresa = c.id_empresa and b.codigo = c.codigo_producto where a.grupo = 'ESTACION' group by id_empresa order by orden`;
-        const [rows] = await withRetry(() => externalDb.query(sql, [sysDate]));
-        res.json(rows.map(r => ({ empresa: r.titulo, diesel_a: Number(r.diesel_a), regular_a: Number(r.regular_a), super_a: Number(r.super_a), diesel_c: Number(r.diesel_c), regular_c: Number(r.regular_c), super_c: Number(r.super_c), ion_diesel: Number(r.ion_diesel), master: Number(r.master) })));
+        const data = await getPreciosEstacionData(date);
+        res.json(data);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar precios por estación'); 
     }
@@ -3818,8 +4320,8 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
             });
         }
 
-        const externalDb = await getExternalDb();
-        const [mappedStations] = await externalDb.query('SELECT competencia FROM web_estaciones_competencia');
+        const localDb = await getDb();
+        const [mappedStations] = await withRetry(() => localDb.query('SELECT competencia FROM web_estaciones_competencia'));
 
         const norm = str => (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
         const mappedMap = new Map();
@@ -3863,7 +4365,7 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
         };
 
         const today = new Date().toISOString().split('T')[0];
-        const conn = await externalDb.getConnection();
+        const conn = await localDb.getConnection();
         await conn.beginTransaction();
         try {
             // 1. Update snapshot
@@ -3923,8 +4425,8 @@ router.post('/consultas/estaciones/precios-competencia/upload', express.json({ l
         if (!Array.isArray(data) || data.length === 0) {
             return res.status(400).json({ message: 'No data provided' });
         }
-        const externalDb = await getExternalDb();
-        const conn = await externalDb.getConnection();
+        const localDb = await getDb();
+        const conn = await localDb.getConnection();
         await conn.beginTransaction();
         try {
             await conn.query('DELETE FROM web_precios_competencia');
@@ -3983,7 +4485,7 @@ router.post('/consultas/estaciones/precios-competencia/upload', express.json({ l
 router.get('/consultas/estaciones/precios-competencia/historial', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
         const { desde, hasta, estacion } = req.query;
-        const externalDb = await getExternalDb();
+        const localDb = await getDb();
         
         let query = `
             SELECT h.id, h.estacion, h.modificacion, DATE_FORMAT(h.fecha_registro, '%Y-%m-%d') as fecha_registro,
@@ -4010,7 +4512,7 @@ router.get('/consultas/estaciones/precios-competencia/historial', authenticateTo
         }
         query += ' ORDER BY h.fecha_registro DESC, h.estacion ASC LIMIT 500';
 
-        const [rows] = await externalDb.query(query, params);
+        const [rows] = await withRetry(() => localDb.query(query, params));
         res.json(rows);
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar historial de precios');
@@ -4019,7 +4521,7 @@ router.get('/consultas/estaciones/precios-competencia/historial', authenticateTo
 
 router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
-        const externalDb = await getExternalDb();
+        const localDb = await getDb();
         
         // 1. Current data with station details
         const queryCurrent = `
@@ -4030,7 +4532,7 @@ router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticat
             INNER JOIN web_estaciones_competencia b ON a.estacion = b.competencia
             INNER JOIN web_consolidado c ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION'
         `;
-        const [currentRows] = await externalDb.query(queryCurrent);
+        const [currentRows] = await withRetry(() => localDb.query(queryCurrent));
 
         // Helper to extract brand
         const extractBrand = (name) => {
@@ -4112,7 +4614,7 @@ router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticat
             ORDER BY fecha_registro ASC
             LIMIT 30
         `;
-        const [trendRows] = await externalDb.query(queryTrend);
+        const [trendRows] = await withRetry(() => localDb.query(queryTrend));
 
         const tendenciaHistorica = trendRows.map(r => ({
             fecha: r.fecha,
@@ -4126,7 +4628,7 @@ router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticat
         }));
 
         // 5. Total History Count & Last Update
-        const [histCount] = await externalDb.query('SELECT COUNT(*) as total, MAX(fecha_registro) as ultima_fecha FROM web_precios_competencia_historial');
+        const [histCount] = await withRetry(() => localDb.query('SELECT COUNT(*) as total, MAX(fecha_registro) as ultima_fecha FROM web_precios_competencia_historial'));
 
         // 6. Generate Dynamic Business Insights
         const insights = [];

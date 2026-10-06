@@ -614,6 +614,67 @@ const initDB = async () => {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
 
+        // Competitor prices and station monitoring tables (migrated to local db_sipe_admin)
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS web_consolidado (
+                id_empresa char(3) DEFAULT NULL,
+                titulo varchar(50) DEFAULT NULL,
+                grupo varchar(20) DEFAULT NULL,
+                orden int DEFAULT NULL,
+                letra char(1) NOT NULL DEFAULT '',
+                cod_destino char(2) NOT NULL DEFAULT '',
+                zona varchar(3) NOT NULL DEFAULT '',
+                descarga_c char(1) NOT NULL DEFAULT 'N'
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS web_estaciones_competencia (
+                ID int NOT NULL AUTO_INCREMENT,
+                id_estacion varchar(3) DEFAULT NULL,
+                competencia varchar(50) DEFAULT NULL,
+                es_propia tinyint(1) NOT NULL DEFAULT 0,
+                PRIMARY KEY (ID)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS web_precios_competencia (
+                estacion varchar(100) DEFAULT NULL,
+                modificacion varchar(50) DEFAULT NULL,
+                super_c double(15,2) NOT NULL DEFAULT 0.00,
+                regular_c double(15,2) NOT NULL DEFAULT 0.00,
+                ion_c double(15,2) NOT NULL DEFAULT 0.00,
+                diesel_c double(15,2) NOT NULL DEFAULT 0.00,
+                super_a double(15,2) NOT NULL DEFAULT 0.00,
+                regular_a double(15,2) NOT NULL DEFAULT 0.00,
+                ion_a double(15,2) NOT NULL DEFAULT 0.00,
+                diesel_a double(15,2) NOT NULL DEFAULT 0.00
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS web_precios_competencia_historial (
+                id int NOT NULL AUTO_INCREMENT,
+                estacion varchar(150) NOT NULL,
+                modificacion varchar(50) DEFAULT NULL,
+                fecha_registro date NOT NULL,
+                super_c double(15,2) DEFAULT 0.00,
+                regular_c double(15,2) DEFAULT 0.00,
+                ion_c double(15,2) DEFAULT 0.00,
+                diesel_c double(15,2) DEFAULT 0.00,
+                super_a double(15,2) DEFAULT 0.00,
+                regular_a double(15,2) DEFAULT 0.00,
+                ion_a double(15,2) DEFAULT 0.00,
+                diesel_a double(15,2) DEFAULT 0.00,
+                created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uk_estacion_fecha (estacion, fecha_registro),
+                KEY idx_estacion_fecha (estacion, fecha_registro),
+                KEY idx_fecha (fecha_registro)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        `);
+
         // Migration for seguro and ahorro columns
         try {
             const [cols] = await pool.query("SHOW COLUMNS FROM prestamos LIKE 'seguro_tipo'");
