@@ -49,9 +49,21 @@ export default function PedidosCombustible() {
     const [selectedPipa, setSelectedPipa] = useState('');
     const [pedidoTemp, setPedidoTemp] = useState({ id: null });
     const [comp, setComp] = useState({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+    // Shared delivery trip states (multiparada entre 2 estaciones)
+    const [esCompartido, setEsCompartido] = useState(false);
+    const [selectedEstacion2, setSelectedEstacion2] = useState('');
+    const [comp2, setComp2] = useState({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
     const [inventario, setInventario] = useState([]);
     const [promedios, setPromedios] = useState({ D: 0, R: 0, S: 0, I: 0 });
     const [programados, setProgramados] = useState([]);
+
+    // Secondary Station (Multiparada) operational data
+    const [inventario2, setInventario2] = useState([]);
+    const [promedios2, setPromedios2] = useState({ D: 0, R: 0, S: 0, I: 0 });
+    const [programados2, setProgramados2] = useState([]);
+    const [isLoading2, setIsLoading2] = useState(false);
+    const [resumenViewMode, setResumenViewMode] = useState('ambas'); // 'ambas' | 'estacion1' | 'estacion2'
+    const [programadosTab, setProgramadosTab] = useState('estacion1'); // 'estacion1' | 'estacion2'
 
     // Portal Orders State & Pagination (10 por defecto para no sobrecargar)
     const [portalOrders, setPortalOrders] = useState([]);
@@ -593,7 +605,9 @@ export default function PedidosCombustible() {
         return { ...p, totalCapacity: totalCap, parsedCompartments: comps };
     }), [pipas]);
 
-    const totalPipa = Number(comp.D.val) + Number(comp.R.val) + Number(comp.S.val) + Number(comp.I.val);
+    const totalEstacion1 = Number(comp.D.val || 0) + Number(comp.R.val || 0) + Number(comp.S.val || 0) + Number(comp.I.val || 0);
+    const totalEstacion2 = esCompartido ? (Number(comp2.D.val || 0) + Number(comp2.R.val || 0) + Number(comp2.S.val || 0) + Number(comp2.I.val || 0)) : 0;
+    const totalPipa = totalEstacion1 + totalEstacion2;
 
     const recommendedPipa = useMemo(() => {
         if (totalPipa <= 0) return null;
@@ -711,7 +725,12 @@ export default function PedidosCombustible() {
     };
 
     const loadPedidoToForm = (row) => {
-        setPedidoTemp({ id: row.id_pedido });
+        setPedidoTemp({ 
+            id: row.id_pedido,
+            id_estacion_compartida: row.id_estacion_compartida,
+            id_pedido_compartido: row.id_pedido_compartido,
+            nombre_estacion_compartida: row.nombre_estacion_compartida
+        });
         setFechaPedido(row.fecha ? row.fecha.split('T')[0] : '');
         setSelectedTransporte(row.id_transportista || '');
         setSelectedPipa(row.id_calibracion_diesel || '');
@@ -721,6 +740,20 @@ export default function PedidosCombustible() {
             S: { val: row.super || 0 },
             I: { val: row.iondiesel || 0 }
         });
+        if (row.id_estacion_compartida) {
+            setEsCompartido(true);
+            setSelectedEstacion2(row.id_estacion_compartida);
+            setComp2({
+                D: { val: row.diesel_compartido || 0 },
+                R: { val: row.regular_compartido || 0 },
+                S: { val: row.super_compartido || 0 },
+                I: { val: row.iondiesel_compartido || 0 }
+            });
+        } else {
+            setEsCompartido(false);
+            setSelectedEstacion2('');
+            setComp2({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+        }
         setPrevisualizar(false);
     };
 
@@ -756,7 +789,15 @@ export default function PedidosCombustible() {
             sumProg.I += Number(p.iondiesel || 0);
         });
 
-        const getInvObj = (tipo) => inventario.find(i => i.tipo_combustible === tipo) || { capacidad: 0, reserva: 0, lectura: 0 };
+        const getInvObj = (tipo) => {
+            const items = inventario.filter(i => i.tipo_combustible === tipo);
+            if (!items.length) return { capacidad: 0, reserva: 0, lectura: 0 };
+            return items.reduce((acc, curr) => ({
+                capacidad: acc.capacidad + Number(curr.capacidad || 0),
+                reserva: acc.reserva + Number(curr.reserva || 0),
+                lectura: acc.lectura + Number(curr.lectura || 0)
+            }), { capacidad: 0, reserva: 0, lectura: 0 });
+        };
 
         const buildCol = (tipo) => {
             const tk = getInvObj(tipo);
@@ -797,11 +838,417 @@ export default function PedidosCombustible() {
         return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I') };
     }, [inventario, promedios, programados, previsualizar, comp, fechaConsulta]);
 
+    const fetchOperationalData2 = async (est) => {
+        if (!est || !fechaConsulta) {
+            setInventario2([]);
+            setPromedios2({ D: 0, R: 0, S: 0, I: 0 });
+            setProgramados2([]);
+            return;
+        }
+        setIsLoading2(true);
+        try {
+            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${fechaConsulta}`);
+            setInventario2(resT.data.inventario || []);
+
+            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${fechaConsulta}`);
+            setPromedios2(resP.data || { D: 0, R: 0, S: 0, I: 0 });
+
+            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${fechaConsulta}`);
+            setProgramados2(resProg.data || []);
+        } catch (error) {
+            console.error("Error al obtener datos operativos de estación secundaria:", error);
+        } finally {
+            setIsLoading2(false);
+        }
+    };
+
+    useEffect(() => {
+        if (esCompartido && selectedEstacion2) {
+            fetchOperationalData2(selectedEstacion2);
+        } else {
+            setInventario2([]);
+            setPromedios2({ D: 0, R: 0, S: 0, I: 0 });
+            setProgramados2([]);
+        }
+    }, [esCompartido, selectedEstacion2, fechaConsulta]);
+
+    const matrix2 = useMemo(() => {
+        if (!esCompartido || !selectedEstacion2) return null;
+
+        const sumProg = { D: 0, R: 0, S: 0, I: 0 };
+        programados2.forEach(p => {
+            sumProg.D += Number(p.diesel || 0);
+            sumProg.R += Number(p.regular || 0);
+            sumProg.S += Number(p.super || 0);
+            sumProg.I += Number(p.iondiesel || 0);
+        });
+
+        const getInvObj = (tipo) => {
+            const items = inventario2.filter(i => i.tipo_combustible === tipo);
+            if (!items.length) return { capacidad: 0, reserva: 0, lectura: 0 };
+            return items.reduce((acc, curr) => ({
+                capacidad: acc.capacidad + Number(curr.capacidad || 0),
+                reserva: acc.reserva + Number(curr.reserva || 0),
+                lectura: acc.lectura + Number(curr.lectura || 0)
+            }), { capacidad: 0, reserva: 0, lectura: 0 });
+        };
+
+        const buildCol = (tipo) => {
+            const tk = getInvObj(tipo);
+            const cap = Number(tk.capacidad);
+            const res = Number(tk.reserva);
+            const invActual = Number(tk.lectura);
+            const prom = Number(promedios2[tipo] || 0);
+
+            let prog = sumProg[tipo];
+            if (previsualizar) prog += Number(comp2[tipo].val || 0);
+
+            let durDias = 0;
+            if (prom > 0) durDias = Math.max(0, (invActual + prog - res) / prom);
+
+            let fechaDur = "";
+            let nomDia = "";
+            if (durDias > 0 && fechaConsulta) {
+                const cleanDate = fechaConsulta.includes('T') ? fechaConsulta.split('T')[0] : fechaConsulta;
+                const parts = cleanDate.split('-').map(Number);
+                if (parts.length === 3) {
+                    const [y, m, d] = parts;
+                    const target = new Date(y, m - 1, d + Math.floor(durDias));
+                    fechaDur = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+                    const days = ['DOMINGO', 'LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO'];
+                    nomDia = days[target.getDay()];
+                }
+            }
+
+            let nivel = 0;
+            if (cap > 0) nivel = (invActual + prog) / cap;
+
+            return {
+                capacidad: cap, reserva: res, inventario: invActual, promedio: prom, programado: prog,
+                duracionDias: durDias, duracionFecha: fechaDur, duracionDiaNom: nomDia, nivelTanque: nivel
+            };
+        };
+
+        return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I') };
+    }, [esCompartido, selectedEstacion2, inventario2, comp2, previsualizar, promedios2, programados2, fechaConsulta]);
+
+    // Helpers de semáforo y estilización visual para la tabla operacional
+    const getDuracionBadge = (dias, cap) => {
+        if (!cap || dias <= 0) {
+            return { bg: 'var(--bg-active)', color: 'var(--text-muted)', border: '1px solid var(--border)' };
+        }
+        if (dias < 2.0) {
+            return { bg: 'rgba(239, 68, 68, 0.18)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.5)' }; // Crítico (< 2d)
+        }
+        if (dias < 4.0) {
+            return { bg: 'rgba(245, 158, 11, 0.18)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.5)' }; // Alerta (2-4d)
+        }
+        return { bg: 'rgba(16, 185, 129, 0.18)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.5)' }; // Óptimo (> 4d)
+    };
+
+    const getNivelBadge = (nivel, cap) => {
+        if (!cap || nivel <= 0) {
+            return { bg: 'transparent', color: 'var(--text-muted)', border: 'none', label: null };
+        }
+        if (nivel > 1.0) {
+            return { bg: 'rgba(239, 68, 68, 0.22)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.6)', label: '¡Exceso!' }; // Sobrellenado
+        }
+        if (nivel >= 0.70) {
+            return { bg: 'rgba(16, 185, 129, 0.18)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.4)', label: null }; // Óptimo
+        }
+        if (nivel >= 0.35) {
+            return { bg: 'rgba(14, 165, 233, 0.18)', color: '#38bdf8', border: '1px solid rgba(14, 165, 233, 0.4)', label: null }; // Normal
+        }
+        if (nivel >= 0.15) {
+            return { bg: 'rgba(245, 158, 11, 0.18)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.4)', label: 'Bajo' }; // Bajo
+        }
+        return { bg: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.6)', label: 'Crítico' }; // Crítico
+    };
+
+    const renderOperationalTable = (stationTitle, matrixData, isSecondary = false, loading = false, showLegend = true) => {
+        if (!matrixData && !loading) return null;
+        const themeColor = isSecondary ? '#0ea5e9' : 'var(--primary)';
+        const headerBg = isSecondary ? 'rgba(14, 165, 233, 0.12)' : 'rgba(37,99,235,0.1)';
+        const borderTheme = isSecondary ? 'rgba(14, 165, 233, 0.4)' : 'var(--border)';
+
+        return (
+            <div className="card glass table-responsive" style={{ padding: 0, border: `1px solid ${borderTheme}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: headerBg, padding: '0.45rem 0.75rem', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    <h3 style={{ margin: 0, fontSize: '0.85rem', color: themeColor, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <span>{isSecondary ? '🤝' : '🏢'}</span>
+                        <span>RESUMEN DE DATOS OPERACIONALES:</span>
+                        <span style={{ color: 'var(--text-color)' }}>{stationTitle}</span>
+                        {isSecondary && (
+                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', fontWeight: 'bold' }}>
+                                ESTACIÓN 2 (COMPAÑERA)
+                            </span>
+                        )}
+                        {!isSecondary && esCompartido && selectedEstacion2 && (
+                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(37, 99, 235, 0.2)', color: 'var(--primary)', fontWeight: 'bold' }}>
+                                ESTACIÓN 1 (ACTUAL)
+                            </span>
+                        )}
+                    </h3>
+                    {loading && (
+                        <span style={{ fontSize: '0.72rem', color: themeColor, display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <div className="spinner" style={{ width: '13px', height: '13px', border: `2px solid ${themeColor}`, borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                            Consultando...
+                        </span>
+                    )}
+                </div>
+                {matrixData ? (
+                    <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
+                        <thead>
+                            <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontWeight: 'bold' }}>MÉTRICA</th>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(245,158,11,0.5)', color: '#f59e0b', fontWeight: 'bold' }}>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                                        DIESEL
+                                    </span>
+                                </th>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(16,185,129,0.5)', color: '#10b981', fontWeight: 'bold' }}>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
+                                        REGULAR
+                                    </span>
+                                </th>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(239,68,68,0.5)', color: '#ef4444', fontWeight: 'bold' }}>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444' }}></span>
+                                        SUPER
+                                    </span>
+                                </th>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(139,92,246,0.5)', color: '#a78bfa', fontWeight: 'bold' }}>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6' }}></span>
+                                        ION
+                                    </span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {/* CAPACIDAD */}
+                            <tr style={{ background: 'rgba(255,255,255,0.01)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                                    CAPACIDAD
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', fontWeight: '600' }}>{numFmt(matrixData.D.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', fontWeight: '600' }}>{numFmt(matrixData.R.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', fontWeight: '600' }}>{numFmt(matrixData.S.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', fontWeight: '600' }}>{numFmt(matrixData.I.capacidad)}</td>
+                            </tr>
+                            {/* INVENTARIO */}
+                            <tr style={{ background: 'rgba(56,189,248,0.05)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#38bdf8' }}>
+                                    INVENTARIO
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.D.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.R.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.S.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.I.inventario)}</td>
+                            </tr>
+                            {/* FUERA DE VENTA (RESERVA) */}
+                            <tr style={{ background: 'rgba(239,68,68,0.06)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#f87171' }}>
+                                    FUERA DE VENTA
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.D.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.R.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.S.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.I.reserva)}</td>
+                            </tr>
+                            {/* VENTA PROMEDIO */}
+                            <tr style={{ background: 'rgba(168,85,247,0.05)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#c084fc' }}>
+                                    VENTA PROMEDIO
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.D.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.R.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.S.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.I.promedio)}</td>
+                            </tr>
+                            {/* PROGRAMADOS */}
+                            <tr style={{ background: isSecondary ? 'rgba(14,165,233,0.09)' : 'rgba(37,99,235,0.09)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: themeColor }}>
+                                    PROGRAMADOS
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: themeColor }}>{numFmt(matrixData.D.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: themeColor }}>{numFmt(matrixData.R.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', color: themeColor }}>{numFmt(matrixData.S.programado)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: themeColor }}>{numFmt(matrixData.I.programado)}</td>
+                            </tr>
+                            {/* DURACION EN DIAS CON SEMAFORO */}
+                            <tr style={{ background: 'rgba(0,0,0,0.06)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>
+                                    DURACION EN DIAS
+                                </td>
+                                {['D', 'R', 'S', 'I'].map(t => {
+                                    const m = matrixData[t];
+                                    const borderLeft = t === 'D' ? '2px solid rgba(245,158,11,0.3)' : t === 'R' ? '2px solid rgba(16,185,129,0.3)' : t === 'S' ? '2px solid rgba(239,68,68,0.3)' : '2px solid rgba(139,92,246,0.3)';
+                                    const badge = getDuracionBadge(m.duracionDias, m.capacidad);
+                                    return (
+                                        <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft }}>
+                                            <div style={{
+                                                display: 'inline-flex',
+                                                justifyContent: 'center',
+                                                alignItems: 'center',
+                                                gap: '0.25rem',
+                                                minWidth: '85px',
+                                                padding: '0.2rem 0.45rem',
+                                                background: badge.bg,
+                                                borderRadius: '5px',
+                                                border: badge.border,
+                                                fontWeight: 'bold',
+                                                fontSize: '0.85rem',
+                                                color: badge.color
+                                            }}>
+                                                {m.duracionDias.toFixed(1)}
+                                            </div>
+                                        </td>
+                                    );
+                                })}
+                            </tr>
+                            {/* DURACION EN FECHA */}
+                            <tr>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>
+                                    DURACION EN FECHA
+                                </td>
+                                {['D', 'R', 'S', 'I'].map(t => {
+                                    const m = matrixData[t];
+                                    const borderLeft = t === 'D' ? '2px solid rgba(245,158,11,0.3)' : t === 'R' ? '2px solid rgba(16,185,129,0.3)' : t === 'S' ? '2px solid rgba(239,68,68,0.3)' : '2px solid rgba(139,92,246,0.3)';
+                                    const hasVal = m.duracionDias > 0 && m.duracionFecha;
+                                    const badge = getDuracionBadge(m.duracionDias, m.capacidad);
+                                    return (
+                                        <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
+                                                <div style={{
+                                                    minWidth: '85px',
+                                                    minHeight: '24px',
+                                                    padding: '0.2rem 0.35rem',
+                                                    background: 'var(--bg-active)',
+                                                    borderRadius: '4px',
+                                                    border: '1px solid var(--border)',
+                                                    fontSize: '0.75rem',
+                                                    fontWeight: 'bold',
+                                                    color: hasVal ? 'var(--text-color)' : 'transparent',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center'
+                                                }}>
+                                                    {hasVal ? fmtDateArray(m.duracionFecha) : '\u00A0'}
+                                                </div>
+                                                <div style={{
+                                                    minWidth: '85px',
+                                                    minHeight: '22px',
+                                                    padding: '0.15rem 0.35rem',
+                                                    background: hasVal ? badge.bg : 'var(--bg-active)',
+                                                    borderRadius: '4px',
+                                                    border: hasVal ? badge.border : '1px solid var(--border)',
+                                                    fontSize: '0.7rem',
+                                                    fontWeight: 'bold',
+                                                    color: hasVal ? badge.color : 'transparent',
+                                                    letterSpacing: '0.03em',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center'
+                                                }}>
+                                                    {hasVal ? m.duracionDiaNom : '\u00A0'}
+                                                </div>
+                                            </div>
+                                        </td>
+                                    );
+                                })}
+                            </tr>
+                            {/* NIVEL TANQUE */}
+                            <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>
+                                    NIVEL TANQUE
+                                </td>
+                                {['D', 'R', 'S', 'I'].map(t => {
+                                    const m = matrixData[t];
+                                    const borderLeft = t === 'D' ? '2px solid rgba(245,158,11,0.3)' : t === 'R' ? '2px solid rgba(16,185,129,0.3)' : t === 'S' ? '2px solid rgba(239,68,68,0.3)' : '2px solid rgba(139,92,246,0.3)';
+                                    const nBadge = getNivelBadge(m.nivelTanque, m.capacidad);
+                                    return (
+                                        <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft }}>
+                                            <div style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.35rem',
+                                                minWidth: '85px',
+                                                padding: '0.2rem 0.45rem',
+                                                borderRadius: '5px',
+                                                background: nBadge.bg,
+                                                border: nBadge.border,
+                                                color: nBadge.color,
+                                                fontWeight: 'bold',
+                                                fontSize: '0.8rem'
+                                            }}>
+                                                <span>{pctFmt(m.nivelTanque)}</span>
+                                                {nBadge.label && (
+                                                    <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.3rem', borderRadius: '3px', background: '#ef4444', color: '#fff', fontWeight: 'bold' }}>
+                                                        {nBadge.label}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
+                                    );
+                                })}
+                            </tr>
+                        </tbody>
+                    </table>
+                ) : (
+                    <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        No hay datos operativos disponibles para esta estación.
+                    </div>
+                )}
+                {/* Mini Leyenda Operacional */}
+                {showLegend && (
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.7rem',
+                        borderTop: '1px solid var(--border)',
+                        background: 'rgba(0,0,0,0.12)',
+                        flexWrap: 'wrap'
+                    }}>
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>SEMÁFORO DÍAS:</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#f87171' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#ef4444' }}></span>
+                                &lt; 2 días (Crítico)
+                            </span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#fbbf24' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                                2 - 4 días (Alerta)
+                            </span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#34d399' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981' }}></span>
+                                &gt; 4 días (Óptimo)
+                            </span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#f87171' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '2px', background: '#ef4444' }}></span>
+                                &gt; 100% Nivel (Sobrellenado)
+                            </span>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     const limpiarFormulario = () => {
         setFechaPedido(fechaServidor || '');
         setSelectedTransporte('');
         setSelectedPipa('');
         setComp({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+        setEsCompartido(false);
+        setSelectedEstacion2('');
+        setComp2({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
         setPrevisualizar(true);
         setPedidoTemp({ id: null });
     };
@@ -878,20 +1325,53 @@ export default function PedidosCombustible() {
 
     const handleGuardarPedido = async () => {
         if (!fechaPedido || !selectedTransporte || !selectedEstacion) return addToast('Faltan campos obligatorios', 'error');
+        if (esCompartido && !selectedEstacion2) {
+            return addToast('Debe seleccionar la estación con la cual se comparte el viaje', 'warning');
+        }
+        if (esCompartido && selectedEstacion === selectedEstacion2) {
+            return addToast('La estación compañera debe ser diferente a la estación actual', 'warning');
+        }
+
+        const d1 = parseNum(comp.D.val);
+        const r1 = parseNum(comp.R.val);
+        const s1 = parseNum(comp.S.val);
+        const i1 = parseNum(comp.I.val);
+        const d2 = esCompartido ? parseNum(comp2.D.val) : 0;
+        const r2 = esCompartido ? parseNum(comp2.R.val) : 0;
+        const s2 = esCompartido ? parseNum(comp2.S.val) : 0;
+        const i2 = esCompartido ? parseNum(comp2.I.val) : 0;
+
+        if ((d1 + r1 + s1 + i1 + d2 + r2 + s2 + i2) <= 0) {
+            return addToast('Debe ingresar al menos un galonaje a pedir', 'warning');
+        }
+
         try {
-            await api.post('/operaciones/pedidos/agregar', {
+            const res = await api.post('/operaciones/pedidos/agregar', {
                 id_pedido: pedidoTemp.id,
                 id_estacion: selectedEstacion,
                 fecha: fechaPedido,
                 id_transportista: selectedTransporte,
-                diesel: parseNum(comp.D.val), regular: parseNum(comp.R.val), super: parseNum(comp.S.val), iondiesel: parseNum(comp.I.val),
-                id_calibracion_diesel: selectedPipa || null, id_calibracion_regular: null,
-                id_calibracion_super: null, id_calibracion_ion: null
+                diesel: d1,
+                regular: r1,
+                super: s1,
+                iondiesel: i1,
+                id_calibracion_diesel: selectedPipa || null,
+                id_calibracion_regular: null,
+                id_calibracion_super: null,
+                id_calibracion_ion: null,
+                es_compartido: esCompartido,
+                id_estacion_compartida: esCompartido ? selectedEstacion2 : null,
+                diesel_compartido: d2,
+                regular_compartido: r2,
+                super_compartido: s2,
+                iondiesel_compartido: i2
             });
-            addToast('Pedido Guardado', 'success');
+            addToast(res.data?.message || 'Pedido Guardado', 'success');
             fetchOperationalData(selectedEstacion);
             limpiarFormulario();
-        } catch (e) { addToast("Error agregando pedido", "error"); }
+        } catch (e) {
+            addToast(e.response?.data?.message || "Error agregando pedido", "error");
+        }
     };
 
     const handleEliminarPedido = async (id) => {
@@ -1522,38 +2002,145 @@ export default function PedidosCombustible() {
 
                             {renderCompartments()}
 
+                            {/* Opción Viaje Compartido / Multiparada */}
+                            <div style={{
+                                padding: '0.5rem 0.65rem',
+                                background: esCompartido ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                                border: `1px solid ${esCompartido ? 'rgba(59, 130, 246, 0.35)' : 'var(--border)'}`,
+                                borderRadius: '6px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.45rem',
+                                marginBottom: '0.5rem'
+                            }}>
+                                <label style={{ fontSize: '0.78rem', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', userSelect: 'none', color: esCompartido ? '#38bdf8' : 'var(--text-color)' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={esCompartido}
+                                        onChange={e => setEsCompartido(e.target.checked)}
+                                        style={{ width: '16px', height: '16px', accentColor: 'var(--primary)' }}
+                                    />
+                                    <span>🤝 ¿Compartir viaje con otra estación? (Multiparada)</span>
+                                </label>
+
+                                {esCompartido && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.2rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                            <span style={{ fontSize: '0.73rem', fontWeight: 'bold', width: '90px', color: 'var(--text-muted)' }}>ESTACIÓN 2:</span>
+                                            <select
+                                                value={selectedEstacion2}
+                                                onChange={e => setSelectedEstacion2(e.target.value)}
+                                                style={{ flex: '1 1 180px', minWidth: '160px', padding: '0.35rem', fontSize: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', borderRadius: '4px', height: '36px' }}
+                                            >
+                                                <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Estación Compañera --</option>
+                                                {estaciones.filter(e => e.id_empresa !== selectedEstacion).map(e => (
+                                                    <option key={e.id_empresa} value={e.id_empresa} style={{ background: '#1e293b', color: 'white' }}>
+                                                        {e.titulo}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
                             {/* Inputs por Combustible */}
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>DIESEL</span>
-                                <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>REGULAR</span>
-                                <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>SUPER</span>
-                                <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px' }}>IONDIESEL</span>
-                                <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
-                                    style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
-                            </div>
+                            {!esCompartido ? (
+                                <>
+                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#f59e0b' }}>DIESEL</span>
+                                        <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#10b981' }}>REGULAR</span>
+                                        <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#ef4444' }}>SUPER</span>
+                                        <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#8b5cf6' }}>IONDIESEL</span>
+                                        <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
+                                    </div>
+                                </>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.12)', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '0.35rem', fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>
+                                        <span>PRODUCTO</span>
+                                        <span style={{ textAlign: 'center', color: 'var(--primary)' }} title={estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Estación 1'}>
+                                            E1: {estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo ? (estaciones.find(e => e.id_empresa === selectedEstacion).titulo.length > 9 ? estaciones.find(e => e.id_empresa === selectedEstacion).titulo.slice(0, 9) + '..' : estaciones.find(e => e.id_empresa === selectedEstacion).titulo) : 'Actual'}
+                                        </span>
+                                        <span style={{ textAlign: 'center', color: '#38bdf8' }} title={estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo || 'Estación 2'}>
+                                            E2: {estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo ? (estaciones.find(e => e.id_empresa === selectedEstacion2).titulo.length > 9 ? estaciones.find(e => e.id_empresa === selectedEstacion2).titulo.slice(0, 9) + '..' : estaciones.find(e => e.id_empresa === selectedEstacion2).titulo) : 'Compañera'}
+                                        </span>
+                                    </div>
+
+                                    {/* DIESEL */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#f59e0b' }}>DIESEL</span>
+                                        <input type="number" min="0" step="1" placeholder="E1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                        <input type="number" min="0" step="1" placeholder="E2" value={comp2.D.val || ''} onChange={e => setComp2({...comp2, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.35)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                    </div>
+
+                                    {/* REGULAR */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#10b981' }}>REGULAR</span>
+                                        <input type="number" min="0" step="1" placeholder="E1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                        <input type="number" min="0" step="1" placeholder="E2" value={comp2.R.val || ''} onChange={e => setComp2({...comp2, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.35)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                    </div>
+
+                                    {/* SUPER */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#ef4444' }}>SUPER</span>
+                                        <input type="number" min="0" step="1" placeholder="E1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                        <input type="number" min="0" step="1" placeholder="E2" value={comp2.S.val || ''} onChange={e => setComp2({...comp2, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.35)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                    </div>
+
+                                    {/* IONDIESEL */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#8b5cf6' }}>IONDIESEL</span>
+                                        <input type="number" min="0" step="1" placeholder="E1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                        <input type="number" min="0" step="1" placeholder="E2" value={comp2.I.val || ''} onChange={e => setComp2({...comp2, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
+                                            style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.35)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
+                                    </div>
+
+                                    {/* Resumen de Subtotales por Estación */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', borderTop: '1px solid var(--border)', paddingTop: '0.35rem', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                        <span>Subtotal E1: <b style={{ color: 'var(--text-color)' }}>{numFmt(totalEstacion1)} Gal</b></span>
+                                        <span>Subtotal E2: <b style={{ color: '#38bdf8' }}>{numFmt(totalEstacion2)} Gal</b></span>
+                                    </div>
+                                </div>
+                            )}
 
                             <RenderPipaRecommendation />
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem', borderTop: '2px solid var(--border)', paddingTop: '0.75rem' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>TOTAL PIPA</span>
+                                    <div>
+                                        <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>TOTAL PIPA</div>
+                                        {esCompartido && (
+                                            <div style={{ fontSize: '0.68rem', color: '#38bdf8' }}>
+                                                (E1: {numFmt(totalEstacion1)} + E2: {numFmt(totalEstacion2)})
+                                            </div>
+                                        )}
+                                    </div>
                                     <input type="text" readOnly value={numFmt(totalPipa)} style={{ flex: '1 1 120px', maxWidth: '160px', textAlign: 'right', padding: '0.35rem', fontSize: '1rem', fontWeight: 'bold', background: 'var(--bg-active)', color: 'var(--primary)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }} />
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap' }}>
                                     <button className="btn-primary" onClick={handleGuardarPedido} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem', flex: '1 1 auto' }}>
-                                        {pedidoTemp.id ? 'ACTUALIZAR PEDIDO' : 'AGREGAR PEDIDO'}
+                                        {pedidoTemp.id ? (esCompartido ? 'ACTUALIZAR VIAJE COMPARTIDO' : 'ACTUALIZAR PEDIDO') : (esCompartido ? 'AGREGAR VIAJE COMPARTIDO' : 'AGREGAR PEDIDO')}
                                     </button>
                                     <button className="btn-secondary" onClick={limpiarFormulario} style={{ fontSize: '0.75rem', padding: '0.45rem 0.85rem', flex: '1 1 auto' }}>
                                         CANCELAR
@@ -1564,138 +2151,151 @@ export default function PedidosCombustible() {
 
                         {/* Columna Derecha: Resumen Operacional + Pedidos Programados */}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 0 }}>
-                            {/* Matriz de Resultados Operacionales */}
-                            <div className="card glass table-responsive" style={{ padding: 0 }}>
-                                <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--primary)', textAlign: 'center', background: 'rgba(37,99,235,0.1)', padding: '0.5rem', fontWeight: 'bold' }}>
-                                    RESUMEN DE DATOS OPERACIONALES ({estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Seleccione Estación'})
-                                </h3>
-                                <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
-                                    <thead>
-                                        <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
-                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>METRICA</th>
-                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>DIESEL</th>
-                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>REGULAR</th>
-                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>SUPER</th>
-                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', borderLeft: '2px solid var(--border)' }}>ION</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr>
-                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>CAPACIDAD</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.capacidad)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.capacidad)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.capacidad)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.capacidad)}</td>
-                                        </tr>
-                                        <tr>
-                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>INVENTARIO</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.inventario)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.inventario)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.inventario)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.inventario)}</td>
-                                        </tr>
-                                        <tr>
-                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>VENTA PROMEDIO</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.promedio)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.promedio)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.promedio)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.promedio)}</td>
-                                        </tr>
-                                        <tr style={{ background: 'rgba(37,99,235,0.05)' }}>
-                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}>PROGRAMADOS</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)' }}>{numFmt(matrix.D.programado)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.R.programado)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.S.programado)}</td>
-                                            <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{numFmt(matrix.I.programado)}</td>
-                                        </tr>
-                                        <tr>
-                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN DIAS</td>
-                                            {['D', 'R', 'S', 'I'].map(t => {
-                                                const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
-                                                return (
-                                                    <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
-                                                        <div style={{
-                                                            display: 'inline-flex',
-                                                            justifyContent: 'center',
-                                                            alignItems: 'center',
-                                                            minWidth: '85px',
-                                                            padding: '0.2rem 0.4rem',
-                                                            background: 'var(--bg-active)',
-                                                            borderRadius: '4px',
-                                                            border: '1px solid var(--border)',
-                                                            fontWeight: 'bold',
-                                                            fontSize: '0.85rem',
-                                                            color: 'var(--text-color)'
-                                                        }}>
-                                                            {matrix[t].duracionDias.toFixed(1)}
-                                                        </div>
-                                                    </td>
-                                                );
-                                            })}
-                                        </tr>
-                                        <tr>
-                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>DURACION EN FECHA</td>
-                                            {['D', 'R', 'S', 'I'].map(t => {
-                                                const m = matrix[t];
-                                                const borderLeft = t === 'D' ? '2px solid var(--primary)' : '2px solid var(--border)';
-                                                const hasVal = m.duracionDias > 0 && m.duracionFecha;
-                                                return (
-                                                    <td key={t} style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft }}>
-                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
-                                                            <div style={{
-                                                                minWidth: '85px',
-                                                                minHeight: '24px',
-                                                                padding: '0.2rem 0.35rem',
-                                                                background: 'var(--bg-active)',
-                                                                borderRadius: '4px',
-                                                                border: '1px solid var(--border)',
-                                                                fontSize: '0.75rem',
-                                                                fontWeight: 'bold',
-                                                                color: hasVal ? 'var(--text-color)' : 'transparent',
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                justifyContent: 'center'
-                                                            }}>
-                                                                {hasVal ? fmtDateArray(m.duracionFecha) : '\u00A0'}
-                                                            </div>
-                                                            <div style={{
-                                                                minWidth: '85px',
-                                                                minHeight: '22px',
-                                                                padding: '0.15rem 0.35rem',
-                                                                background: 'var(--bg-active)',
-                                                                borderRadius: '4px',
-                                                                border: '1px solid var(--border)',
-                                                                fontSize: '0.7rem',
-                                                                fontWeight: 'bold',
-                                                                color: hasVal ? 'var(--primary)' : 'transparent',
-                                                                letterSpacing: '0.03em',
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                justifyContent: 'center'
-                                                            }}>
-                                                                {hasVal ? m.duracionDiaNom : '\u00A0'}
-                                                            </div>
-                                                        </div>
-                                                    </td>
-                                                );
-                                            })}
-                                        </tr>
-                                        <tr style={{ background: 'rgba(16,185,129,0.08)' }}>
-                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#10b981' }}>NIVEL TANQUE</td>
-                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--primary)', fontWeight: 'bold' }}>{pctFmt(matrix.D.nivelTanque)}</td>
-                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.R.nivelTanque)}</td>
-                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.S.nivelTanque)}</td>
-                                            <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)', fontWeight: 'bold' }}>{pctFmt(matrix.I.nivelTanque)}</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
+                            {/* Selector de Vista Operacional Multiparada */}
+                            {esCompartido && selectedEstacion2 && (
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '0.5rem',
+                                    padding: '0.45rem 0.75rem',
+                                    borderRadius: '6px',
+                                    background: 'rgba(59, 130, 246, 0.08)',
+                                    border: '1px solid rgba(59, 130, 246, 0.25)',
+                                    flexWrap: 'wrap'
+                                }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 'bold', color: '#38bdf8' }}>
+                                        <span>🤝 VISTA MULTIPARADA:</span>
+                                        <span style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>
+                                            Monitoreo simultáneo de datos operacionales
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'inline-flex', gap: '0.25rem', background: 'var(--bg-color)', padding: '2px', borderRadius: '5px', border: '1px solid var(--border)' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setResumenViewMode('ambas')}
+                                            style={{
+                                                padding: '0.25rem 0.6rem',
+                                                fontSize: '0.72rem',
+                                                fontWeight: 'bold',
+                                                borderRadius: '4px',
+                                                border: 'none',
+                                                cursor: 'pointer',
+                                                background: resumenViewMode === 'ambas' ? 'var(--primary)' : 'transparent',
+                                                color: resumenViewMode === 'ambas' ? '#fff' : 'var(--text-muted)'
+                                            }}
+                                        >
+                                            👁️ Ver Ambas
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setResumenViewMode('estacion1')}
+                                            style={{
+                                                padding: '0.25rem 0.6rem',
+                                                fontSize: '0.72rem',
+                                                fontWeight: 'bold',
+                                                borderRadius: '4px',
+                                                border: 'none',
+                                                cursor: 'pointer',
+                                                background: resumenViewMode === 'estacion1' ? 'var(--primary)' : 'transparent',
+                                                color: resumenViewMode === 'estacion1' ? '#fff' : 'var(--text-muted)'
+                                            }}
+                                        >
+                                            🏢 E1 ({estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo?.slice(0, 10) || 'Actual'})
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setResumenViewMode('estacion2')}
+                                            style={{
+                                                padding: '0.25rem 0.6rem',
+                                                fontSize: '0.72rem',
+                                                fontWeight: 'bold',
+                                                borderRadius: '4px',
+                                                border: 'none',
+                                                cursor: 'pointer',
+                                                background: resumenViewMode === 'estacion2' ? '#0ea5e9' : 'transparent',
+                                                color: resumenViewMode === 'estacion2' ? '#fff' : 'var(--text-muted)'
+                                            }}
+                                        >
+                                            🤝 E2 ({estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo?.slice(0, 10) || 'Compañera'})
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Tabla Operacional Estación 1 */}
+                            {(resumenViewMode === 'ambas' || resumenViewMode === 'estacion1' || !esCompartido || !selectedEstacion2) && (
+                                renderOperationalTable(
+                                    estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Seleccione Estación',
+                                    matrix,
+                                    false,
+                                    isLoading,
+                                    !esCompartido || !selectedEstacion2 || resumenViewMode !== 'ambas'
+                                )
+                            )}
+
+                            {/* Tabla Operacional Estación 2 (Compañera) */}
+                            {esCompartido && selectedEstacion2 && (resumenViewMode === 'ambas' || resumenViewMode === 'estacion2') && (
+                                renderOperationalTable(
+                                    estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo || 'Estación Compañera',
+                                    matrix2,
+                                    true,
+                                    isLoading2,
+                                    true
+                                )
+                            )}
 
                             {/* Tabla de Programados */}
                             <div className="card glass table-responsive" style={{ padding: 0 }}>
-                                <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', background: 'var(--bg-active)', padding: '0.5rem 1rem', borderBottom: '1px solid var(--border)' }}>
-                                    PEDIDOS PROGRAMADOS POR ESTACION ({programados.length})
-                                </h3>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-active)', padding: '0.45rem 0.85rem', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                    <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <span>PEDIDOS PROGRAMADOS:</span>
+                                        <span style={{ color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#38bdf8' : 'var(--primary)' }}>
+                                            {(esCompartido && selectedEstacion2 && programadosTab === 'estacion2') 
+                                                ? (estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo || 'Estación 2') 
+                                                : (estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Estación 1')}
+                                        </span>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            ({((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).length})
+                                        </span>
+                                    </h3>
+                                    {esCompartido && selectedEstacion2 && (
+                                        <div style={{ display: 'inline-flex', gap: '0.2rem', background: 'var(--bg-color)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border)' }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => setProgramadosTab('estacion1')}
+                                                style={{
+                                                    padding: '0.2rem 0.5rem',
+                                                    fontSize: '0.7rem',
+                                                    fontWeight: 'bold',
+                                                    borderRadius: '3px',
+                                                    border: 'none',
+                                                    cursor: 'pointer',
+                                                    background: programadosTab === 'estacion1' ? 'var(--primary)' : 'transparent',
+                                                    color: programadosTab === 'estacion1' ? '#fff' : 'var(--text-muted)'
+                                                }}
+                                            >
+                                                🏢 E1 ({programados.length})
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setProgramadosTab('estacion2')}
+                                                style={{
+                                                    padding: '0.2rem 0.5rem',
+                                                    fontSize: '0.7rem',
+                                                    fontWeight: 'bold',
+                                                    borderRadius: '3px',
+                                                    border: 'none',
+                                                    cursor: 'pointer',
+                                                    background: programadosTab === 'estacion2' ? '#0ea5e9' : 'transparent',
+                                                    color: programadosTab === 'estacion2' ? '#fff' : 'var(--text-muted)'
+                                                }}
+                                            >
+                                                🤝 E2 ({programados2.length})
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                                 <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
                                     <thead>
                                         <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg-color)' }}>
@@ -1709,7 +2309,7 @@ export default function PedidosCombustible() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {programados.map(p => (
+                                        {((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).map(p => (
                                             <tr 
                                                 key={p.id_pedido} 
                                                 style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
@@ -1717,31 +2317,38 @@ export default function PedidosCombustible() {
                                                 title="Doble clic para editar / cargar en el formulario"
                                             >
                                                 <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
-                                                <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>{p.numero || p.id_pedido}</td>
+                                                <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>
+                                                    <div>{p.numero || p.id_pedido}</div>
+                                                    {p.nombre_estacion_compartida && (
+                                                        <span style={{ fontSize: '0.66rem', padding: '0.1rem 0.35rem', background: 'rgba(59, 130, 246, 0.15)', color: '#38bdf8', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }} title={`Viaje compartido con ${p.nombre_estacion_compartida}`}>
+                                                            🤝 {p.nombre_estacion_compartida}
+                                                        </span>
+                                                    )}
+                                                </td>
                                                 <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.diesel)}</td>
                                                 <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.regular)}</td>
                                                 <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.super)}</td>
                                                 <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(p.iondiesel)}</td>
                                                 <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                     <div style={{ display: 'inline-flex', gap: '0.35rem', justifyContent: 'center' }}>
-                                                        <button onClick={() => { setPedidoTemp({ id: p.id_pedido }); setShowConfirmModal(true); }} className="btn-primary" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>CONFIRMAR</button>
+                                                        <button onClick={() => { setPedidoTemp({ id: p.id_pedido, nombre_estacion_compartida: p.nombre_estacion_compartida }); setShowConfirmModal(true); }} className="btn-primary" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>CONFIRMAR</button>
                                                         <button onClick={() => handleEliminarPedido(p.id_pedido)} className="btn-secondary" style={{ padding: '3px 8px', fontSize: '0.68rem', color: '#ef4444' }}>ANULAR</button>
                                                     </div>
                                                 </td>
                                             </tr>
                                         ))}
-                                        {programados.length === 0 && (
+                                        {((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).length === 0 && (
                                             <tr><td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>No hay pedidos programados para la estación y fecha seleccionada.</td></tr>
                                         )}
                                     </tbody>
-                                    {programados.length > 0 && (
+                                    {((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).length > 0 && (
                                         <tfoot>
                                             <tr style={{ background: 'rgba(37,99,235,0.05)', borderTop: '2px solid var(--border)', fontWeight: 'bold' }}>
-                                                <td colSpan="2" style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)' }}>TOTAL PROGRAMADO</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.D.programado)}</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.R.programado)}</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.S.programado)}</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(matrix.I.programado)}</td>
+                                                <td colSpan="2" style={{ padding: '0.45rem 0.5rem', color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#38bdf8' : 'var(--primary)' }}>TOTAL PROGRAMADO</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).D.programado)}</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).R.programado)}</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).S.programado)}</td>
+                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).I.programado)}</td>
                                                 <td></td>
                                             </tr>
                                         </tfoot>
@@ -2298,6 +2905,17 @@ export default function PedidosCombustible() {
             {/* MODAL 5: CONFIRMAR PEDIDO PROGRAMADO LOCAL */}
             <Modal open={showConfirmModal} onClose={() => setShowConfirmModal(false)} title="Confirmar Transacción">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {pedidoTemp.nombre_estacion_compartida && (
+                        <div style={{ padding: '0.6rem 0.8rem', background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.35)', borderRadius: '6px', fontSize: '0.78rem', color: '#60a5fa', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+                            <span style={{ fontSize: '1rem', lineHeight: 1 }}>🤝</span>
+                            <div>
+                                <b style={{ color: '#93c5fd' }}>Viaje Compartido / Multiparada:</b>
+                                <div style={{ marginTop: '0.2rem' }}>
+                                    Al confirmar con este número de pedido Puma, se confirmará automáticamente tanto la entrega de esta estación como la de <b>{pedidoTemp.nombre_estacion_compartida}</b>.
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>NÚMERO DE PEDIDO</label>
                         <input type="text" placeholder="Ingrese número de pedido" value={confirmData.numero_pedido} onChange={e=>setConfirmData({...confirmData, numero_pedido: e.target.value})} style={{ padding: '0.5rem', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border)', borderRadius: '4px', height: '36px' }} />

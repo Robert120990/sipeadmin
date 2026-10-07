@@ -355,17 +355,40 @@ router.get('/operaciones/pedidos/promedios/:id_empresa/:fecha', authenticateToke
     }
 });
 
+// Asegurar columnas de viaje compartido en web_pedidos_temp
+let sharedColsChecked = false;
+async function ensureSharedColumns(db) {
+    if (sharedColsChecked) return;
+    try {
+        await db.query("ALTER TABLE web_pedidos_temp ADD COLUMN id_estacion_compartida VARCHAR(50) NULL");
+    } catch (e) { /* columna ya existe */ }
+    try {
+        await db.query("ALTER TABLE web_pedidos_temp ADD COLUMN id_pedido_compartido INT NULL");
+    } catch (e) { /* columna ya existe */ }
+    sharedColsChecked = true;
+}
+
 router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const { id_estacion, fecha } = req.params;
         const externalDb = await getExternalDb();
+        await ensureSharedColumns(externalDb);
         const query = `
-            SELECT fecha, numero, diesel, regular, super, iondiesel,
-                   IFNULL(id_carrier_local, id_transportista) as id_transportista,
-                   IFNULL(id_tanker_local, id_calibracion_diesel) as id_calibracion_diesel,
-                   id as id_pedido
-            FROM web_pedidos_temp 
-            WHERE id_estacion = ? AND fecha > ? ORDER BY fecha
+            SELECT t.fecha, t.numero, t.diesel, t.regular, t.super, t.iondiesel,
+                   IFNULL(t.id_carrier_local, t.id_transportista) as id_transportista,
+                   IFNULL(t.id_tanker_local, t.id_calibracion_diesel) as id_calibracion_diesel,
+                   t.id as id_pedido,
+                   t.id_estacion_compartida,
+                   t.id_pedido_compartido,
+                   e2.titulo as nombre_estacion_compartida,
+                   t2.diesel as diesel_compartido,
+                   t2.regular as regular_compartido,
+                   t2.super as super_compartido,
+                   t2.iondiesel as iondiesel_compartido
+            FROM web_pedidos_temp t
+            LEFT JOIN web_consolidado e2 ON t.id_estacion_compartida = e2.id_empresa AND e2.grupo = 'ESTACION'
+            LEFT JOIN web_pedidos_temp t2 ON t.id_pedido_compartido = t2.id
+            WHERE t.id_estacion = ? AND t.fecha > ? ORDER BY t.fecha
         `;
         const [rows] = await externalDb.query(query, [id_estacion, fecha]);
         res.json(rows);
@@ -376,12 +399,76 @@ router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateT
 
 router.post('/operaciones/pedidos/agregar', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
-        const { id_pedido, id_estacion, fecha, id_transportista, diesel, regular, super: s, iondiesel, id_calibracion_diesel } = req.body;
+        const {
+            id_pedido,
+            id_estacion,
+            fecha,
+            id_transportista,
+            diesel,
+            regular,
+            super: s,
+            iondiesel,
+            id_calibracion_diesel,
+            es_compartido,
+            id_estacion_compartida,
+            diesel_compartido,
+            regular_compartido,
+            super_compartido,
+            iondiesel_compartido
+        } = req.body;
         const externalDb = await getExternalDb();
+        await ensureSharedColumns(externalDb);
+
         if (id_pedido) {
-            await externalDb.query(`UPDATE web_pedidos_temp SET fecha=?, id_carrier_local=?, diesel=?, regular=?, super=?, iondiesel=?, id_tanker_local=? WHERE id=?`, 
-                [fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, id_pedido]);
+            await externalDb.query(`UPDATE web_pedidos_temp SET fecha=?, id_carrier_local=?, diesel=?, regular=?, super=?, iondiesel=?, id_tanker_local=?, id_estacion_compartida=? WHERE id=?`, 
+                [fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, es_compartido ? id_estacion_compartida : null, id_pedido]);
+
+            // Sincronizar fecha, pipa y cantidades con el pedido compañero si existe
+            const [curr] = await externalDb.query("SELECT id_pedido_compartido FROM web_pedidos_temp WHERE id = ?", [id_pedido]);
+            if (curr.length && curr[0].id_pedido_compartido) {
+                if (es_compartido) {
+                    await externalDb.query(`UPDATE web_pedidos_temp SET fecha=?, id_carrier_local=?, id_tanker_local=?, diesel=?, regular=?, super=?, iondiesel=?, id_estacion_compartida=? WHERE id=?`, 
+                        [fecha, id_transportista, id_calibracion_diesel || null, diesel_compartido || 0, regular_compartido || 0, super_compartido || 0, iondiesel_compartido || 0, id_estacion, curr[0].id_pedido_compartido]);
+                } else {
+                    await externalDb.query("DELETE FROM web_pedidos_temp WHERE id = ?", [curr[0].id_pedido_compartido]);
+                    await externalDb.query("UPDATE web_pedidos_temp SET id_pedido_compartido = NULL, id_estacion_compartida = NULL WHERE id = ?", [id_pedido]);
+                }
+            } else if (es_compartido && id_estacion_compartida) {
+                const [res2] = await externalDb.query(`
+                    INSERT INTO web_pedidos_temp 
+                    (id_estacion, fecha, id_carrier_local, diesel, regular, super, iondiesel, id_tanker_local, id_estacion_compartida, id_pedido_compartido) 
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                `, [id_estacion_compartida, fecha, id_transportista, diesel_compartido || 0, regular_compartido || 0, super_compartido || 0, iondiesel_compartido || 0, id_calibracion_diesel || null, id_estacion, id_pedido]);
+                await externalDb.query("UPDATE web_pedidos_temp SET id_pedido_compartido = ?, id_estacion_compartida = ? WHERE id = ?", [res2.insertId, id_estacion_compartida, id_pedido]);
+            }
         } else {
+            if (es_compartido && id_estacion_compartida) {
+                const totalComp = Number(diesel_compartido || 0) + Number(regular_compartido || 0) + Number(super_compartido || 0) + Number(iondiesel_compartido || 0);
+                if (totalComp > 0) {
+                    // 1. Insertar entrega para la estación principal
+                    const [res1] = await externalDb.query(`
+                        INSERT INTO web_pedidos_temp 
+                        (id_estacion, fecha, id_carrier_local, diesel, regular, super, iondiesel, id_tanker_local, id_estacion_compartida) 
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                    `, [id_estacion, fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null, id_estacion_compartida]);
+                    const id1 = res1.insertId;
+
+                    // 2. Insertar entrega para la estación compañera
+                    const [res2] = await externalDb.query(`
+                        INSERT INTO web_pedidos_temp 
+                        (id_estacion, fecha, id_carrier_local, diesel, regular, super, iondiesel, id_tanker_local, id_estacion_compartida, id_pedido_compartido) 
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    `, [id_estacion_compartida, fecha, id_transportista, diesel_compartido || 0, regular_compartido || 0, super_compartido || 0, iondiesel_compartido || 0, id_calibracion_diesel || null, id_estacion, id1]);
+                    const id2 = res2.insertId;
+
+                    // 3. Vincular id de la segunda entrega en la principal
+                    await externalDb.query("UPDATE web_pedidos_temp SET id_pedido_compartido = ? WHERE id = ?", [id2, id1]);
+
+                    return res.json({ success: true, message: '¡Viaje Compartido programado exitosamente para ambas estaciones!' });
+                }
+            }
+
+            // Pedido regular de una sola estación
             await externalDb.query(`INSERT INTO web_pedidos_temp (id_estacion, fecha, id_carrier_local, diesel, regular, super, iondiesel, id_tanker_local) VALUES (?,?,?,?,?,?,?,?)`, 
                 [id_estacion, fecha, id_transportista, diesel || 0, regular || 0, s || 0, iondiesel || 0, id_calibracion_diesel || null]);
         }
@@ -392,8 +479,20 @@ router.post('/operaciones/pedidos/agregar', authenticateToken, requirePermission
 router.delete('/operaciones/pedidos/anular/:id', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
+        await ensureSharedColumns(externalDb);
         const [ex] = await externalDb.query("SELECT count(id_origen) as cont FROM web_pedidos WHERE id_origen = ?", [req.params.id]);
         if (ex[0].cont > 0) return res.status(400).json({ message: "Pedido Confirmado. No Puede Anular." });
+
+        // Si tiene pedido compartido vinculado, anular también el compañero si no está confirmado
+        const [row] = await externalDb.query("SELECT id_pedido_compartido FROM web_pedidos_temp WHERE id = ?", [req.params.id]);
+        if (row.length && row[0].id_pedido_compartido) {
+            const partnerId = row[0].id_pedido_compartido;
+            const [exPartner] = await externalDb.query("SELECT count(id_origen) as cont FROM web_pedidos WHERE id_origen = ?", [partnerId]);
+            if (!exPartner[0].cont) {
+                await externalDb.query("DELETE FROM web_pedidos_temp WHERE id = ?", [partnerId]);
+            }
+        }
+
         await externalDb.query("DELETE FROM web_pedidos_temp WHERE id = ?", [req.params.id]);
         res.json({ success: true, message: 'Pedido Anulado' });
     } catch (error) { sendSafeError(res, error, 'Error anulando pedido'); }
@@ -403,14 +502,26 @@ router.post('/operaciones/pedidos/confirmar', authenticateToken, requirePermissi
     try {
         const { id_pedido, numero, id_estacion, forma_pago, costo_d, costo_s, costo_r, costo_i } = req.body;
         const externalDb = await getExternalDb();
+        await ensureSharedColumns(externalDb);
         const [exCheck] = await externalDb.query("SELECT count(id_origen) as cont FROM web_pedidos WHERE id_origen = ?", [id_pedido]);
         if (exCheck[0].cont > 0) return res.status(400).json({ message: "Pedido Confirmado. No Puede Volver a Confirmar." });
         const [tempReq] = await externalDb.query("SELECT * FROM web_pedidos_temp WHERE id = ?", [id_pedido]);
         if (!tempReq.length) return res.status(404).json({ message: "Pedido temporal no encontrado." });
         const p = tempReq[0];
+
+        // Verificar si tiene entrega compañera vinculada
+        let partnerReq = null;
+        if (p.id_pedido_compartido) {
+            const [pRows] = await externalDb.query("SELECT * FROM web_pedidos_temp WHERE id = ?", [p.id_pedido_compartido]);
+            if (pRows.length) partnerReq = pRows[0];
+        }
+
         const nTotal = Number(p.diesel || 0) + Number(p.regular || 0) + Number(p.super || 0) + Number(p.iondiesel || 0);
-        const pipa = nTotal >= 8000 ? 8000 : 4000;
-        const fleteCol = nTotal >= 8000 ? "pipa8000" : "pipa4000";
+        const partnerTotal = partnerReq ? (Number(partnerReq.diesel || 0) + Number(partnerReq.regular || 0) + Number(partnerReq.super || 0) + Number(partnerReq.iondiesel || 0)) : 0;
+        const granTotalViaje = nTotal + partnerTotal;
+
+        const pipa = granTotalViaje >= 8000 ? 8000 : 4000;
+        const fleteCol = granTotalViaje >= 8000 ? "pipa8000" : "pipa4000";
         let flete = 0.0;
         try {
             const [fRows] = await externalDb.query(`SELECT ${fleteCol} as cost FROM web_fletes WHERE id_estacion = ? AND id_transportista = ?`, [id_estacion, p.id_transportista || p.id_carrier_local]);
@@ -423,14 +534,22 @@ router.post('/operaciones/pedidos/confirmar', authenticateToken, requirePermissi
             const [exNum] = await connection.query("SELECT count(numero) as c FROM web_pedidos WHERE numero = ?", [numero]);
             if (exNum[0].c > 0) {
                 await connection.query("UPDATE web_pedidos SET p_diesel = p_diesel + ?, p_regular = p_regular + ?, p_super = p_super + ?, p_ion = p_ion + ?, compartido = ? WHERE numero = ?", 
-                    [p.diesel, p.regular, p.super, p.iondiesel, nTotal, numero]);
+                    [p.diesel, p.regular, p.super, p.iondiesel, granTotalViaje, numero]);
             } else {
-                await connection.query(`INSERT INTO web_pedidos (fecha, numero, id_estacion, forma_pago, p_diesel, p_regular, p_super, p_ion, id_carrier_local, id_tanker_local, flete, pipa, costo_d, costo_s, costo_r, costo_i, id_origen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, 
-                    [cDate, numero, id_estacion, forma_pago, p.diesel, p.regular, p.super, p.iondiesel, p.id_carrier_local, p.id_tanker_local, flete, pipa, costo_d || 0, costo_s || 0, costo_r || 0, costo_i || 0, id_pedido]);
+                await connection.query(`INSERT INTO web_pedidos (fecha, numero, id_estacion, forma_pago, p_diesel, p_regular, p_super, p_ion, id_carrier_local, id_tanker_local, flete, pipa, costo_d, costo_s, costo_r, costo_i, id_origen, compartido) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, 
+                    [cDate, numero, id_estacion, forma_pago, p.diesel, p.regular, p.super, p.iondiesel, p.id_carrier_local, p.id_tanker_local, flete, pipa, costo_d || 0, costo_s || 0, costo_r || 0, costo_i || 0, id_pedido, partnerReq ? granTotalViaje : 0]);
             }
             await connection.query("UPDATE web_pedidos_temp SET numero = ? WHERE id = ?", [numero, id_pedido]);
+
+            // Si hay pedido compartido vinculado, confirmarlo también con el mismo número de orden del portal
+            if (partnerReq) {
+                await connection.query("UPDATE web_pedidos_temp SET numero = ? WHERE id = ?", [numero, partnerReq.id]);
+                await connection.query("UPDATE web_pedidos SET p_diesel = p_diesel + ?, p_regular = p_regular + ?, p_super = p_super + ?, p_ion = p_ion + ?, compartido = ? WHERE numero = ?", 
+                    [partnerReq.diesel, partnerReq.regular, partnerReq.super, partnerReq.iondiesel, granTotalViaje, numero]);
+            }
+
             await connection.commit();
-            res.json({ success: true, message: 'Pedido Confirmado y Creado!' });
+            res.json({ success: true, message: partnerReq ? '¡Viaje Compartido confirmado exitosamente para ambas estaciones!' : 'Pedido Confirmado y Creado!' });
         } catch(errTransaction) {
             await connection.rollback();
             throw errTransaction;
