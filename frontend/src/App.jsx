@@ -54,7 +54,8 @@ import {
     Tareas,
     ConsultaCambiosGithub,
     PlanillasRRHH,
-    ConfiguracionTema
+    ConfiguracionTema,
+    PedidosProgramadosConsulta
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -108,6 +109,7 @@ function App() {
                                     <Route path="consultas/estaciones/precios" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios"><PreciosEstacion /></PermissionRoute>} />
                                     <Route path="consultas/estaciones/precios-competencia" element={<PermissionRoute pathKey="/dashboard/consultas/estaciones/precios-competencia"><ConsultasPreciosCompetencia /></PermissionRoute>} />
                                     <Route path="operaciones/pedidos" element={<PermissionRoute pathKey="/dashboard/operaciones/pedidos"><PedidosCombustible /></PermissionRoute>} />
+                                    <Route path="operaciones/pedidos-programados" element={<PermissionRoute pathKey="/dashboard/operaciones/pedidos-programados"><PedidosProgramadosConsulta /></PermissionRoute>} />
                                     <Route path="operaciones/recordatorios" element={<PermissionRoute pathKey="/dashboard/operaciones/recordatorios"><ControlRecordatorios /></PermissionRoute>} />
                                     <Route path="operaciones/tareas" element={<PermissionRoute pathKey="/dashboard/operaciones/tareas"><Tareas /></PermissionRoute>} />
                                     <Route path="bancos/reportes/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />

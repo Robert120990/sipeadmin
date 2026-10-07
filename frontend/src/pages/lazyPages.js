@@ -45,3 +45,4 @@ export const Tareas = lazy(() => import('./Tareas'));
 export const ConsultaCambiosGithub = lazy(() => import('./ConsultaCambiosGithub'));
 export const PlanillasRRHH = lazy(() => import('./PlanillasRRHH'));
 export const ConfiguracionTema = lazy(() => import('./ConfiguracionTema'));
+export const PedidosProgramadosConsulta = lazy(() => import('./PedidosProgramadosConsulta'));

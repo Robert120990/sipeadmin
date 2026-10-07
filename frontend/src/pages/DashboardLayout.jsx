@@ -53,7 +53,8 @@ import {
     EstrategiaCreditos,
     Tareas,
     ConsultaCambiosGithub,
-    PlanillasRRHH
+    PlanillasRRHH,
+    PedidosProgramadosConsulta
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -139,6 +140,7 @@ export default function DashboardLayout() {
         '/dashboard/consultas/estaciones/precios': <PreciosEstacion />,
         '/dashboard/consultas/estaciones/precios-competencia': <ConsultasPreciosCompetencia />,
         '/dashboard/operaciones/pedidos': <PedidosCombustible />,
+        '/dashboard/operaciones/pedidos-programados': <PedidosProgramadosConsulta />,
         '/dashboard/operaciones/recordatorios': <ControlRecordatorios />,
         '/dashboard/operaciones/tareas': <Tareas />,
         '/dashboard/bancos/reportes/saldos-bancos': <Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." />,

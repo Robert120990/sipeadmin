@@ -36,6 +36,11 @@ export const operacionesMenu = [
         icon: Truck
     },
     {
+        name: 'Pedidos Programados',
+        path: '/dashboard/operaciones/pedidos-programados',
+        icon: ClipboardList
+    },
+    {
         name: 'Control de Pagos',
         path: '/dashboard/operaciones/recordatorios',
         icon: FileText

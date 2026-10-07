@@ -16,6 +16,7 @@ const vencimientosViewPerms = [
 const pedidosViewPerms = [
     'manage_pedidos',
     '/dashboard/operaciones/pedidos',
+    '/dashboard/operaciones/pedidos-programados',
     '/dashboard/estrategia/torre-control',
     '/dashboard/estrategia/combustible'
 ];
@@ -394,6 +395,324 @@ router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateT
         res.json(rows);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar pedidos programados'); 
+    }
+});
+
+router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
+    try {
+        const externalDb = await getExternalDb();
+        const localDb = getDb();
+        await ensureSharedColumns(externalDb);
+
+        // Fetch carriers and tankers from local DB for human-readable labels
+        let carrierMap = {};
+        let tankerMap = {};
+        try {
+            const [carriers] = await localDb.query('SELECT id, name FROM carriers');
+            const [tankers] = await localDb.query('SELECT id, plate FROM tankers');
+            carrierMap = Object.fromEntries(carriers.map(c => [c.id, c.name]));
+            tankerMap = Object.fromEntries(tankers.map(t => [t.id, t.plate]));
+        } catch (e) {
+            console.warn('Error preloading carriers/tankers:', e.message);
+        }
+
+        // Determine fecha_actual and fecha_corte
+        const [fechaRows] = await externalDb.query("SELECT CURDATE() as fecha_actual, DATE_SUB(CURDATE(), INTERVAL 1 DAY) as fecha_ayer");
+        let fechaActual = fechaRows[0]?.fecha_actual;
+        let fechaAyer = fechaRows[0]?.fecha_ayer;
+        if (fechaActual instanceof Date) fechaActual = fechaActual.toISOString().split('T')[0];
+        if (fechaAyer instanceof Date) fechaAyer = fechaAyer.toISOString().split('T')[0];
+
+        // Stations
+        const [estaciones] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY id_empresa");
+
+        // Helper function to get tank readings for a station with fallback
+        const getTanques = async (id_empresa, fecha) => {
+            const maxFechaQ = `SELECT MAX(fecha) as last_date FROM lecturas_tanque WHERE id_empresa = ? AND fecha <= ?`;
+            const [maxRows] = await externalDb.query(maxFechaQ, [id_empresa, fecha]);
+            let targetDate = fecha;
+            if (maxRows.length && maxRows[0].last_date) {
+                targetDate = maxRows[0].last_date;
+                if (targetDate instanceof Date) targetDate = targetDate.toISOString().split('T')[0];
+            }
+            const query = `
+                SELECT 
+                    b.id_producto AS id_tanque, 
+                    SUM(b.lectura) AS lectura, 
+                    SUM(
+                        CASE 
+                            WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03')) THEN 5000
+                            WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01')) THEN 3000
+                            WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02')) THEN 
+                                IF(a.id LIKE '%-T', 6000, c.capacidad)
+                            ELSE COALESCE(c.capacidad, 0)
+                        END
+                    ) AS capacidad, 
+                    SUM(
+                        CASE 
+                            WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03')) THEN 86
+                            WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01')) THEN 86
+                            WHEN a.id_empresa = '008' AND (b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02')) THEN 
+                                IF(a.id LIKE '%-T', 105, c.galones_reserva)
+                            ELSE COALESCE(c.galones_reserva, 0)
+                        END
+                    ) AS reserva, 
+                    CASE 
+                        WHEN a.id_empresa = '008' THEN 
+                            CASE 
+                                WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                                WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                                WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                                ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                            END
+                        ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                    END AS tipo_combustible
+                FROM lecturas_tanque a 
+                INNER JOIN (
+                    SELECT id_empresa, fecha, MAX(turno) as max_turno 
+                    FROM lecturas_tanque 
+                    WHERE id_empresa = ? AND fecha = ?
+                    GROUP BY id_empresa, fecha
+                ) m ON a.id_empresa = m.id_empresa AND a.fecha = m.fecha AND a.turno = m.max_turno
+                INNER JOIN detalle_lecturas_tanque b ON a.id = b.id_lectura AND a.id_empresa = b.id_empresa 
+                LEFT JOIN tanques c ON b.codigo_producto = c.id AND b.id_empresa = c.id_empresa 
+                WHERE a.id_empresa = ? AND a.fecha = ?
+                GROUP BY 
+                    CASE 
+                        WHEN a.id_empresa = '008' THEN 
+                            CASE 
+                                WHEN b.descripcion LIKE '%DIESEL%' OR (a.id LIKE '%-T' AND b.codigo_producto = '03') THEN 'D'
+                                WHEN b.descripcion LIKE '%SUPER%' OR (a.id LIKE '%-T' AND b.codigo_producto = '01') THEN 'S'
+                                WHEN b.descripcion LIKE '%REGULAR%' OR (a.id LIKE '%-T' AND b.codigo_producto = '02') THEN 'R'
+                                ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                            END
+                        ELSE IF(c.tipo_combustible='M','I',c.tipo_combustible)
+                    END
+            `;
+            let [rows] = await externalDb.query(query, [id_empresa, targetDate, id_empresa, targetDate]);
+
+            if (!rows || rows.length === 0 || (id_empresa === '008' && !rows.some(r => r.tipo_combustible === 'D' && Number(r.capacidad) > 0))) {
+                try {
+                    const accountingDb = await getAccountingDb();
+                    const [settings] = await accountingDb.query('SELECT branch_id FROM gas_station_settings WHERE setting_key = ? AND setting_value = ? LIMIT 1', ['rrs_id_empresa', id_empresa]);
+                    let branchId = settings.length ? settings[0].branch_id : null;
+                    if (!branchId) {
+                        const [b] = await accountingDb.query('SELECT id FROM branches WHERE id = ? LIMIT 1', [parseInt(id_empresa, 10)]);
+                        if (b.length) branchId = b[0].id;
+                    }
+                    if (branchId) {
+                        const [closeoutRows] = await accountingDb.query(`
+                            SELECT id, fecha_turno, numero_turno 
+                            FROM gas_station_closeouts 
+                            WHERE branch_id = ? AND fecha_turno <= ? AND estado = 'cerrado'
+                            ORDER BY fecha_turno DESC, numero_turno DESC 
+                            LIMIT 1
+                        `, [branchId, fecha]);
+
+                        if (closeoutRows.length) {
+                            const closeout = closeoutRows[0];
+                            const [tanks] = await accountingDb.query(`
+                                SELECT 
+                                    t.codigo as id_tanque,
+                                    COALESCE(tr.lectura_actual, 0) as lectura,
+                                    t.capacidad,
+                                    t.reserva,
+                                    CASE 
+                                        WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                                        WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                                        WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                                        WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                                        ELSE 'D'
+                                    END as tipo_combustible
+                                FROM gas_station_tanks t
+                                LEFT JOIN gas_station_closeout_tank_readings tr ON t.id = tr.tank_id AND tr.closeout_id = ?
+                                WHERE t.branch_id = ?
+                                ORDER BY t.codigo
+                            `, [closeout.id, branchId]);
+
+                            if (tanks && tanks.length > 0) rows = tanks;
+                        }
+                    }
+                } catch (fallbackErr) {
+                    console.warn('Fallback accountingDb datos-tanque warning:', fallbackErr.message);
+                }
+            }
+            return rows || [];
+        }
+
+        // Helper function to get 7-day sales averages
+        const getPromedios = async (id_empresa, fecha) => {
+            const dates = [];
+            const baseDate = new Date(fecha + 'T12:00:00');
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(baseDate);
+                d.setDate(d.getDate() - i);
+                const day = String(d.getDate()).padStart(2, '0');
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const year = d.getFullYear();
+                dates.push(`${day}/${month}/${year}`);
+            }
+            const query = `
+               SELECT IF(a.id_empresa = '004' AND a.codigo_producto = '0007','I', LEFT(a.nom_producto,1)) AS tipo_combustible,
+                      SUM(a.total)/7 as promedio
+               FROM cierre_turno_lecturas a 
+               INNER JOIN cierre_turno b ON a.id_cierre_turno = b.id AND a.id_empresa=b.id_empresa 
+               WHERE a.id_empresa = ? AND b.fecha_turno IN (?)
+               GROUP BY codigo_producto, a.id_empresa
+            `;
+            const [rows] = await externalDb.query(query, [id_empresa, dates]);
+            const agg = { D: 0, R: 0, S: 0, I: 0 };
+            (rows || []).forEach(r => {
+                if (['D', 'R', 'S', 'I'].includes(r.tipo_combustible)) {
+                    agg[r.tipo_combustible] += Number(r.promedio || 0);
+                }
+            });
+            return agg;
+        }
+
+        // Compute rows for each station in parallel
+        const rows = await Promise.all(estaciones.map(async (est) => {
+            const orderQ = `
+                SELECT t.id as id_pedido, t.fecha, t.numero, t.diesel, t.regular, t.super, t.iondiesel,
+                       IFNULL(t.id_carrier_local, t.id_transportista) as id_transportista,
+                       IFNULL(t.id_tanker_local, t.id_calibracion_diesel) as id_calibracion_diesel,
+                       t.id_estacion_compartida,
+                       t.id_pedido_compartido,
+                       e2.titulo as nombre_estacion_compartida
+                FROM web_pedidos_temp t
+                LEFT JOIN web_consolidado e2 ON t.id_estacion_compartida = e2.id_empresa AND e2.grupo = 'ESTACION'
+                WHERE t.id_estacion = ? AND t.fecha > ?
+                ORDER BY t.fecha ASC, t.id ASC
+            `;
+            const [orders] = await externalDb.query(orderQ, [est.id_empresa, fechaAyer]);
+
+            const sumProg = { D: 0, R: 0, S: 0, I: 0 };
+            const enrichedOrders = orders.map(o => {
+                const d = Number(o.diesel || 0);
+                const r = Number(o.regular || 0);
+                const s = Number(o.super || 0);
+                const i = Number(o.iondiesel || 0);
+                sumProg.D += d;
+                sumProg.R += r;
+                sumProg.S += s;
+                sumProg.I += i;
+                return {
+                    id_pedido: o.id_pedido,
+                    fecha: o.fecha instanceof Date ? o.fecha.toISOString().split('T')[0] : (o.fecha || '').split('T')[0],
+                    numero: o.numero || '',
+                    diesel: d,
+                    regular: r,
+                    super: s,
+                    iondiesel: i,
+                    total_galones: d + r + s + i,
+                    transportista_nombre: carrierMap[o.id_transportista] || 'Sin asignar',
+                    pipa_placa: tankerMap[o.id_calibracion_diesel] || 'Sin asignar',
+                    nombre_estacion_compartida: o.nombre_estacion_compartida || null
+                };
+            });
+
+            const tanques = await getTanques(est.id_empresa, fechaAyer);
+            const promedios = await getPromedios(est.id_empresa, fechaAyer);
+
+            const getInv = (tipo) => {
+                const items = tanques.filter(t => t.tipo_combustible === tipo);
+                return items.reduce((acc, curr) => ({
+                    capacidad: acc.capacidad + Number(curr.capacidad || 0),
+                    reserva: acc.reserva + Number(curr.reserva || 0),
+                    lectura: acc.lectura + Number(curr.lectura || 0)
+                }), { capacidad: 0, reserva: 0, lectura: 0 });
+            };
+
+            const calcType = (tipo) => {
+                const tk = getInv(tipo);
+                const prom = Number(promedios[tipo] || 0);
+                const prog = Number(sumProg[tipo] || 0);
+                let durDias = 0;
+                if (prom > 0) {
+                    durDias = Math.max(0, (tk.lectura + prog - tk.reserva) / prom);
+                }
+                durDias = Math.round(durDias * 10) / 10;
+
+                let nivel = 0;
+                if (tk.capacidad > 0) {
+                    nivel = Math.round(((tk.lectura + prog) / tk.capacidad) * 100);
+                }
+
+                let fechaStr = "";
+                if (durDias > 0 && fechaAyer) {
+                    const cleanDate = fechaAyer.includes('T') ? fechaAyer.split('T')[0] : fechaAyer;
+                    const parts = cleanDate.split('-').map(Number);
+                    if (parts.length === 3) {
+                        const [y, m, d] = parts;
+                        const target = new Date(y, m - 1, d + Math.floor(durDias));
+                        const dd = String(target.getDate()).padStart(2, '0');
+                        const mm = String(target.getMonth() + 1).padStart(2, '0');
+                        const yyyy = target.getFullYear();
+                        const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+                        fechaStr = `${dd}/${mm}/${yyyy} (${days[target.getDay()]})`;
+                    }
+                }
+
+                return {
+                    durDias,
+                    fechaStr,
+                    inventario: tk.lectura,
+                    capacidad: tk.capacidad,
+                    reserva: tk.reserva,
+                    promedio: prom,
+                    programado: prog,
+                    nivel
+                };
+            };
+
+            const D = calcType('D');
+            const I = calcType('I');
+            const R = calcType('R');
+            const S = calcType('S');
+
+            const totalPedido = sumProg.D + sumProg.I + sumProg.R + sumProg.S;
+
+            return {
+                id_empresa: est.id_empresa,
+                estacion: est.titulo,
+                pedido_diesel: sumProg.D,
+                pedido_diesel_ion: sumProg.I,
+                pedido_regular: sumProg.R,
+                pedido_super: sumProg.S,
+                total_pedido: totalPedido,
+                d_d: D.durDias,
+                d_i: I.durDias,
+                d_r: R.durDias,
+                d_s: S.durDias,
+                fecha_diesel: D.fechaStr,
+                fecha_diesel_ion: I.fechaStr,
+                fecha_regular: R.fechaStr,
+                fecha_super: S.fechaStr,
+                tanques_detalle: { D, I, R, S },
+                pedidos: enrichedOrders,
+                pedidos_count: enrichedOrders.length
+            };
+        }));
+
+        // Totals
+        const totales = {
+            pedido_diesel: rows.reduce((s, r) => s + r.pedido_diesel, 0),
+            pedido_diesel_ion: rows.reduce((s, r) => s + r.pedido_diesel_ion, 0),
+            pedido_regular: rows.reduce((s, r) => s + r.pedido_regular, 0),
+            pedido_super: rows.reduce((s, r) => s + r.pedido_super, 0),
+            total_general: rows.reduce((s, r) => s + r.total_pedido, 0),
+            total_pedidos_activos: rows.reduce((s, r) => s + r.pedidos_count, 0)
+        };
+
+        res.json({
+            fecha_actual: fechaActual,
+            fecha_corte: fechaAyer,
+            timestamp: new Date().toISOString(),
+            estaciones: rows,
+            totales
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar consolidado de pedidos programados');
     }
 });
 
