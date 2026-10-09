@@ -48,11 +48,11 @@ export default function PedidosCombustible() {
     const [selectedTransporte, setSelectedTransporte] = useState('');
     const [selectedPipa, setSelectedPipa] = useState('');
     const [pedidoTemp, setPedidoTemp] = useState({ id: null });
-    const [comp, setComp] = useState({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+    const [comp, setComp] = useState({ D: { val: '' }, R: { val: '' }, S: { val: '' }, I: { val: '' } });
     // Shared delivery trip states (multiparada entre 2 estaciones)
     const [esCompartido, setEsCompartido] = useState(false);
     const [selectedEstacion2, setSelectedEstacion2] = useState('');
-    const [comp2, setComp2] = useState({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+    const [comp2, setComp2] = useState({ D: { val: '' }, R: { val: '' }, S: { val: '' }, I: { val: '' } });
     const [inventario, setInventario] = useState([]);
     const [promedios, setPromedios] = useState({ D: 0, R: 0, S: 0, I: 0 });
     const [programados, setProgramados] = useState([]);
@@ -752,7 +752,7 @@ export default function PedidosCombustible() {
         } else {
             setEsCompartido(false);
             setSelectedEstacion2('');
-            setComp2({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+            setComp2({ D: { val: '' }, R: { val: '' }, S: { val: '' }, I: { val: '' } });
         }
         setPrevisualizar(false);
     };
@@ -777,7 +777,13 @@ export default function PedidosCombustible() {
     };
 
     useEffect(() => {
-        if (selectedEstacion) fetchOperationalData(selectedEstacion);
+        if (selectedEstacion) {
+            fetchOperationalData(selectedEstacion);
+        } else {
+            setInventario([]);
+            setPromedios({ D: 0, R: 0, S: 0, I: 0 });
+            setProgramados([]);
+        }
     }, [selectedEstacion, fechaConsulta]);
 
     const matrix = useMemo(() => {
@@ -1242,13 +1248,13 @@ export default function PedidosCombustible() {
     };
 
     const limpiarFormulario = () => {
-        setFechaPedido(fechaServidor || '');
+        setFechaPedido('');
         setSelectedTransporte('');
         setSelectedPipa('');
-        setComp({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+        setComp({ D: { val: '' }, R: { val: '' }, S: { val: '' }, I: { val: '' } });
         setEsCompartido(false);
         setSelectedEstacion2('');
-        setComp2({ D: { val: 0 }, R: { val: 0 }, S: { val: 0 }, I: { val: 0 } });
+        setComp2({ D: { val: '' }, R: { val: '' }, S: { val: '' }, I: { val: '' } });
         setPrevisualizar(true);
         setPedidoTemp({ id: null });
     };
@@ -1345,6 +1351,7 @@ export default function PedidosCombustible() {
             return addToast('Debe ingresar al menos un galonaje a pedir', 'warning');
         }
 
+        const partnerStation = esCompartido ? selectedEstacion2 : null;
         try {
             const res = await api.post('/operaciones/pedidos/agregar', {
                 id_pedido: pedidoTemp.id,
@@ -1367,8 +1374,11 @@ export default function PedidosCombustible() {
                 iondiesel_compartido: i2
             });
             addToast(res.data?.message || 'Pedido Guardado', 'success');
-            fetchOperationalData(selectedEstacion);
             limpiarFormulario();
+            fetchOperationalData(selectedEstacion);
+            if (partnerStation) {
+                fetchOperationalData2(partnerStation);
+            }
         } catch (e) {
             addToast(e.response?.data?.message || "Error agregando pedido", "error");
         }
@@ -1946,7 +1956,7 @@ export default function PedidosCombustible() {
                     <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '220px' }}>
                             <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>ESTACION</label>
-                            <select value={selectedEstacion} onChange={e => setSelectedEstacion(e.target.value)} disabled={isLoading}
+                            <select value={selectedEstacion} onChange={e => { setSelectedEstacion(e.target.value); limpiarFormulario(); }} disabled={isLoading}
                                 style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-color)', width: '100%', height: '36px' }}>
                                 <option value="" style={{ background: '#1e293b', color: 'white' }}>-- Seleccione Estación --</option>
                                 {estaciones.map(e => <option key={e.id_empresa} value={e.id_empresa} style={{ background: '#1e293b', color: 'white' }}>{e.titulo}</option>)}
