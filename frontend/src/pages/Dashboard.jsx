@@ -3,6 +3,7 @@ import { Calendar, AlertCircle, ArrowRight, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import CalendarGrid from '../components/CalendarGrid';
+import ColorIcon from '../components/ColorIcon';
 import { parseDateOnly, formatDateDisplay, daysFromNow, isTodayOrPast, todayStr } from '../utils/date';
 
 const Dashboard = () => {
@@ -115,8 +116,8 @@ const Dashboard = () => {
                 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', flexShrink: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                            <div style={{ backgroundColor: 'rgba(99, 102, 241, 0.15)', padding: '0.5rem', borderRadius: '10px' }}>
-                                <Calendar size={22} color="var(--primary)" />
+                            <div style={{ backgroundColor: 'rgba(99, 102, 241, 0.12)', padding: '0.4rem', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <ColorIcon icon="fluent-color:calendar-clock-24" size={26} />
                             </div>
                             <div>
                                 <h4 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 'bold' }}>Vencimientos de la Semana</h4>
@@ -145,7 +146,7 @@ const Dashboard = () => {
                             flexShrink: 0
                         }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <AlertCircle size={16} color="#ef4444" />
+                                <ColorIcon icon="fluent-color:warning-24" size={18} />
                                 <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '0.85rem' }}>
                                     {expiredCount} VENCIDOS
                                 </span>

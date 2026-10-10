@@ -4,6 +4,7 @@ import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserC
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import NotificationBell from '../components/NotificationBell';
+import ColorIcon from '../components/ColorIcon';
 import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, rrhhMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
 
 // Import All Page Components for Tab Rendering (Code-split with lazy)
@@ -396,13 +397,13 @@ export default function DashboardLayout() {
         const navClassName = variant === 'drawer' ? 'drawer-nav' : 'sidebar-nav';
         return (
             <nav className={navClassName} style={variant === 'drawer' ? undefined : { flex: 1, overflowY: 'auto' }}>
-                {renderNavItem({ name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard })}
+                {renderNavItem({ name: 'Dashboard', path: '/dashboard', icon: (p) => <ColorIcon icon="fluent-color:home-24" size={p.size || 20} /> })}
 
                 {filteredEstrategia.length > 0 && (
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('estrategia')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <Compass size={20} color="var(--primary)" />
+                                <ColorIcon icon="fluent-emoji-flat:compass" size={20} />
                                 {!isCollapsed && <span style={{ fontWeight: 600 }}>Dirección Estratégica</span>}
                             </div>
                             {!isCollapsed && (openMenus.estrategia ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -415,7 +416,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('catalogs')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <BookOpen size={20} />
+                                <ColorIcon icon="flat-color-icons:opened-folder" size={20} />
                                 {!isCollapsed && <span>Catálogos</span>}
                             </div>
                             {!isCollapsed && (openMenus.catalogs ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -428,7 +429,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('operaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <Briefcase size={20} />
+                                <ColorIcon icon="fluent-color:briefcase-24" size={20} />
                                 {!isCollapsed && <span>Operaciones</span>}
                             </div>
                             {!isCollapsed && (openMenus.operaciones ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -441,7 +442,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('bancos')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <Landmark size={20} />
+                                <ColorIcon icon="fluent-emoji-flat:bank" size={20} />
                                 {!isCollapsed && <span>Bancos</span>}
                             </div>
                             {!isCollapsed && (openMenus.bancos ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -466,7 +467,7 @@ export default function DashboardLayout() {
                                             }}
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                <BarChart3 size={16} />
+                                                <ColorIcon icon="fluent-color:data-pie-24" size={16} />
                                                 <span>Reportes</span>
                                             </div>
                                             {openMenus.bancosReportes ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -483,7 +484,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('finanzas')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <DollarSign size={20} />
+                                <ColorIcon icon="flat-color-icons:money-transfer" size={20} />
                                 {!isCollapsed && <span>Finanzas</span>}
                             </div>
                             {!isCollapsed && (openMenus.finanzas ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -496,7 +497,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('rrhh')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <UsersIcon size={20} />
+                                <ColorIcon icon="fluent-color:people-community-24" size={20} />
                                 {!isCollapsed && <span>Recursos Humanos</span>}
                             </div>
                             {!isCollapsed && (openMenus.rrhh ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -510,7 +511,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('consultas')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <FileText size={20} />
+                                <ColorIcon icon="flat-color-icons:search" size={20} />
                                 {!isCollapsed && <span>Consultas</span>}
                             </div>
                             {!isCollapsed && (openMenus.consultas ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -521,7 +522,10 @@ export default function DashboardLayout() {
                                 {filteredEstaciones.length > 0 && (
                                     <div>
                                         <button className="nav-item" onClick={() => toggleMenu('consultasEstaciones')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)', justifyContent: 'space-between' }}>
-                                            <span>Estaciones</span>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                <ColorIcon icon="flat-color-icons:document" size={16} />
+                                                <span>Estaciones</span>
+                                            </div>
                                             {openMenus.consultasEstaciones ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                         </button>
                                         {openMenus.consultasEstaciones && filteredEstaciones.map(item => renderNavItem(item, true, 2))}
@@ -531,7 +535,10 @@ export default function DashboardLayout() {
                                 {filteredOtras.length > 0 && (
                                     <div>
                                         <button className="nav-item" onClick={() => toggleMenu('consultasOtras')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', paddingLeft: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)', justifyContent: 'space-between' }}>
-                                            <span>Otras</span>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                <ColorIcon icon="flat-color-icons:folder" size={16} />
+                                                <span>Otras</span>
+                                            </div>
                                             {openMenus.consultasOtras ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                         </button>
                                         {openMenus.consultasOtras && filteredOtras.map(item => renderNavItem(item, true, 2))}
@@ -546,7 +553,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('security')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <Shield size={20} />
+                                <ColorIcon icon="fluent-color:shield-24" size={20} />
                                 {!isCollapsed && <span>Seguridad</span>}
                             </div>
                             {!isCollapsed && (openMenus.security ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -559,7 +566,7 @@ export default function DashboardLayout() {
                     <div>
                         <button className="nav-item" onClick={() => toggleMenu('configuracion')} style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: isCollapsed ? '0' : '0.75rem' }}>
-                                <SettingsIcon size={20} />
+                                <ColorIcon icon="fluent-color:settings-24" size={20} />
                                 {!isCollapsed && <span>Configuración</span>}
                             </div>
                             {!isCollapsed && (openMenus.configuracion ? <ChevronDown size={16} /> : <ChevronRight size={16} />)}
@@ -756,7 +763,7 @@ export default function DashboardLayout() {
             </main>
 
             <nav className="bottom-nav">
-                <button className={activeTabPath === '/dashboard' ? 'active' : ''} onClick={() => openTab({ name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard })}>
+                <button className={activeTabPath === '/dashboard' ? 'active' : ''} onClick={() => openTab({ name: 'Dashboard', path: '/dashboard', icon: (p) => <ColorIcon icon="fluent-color:home-24" size={p.size || 20} /> })}>
                     <Home size={20} />
                     <span>Inicio</span>
                 </button>

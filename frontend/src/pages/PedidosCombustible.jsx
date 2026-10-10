@@ -8,6 +8,7 @@ import {
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import ColorIcon from '../components/ColorIcon';
 import api from '../services/api';
 import { socket } from '../services/socket';
 import { todayStr } from '../utils/date';
@@ -1481,7 +1482,7 @@ export default function PedidosCombustible() {
             <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.5rem' }}>
                 <div>
                     <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.25rem', margin: 0, fontWeight: 'bold' }}>
-                        <Truck size={22} color="var(--primary)" /> Operaciones: Pedidos de Combustible
+                        <ColorIcon icon="fuel" size={26} /> Operaciones: Pedidos de Combustible
                     </h1>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                         Gestión de pedidos programados por estación, integración en vivo con portal de mayorista, costos quincenales y conciliación bancaria
@@ -1539,10 +1540,13 @@ export default function PedidosCombustible() {
                     className="pedidos-tab-btn"
                     style={{
                         background: activeTab === 'portal' ? 'var(--primary)' : 'transparent',
-                        color: activeTab === 'portal' ? '#fff' : 'var(--text-muted)'
+                        color: activeTab === 'portal' ? '#fff' : 'var(--text-muted)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.45rem'
                     }}
                 >
-                    <Layers size={16} /> Portal Puma ({portalOrders.length}{portalTotal > portalOrders.length ? `/${portalTotal}` : ''})
+                    <ColorIcon icon="fluent-color:globe-24" size={17} /> Portal Puma ({portalOrders.length}{portalTotal > portalOrders.length ? `/${portalTotal}` : ''})
                 </button>
 
                 <button
@@ -1550,10 +1554,13 @@ export default function PedidosCombustible() {
                     className="pedidos-tab-btn"
                     style={{
                         background: activeTab === 'programados' ? 'var(--primary)' : 'transparent',
-                        color: activeTab === 'programados' ? '#fff' : 'var(--text-muted)'
+                        color: activeTab === 'programados' ? '#fff' : 'var(--text-muted)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.45rem'
                     }}
                 >
-                    <Truck size={16} /> Pedidos Programados & Despacho
+                    <ColorIcon icon="tanker" size={17} /> Pedidos Programados & Despacho
                 </button>
 
                 <button
@@ -1561,10 +1568,13 @@ export default function PedidosCombustible() {
                     className="pedidos-tab-btn"
                     style={{
                         background: activeTab === 'precios' ? 'var(--primary)' : 'transparent',
-                        color: activeTab === 'precios' ? '#fff' : 'var(--text-muted)'
+                        color: activeTab === 'precios' ? '#fff' : 'var(--text-muted)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.45rem'
                     }}
                 >
-                    <Sliders size={16} /> Precios Quincenales
+                    <ColorIcon icon="fluent-emoji-flat:label" size={17} /> Precios Quincenales
                 </button>
 
                 <button
@@ -1572,10 +1582,13 @@ export default function PedidosCombustible() {
                     className="pedidos-tab-btn"
                     style={{
                         background: activeTab === 'conciliacion' ? 'var(--primary)' : 'transparent',
-                        color: activeTab === 'conciliacion' ? '#fff' : 'var(--text-muted)'
+                        color: activeTab === 'conciliacion' ? '#fff' : 'var(--text-muted)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.45rem'
                     }}
                 >
-                    <Scale size={16} /> Pagos & Conciliación
+                    <ColorIcon icon="bank" size={17} /> Pagos & Conciliación
                 </button>
             </div>
 
@@ -1981,7 +1994,7 @@ export default function PedidosCombustible() {
                             </h3>
 
                             <button onClick={autoSuggestPedido} className="btn-success" style={{ width: '100%', margin: '0.5rem 0', padding: '0.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', backgroundColor: '#10b981', color: '#fff' }}>
-                                <CheckSquare size={18} /> Sugerir Pedido (IA)
+                                <ColorIcon icon="sparkles" size={18} /> Sugerir Pedido (IA)
                             </button>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
