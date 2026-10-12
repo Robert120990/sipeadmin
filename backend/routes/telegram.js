@@ -85,8 +85,55 @@ router.post('/toggle-active', authenticateToken, requirePermission(telegramPerms
 });
 
 /**
+ * GET /api/telegram/system-users
+ * Lista de usuarios del sistema SIPE Admin con sus roles y permisos para vinculación
+ */
+router.get('/system-users', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const [users] = await db.query(`
+            SELECT u.id, u.username, u.nombre, u.email, u.status, u.role_id, r.name as role_name,
+                   GROUP_CONCAT(p.name) as permissions
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            LEFT JOIN role_permissions rp ON r.id = rp.role_id
+            LEFT JOIN permissions p ON rp.permission_id = p.id
+            WHERE u.status = 'active' OR u.status IS NULL
+            GROUP BY u.id
+            ORDER BY u.nombre ASC, u.username ASC
+        `);
+
+        const formatted = users.map(u => {
+            const isAdmin = u.role_name === 'Administrator';
+            const perms = (u.permissions || '').split(',');
+            return {
+                id: u.id,
+                username: u.username,
+                nombre: u.nombre || u.username,
+                email: u.email || '',
+                role_id: u.role_id,
+                role_name: u.role_name || 'Sin Rol',
+                status: u.status || 'active',
+                permissions: {
+                    ventas: isAdmin || perms.includes('/dashboard/consultas/estaciones/ventas'),
+                    saldos_banco: isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-bancos') || perms.includes('/dashboard/bancos/cuentas') || perms.includes('/dashboard/bancos/movimientos'),
+                    saldos_chequera: isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-chequera') || perms.includes('/dashboard/bancos/cheques'),
+                    alertas: isAdmin || perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') || perms.includes('/dashboard/consultas/estaciones/resumen-cierre')
+                }
+            };
+        });
+
+        res.json(formatted);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al listar usuarios del sistema');
+    }
+});
+
+/**
  * GET /api/telegram/users
- * Lista de usuarios autorizados y pendientes
+ * Lista de usuarios autorizados y pendientes con datos vinculados de SIPE Admin
  */
 router.get('/users', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
     try {
@@ -94,22 +141,59 @@ router.get('/users', authenticateToken, requirePermission(telegramPerms), async 
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
 
         const [users] = await db.query(`
-            SELECT id, telegram_user_id, telegram_username, first_name, last_name,
-                   user_id, activo, permiso_ventas, permiso_saldos_banco, 
-                   permiso_saldos_chequera, permiso_alertas, notas,
-                   last_interaction, created_at, updated_at
-            FROM telegram_usuarios
-            ORDER BY activo ASC, created_at DESC
+            SELECT tu.id, tu.telegram_user_id, tu.telegram_username, tu.first_name, tu.last_name,
+                   tu.user_id, tu.activo, tu.permiso_ventas, tu.permiso_saldos_banco, 
+                   tu.permiso_saldos_chequera, tu.permiso_alertas, tu.notas,
+                   tu.last_interaction, tu.created_at, tu.updated_at,
+                   u.nombre as sipe_nombre, u.username as sipe_username, u.email as sipe_email,
+                   u.status as sipe_status, r.name as sipe_role_name,
+                   GROUP_CONCAT(p.name) as sipe_permissions
+            FROM telegram_usuarios tu
+            LEFT JOIN users u ON tu.user_id = u.id
+            LEFT JOIN roles r ON u.role_id = r.id
+            LEFT JOIN role_permissions rp ON r.id = rp.role_id
+            LEFT JOIN permissions p ON rp.permission_id = p.id
+            GROUP BY tu.id
+            ORDER BY tu.activo ASC, tu.created_at DESC
         `);
 
+        const enhancedUsers = users.map(u => {
+            const isLinked = Boolean(u.user_id && u.sipe_nombre);
+            let effectiveVentas = Boolean(u.permiso_ventas);
+            let effectiveBancos = Boolean(u.permiso_saldos_banco);
+            let effectiveChequera = Boolean(u.permiso_saldos_chequera);
+            let effectiveAlertas = Boolean(u.permiso_alertas);
+
+            if (isLinked) {
+                const isAdmin = u.sipe_role_name === 'Administrator';
+                const perms = (u.sipe_permissions || '').split(',');
+                effectiveVentas = isAdmin || perms.includes('/dashboard/consultas/estaciones/ventas');
+                effectiveBancos = isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-bancos') || perms.includes('/dashboard/bancos/cuentas') || perms.includes('/dashboard/bancos/movimientos');
+                effectiveChequera = isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-chequera') || perms.includes('/dashboard/bancos/cheques');
+                effectiveAlertas = isAdmin || perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') || perms.includes('/dashboard/consultas/estaciones/resumen-cierre');
+            }
+
+            return {
+                ...u,
+                is_linked: isLinked,
+                effective_permissions: {
+                    ventas: effectiveVentas,
+                    saldos_banco: effectiveBancos,
+                    saldos_chequera: effectiveChequera,
+                    alertas: effectiveAlertas
+                }
+            };
+        });
+
         const summary = {
-            total: users.length,
-            activos: users.filter(u => u.activo === 1).length,
-            pendientes: users.filter(u => u.activo === 0 && (u.notas || '').includes('Solicitud')).length,
-            inactivos: users.filter(u => u.activo === 0).length
+            total: enhancedUsers.length,
+            activos: enhancedUsers.filter(u => u.activo === 1).length,
+            vinculados: enhancedUsers.filter(u => u.is_linked).length,
+            pendientes: enhancedUsers.filter(u => u.activo === 0 && (u.notas || '').includes('Solicitud')).length,
+            inactivos: enhancedUsers.filter(u => u.activo === 0).length
         };
 
-        res.json({ users, summary });
+        res.json({ users: enhancedUsers, summary });
     } catch (error) {
         sendSafeError(res, error, 'Error al listar usuarios de Telegram');
     }
@@ -125,6 +209,7 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
         telegram_username,
         first_name,
         last_name,
+        user_id,
         activo,
         permiso_ventas,
         permiso_saldos_banco,
@@ -143,15 +228,17 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
 
         const cleanUid = String(telegram_user_id).trim();
         const username = telegram_username ? (telegram_username.startsWith('@') ? telegram_username : `@${telegram_username}`) : null;
+        const targetUserId = user_id ? parseInt(user_id, 10) : null;
 
         await db.query(`
             INSERT INTO telegram_usuarios 
-            (telegram_user_id, telegram_username, first_name, last_name, activo, permiso_ventas, permiso_saldos_banco, permiso_saldos_chequera, permiso_alertas, notas, last_interaction)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            (telegram_user_id, telegram_username, first_name, last_name, user_id, activo, permiso_ventas, permiso_saldos_banco, permiso_saldos_chequera, permiso_alertas, notas, last_interaction)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ON DUPLICATE KEY UPDATE
             telegram_username = VALUES(telegram_username),
             first_name = VALUES(first_name),
             last_name = VALUES(last_name),
+            user_id = VALUES(user_id),
             activo = VALUES(activo),
             permiso_ventas = VALUES(permiso_ventas),
             permiso_saldos_banco = VALUES(permiso_saldos_banco),
@@ -163,6 +250,7 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
             username,
             first_name || '',
             last_name || '',
+            targetUserId,
             activo !== undefined ? (activo ? 1 : 0) : 1,
             permiso_ventas !== undefined ? (permiso_ventas ? 1 : 0) : 1,
             permiso_saldos_banco !== undefined ? (permiso_saldos_banco ? 1 : 0) : 1,
@@ -195,6 +283,7 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
         telegram_username,
         first_name,
         last_name,
+        user_id,
         activo,
         permiso_ventas,
         permiso_saldos_banco,
@@ -214,12 +303,14 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
         const currentUser = currRows[0];
 
         const username = telegram_username ? (telegram_username.startsWith('@') ? telegram_username : `@${telegram_username}`) : currentUser.telegram_username;
+        const resolvedUserId = user_id !== undefined ? (user_id ? parseInt(user_id, 10) : null) : currentUser.user_id;
 
         await db.query(`
             UPDATE telegram_usuarios SET
                 telegram_username = ?,
                 first_name = ?,
                 last_name = ?,
+                user_id = ?,
                 activo = ?,
                 permiso_ventas = ?,
                 permiso_saldos_banco = ?,
@@ -231,6 +322,7 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
             username,
             first_name !== undefined ? first_name : currentUser.first_name,
             last_name !== undefined ? last_name : currentUser.last_name,
+            resolvedUserId,
             activo !== undefined ? (activo ? 1 : 0) : currentUser.activo,
             permiso_ventas !== undefined ? (permiso_ventas ? 1 : 0) : currentUser.permiso_ventas,
             permiso_saldos_banco !== undefined ? (permiso_saldos_banco ? 1 : 0) : currentUser.permiso_saldos_banco,
@@ -251,6 +343,78 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
         res.json({ ok: true, message: 'Usuario actualizado exitosamente.' });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar usuario de Telegram');
+    }
+});
+
+/**
+ * POST /api/telegram/users/:id/link
+ * Vincular o desvincular un usuario de Telegram con un usuario de SIPE Admin
+ */
+router.post('/users/:id/link', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    const { id } = req.params;
+    const { user_id, sync_permissions } = req.body;
+
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const targetUserId = user_id ? parseInt(user_id, 10) : null;
+
+        if (targetUserId) {
+            const [users] = await db.query(`
+                SELECT u.id, u.nombre, u.username, r.name as role_name,
+                       GROUP_CONCAT(p.name) as permissions
+                FROM users u
+                LEFT JOIN roles r ON u.role_id = r.id
+                LEFT JOIN role_permissions rp ON r.id = rp.role_id
+                LEFT JOIN permissions p ON rp.permission_id = p.id
+                WHERE u.id = ?
+                GROUP BY u.id
+            `, [targetUserId]);
+
+            if (!users || users.length === 0) {
+                return res.status(404).json({ message: 'El usuario de SIPE Admin seleccionado no existe.' });
+            }
+
+            const su = users[0];
+            const isAdmin = su.role_name === 'Administrator';
+            const perms = (su.permissions || '').split(',');
+
+            const pVentas = (isAdmin || perms.includes('/dashboard/consultas/estaciones/ventas')) ? 1 : 0;
+            const pBancos = (isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-bancos') || perms.includes('/dashboard/bancos/cuentas') || perms.includes('/dashboard/bancos/movimientos')) ? 1 : 0;
+            const pChequera = (isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-chequera') || perms.includes('/dashboard/bancos/cheques')) ? 1 : 0;
+            const pAlertas = (isAdmin || perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') || perms.includes('/dashboard/consultas/estaciones/resumen-cierre')) ? 1 : 0;
+
+            if (sync_permissions !== false) {
+                await db.query(`
+                    UPDATE telegram_usuarios SET
+                        user_id = ?,
+                        permiso_ventas = ?,
+                        permiso_saldos_banco = ?,
+                        permiso_saldos_chequera = ?,
+                        permiso_alertas = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                `, [targetUserId, pVentas, pBancos, pChequera, pAlertas, id]);
+            } else {
+                await db.query(`
+                    UPDATE telegram_usuarios SET
+                        user_id = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                `, [targetUserId, id]);
+            }
+
+            return res.json({
+                ok: true,
+                message: `Usuario de Telegram vinculado exitosamente a "${su.nombre || su.username}" (${su.role_name}).`
+            });
+        } else {
+            await db.query('UPDATE telegram_usuarios SET user_id = NULL, updated_at = NOW() WHERE id = ?', [id]);
+            return res.json({ ok: true, message: 'Usuario de Telegram desvinculado de SIPE Admin.' });
+        }
+    } catch (error) {
+        sendSafeError(res, error, 'Error al vincular usuario de Telegram');
     }
 });
 

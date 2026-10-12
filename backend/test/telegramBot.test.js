@@ -195,5 +195,40 @@ describe('Telegram Bot Service Unit Tests', () => {
             assert.ok(msg.includes('❌ <b>Saldo en Chequera</b>'));
             assert.ok(msg.includes('✅ <b>Alertas en Estaciones</b>'));
         });
+
+        it('debe reflejar usuario SIPE vinculado y herencia de permisos cuando está asociado', () => {
+            const user = {
+                first_name: 'Raul',
+                last_name: 'Sosa',
+                telegram_username: '@RRSM5',
+                telegram_user_id: '1651970576',
+                user_id: 2,
+                activo: 1
+            };
+
+            const effectivePerms = {
+                isLinked: true,
+                linkedUser: {
+                    id: 2,
+                    nombre: 'Raul Sosa',
+                    username: 'raul',
+                    role_name: 'Administrator'
+                },
+                ventas: true,
+                saldos_banco: true,
+                saldos_chequera: true,
+                alertas: true
+            };
+
+            const msg = formatProfileMessage(user, effectivePerms);
+            assert.ok(msg.includes('Raul Sosa'));
+            assert.ok(msg.includes('Usuario SIPE Admin:</b> 🏢 <b>Raul Sosa'));
+            assert.ok(msg.includes('Rol en SIPE:</b> 🛡️ <i>Administrator</i>'));
+            assert.ok(msg.includes('Heredados de SIPE Admin'));
+            assert.ok(msg.includes('✅ <b>Ventas de Estaciones</b>'));
+            assert.ok(msg.includes('✅ <b>Saldo en Bancos</b>'));
+            assert.ok(msg.includes('✅ <b>Saldo en Chequera</b>'));
+            assert.ok(msg.includes('✅ <b>Alertas en Estaciones</b>'));
+        });
     });
 });

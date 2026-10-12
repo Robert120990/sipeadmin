@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Bot, RefreshCw, Plus, Edit2, Trash2, CheckCircle2,
     XCircle, Clock, Shield, Search, Send, Copy, AlertTriangle,
-    Activity, Power, HelpCircle, Check, Eye, EyeOff
+    Activity, Power, HelpCircle, Check, Eye, EyeOff,
+    UserCheck, ShieldAlert, ShieldCheck, Link2
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -16,11 +17,15 @@ export default function TelegramUsers() {
     // Estado principal
     const [loading, setLoading] = useState(true);
     const [users, setUsers] = useState([]);
-    const [summary, setSummary] = useState({ total: 0, activos: 0, pendientes: 0, inactivos: 0 });
+    const [summary, setSummary] = useState({ total: 0, activos: 0, vinculados: 0, pendientes: 0, inactivos: 0 });
     const [botStatus, setBotStatus] = useState(null);
     const [statusLoading, setStatusLoading] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [activeTab, setActiveTab] = useState('users'); // 'users' | 'bitacora'
+
+    // Catálogo de usuarios de SIPE Admin para vinculación
+    const [systemUsers, setSystemUsers] = useState([]);
+    const [loadingSystemUsers, setLoadingSystemUsers] = useState(false);
 
     // Bitácora
     const [bitacora, setBitacora] = useState([]);
@@ -38,6 +43,8 @@ export default function TelegramUsers() {
         telegram_username: '',
         first_name: '',
         last_name: '',
+        user_id: '',
+        heredar_permisos: true,
         activo: 1,
         permiso_ventas: 1,
         permiso_saldos_banco: 1,
@@ -46,6 +53,12 @@ export default function TelegramUsers() {
         notas: ''
     };
     const [formData, setFormData] = useState(initialFormState);
+
+    // Usuario de SIPE seleccionado actualmente en el formulario
+    const selectedSystemUser = useMemo(() => {
+        if (!formData.user_id) return null;
+        return systemUsers.find(su => String(su.id) === String(formData.user_id)) || null;
+    }, [formData.user_id, systemUsers]);
 
     // Modal de mensaje de prueba
     const [testModalOpen, setTestModalOpen] = useState(false);
@@ -63,13 +76,26 @@ export default function TelegramUsers() {
         }
     }, []);
 
-    // Cargar usuarios
+    // Cargar catálogo de usuarios de SIPE Admin
+    const fetchSystemUsers = useCallback(async () => {
+        setLoadingSystemUsers(true);
+        try {
+            const res = await api.get('/telegram/system-users');
+            setSystemUsers(res.data || []);
+        } catch (e) {
+            console.warn('Error cargando usuarios de SIPE:', e.message);
+        } finally {
+            setLoadingSystemUsers(false);
+        }
+    }, []);
+
+    // Cargar usuarios de Telegram
     const fetchUsers = useCallback(async () => {
         setLoading(true);
         try {
             const res = await api.get('/telegram/users');
             setUsers(res.data.users || []);
-            setSummary(res.data.summary || { total: 0, activos: 0, pendientes: 0, inactivos: 0 });
+            setSummary(res.data.summary || { total: 0, activos: 0, vinculados: 0, pendientes: 0, inactivos: 0 });
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al cargar usuarios de Telegram', 'error');
         } finally {
@@ -93,7 +119,8 @@ export default function TelegramUsers() {
     useEffect(() => {
         fetchBotStatus();
         fetchUsers();
-    }, [fetchBotStatus, fetchUsers]);
+        fetchSystemUsers();
+    }, [fetchBotStatus, fetchUsers, fetchSystemUsers]);
 
     useEffect(() => {
         if (activeTab === 'bitacora') {
@@ -152,19 +179,66 @@ export default function TelegramUsers() {
         setModalOpen(true);
     };
 
+    // Selección de usuario del sistema SIPE para vinculación
+    const handleSystemUserSelect = (selectedId) => {
+        if (!selectedId) {
+            setFormData(prev => ({
+                ...prev,
+                user_id: '',
+                heredar_permisos: false
+            }));
+            return;
+        }
+        const matched = systemUsers.find(su => String(su.id) === String(selectedId));
+        if (matched) {
+            setFormData(prev => ({
+                ...prev,
+                user_id: String(matched.id),
+                heredar_permisos: true,
+                first_name: prev.first_name || (matched.nombre || '').split(' ')[0] || '',
+                last_name: prev.last_name || (matched.nombre || '').split(' ').slice(1).join(' ') || '',
+                permiso_ventas: matched.permissions.ventas ? 1 : 0,
+                permiso_saldos_banco: matched.permissions.saldos_banco ? 1 : 0,
+                permiso_saldos_chequera: matched.permissions.saldos_chequera ? 1 : 0,
+                permiso_alertas: matched.permissions.alertas ? 1 : 0
+            }));
+        }
+    };
+
     // Abrir modal para editar o aprobar
     const handleOpenEdit = (user) => {
         setEditingUser(user);
+        let targetUserId = user.user_id ? String(user.user_id) : '';
+
+        // Autocoincidencia inteligente si aún no está vinculado a SIPE
+        if (!targetUserId && systemUsers.length > 0) {
+            const fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim().toLowerCase();
+            const cleanTele = (user.telegram_username || '').replace(/^@/, '').trim().toLowerCase();
+            const matched = systemUsers.find(su => 
+                (su.nombre && su.nombre.trim().toLowerCase() === fullName && fullName !== '') ||
+                (su.username && su.username.trim().toLowerCase() === cleanTele && cleanTele !== '') ||
+                (su.email && cleanTele !== '' && su.email.toLowerCase().includes(cleanTele))
+            );
+            if (matched) {
+                targetUserId = String(matched.id);
+            }
+        }
+
+        const linkedSystemUser = systemUsers.find(su => String(su.id) === String(targetUserId));
+        const isLinked = Boolean(targetUserId && linkedSystemUser);
+
         setFormData({
             telegram_user_id: user.telegram_user_id || '',
             telegram_username: user.telegram_username ? user.telegram_username.replace(/^@/, '') : '',
             first_name: user.first_name || '',
             last_name: user.last_name || '',
+            user_id: targetUserId,
+            heredar_permisos: isLinked,
             activo: user.activo ? 1 : 0,
-            permiso_ventas: user.permiso_ventas ? 1 : 0,
-            permiso_saldos_banco: user.permiso_saldos_banco ? 1 : 0,
-            permiso_saldos_chequera: user.permiso_saldos_chequera ? 1 : 0,
-            permiso_alertas: user.permiso_alertas ? 1 : 0,
+            permiso_ventas: user.effective_permissions ? (user.effective_permissions.ventas ? 1 : 0) : (user.permiso_ventas ? 1 : 0),
+            permiso_saldos_banco: user.effective_permissions ? (user.effective_permissions.saldos_banco ? 1 : 0) : (user.permiso_saldos_banco ? 1 : 0),
+            permiso_saldos_chequera: user.effective_permissions ? (user.effective_permissions.saldos_chequera ? 1 : 0) : (user.permiso_saldos_chequera ? 1 : 0),
+            permiso_alertas: user.effective_permissions ? (user.effective_permissions.alertas ? 1 : 0) : (user.permiso_alertas ? 1 : 0),
             notas: user.notas || ''
         });
         setModalOpen(true);
@@ -476,6 +550,10 @@ export default function TelegramUsers() {
                             <span style={{ fontSize: '0.78rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.1)', color: '#10B981', fontWeight: 600 }}>
                                 {summary.activos} Activos
                             </span>
+                            <span style={{ fontSize: '0.78rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.1)', color: '#3B82F6', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <UserCheck size={13} />
+                                {summary.vinculados || 0} Vinculados a SIPE
+                            </span>
                             <span style={{ fontSize: '0.78rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.1)', color: '#F59E0B', fontWeight: 600 }}>
                                 {summary.pendientes} Pendientes
                             </span>
@@ -543,15 +621,47 @@ export default function TelegramUsers() {
                                             </td>
 
                                             <td style={{ padding: '0.55rem 0.65rem', fontSize: '0.8rem' }}>
-                                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                                                     <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
                                                         {`${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Sin Nombre'}
                                                     </span>
                                                     <span style={{ fontSize: '0.74rem', color: 'var(--primary)' }}>
                                                         {u.telegram_username || 'Sin username'}
                                                     </span>
+                                                    {u.is_linked ? (
+                                                        <span style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.3rem',
+                                                            fontSize: '0.72rem',
+                                                            padding: '0.12rem 0.45rem',
+                                                            borderRadius: '4px',
+                                                            backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                                                            color: '#60A5FA',
+                                                            fontWeight: 600,
+                                                            width: 'fit-content'
+                                                        }}>
+                                                            <UserCheck size={12} />
+                                                            SIPE: {u.sipe_nombre} ({u.sipe_role_name || 'Usuario'})
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.3rem',
+                                                            fontSize: '0.7rem',
+                                                            padding: '0.12rem 0.45rem',
+                                                            borderRadius: '4px',
+                                                            backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                                                            color: '#F59E0B',
+                                                            width: 'fit-content'
+                                                        }}>
+                                                            <ShieldAlert size={12} />
+                                                            Sin vincular a SIPE (Manual)
+                                                        </span>
+                                                    )}
                                                     {u.notas && (
-                                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.15rem' }}>
+                                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.1rem' }}>
                                                             {u.notas}
                                                         </span>
                                                     )}
@@ -583,59 +693,72 @@ export default function TelegramUsers() {
                                             </td>
 
                                             <td style={{ padding: '0.55rem 0.65rem', textAlign: 'center', fontSize: '0.8rem' }}>
-                                                <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-                                                    <span
-                                                        style={{
-                                                            fontSize: '0.72rem',
-                                                            padding: '0.15rem 0.45rem',
-                                                            borderRadius: '4px',
-                                                            background: u.permiso_ventas ? 'rgba(16, 185, 129, 0.12)' : 'rgba(107, 114, 128, 0.1)',
-                                                            color: u.permiso_ventas ? '#10B981' : '#9CA3AF',
-                                                            fontWeight: 600
-                                                        }}
-                                                        title="Permiso para consultar Ventas de Estaciones"
-                                                    >
-                                                        ⛽ Ventas
-                                                    </span>
-                                                    <span
-                                                        style={{
-                                                            fontSize: '0.72rem',
-                                                            padding: '0.15rem 0.45rem',
-                                                            borderRadius: '4px',
-                                                            background: u.permiso_saldos_banco ? 'rgba(59, 130, 246, 0.12)' : 'rgba(107, 114, 128, 0.1)',
-                                                            color: u.permiso_saldos_banco ? '#3B82F6' : '#9CA3AF',
-                                                            fontWeight: 600
-                                                        }}
-                                                        title="Permiso para consultar Saldos en Bancos"
-                                                    >
-                                                        🏦 Bancos
-                                                    </span>
-                                                    <span
-                                                        style={{
-                                                            fontSize: '0.72rem',
-                                                            padding: '0.15rem 0.45rem',
-                                                            borderRadius: '4px',
-                                                            background: u.permiso_saldos_chequera ? 'rgba(139, 92, 246, 0.12)' : 'rgba(107, 114, 128, 0.1)',
-                                                            color: u.permiso_saldos_chequera ? '#8B5CF6' : '#9CA3AF',
-                                                            fontWeight: 600
-                                                        }}
-                                                        title="Permiso para consultar Saldos en Chequeras"
-                                                    >
-                                                        🧾 Chequera
-                                                    </span>
-                                                    <span
-                                                        style={{
-                                                            fontSize: '0.72rem',
-                                                            padding: '0.15rem 0.45rem',
-                                                            borderRadius: '4px',
-                                                            background: u.permiso_alertas ? 'rgba(245, 158, 11, 0.12)' : 'rgba(107, 114, 128, 0.1)',
-                                                            color: u.permiso_alertas ? '#F59E0B' : '#9CA3AF',
-                                                            fontWeight: 600
-                                                        }}
-                                                        title="Permiso para consultar Alertas Operativas"
-                                                    >
-                                                        🚨 Alertas
-                                                    </span>
+                                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                                                    {u.is_linked && (
+                                                        <span style={{
+                                                            fontSize: '0.67rem',
+                                                            color: '#60A5FA',
+                                                            fontWeight: 600,
+                                                            textTransform: 'uppercase',
+                                                            letterSpacing: '0.02em'
+                                                        }}>
+                                                            Heredados de SIPE ({u.sipe_role_name})
+                                                        </span>
+                                                    )}
+                                                    <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                                        <span
+                                                            style={{
+                                                                fontSize: '0.72rem',
+                                                                padding: '0.15rem 0.45rem',
+                                                                borderRadius: '4px',
+                                                                background: (u.effective_permissions?.ventas ?? u.permiso_ventas) ? 'rgba(16, 185, 129, 0.12)' : 'rgba(107, 114, 128, 0.1)',
+                                                                color: (u.effective_permissions?.ventas ?? u.permiso_ventas) ? '#10B981' : '#9CA3AF',
+                                                                fontWeight: 600
+                                                            }}
+                                                            title="Permiso para consultar Ventas de Estaciones"
+                                                        >
+                                                            ⛽ Ventas
+                                                        </span>
+                                                        <span
+                                                            style={{
+                                                                fontSize: '0.72rem',
+                                                                padding: '0.15rem 0.45rem',
+                                                                borderRadius: '4px',
+                                                                background: (u.effective_permissions?.saldos_banco ?? u.permiso_saldos_banco) ? 'rgba(59, 130, 246, 0.12)' : 'rgba(107, 114, 128, 0.1)',
+                                                                color: (u.effective_permissions?.saldos_banco ?? u.permiso_saldos_banco) ? '#3B82F6' : '#9CA3AF',
+                                                                fontWeight: 600
+                                                            }}
+                                                            title="Permiso para consultar Saldos en Bancos"
+                                                        >
+                                                            🏦 Bancos
+                                                        </span>
+                                                        <span
+                                                            style={{
+                                                                fontSize: '0.72rem',
+                                                                padding: '0.15rem 0.45rem',
+                                                                borderRadius: '4px',
+                                                                background: (u.effective_permissions?.saldos_chequera ?? u.permiso_saldos_chequera) ? 'rgba(139, 92, 246, 0.12)' : 'rgba(107, 114, 128, 0.1)',
+                                                                color: (u.effective_permissions?.saldos_chequera ?? u.permiso_saldos_chequera) ? '#8B5CF6' : '#9CA3AF',
+                                                                fontWeight: 600
+                                                            }}
+                                                            title="Permiso para consultar Saldos en Chequeras"
+                                                        >
+                                                            🧾 Chequera
+                                                        </span>
+                                                        <span
+                                                            style={{
+                                                                fontSize: '0.72rem',
+                                                                padding: '0.15rem 0.45rem',
+                                                                borderRadius: '4px',
+                                                                background: (u.effective_permissions?.alertas ?? u.permiso_alertas) ? 'rgba(245, 158, 11, 0.12)' : 'rgba(107, 114, 128, 0.1)',
+                                                                color: (u.effective_permissions?.alertas ?? u.permiso_alertas) ? '#F59E0B' : '#9CA3AF',
+                                                                fontWeight: 600
+                                                            }}
+                                                            title="Permiso para consultar Alertas Operativas"
+                                                        >
+                                                            🚨 Alertas
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             </td>
 
@@ -654,6 +777,14 @@ export default function TelegramUsers() {
                                                         title="Enviar mensaje de prueba a Telegram"
                                                     >
                                                         <Send size={15} color="#0088cc" />
+                                                    </button>
+                                                    <button
+                                                        className="icon-btn"
+                                                        onClick={() => handleOpenEdit(u)}
+                                                        title={u.is_linked ? `Vinculado a SIPE: ${u.sipe_nombre} (${u.sipe_role_name || 'Rol'})` : 'Vincular con usuario de SIPE Admin'}
+                                                        style={{ color: u.is_linked ? '#10B981' : '#F59E0B' }}
+                                                    >
+                                                        <UserCheck size={15} />
                                                     </button>
                                                     <button
                                                         className="icon-btn"
@@ -784,6 +915,149 @@ export default function TelegramUsers() {
             >
                 <form id="telegram-user-form" onSubmit={handleSubmitUser}>
                     <div className="form-grid form-grid-2">
+                        {/* Selector de Vinculación con SIPE Admin */}
+                        <div className="form-group span-2" style={{
+                            background: 'var(--surface-color)',
+                            border: formData.user_id ? '1px solid rgba(59, 130, 246, 0.4)' : '1px dashed var(--border)',
+                            borderRadius: '8px',
+                            padding: '0.85rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.5rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <label style={{ fontSize: '0.825rem', fontWeight: 700, color: 'var(--text-main)', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                                    <UserCheck size={16} color={formData.user_id ? '#3B82F6' : 'var(--text-muted)'} />
+                                    Vincular con Usuario del Sistema SIPE Admin
+                                </label>
+                                {formData.user_id ? (
+                                    <span style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', padding: '0.12rem 0.45rem', borderRadius: '4px' }}>
+                                        ✓ Vinculado
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                        (Opcional)
+                                    </span>
+                                )}
+                            </div>
+
+                            <select
+                                value={formData.user_id || ''}
+                                onChange={e => handleSystemUserSelect(e.target.value)}
+                                style={{
+                                    width: '100%',
+                                    height: '38px',
+                                    fontSize: '0.825rem',
+                                    padding: '0 0.65rem',
+                                    borderRadius: 'var(--border-radius)',
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--bg-color)',
+                                    color: 'var(--text-main)'
+                                }}
+                            >
+                                <option value="">-- Sin vincular a SIPE (Permisos manuales) --</option>
+                                {systemUsers.map(su => (
+                                    <option key={su.id} value={su.id}>
+                                        {su.nombre} ({su.username}) — Rol: {su.role_name}
+                                    </option>
+                                ))}
+                            </select>
+
+                            {selectedSystemUser ? (
+                                <div style={{
+                                    padding: '0.65rem 0.75rem',
+                                    borderRadius: '6px',
+                                    background: 'rgba(59, 130, 246, 0.06)',
+                                    border: '1px solid rgba(59, 130, 246, 0.2)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.4rem',
+                                    marginTop: '0.2rem'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                                            Rol: <span style={{ color: '#3B82F6' }}>{selectedSystemUser.role_name}</span>
+                                        </span>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            {selectedSystemUser.email || selectedSystemUser.username}
+                                        </span>
+                                    </div>
+
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', cursor: 'pointer', fontWeight: 600, color: 'var(--text-main)' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(formData.heredar_permisos)}
+                                            onChange={e => {
+                                                const checked = e.target.checked;
+                                                setFormData(prev => ({
+                                                    ...prev,
+                                                    heredar_permisos: checked,
+                                                    ...(checked ? {
+                                                        permiso_ventas: selectedSystemUser.permissions.ventas ? 1 : 0,
+                                                        permiso_saldos_banco: selectedSystemUser.permissions.saldos_banco ? 1 : 0,
+                                                        permiso_saldos_chequera: selectedSystemUser.permissions.saldos_chequera ? 1 : 0,
+                                                        permiso_alertas: selectedSystemUser.permissions.alertas ? 1 : 0
+                                                    } : {})
+                                                }));
+                                            }}
+                                            style={{ width: '16px', height: '16px' }}
+                                        />
+                                        Heredar automáticamente permisos de consultas según rol en SIPE Admin
+                                    </label>
+
+                                    {formData.heredar_permisos && (
+                                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.1rem' }}>
+                                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Consultas permitidas:</span>
+                                            <span style={{
+                                                fontSize: '0.72rem',
+                                                padding: '0.1rem 0.4rem',
+                                                borderRadius: '3px',
+                                                fontWeight: 600,
+                                                background: selectedSystemUser.permissions.ventas ? 'rgba(16, 185, 129, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions.ventas ? '#10B981' : '#9CA3AF'
+                                            }}>
+                                                {selectedSystemUser.permissions.ventas ? '✓ Ventas' : '✗ Ventas'}
+                                            </span>
+                                            <span style={{
+                                                fontSize: '0.72rem',
+                                                padding: '0.1rem 0.4rem',
+                                                borderRadius: '3px',
+                                                fontWeight: 600,
+                                                background: selectedSystemUser.permissions.saldos_banco ? 'rgba(59, 130, 246, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions.saldos_banco ? '#3B82F6' : '#9CA3AF'
+                                            }}>
+                                                {selectedSystemUser.permissions.saldos_banco ? '✓ Bancos' : '✗ Bancos'}
+                                            </span>
+                                            <span style={{
+                                                fontSize: '0.72rem',
+                                                padding: '0.1rem 0.4rem',
+                                                borderRadius: '3px',
+                                                fontWeight: 600,
+                                                background: selectedSystemUser.permissions.saldos_chequera ? 'rgba(139, 92, 246, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions.saldos_chequera ? '#8B5CF6' : '#9CA3AF'
+                                            }}>
+                                                {selectedSystemUser.permissions.saldos_chequera ? '✓ Chequera' : '✗ Chequera'}
+                                            </span>
+                                            <span style={{
+                                                fontSize: '0.72rem',
+                                                padding: '0.1rem 0.4rem',
+                                                borderRadius: '3px',
+                                                fontWeight: 600,
+                                                background: selectedSystemUser.permissions.alertas ? 'rgba(245, 158, 11, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions.alertas ? '#F59E0B' : '#9CA3AF'
+                                            }}>
+                                                {selectedSystemUser.permissions.alertas ? '✓ Alertas' : '✗ Alertas'}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                    💡 Vincula este usuario de Telegram con su cuenta de SIPE Admin para que sus permisos se hereden dinámicamente y no tengas que parametrizarlo manualmente.
+                                </span>
+                            )}
+                        </div>
+
                         <div className="form-group span-2">
                             <label style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem', display: 'block' }}>
                                 Telegram User ID (Numérico) *
@@ -863,45 +1137,88 @@ export default function TelegramUsers() {
 
                         {/* Selección de Permisos de Consulta */}
                         <div className="form-group span-2" style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.25rem' }}>
-                            <span style={{ fontSize: '0.8rem', fontWeight: 700, display: 'block', marginBottom: '0.5rem', color: 'var(--text-main)' }}>
-                                Permisos Granulares de Consulta:
-                            </span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                    Permisos Granulares de Consulta:
+                                </span>
+                                {formData.heredar_permisos && formData.user_id ? (
+                                    <span style={{ fontSize: '0.72rem', color: '#3B82F6', fontWeight: 600 }}>
+                                        (Heredados automáticamente según rol en SIPE Admin)
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                        (Configuración manual personalizada)
+                                    </span>
+                                )}
+                            </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
-                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                <label style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.45rem',
+                                    fontSize: '0.8rem',
+                                    cursor: (formData.heredar_permisos && formData.user_id) ? 'not-allowed' : 'pointer',
+                                    opacity: (formData.heredar_permisos && formData.user_id) ? 0.75 : 1
+                                }}>
                                     <input
                                         type="checkbox"
                                         checked={Boolean(formData.permiso_ventas)}
+                                        disabled={Boolean(formData.heredar_permisos && formData.user_id)}
                                         onChange={e => setFormData({ ...formData, permiso_ventas: e.target.checked ? 1 : 0 })}
                                         style={{ width: '16px', height: '16px' }}
                                     />
                                     ⛽ Ventas de Estaciones (/ventas)
                                 </label>
 
-                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                <label style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.45rem',
+                                    fontSize: '0.8rem',
+                                    cursor: (formData.heredar_permisos && formData.user_id) ? 'not-allowed' : 'pointer',
+                                    opacity: (formData.heredar_permisos && formData.user_id) ? 0.75 : 1
+                                }}>
                                     <input
                                         type="checkbox"
                                         checked={Boolean(formData.permiso_saldos_banco)}
+                                        disabled={Boolean(formData.heredar_permisos && formData.user_id)}
                                         onChange={e => setFormData({ ...formData, permiso_saldos_banco: e.target.checked ? 1 : 0 })}
                                         style={{ width: '16px', height: '16px' }}
                                     />
                                     🏦 Saldo en Banco (/bancos)
                                 </label>
 
-                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                <label style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.45rem',
+                                    fontSize: '0.8rem',
+                                    cursor: (formData.heredar_permisos && formData.user_id) ? 'not-allowed' : 'pointer',
+                                    opacity: (formData.heredar_permisos && formData.user_id) ? 0.75 : 1
+                                }}>
                                     <input
                                         type="checkbox"
                                         checked={Boolean(formData.permiso_saldos_chequera)}
+                                        disabled={Boolean(formData.heredar_permisos && formData.user_id)}
                                         onChange={e => setFormData({ ...formData, permiso_saldos_chequera: e.target.checked ? 1 : 0 })}
                                         style={{ width: '16px', height: '16px' }}
                                     />
                                     🧾 Saldo en Chequera (/chequera)
                                 </label>
 
-                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                <label style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.45rem',
+                                    fontSize: '0.8rem',
+                                    cursor: (formData.heredar_permisos && formData.user_id) ? 'not-allowed' : 'pointer',
+                                    opacity: (formData.heredar_permisos && formData.user_id) ? 0.75 : 1
+                                }}>
                                     <input
                                         type="checkbox"
                                         checked={Boolean(formData.permiso_alertas)}
+                                        disabled={Boolean(formData.heredar_permisos && formData.user_id)}
                                         onChange={e => setFormData({ ...formData, permiso_alertas: e.target.checked ? 1 : 0 })}
                                         style={{ width: '16px', height: '16px' }}
                                     />

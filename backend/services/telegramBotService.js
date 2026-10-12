@@ -214,12 +214,30 @@ const resolveTelegramUser = async (from) => {
             return { ...user, telegram_username: username, first_name: firstName, last_name: lastName };
         }
 
+        // Intentar autovinculación inteligente con usuario de SIPE si coincide nombre o username
+        let matchedUserId = null;
+        try {
+            const fullName = `${firstName} ${lastName}`.trim();
+            const cleanUser = (username || '').replace(/^@/, '').trim();
+            const [matchedUsers] = await db.query(`
+                SELECT id, nombre, username, email FROM users 
+                WHERE (LOWER(TRIM(nombre)) = LOWER(TRIM(?)) AND ? != '')
+                   OR (LOWER(TRIM(username)) = LOWER(TRIM(?)) AND ? != '')
+                LIMIT 1
+            `, [fullName, fullName, cleanUser, cleanUser]);
+            if (matchedUsers && matchedUsers.length > 0) {
+                matchedUserId = matchedUsers[0].id;
+            }
+        } catch (_) {
+            // Silenciosamente continuar sin vinculación automática
+        }
+
         // Si no existe, insertar con activo = 0 para aprobación administrativa
         const [insertRes] = await db.query(
             `INSERT INTO telegram_usuarios 
-             (telegram_user_id, telegram_username, first_name, last_name, activo, permiso_ventas, permiso_saldos_banco, permiso_saldos_chequera, permiso_alertas, notas, last_interaction)
-             VALUES (?, ?, ?, ?, 0, 1, 1, 1, 1, 'Solicitud automática desde Telegram', NOW())`,
-            [telegramUserId, username, firstName, lastName]
+             (telegram_user_id, telegram_username, first_name, last_name, user_id, activo, permiso_ventas, permiso_saldos_banco, permiso_saldos_chequera, permiso_alertas, notas, last_interaction)
+             VALUES (?, ?, ?, ?, ?, 0, 1, 1, 1, 1, 'Solicitud automática desde Telegram', NOW())`,
+            [telegramUserId, username, firstName, lastName, matchedUserId]
         );
 
         return {
@@ -228,6 +246,7 @@ const resolveTelegramUser = async (from) => {
             telegram_username: username,
             first_name: firstName,
             last_name: lastName,
+            user_id: matchedUserId,
             activo: 0,
             permiso_ventas: 1,
             permiso_saldos_banco: 1,
@@ -237,6 +256,117 @@ const resolveTelegramUser = async (from) => {
     } catch (err) {
         console.error('[TelegramBot] Error resolviendo usuario:', err.message);
         return null;
+    }
+};
+
+/**
+ * Resolver permisos efectivos del usuario de Telegram.
+ * Si está vinculado a un usuario de SIPE Admin (user_id),
+ * hereda dinámicamente sus permisos de acuerdo con su rol y accesos configurados.
+ */
+const getUserEffectivePermissions = async (user) => {
+    if (!user) {
+        return {
+            isLinked: false,
+            linkedUser: null,
+            inactiveInSipe: false,
+            ventas: false,
+            saldos_banco: false,
+            saldos_chequera: false,
+            alertas: false
+        };
+    }
+
+    if (!user.user_id) {
+        return {
+            isLinked: false,
+            linkedUser: null,
+            inactiveInSipe: false,
+            ventas: Boolean(user.permiso_ventas),
+            saldos_banco: Boolean(user.permiso_saldos_banco),
+            saldos_chequera: Boolean(user.permiso_saldos_chequera),
+            alertas: Boolean(user.permiso_alertas)
+        };
+    }
+
+    const db = getDb();
+    if (!db) {
+        return {
+            isLinked: true,
+            linkedUser: null,
+            inactiveInSipe: false,
+            ventas: Boolean(user.permiso_ventas),
+            saldos_banco: Boolean(user.permiso_saldos_banco),
+            saldos_chequera: Boolean(user.permiso_saldos_chequera),
+            alertas: Boolean(user.permiso_alertas)
+        };
+    }
+
+    try {
+        const [rows] = await db.query(`
+            SELECT u.id, u.username, u.nombre, u.email, u.status, r.name as role_name,
+                   GROUP_CONCAT(p.name) as permissions
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            LEFT JOIN role_permissions rp ON r.id = rp.role_id
+            LEFT JOIN permissions p ON rp.permission_id = p.id
+            WHERE u.id = ?
+            GROUP BY u.id
+        `, [user.user_id]);
+
+        if (!rows || rows.length === 0) {
+            return {
+                isLinked: false,
+                linkedUser: null,
+                inactiveInSipe: false,
+                ventas: Boolean(user.permiso_ventas),
+                saldos_banco: Boolean(user.permiso_saldos_banco),
+                saldos_chequera: Boolean(user.permiso_saldos_chequera),
+                alertas: Boolean(user.permiso_alertas)
+            };
+        }
+
+        const su = rows[0];
+        if (su.status && su.status !== 'active') {
+            return {
+                isLinked: true,
+                linkedUser: su,
+                inactiveInSipe: true,
+                ventas: false,
+                saldos_banco: false,
+                saldos_chequera: false,
+                alertas: false
+            };
+        }
+
+        const isAdmin = su.role_name === 'Administrator';
+        const permsList = (su.permissions || '').split(',');
+
+        const hasVentas = isAdmin || permsList.includes('/dashboard/consultas/estaciones/ventas');
+        const hasBancos = isAdmin || permsList.includes('/dashboard/bancos/reportes/saldos-bancos') || permsList.includes('/dashboard/bancos/cuentas') || permsList.includes('/dashboard/bancos/movimientos');
+        const hasChequera = isAdmin || permsList.includes('/dashboard/bancos/reportes/saldos-chequera') || permsList.includes('/dashboard/bancos/cheques');
+        const hasAlertas = isAdmin || permsList.includes('/dashboard/consultas/estaciones/diferencias-combustible') || permsList.includes('/dashboard/consultas/estaciones/resumen-cierre');
+
+        return {
+            isLinked: true,
+            linkedUser: su,
+            inactiveInSipe: false,
+            ventas: hasVentas,
+            saldos_banco: hasBancos,
+            saldos_chequera: hasChequera,
+            alertas: hasAlertas
+        };
+    } catch (err) {
+        console.error('[TelegramBot] Error resolviendo permisos heredados:', err.message);
+        return {
+            isLinked: true,
+            linkedUser: null,
+            inactiveInSipe: false,
+            ventas: Boolean(user.permiso_ventas),
+            saldos_banco: Boolean(user.permiso_saldos_banco),
+            saldos_chequera: Boolean(user.permiso_saldos_chequera),
+            alertas: Boolean(user.permiso_alertas)
+        };
     }
 };
 
@@ -612,18 +742,36 @@ const formatAlertasMessage = (data, date) => {
 /**
  * Formatear perfil del usuario
  */
-const formatProfileMessage = (user) => {
+const formatProfileMessage = (user, effectivePerms = null) => {
+    const perms = effectivePerms || {
+        isLinked: false,
+        linkedUser: null,
+        ventas: Boolean(user.permiso_ventas),
+        saldos_banco: Boolean(user.permiso_saldos_banco),
+        saldos_chequera: Boolean(user.permiso_saldos_chequera),
+        alertas: Boolean(user.permiso_alertas)
+    };
+
     let msg = `👤 <b>PERFIL DE USUARIO TELEGRAM</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
     msg += `• <b>Nombre:</b> ${escapeHtml(`${user.first_name || ''} ${user.last_name || ''}`.trim() || 'No especificado')}\n`;
     msg += `• <b>Usuario:</b> ${escapeHtml(user.telegram_username || 'Sin @username')}\n`;
     msg += `• <b>ID Telegram:</b> <code>${escapeHtml(user.telegram_user_id)}</code>\n`;
-    msg += `• <b>Estado:</b> ${user.activo ? '🟢 <b>Activo / Autorizado</b>' : '🔴 <b>Inactivo</b>'}\n\n`;
-    msg += `🔑 <b>PERMISOS DE CONSULTA ASIGNADOS:</b>\n`;
-    msg += `${user.permiso_ventas ? '✅' : '❌'} <b>Ventas de Estaciones</b>\n`;
-    msg += `${user.permiso_saldos_banco ? '✅' : '❌'} <b>Saldo en Bancos</b>\n`;
-    msg += `${user.permiso_saldos_chequera ? '✅' : '❌'} <b>Saldo en Chequera</b>\n`;
-    msg += `${user.permiso_alertas ? '✅' : '❌'} <b>Alertas en Estaciones</b>\n\n`;
+    msg += `• <b>Estado:</b> ${user.activo ? '🟢 <b>Activo / Autorizado</b>' : '🔴 <b>Inactivo</b>'}\n`;
+
+    if (perms.isLinked && perms.linkedUser) {
+        msg += `• <b>Usuario SIPE Admin:</b> 🏢 <b>${escapeHtml(perms.linkedUser.nombre || perms.linkedUser.username)}</b>\n`;
+        msg += `• <b>Rol en SIPE:</b> 🛡️ <i>${escapeHtml(perms.linkedUser.role_name || 'Usuario')}</i>\n`;
+        msg += `• <b>Modo de Permisos:</b> 🔄 <i>Heredados de SIPE Admin</i>\n\n`;
+    } else {
+        msg += `• <b>Usuario SIPE:</b> ⚠️ <i>Sin vincular (Permisos manuales)</i>\n\n`;
+    }
+
+    msg += `🔑 <b>PERMISOS DE CONSULTA ACTIVOS:</b>\n`;
+    msg += `${perms.ventas ? '✅' : '❌'} <b>Ventas de Estaciones</b>\n`;
+    msg += `${perms.saldos_banco ? '✅' : '❌'} <b>Saldo en Bancos</b>\n`;
+    msg += `${perms.saldos_chequera ? '✅' : '❌'} <b>Saldo en Chequera</b>\n`;
+    msg += `${perms.alertas ? '✅' : '❌'} <b>Alertas en Estaciones</b>\n\n`;
     msg += `<i>Administrado desde SIPE Admin (Seguridad &gt; Usuarios de Telegram)</i>`;
     return msg;
 };
@@ -677,6 +825,21 @@ const handleIncomingMessage = async (msg) => {
         return;
     }
 
+    // 2.1 Resolver permisos efectivos (heredados de SIPE o manuales)
+    const effectivePerms = await getUserEffectivePermissions(user);
+
+    // Si está vinculado pero su cuenta en SIPE Admin está inactiva
+    if (effectivePerms.inactiveInSipe) {
+        await logTelegramQuery(user.telegram_user_id, rawText, 'Acceso suspendido (usuario SIPE inactivo)', 0);
+        const name = escapeHtml(user.first_name || 'Usuario');
+        const inactiveMsg = `⛔ <b>Acceso Suspendido</b>\n\n` +
+            `Hola <b>${name}</b>.\n` +
+            `Tu cuenta de Telegram está vinculada al usuario de SIPE Admin <b>${escapeHtml(effectivePerms.linkedUser?.nombre || '')}</b>, el cual se encuentra actualmente <b>inactivo</b> en el sistema.\n` +
+            `Por favor contacta a un Administrador para reactivar tu cuenta.`;
+        await sendTelegramMessage(chatId, inactiveMsg);
+        return;
+    }
+
     const keyboard = getMainReplyKeyboard();
     const cleanLower = rawText.toLowerCase().replace(/^[/\s]+/, '');
 
@@ -694,7 +857,7 @@ const handleIncomingMessage = async (msg) => {
     // Comandos de Perfil / ID
     if (cleanLower === 'perfil' || cleanLower === 'id' || cleanLower === 'mi_id' || cleanLower.includes('mi perfil')) {
         await logTelegramQuery(user.telegram_user_id, '/perfil', 'Consulta de perfil', 1);
-        await sendTelegramMessage(chatId, formatProfileMessage(user), keyboard);
+        await sendTelegramMessage(chatId, formatProfileMessage(user, effectivePerms), keyboard);
         return;
     }
 
@@ -707,7 +870,7 @@ const handleIncomingMessage = async (msg) => {
 
     // 3. CONSULTA: SALDO EN BANCO
     if (cleanLower.includes('saldo en banco') || cleanLower === 'bancos' || cleanLower === 'banco' || cleanLower === 'saldos') {
-        if (!user.permiso_saldos_banco) {
+        if (!effectivePerms.saldos_banco) {
             await logTelegramQuery(user.telegram_user_id, 'bancos', 'Permiso denegado', 0);
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar saldos en bancos.', keyboard);
             return;
@@ -727,7 +890,7 @@ const handleIncomingMessage = async (msg) => {
 
     // 4. CONSULTA: SALDO EN CHEQUERA
     if (cleanLower.includes('saldo en chequera') || cleanLower === 'chequera' || cleanLower === 'cheques' || cleanLower === 'saldo_chequera') {
-        if (!user.permiso_saldos_chequera) {
+        if (!effectivePerms.saldos_chequera) {
             await logTelegramQuery(user.telegram_user_id, 'chequera', 'Permiso denegado', 0);
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar saldos en chequera.', keyboard);
             return;
@@ -747,7 +910,7 @@ const handleIncomingMessage = async (msg) => {
 
     // 5. CONSULTA: ALERTAS EN ESTACIONES
     if (cleanLower.includes('alertas') || cleanLower.includes('descuadres') || cleanLower.includes('auditoria')) {
-        if (!user.permiso_alertas) {
+        if (!effectivePerms.alertas) {
             await logTelegramQuery(user.telegram_user_id, 'alertas', 'Permiso denegado', 0);
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar alertas operativas.', keyboard);
             return;
@@ -777,7 +940,7 @@ const handleIncomingMessage = async (msg) => {
 
     // 6. CONSULTA: VENTAS DE ESTACIONES
     if (cleanLower.includes('ventas') || cleanLower.includes('venta') || cleanLower.includes('combustible')) {
-        if (!user.permiso_ventas) {
+        if (!effectivePerms.ventas) {
             await logTelegramQuery(user.telegram_user_id, 'ventas', 'Permiso denegado', 0);
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de estaciones.', keyboard);
             return;
@@ -981,6 +1144,7 @@ module.exports = {
     formatAlertasMessage,
     formatProfileMessage,
     formatHelpMessage,
+    getUserEffectivePermissions,
     parseUserDate,
     moneyFmt,
     numFmt
