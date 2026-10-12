@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Bot, RefreshCw, Plus, Edit2, Trash2, CheckCircle2,
     XCircle, Clock, Shield, Search, Send, Copy, AlertTriangle,
-    Activity, Power, HelpCircle, Check, Eye, EyeOff,
+    Activity, Power, HelpCircle, Check, Eye,
     UserCheck, ShieldAlert, ShieldCheck, Link2,
     ThumbsUp, ThumbsDown, MessageSquare, Database, Cpu, Radio,
-    Terminal, AlertOctagon, Key
+    Terminal, AlertOctagon, Key, ClipboardPaste
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -88,7 +88,6 @@ export default function TelegramUsers() {
     const [showTokenModal, setShowTokenModal] = useState(false);
     const [tokenConfig, setTokenConfig] = useState(null);
     const [newTokenInput, setNewTokenInput] = useState('');
-    const [showTokenText, setShowTokenText] = useState(false);
     const [savingToken, setSavingToken] = useState(false);
 
     // Cargar estado del bot
@@ -338,17 +337,37 @@ export default function TelegramUsers() {
     // Abrir modal de token
     const handleOpenTokenModal = async () => {
         setNewTokenInput('');
-        setShowTokenText(false);
-        await fetchTokenConfig();
         setShowTokenModal(true);
+        await fetchTokenConfig();
+    };
+
+    // Pegar token desde el portapapeles
+    const handlePasteClipboard = async () => {
+        try {
+            if (navigator?.clipboard?.readText) {
+                const text = await navigator.clipboard.readText();
+                if (text && text.trim()) {
+                    setNewTokenInput(text.trim());
+                    addToast('Token pegado desde el portapapeles', 'info');
+                    return;
+                }
+            }
+            addToast('Usa Ctrl+V para pegar en el campo de texto', 'info');
+        } catch (_) {
+            addToast('Usa Ctrl+V para pegar en el campo de texto', 'info');
+        }
     };
 
     // Guardar nuevo token de bot
     const handleSaveToken = async (e) => {
         if (e && e.preventDefault) e.preventDefault();
         const clean = newTokenInput.trim();
-        if (!clean || clean.length < 15) {
-            addToast('Ingresa un token de bot de Telegram válido (ej. 123456789:AAH...)', 'warning');
+        if (!clean) {
+            addToast('Por favor escribe o pega el nuevo token del bot', 'warning');
+            return;
+        }
+        if (!clean.includes(':') || clean.length < 20) {
+            addToast('Formato de token inválido. Debe contener números seguidos de ":" y la clave alfanumérica', 'warning');
             return;
         }
 
@@ -2395,60 +2414,114 @@ export default function TelegramUsers() {
                         </div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                            Token Actualmente Activo
-                        </label>
-                        <div style={{
-                            padding: '0.55rem 0.75rem',
-                            background: 'var(--surface-color)',
-                            border: '1px solid var(--border)',
-                            borderRadius: '6px',
-                            fontFamily: 'monospace',
-                            fontSize: '0.85rem',
-                            color: tokenConfig?.has_token ? 'var(--text-main)' : 'var(--text-muted)'
-                        }}>
-                            {tokenConfig?.masked_token || (tokenConfig?.has_token ? '••••••••••••••••' : 'Ningún token configurado')}
+                    {/* Estado del token actual (Tarjeta informativa no editable) */}
+                    <div style={{
+                        padding: '0.65rem 0.85rem',
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: '0.5rem'
+                    }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                Token actualmente en uso
+                            </span>
+                            <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary, #0088cc)' }}>
+                                {tokenConfig?.masked_token || (tokenConfig?.has_token ? '••••••••••••••••' : 'Ningún token registrado')}
+                            </span>
                         </div>
+                        <span style={{
+                            fontSize: '0.72rem',
+                            padding: '0.2rem 0.55rem',
+                            borderRadius: '4px',
+                            fontWeight: 600,
+                            background: tokenConfig?.has_token ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                            color: tokenConfig?.has_token ? '#10B981' : '#EF4444'
+                        }}>
+                            {tokenConfig?.has_token ? 'Configurado' : 'Sin Token'}
+                        </span>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                        <label htmlFor="new_bot_token_input" style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-main)', textTransform: 'uppercase' }}>
-                            Nuevo Token del Bot (proporcionado por @BotFather)
-                        </label>
-                        <div style={{ position: 'relative' }}>
-                            <input
-                                id="new_bot_token_input"
-                                type={showTokenText ? 'text' : 'password'}
-                                value={newTokenInput}
-                                onChange={(e) => setNewTokenInput(e.target.value)}
-                                placeholder="123456789:AAH..."
-                                className="form-input"
-                                style={{ width: '100%', fontFamily: 'monospace', paddingRight: '2.5rem', height: '38px', fontSize: '0.85rem' }}
-                                disabled={savingToken}
-                                autoComplete="off"
-                            />
+                    {/* Campo de edición directa del nuevo Token */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <label htmlFor="new_bot_token_input" style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)', textTransform: 'uppercase' }}>
+                                Ingresa el Nuevo Token de @BotFather
+                            </label>
                             <button
                                 type="button"
-                                onClick={() => setShowTokenText(!showTokenText)}
+                                onClick={handlePasteClipboard}
                                 style={{
-                                    position: 'absolute',
-                                    right: '8px',
-                                    top: '50%',
-                                    transform: 'translateY(-50%)',
                                     background: 'none',
                                     border: 'none',
                                     cursor: 'pointer',
-                                    color: 'var(--text-muted)',
-                                    padding: '4px'
+                                    color: 'var(--primary, #0088cc)',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                    padding: '0.2rem 0.4rem'
                                 }}
-                                title={showTokenText ? 'Ocultar' : 'Mostrar'}
                             >
-                                {showTokenText ? <EyeOff size={16} /> : <Eye size={16} />}
+                                <ClipboardPaste size={14} />
+                                Pegar del portapapeles
                             </button>
                         </div>
-                        <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
-                            Al guardar, el servidor validará el token directamente con la API de Telegram (<code>getMe</code>) antes de persistirlo y reactivar el servicio.
+
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                            <input
+                                id="new_bot_token_input"
+                                name="new_bot_token_input"
+                                type="text"
+                                value={newTokenInput}
+                                onChange={(e) => setNewTokenInput(e.target.value)}
+                                placeholder="Ej: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ..."
+                                autoFocus
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="off"
+                                spellCheck="false"
+                                data-lpignore="true"
+                                data-form-type="other"
+                                className="form-input"
+                                style={{
+                                    width: '100%',
+                                    fontFamily: 'monospace',
+                                    paddingRight: newTokenInput ? '4.5rem' : '1rem',
+                                    height: '42px',
+                                    fontSize: '0.85rem'
+                                }}
+                                disabled={savingToken}
+                            />
+                            {newTokenInput && (
+                                <button
+                                    type="button"
+                                    onClick={() => setNewTokenInput('')}
+                                    style={{
+                                        position: 'absolute',
+                                        right: '8px',
+                                        background: 'rgba(239, 68, 68, 0.1)',
+                                        color: '#EF4444',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: 'pointer',
+                                        padding: '4px 8px',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 600
+                                    }}
+                                    title="Limpiar campo"
+                                >
+                                    Borrar
+                                </button>
+                            )}
+                        </div>
+
+                        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            Al hacer clic en <b>Guardar y Reconectar</b>, el sistema validará el token directamente con la API oficial de Telegram antes de activarlo.
                         </span>
                     </div>
                 </div>
