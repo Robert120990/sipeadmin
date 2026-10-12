@@ -76,6 +76,16 @@ if [ -n "$PM2_BIN" ]; then
     $PM2_BIN restart 0 --update-env >> "$DEBUG_FILE" 2>&1 || \
     $PM2_BIN restart all --update-env >> "$DEBUG_FILE" 2>&1 || \
     $PM2_BIN startOrRestart "$PROJECT_DIR/ecosystem.config.cjs" --update-env >> "$DEBUG_FILE" 2>&1 || true
+
+    # Si PM2 corre bajo otro perfil de usuario (/root o /home/sistemas)
+    if [ -d "/root/.pm2" ]; then
+        PM2_HOME="/root/.pm2" $PM2_BIN restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+        PM2_HOME="/root/.pm2" $PM2_BIN restart all --update-env >> "$DEBUG_FILE" 2>&1 || true
+    fi
+    if [ -d "$HOME/.pm2" ]; then
+        PM2_HOME="$HOME/.pm2" $PM2_BIN restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+        PM2_HOME="$HOME/.pm2" $PM2_BIN restart all --update-env >> "$DEBUG_FILE" 2>&1 || true
+    fi
     
     $PM2_BIN save >> "$DEBUG_FILE" 2>&1 || true
 fi
@@ -102,6 +112,8 @@ for pid in $SERVER_PIDS; do
         echo "Terminando server.js PID $pid ($CMD_LINE)..." >> "$DEBUG_FILE"
         kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
     fi
+done
+
 echo "Fecha fin: $(date)" >> "$DEBUG_FILE"
 echo "=== Despliegue completado con éxito ===" >> "$DEBUG_FILE"
 
