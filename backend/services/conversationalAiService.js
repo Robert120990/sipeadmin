@@ -55,6 +55,22 @@ const cleanExpiredSessions = () => {
 };
 
 /**
+ * Obtener cantidad de conversaciones activas en la ventana dada (por defecto 20 minutos)
+ */
+const getActiveConversationsCount = (windowMs = 20 * 60 * 1000) => {
+    cleanExpiredSessions();
+    const now = Date.now();
+    let count = 0;
+    for (const [, session] of conversationHistory.entries()) {
+        const lastActivity = session.length > 0 ? session[session.length - 1].timestamp : 0;
+        if (now - lastActivity <= windowMs) {
+            count += 1;
+        }
+    }
+    return count;
+};
+
+/**
  * Obtener historial formateado para la API de Gemini
  */
 const getFormattedHistory = (chatId) => {
@@ -321,6 +337,15 @@ REGLAS DE DATOS:
 CONTEXTO OPERATIVO REAL DE SIPE ADMIN:
 ${JSON.stringify(liveContext)}`;
 
+        if (history.length > 0) {
+            try {
+                const { recordMultiTurnQuery } = require('./telegramAuditorService');
+                recordMultiTurnQuery(chatId);
+            } catch (_) {
+                // Silencioso
+            }
+        }
+
         const contents = [
             ...history,
             {
@@ -349,6 +374,19 @@ ${JSON.stringify(liveContext)}`;
         return cleanReply;
     } catch (err) {
         console.warn('[ConversationalAI] Error al generar respuesta con Gemini:', err.message);
+        try {
+            const { recordError } = require('./telegramAuditorService');
+            recordError({
+                type: 'AI_ERROR',
+                message: err.message,
+                stack: err.stack,
+                userId: user?.telegram_user_id,
+                chatId,
+                query: prompt
+            });
+        } catch (_) {
+            // Silencioso
+        }
         return null;
     }
 };
@@ -359,6 +397,7 @@ module.exports = {
     getFormattedHistory,
     appendToHistory,
     clearConversation,
+    getActiveConversationsCount,
     learnAlias,
     loadDynamicAliases,
     getGeminiApiKey,

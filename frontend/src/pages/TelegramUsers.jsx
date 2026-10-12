@@ -4,7 +4,8 @@ import {
     XCircle, Clock, Shield, Search, Send, Copy, AlertTriangle,
     Activity, Power, HelpCircle, Check, Eye, EyeOff,
     UserCheck, ShieldAlert, ShieldCheck, Link2,
-    ThumbsUp, ThumbsDown, MessageSquare
+    ThumbsUp, ThumbsDown, MessageSquare, Database, Cpu, Radio,
+    Terminal, AlertOctagon
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -37,6 +38,16 @@ export default function TelegramUsers() {
     const [feedbackStats, setFeedbackStats] = useState({ total: 0, utiles: 0, no_utiles: 0, pendientes: 0, con_comentarios: 0, tasa_satisfaccion: 100 });
     const [loadingFeedback, setLoadingFeedback] = useState(false);
     const [feedbackFilter, setFeedbackFilter] = useState('ALL');
+
+    // Diagnóstico de Salud & Auditoría Forense
+    const [healthData, setHealthData] = useState(null);
+    const [loadingHealth, setLoadingHealth] = useState(false);
+    const [forensicErrors, setForensicErrors] = useState([]);
+    const [loadingErrors, setLoadingErrors] = useState(false);
+    const [clearingErrors, setClearingErrors] = useState(false);
+    const [selectedError, setSelectedError] = useState(null);
+    const [errorDetailModalOpen, setErrorDetailModalOpen] = useState(false);
+    const [errorFilter, setErrorFilter] = useState('ALL');
 
     // Modal de usuario
     const [modalOpen, setModalOpen] = useState(false);
@@ -174,19 +185,72 @@ export default function TelegramUsers() {
         }
     }, [addToast]);
 
+    // Cargar diagnóstico de salud operacional
+    const fetchHealthDiagnostics = useCallback(async () => {
+        setLoadingHealth(true);
+        try {
+            const res = await api.get('/telegram/audit/health');
+            setHealthData(res.data.diagnostics || res.data);
+        } catch (err) {
+            console.warn('Error al cargar diagnóstico de salud:', err.message);
+        } finally {
+            setLoadingHealth(false);
+        }
+    }, []);
+
+    // Cargar errores forenses almacenados en el buffer circular
+    const fetchForensicErrors = useCallback(async () => {
+        setLoadingErrors(true);
+        try {
+            const res = await api.get('/telegram/audit/errors');
+            setForensicErrors(res.data.errors || []);
+        } catch (err) {
+            console.warn('Error al cargar errores forenses:', err.message);
+        } finally {
+            setLoadingErrors(false);
+        }
+    }, []);
+
+    // Limpiar el buffer circular de errores forenses
+    const handleClearForensicErrors = async () => {
+        const ok = await confirm('¿Estás seguro de vaciar el buffer forense de errores en memoria?', {
+            variant: 'danger',
+            title: 'Limpiar Buffer Forense',
+            confirmText: 'Sí, Vaciar Buffer'
+        });
+        if (!ok) return;
+
+        setClearingErrors(true);
+        try {
+            await api.post('/telegram/audit/clear-errors');
+            addToast('Buffer de errores forenses limpiado exitosamente', 'success');
+            await fetchForensicErrors();
+            await fetchHealthDiagnostics();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al limpiar buffer forense', 'error');
+        } finally {
+            setClearingErrors(false);
+        }
+    };
+
     useEffect(() => {
         fetchBotStatus();
         fetchUsers();
         fetchSystemUsers();
-    }, [fetchBotStatus, fetchUsers, fetchSystemUsers]);
+        fetchHealthDiagnostics();
+    }, [fetchBotStatus, fetchUsers, fetchSystemUsers, fetchHealthDiagnostics]);
 
     useEffect(() => {
         if (activeTab === 'bitacora') {
             fetchBitacora();
         } else if (activeTab === 'feedback') {
             fetchFeedback();
+            fetchHealthDiagnostics();
+        } else if (activeTab === 'diagnostico') {
+            fetchHealthDiagnostics();
+            fetchForensicErrors();
         }
-    }, [activeTab, fetchBitacora, fetchFeedback]);
+    }, [activeTab, fetchBitacora, fetchFeedback, fetchHealthDiagnostics, fetchForensicErrors]);
 
     // Marcar retroalimentación como revisada
     const handleMarkFeedbackReviewed = async (fb) => {
@@ -418,6 +482,245 @@ export default function TelegramUsers() {
 
     const pendingUsers = users.filter(u => !u.activo && (u.notas || '').includes('Solicitud'));
 
+    // Renderizado de Tarjeta de Salud del Bot (Estado Polling, Conexión BD, Gemini AI, Sesiones Activas)
+    const renderBotHealthCard = () => {
+        const isHealthy = healthData?.status === 'healthy';
+        const isDegraded = healthData?.status === 'degraded';
+        const isCritical = healthData?.status === 'critical';
+
+        const statusLabel = isHealthy
+            ? '🟢 Sistema Saludable y Operativo'
+            : isDegraded
+                ? '🟡 Rendimiento Degradado'
+                : isCritical
+                    ? '🔴 Alerta Crítica Operativa'
+                    : '⏳ Verificando Salud...';
+
+        const statusBg = isHealthy
+            ? 'rgba(16, 185, 129, 0.12)'
+            : isDegraded
+                ? 'rgba(245, 158, 11, 0.12)'
+                : isCritical
+                    ? 'rgba(239, 68, 68, 0.12)'
+                    : 'rgba(107, 114, 128, 0.12)';
+
+        const statusColor = isHealthy
+            ? '#10B981'
+            : isDegraded
+                ? '#F59E0B'
+                : isCritical
+                    ? '#EF4444'
+                    : 'var(--text-muted)';
+
+        const lastPollStr = healthData?.bot?.lastPollAt
+            ? new Date(healthData.bot.lastPollAt).toLocaleTimeString('es-SV', { hour12: false })
+            : 'Sin registro';
+
+        return (
+            <div className="card glass" style={{ padding: '0.9rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                        <Activity size={18} color="var(--primary)" />
+                        <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                            Tarjeta de Salud del Bot & Diagnóstico Forense
+                        </span>
+                        <span style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            padding: '0.2rem 0.6rem',
+                            borderRadius: '12px',
+                            background: statusBg,
+                            color: statusColor
+                        }}>
+                            {statusLabel}
+                        </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            Última verificación: {healthData?.timestamp ? new Date(healthData.timestamp).toLocaleTimeString('es-SV', { hour12: false }) : 'N/A'}
+                        </span>
+                        <button
+                            className="btn-secondary"
+                            onClick={fetchHealthDiagnostics}
+                            disabled={loadingHealth}
+                            style={{ height: '28px', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0 0.55rem' }}
+                        >
+                            <RefreshCw size={12} className={loadingHealth ? 'spin' : ''} /> Actualizar Salud
+                        </button>
+                    </div>
+                </div>
+
+                {/* 4 Pilares Fundamentales: Polling, Bases de Datos, Gemini AI, Sesiones Activas */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.65rem' }}>
+                    {/* Pilar 1: Estado Polling */}
+                    <div style={{
+                        padding: '0.65rem 0.85rem',
+                        background: 'var(--surface-color, rgba(255,255,255,0.03))',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.35rem'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <Radio size={13} color="#3B82F6" /> Estado Polling
+                            </span>
+                            <span style={{
+                                fontSize: '0.68rem',
+                                padding: '0.1rem 0.4rem',
+                                borderRadius: '4px',
+                                fontWeight: 700,
+                                background: healthData?.bot?.isPolling ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                color: healthData?.bot?.isPolling ? '#10B981' : '#EF4444'
+                            }}>
+                                {healthData?.bot?.isPolling ? 'Sondeo Activo' : 'En Pausa'}
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                            {healthData?.bot?.username || '@SIPE_IA_BOT'}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                            Último sondeo: <strong>{lastPollStr}</strong>
+                        </div>
+                    </div>
+
+                    {/* Pilar 2: Conexión Bases de Datos */}
+                    <div style={{
+                        padding: '0.65rem 0.85rem',
+                        background: 'var(--surface-color, rgba(255,255,255,0.03))',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.35rem'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <Database size={13} color="#10B981" /> Conexión Bases de Datos
+                            </span>
+                            <span style={{
+                                fontSize: '0.68rem',
+                                padding: '0.1rem 0.4rem',
+                                borderRadius: '4px',
+                                fontWeight: 700,
+                                background: healthData?.databases?.sipeAdmin?.connected && healthData?.databases?.sistemaSaas?.connected ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                color: healthData?.databases?.sipeAdmin?.connected && healthData?.databases?.sistemaSaas?.connected ? '#10B981' : '#EF4444'
+                            }}>
+                                {healthData?.databases?.sipeAdmin?.connected && healthData?.databases?.sistemaSaas?.connected ? '2/2 Conectadas' : 'Degradado'}
+                            </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem' }}>
+                            <span>db_sipe_admin:</span>
+                            <strong style={{ color: healthData?.databases?.sipeAdmin?.connected ? '#10B981' : '#EF4444' }}>
+                                {healthData?.databases?.sipeAdmin?.connected ? `🟢 Conectada (${healthData.databases.sipeAdmin.latencyMs} ms)` : '🔴 Desconectada'}
+                            </strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem' }}>
+                            <span>db_sistema_saas:</span>
+                            <strong style={{ color: healthData?.databases?.sistemaSaas?.connected ? '#10B981' : '#EF4444' }}>
+                                {healthData?.databases?.sistemaSaas?.connected ? `🟢 Conectada (${healthData.databases.sistemaSaas.latencyMs} ms)` : '🔴 Desconectada'}
+                            </strong>
+                        </div>
+                    </div>
+
+                    {/* Pilar 3: Gemini AI & Copiloto */}
+                    <div style={{
+                        padding: '0.65rem 0.85rem',
+                        background: 'var(--surface-color, rgba(255,255,255,0.03))',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.35rem'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <Cpu size={13} color="#8B5CF6" /> Gemini AI
+                            </span>
+                            <span style={{
+                                fontSize: '0.68rem',
+                                padding: '0.1rem 0.4rem',
+                                borderRadius: '4px',
+                                fontWeight: 700,
+                                background: healthData?.gemini?.configured ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                                color: healthData?.gemini?.configured ? '#10B981' : '#F59E0B'
+                            }}>
+                                {healthData?.gemini?.configured ? '🟢 Configurado' : '⚠️ Sin Clave'}
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                            {healthData?.gemini?.model || 'gemini-2.0-flash'}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                            Consultas multi-turno: <strong>{healthData?.metrics?.multiTurnQueriesCount || 0}</strong>
+                        </div>
+                    </div>
+
+                    {/* Pilar 4: Sesiones Activas & Memoria */}
+                    <div style={{
+                        padding: '0.65rem 0.85rem',
+                        background: 'var(--surface-color, rgba(255,255,255,0.03))',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.35rem'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <UserCheck size={13} color="#F59E0B" /> Sesiones Activas
+                            </span>
+                            <span style={{
+                                fontSize: '0.68rem',
+                                padding: '0.1rem 0.4rem',
+                                borderRadius: '4px',
+                                fontWeight: 700,
+                                background: 'rgba(59, 130, 246, 0.12)',
+                                color: '#3B82F6'
+                            }}>
+                                Últimos 20 min
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                            {healthData?.activeConversations?.count || 0} usuarios activos
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                            Notas de voz: <strong>{healthData?.metrics?.voiceNotesProcessed || 0}</strong> proc. / <strong>{healthData?.metrics?.voiceNotesFailed || 0}</strong> fallidas
+                        </div>
+                    </div>
+                </div>
+
+                {/* Barra de Métricas Forenses Consolidadas */}
+                <div style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '1rem',
+                    padding: '0.5rem 0.75rem',
+                    background: 'var(--surface-color, rgba(255,255,255,0.02))',
+                    border: '1px dashed var(--border)',
+                    borderRadius: '6px',
+                    fontSize: '0.76rem',
+                    alignItems: 'center'
+                }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Métricas Forenses:</span>
+                    <span>Consultas Totales: <strong>{healthData?.metrics?.totalQueriesReceived || 0}</strong></span>
+                    <span style={{ color: '#10B981' }}>Exitosas: <strong>{healthData?.metrics?.totalSuccessfulQueries || 0}</strong></span>
+                    <span style={{ color: (healthData?.metrics?.totalFailedQueries || 0) > 0 ? '#EF4444' : 'var(--text-main)' }}>
+                        Fallidas: <strong>{healthData?.metrics?.totalFailedQueries || 0}</strong>
+                    </span>
+                    <span>
+                        Tasa Global de Error: <strong style={{
+                            color: (healthData?.metrics?.errorRatePct || 0) > 15 ? '#EF4444' : (healthData?.metrics?.errorRatePct || 0) > 5 ? '#F59E0B' : '#10B981'
+                        }}>{healthData?.metrics?.errorRatePct ?? 0}%</strong>
+                    </span>
+                    <span>Latencia Promedio: ⏱️ <strong>{healthData?.metrics?.averageResponseTimeMs || 0} ms</strong></span>
+                    <span>Callbacks Alerta: 🚨 <strong>{healthData?.metrics?.alertCallbacksHandled || 0}</strong></span>
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {/* Header Compacto */}
@@ -626,6 +929,37 @@ export default function TelegramUsers() {
                             borderRadius: '10px'
                         }}>
                             {feedbackStats.no_utiles}
+                        </span>
+                    )}
+                </button>
+                <button
+                    onClick={() => setActiveTab('diagnostico')}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: '0.45rem 1rem',
+                        fontSize: '0.825rem',
+                        fontWeight: activeTab === 'diagnostico' ? 700 : 500,
+                        color: activeTab === 'diagnostico' ? 'var(--primary)' : 'var(--text-muted)',
+                        borderBottom: activeTab === 'diagnostico' ? '2px solid var(--primary)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem'
+                    }}
+                >
+                    <Activity size={13} />
+                    Diagnóstico & Salud Forense
+                    {forensicErrors.length > 0 && (
+                        <span style={{
+                            background: '#EF4444',
+                            color: '#fff',
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            padding: '0.1rem 0.35rem',
+                            borderRadius: '10px'
+                        }}>
+                            {forensicErrors.length}
                         </span>
                     )}
                 </button>
@@ -1000,6 +1334,9 @@ export default function TelegramUsers() {
             {activeTab === 'feedback' && (
                 /* Tab de Retroalimentación & Mejora Continua */
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    {/* Tarjeta de Salud del Bot */}
+                    {renderBotHealthCard()}
+
                     {/* Tarjetas KPI de Satisfacción */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
                         <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -1177,6 +1514,187 @@ export default function TelegramUsers() {
                                                 </td>
                                             </tr>
                                         ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'diagnostico' && (
+                /* Tab de Diagnóstico & Salud Forense */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    {/* Tarjeta de Salud del Bot */}
+                    {renderBotHealthCard()}
+
+                    {/* Tabla de Eventos y Errores Forenses (Buffer Circular) */}
+                    <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
+                        <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <Terminal size={15} color="var(--primary)" />
+                                    <span style={{ fontSize: '0.825rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                                        Buffer Forense de Errores e Incidentes (Últimos 50 Eventos en Memoria)
+                                    </span>
+                                </div>
+                                <select
+                                    value={errorFilter}
+                                    onChange={e => setErrorFilter(e.target.value)}
+                                    style={{
+                                        height: '30px',
+                                        fontSize: '0.76rem',
+                                        borderRadius: 'var(--border-radius)',
+                                        border: '1px solid var(--border)',
+                                        background: 'var(--bg-color)',
+                                        color: 'var(--text-main)',
+                                        padding: '0 0.5rem'
+                                    }}
+                                >
+                                    <option value="ALL">Todos los eventos ({forensicErrors.length})</option>
+                                    <option value="CRITICAL">🔴 Críticos</option>
+                                    <option value="ERROR">🟠 Errores</option>
+                                    <option value="WARNING">🟡 Advertencias</option>
+                                    <option value="POLLING_ERROR">📡 Errores Polling</option>
+                                    <option value="AI_ERROR">🧠 Errores IA (Gemini)</option>
+                                    <option value="QUERY_ERROR">❓ Errores de Consulta</option>
+                                    <option value="VOICE_ERROR">🎙️ Errores de Voz</option>
+                                    <option value="DB_ERROR">🗄️ Errores de Base de Datos</option>
+                                </select>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <button
+                                    className="btn-secondary"
+                                    onClick={fetchForensicErrors}
+                                    disabled={loadingErrors}
+                                    style={{ height: '30px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                >
+                                    <RefreshCw size={13} className={loadingErrors ? 'spin' : ''} /> Actualizar
+                                </button>
+                                <button
+                                    className="btn-secondary"
+                                    onClick={handleClearForensicErrors}
+                                    disabled={clearingErrors || forensicErrors.length === 0}
+                                    style={{
+                                        height: '30px',
+                                        fontSize: '0.75rem',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.35rem',
+                                        color: '#EF4444',
+                                        borderColor: 'rgba(239, 68, 68, 0.3)'
+                                    }}
+                                    title="Limpiar buffer de memoria"
+                                >
+                                    <AlertTriangle size={13} /> Limpiar Buffer
+                                </button>
+                            </div>
+                        </div>
+
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '950px' }}>
+                            <thead>
+                                <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha / Hora</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Severidad</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Tipo</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Usuario / Origen</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Mensaje / Causa</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Consulta Disparadora</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loadingErrors ? (
+                                    <tr>
+                                        <td colSpan="7" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            Cargando registro de eventos forenses...
+                                        </td>
+                                    </tr>
+                                ) : forensicErrors.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="7" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem' }}>
+                                                <CheckCircle2 size={28} color="#10B981" />
+                                                <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.85rem' }}>
+                                                    El buffer circular de auditoría forense se encuentra completamente limpio.
+                                                </div>
+                                                <div style={{ fontSize: '0.76rem' }}>
+                                                    Cero excepciones, caídas o fallos registrados en las sesiones del bot.
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    forensicErrors
+                                        .filter(e => {
+                                            if (errorFilter === 'ALL') return true;
+                                            if (errorFilter === 'CRITICAL') return e.severity === 'critical';
+                                            if (errorFilter === 'ERROR') return e.severity === 'error';
+                                            if (errorFilter === 'WARNING') return e.severity === 'warning';
+                                            return e.type === errorFilter;
+                                        })
+                                        .map(e => {
+                                            const isCrit = e.severity === 'critical';
+                                            const isWarn = e.severity === 'warning';
+                                            const badgeBg = isCrit ? 'rgba(220, 38, 38, 0.15)' : isWarn ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.12)';
+                                            const badgeColor = isCrit ? '#DC2626' : isWarn ? '#F59E0B' : '#EF4444';
+
+                                            return (
+                                                <tr key={e.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                    <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.76rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                                        {new Date(e.timestamp).toLocaleString('es-SV', {
+                                                            day: '2-digit', month: '2-digit', year: 'numeric',
+                                                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                                                        })}
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
+                                                        <span style={{
+                                                            fontSize: '0.7rem',
+                                                            padding: '0.15rem 0.45rem',
+                                                            borderRadius: '4px',
+                                                            fontWeight: 700,
+                                                            textTransform: 'uppercase',
+                                                            background: badgeBg,
+                                                            color: badgeColor
+                                                        }}>
+                                                            {e.severity}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.78rem' }}>
+                                                        <code>{e.type}</code>
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.78rem' }}>
+                                                        {e.userId ? <span>ID: <code>{e.userId}</code></span> : (e.chatId ? <span>Chat: <code>{e.chatId}</code></span> : <span style={{ color: 'var(--text-muted)' }}>Sistema</span>)}
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem', maxWidth: '300px' }}>
+                                                        <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                                                            {e.message}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.78rem', maxWidth: '240px' }}>
+                                                        {e.query ? (
+                                                            <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                                                «{e.query.slice(0, 60)}{e.query.length > 60 ? '...' : ''}»
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{ color: 'var(--text-muted)' }}>-</span>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
+                                                        <button
+                                                            className="btn-secondary"
+                                                            onClick={() => {
+                                                                setSelectedError(e);
+                                                                setErrorDetailModalOpen(true);
+                                                            }}
+                                                            title="Ver stack trace e inspección forense"
+                                                            style={{ height: '26px', fontSize: '0.72rem', padding: '0 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                                        >
+                                                            <Eye size={12} /> Detalle
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
                                 )}
                             </tbody>
                         </table>
@@ -1606,6 +2124,133 @@ export default function TelegramUsers() {
                         }}
                     />
                 </div>
+            </Modal>
+
+            {/* Modal de Inspección Forense de Error */}
+            <Modal
+                open={errorDetailModalOpen}
+                onClose={() => setErrorDetailModalOpen(false)}
+                title={selectedError ? `Inspección Forense: ${selectedError.type}` : 'Detalle del Error'}
+                size="lg"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setErrorDetailModalOpen(false)}
+                            style={{ height: '36px', fontSize: '0.825rem' }}
+                        >
+                            Cerrar
+                        </button>
+                    </div>
+                }
+            >
+                {selectedError && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
+                            <div style={{ padding: '0.5rem 0.75rem', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Identificador</div>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 600 }}><code>{selectedError.id}</code></div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.75rem', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Timestamp</div>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>{new Date(selectedError.timestamp).toLocaleString('es-SV')}</div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.75rem', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Severidad / Tipo</div>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <span style={{
+                                        fontSize: '0.7rem',
+                                        padding: '0.1rem 0.4rem',
+                                        borderRadius: '3px',
+                                        fontWeight: 700,
+                                        textTransform: 'uppercase',
+                                        background: selectedError.severity === 'critical' ? 'rgba(220, 38, 38, 0.15)' : 'rgba(239, 68, 68, 0.12)',
+                                        color: selectedError.severity === 'critical' ? '#DC2626' : '#EF4444'
+                                    }}>
+                                        {selectedError.severity}
+                                    </span>
+                                    <code>{selectedError.type}</code>
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.5rem 0.75rem', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Usuario / Chat</div>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                                    {selectedError.userId ? `User: ${selectedError.userId}` : ''} {selectedError.chatId ? `(Chat: ${selectedError.chatId})` : 'Sistema'}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '0.25rem' }}>
+                                Mensaje de Error
+                            </div>
+                            <div style={{
+                                padding: '0.65rem 0.85rem',
+                                background: 'rgba(239, 68, 68, 0.08)',
+                                borderLeft: '3px solid #EF4444',
+                                borderRadius: '0 6px 6px 0',
+                                fontSize: '0.85rem',
+                                fontWeight: 600,
+                                color: 'var(--text-main)'
+                            }}>
+                                {selectedError.message}
+                            </div>
+                        </div>
+
+                        {selectedError.query && (
+                            <div>
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '0.25rem' }}>
+                                    Consulta Disparadora
+                                </div>
+                                <div style={{ padding: '0.55rem 0.75rem', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '0.825rem', fontStyle: 'italic' }}>
+                                    «{selectedError.query}»
+                                </div>
+                            </div>
+                        )}
+
+                        {selectedError.stack && (
+                            <div>
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '0.25rem' }}>
+                                    Stack Trace Forense
+                                </div>
+                                <pre style={{
+                                    margin: 0,
+                                    padding: '0.75rem',
+                                    borderRadius: '6px',
+                                    background: '#1e293b',
+                                    color: '#f8fafc',
+                                    fontSize: '0.75rem',
+                                    fontFamily: 'monospace',
+                                    overflowX: 'auto',
+                                    maxHeight: '220px'
+                                }}>
+                                    {selectedError.stack}
+                                </pre>
+                            </div>
+                        )}
+
+                        {selectedError.details && (
+                            <div>
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '0.25rem' }}>
+                                    Metadatos Adicionales
+                                </div>
+                                <pre style={{
+                                    margin: 0,
+                                    padding: '0.65rem',
+                                    borderRadius: '6px',
+                                    background: 'var(--surface-color)',
+                                    border: '1px solid var(--border)',
+                                    fontSize: '0.75rem',
+                                    fontFamily: 'monospace',
+                                    overflowX: 'auto'
+                                }}>
+                                    {JSON.stringify(selectedError.details, null, 2)}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
+                )}
             </Modal>
         </div>
     );

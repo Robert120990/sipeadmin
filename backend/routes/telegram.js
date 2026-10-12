@@ -15,6 +15,11 @@ const {
     getFeedbackStats,
     getFeedbackList
 } = require('../services/telegramBotService');
+const {
+    getHealthDiagnostics,
+    getErrors,
+    clearErrors
+} = require('../services/telegramAuditorService');
 
 const telegramPerms = [
     '/dashboard/seguridad/telegram',
@@ -610,6 +615,46 @@ router.patch('/feedback/:id/revisar', authenticateToken, requirePermission(teleg
         res.json({ ok: true, message: 'Retroalimentación marcada como revisada exitosamente' });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar estado de retroalimentación');
+    }
+});
+
+/**
+ * GET /api/telegram/audit/health
+ * Diagnóstico consolidado de salud, infraestructura, conectividad y métricas operativas
+ */
+router.get('/audit/health', authenticateN8nOrAdmin, async (req, res) => {
+    try {
+        const diagnostics = await getHealthDiagnostics();
+        res.json({ ok: true, ...diagnostics, diagnostics });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener diagnóstico de salud de Telegram');
+    }
+});
+
+/**
+ * GET /api/telegram/audit/errors
+ * Listado de eventos y errores forenses almacenados en el buffer circular
+ */
+router.get('/audit/errors', authenticateN8nOrAdmin, async (req, res) => {
+    try {
+        const { limit = 50, type } = req.query;
+        const errors = getErrors({ limit: Number(limit) || 50, type });
+        res.json({ ok: true, count: errors.length, errors });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener registros de errores forenses');
+    }
+});
+
+/**
+ * POST /api/telegram/audit/clear-errors
+ * Limpia el buffer de errores forenses en memoria
+ */
+router.post('/audit/clear-errors', authenticateN8nOrAdmin, async (req, res) => {
+    try {
+        const result = clearErrors();
+        res.json({ ok: true, message: 'Buffer de errores forenses limpiado exitosamente', ...result });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al limpiar buffer de errores forenses');
     }
 });
 

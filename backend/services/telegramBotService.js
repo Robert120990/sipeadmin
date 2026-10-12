@@ -157,6 +157,18 @@ const formatYMD = (y, m, d) => {
 };
 
 /**
+ * Desplazar una fecha YYYY-MM-DD en N días (soporta números negativos para retroceder)
+ */
+const shiftDate = (ymd, offsetDays = -1) => {
+    if (!ymd || typeof ymd !== 'string') return getDateStr(offsetDays);
+    const parts = ymd.split('-');
+    if (parts.length !== 3) return getDateStr(offsetDays);
+    const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    d.setDate(d.getDate() + offsetDays);
+    return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+};
+
+/**
  * Parser semántico completo de fechas en español natural:
  * Reconoce '5 de octubre', '15 de septiembre', '05 de oct', 'el dia 5', 'el dia de ayer',
  * formatos numéricos, etc., asociando el año correspondiente (por defecto año actual 2026).
@@ -248,7 +260,107 @@ const SPANISH_MONTH_NAMES = [
  */
 const parseSpanishPeriodOrDate = (text, ref = 2026) => {
     if (!text || typeof text !== 'string') return null;
+    let refDate = new Date();
+    let defaultYear = 2026;
+    if (ref instanceof Date && !isNaN(ref.getTime())) {
+        refDate = ref;
+        defaultYear = ref.getFullYear();
+    } else if (typeof ref === 'number' && ref > 1900 && ref < 3000) {
+        defaultYear = ref;
+        refDate.setFullYear(ref);
+    } else {
+        defaultYear = refDate.getFullYear() || 2026;
+    }
     const normalized = normalizeText(text);
+
+    // 0. Detección de periodos relativos especiales solicitados por usuarios
+
+    // 0.a "esta semana", "semana actual", "de esta semana"
+    if (/\b(esta\s+semana|semana\s+actual|de\s+esta\s+semana)\b/i.test(normalized)) {
+        const dayOfWeek = (refDate.getDay() + 6) % 7; // Lunes = 0, ..., Domingo = 6
+        const monday = new Date(refDate);
+        monday.setDate(monday.getDate() - dayOfWeek);
+        const sunday = new Date(monday);
+        sunday.setDate(sunday.getDate() + 6);
+        const startDate = formatYMD(monday.getFullYear(), monday.getMonth() + 1, monday.getDate());
+        const endDate = formatYMD(sunday.getFullYear(), sunday.getMonth() + 1, sunday.getDate());
+        return {
+            type: 'range',
+            startDate,
+            endDate,
+            label: `Esta semana (${toDisplayDate(startDate)} al ${toDisplayDate(endDate)})`,
+            periodo: 'esta_semana'
+        };
+    }
+
+    // 0.b "semana pasada", "semana anterior", "la semana pasada"
+    if (/\b(semana\s+pasada|semana\s+anterior|la\s+semana\s+pasada)\b/i.test(normalized)) {
+        const dayOfWeek = (refDate.getDay() + 6) % 7;
+        const lastMonday = new Date(refDate);
+        lastMonday.setDate(lastMonday.getDate() - dayOfWeek - 7);
+        const lastSunday = new Date(lastMonday);
+        lastSunday.setDate(lastSunday.getDate() + 6);
+        const startDate = formatYMD(lastMonday.getFullYear(), lastMonday.getMonth() + 1, lastMonday.getDate());
+        const endDate = formatYMD(lastSunday.getFullYear(), lastSunday.getMonth() + 1, lastSunday.getDate());
+        return {
+            type: 'range',
+            startDate,
+            endDate,
+            label: `Semana pasada (${toDisplayDate(startDate)} al ${toDisplayDate(endDate)})`,
+            periodo: 'semana_pasada'
+        };
+    }
+
+    // 0.c "quincena pasada", "quincena anterior", "la quincena pasada"
+    if (/\b(quincena\s+pasada|quincena\s+anterior|la\s+quincena\s+pasada)\b/i.test(normalized)) {
+        const day = refDate.getDate();
+        let startDate, endDate, qLabel;
+        if (day <= 15) {
+            let prevM = refDate.getMonth();
+            let y = refDate.getFullYear();
+            if (prevM === 0) { prevM = 12; y -= 1; }
+            const lastDay = new Date(y, prevM, 0).getDate();
+            startDate = formatYMD(y, prevM, 16);
+            endDate = formatYMD(y, prevM, lastDay);
+            qLabel = `2ª Quincena de ${SPANISH_MONTH_NAMES[prevM]} ${y}`;
+        } else {
+            const y = refDate.getFullYear();
+            const m = refDate.getMonth() + 1;
+            startDate = formatYMD(y, m, 1);
+            endDate = formatYMD(y, m, 15);
+            qLabel = `1ª Quincena de ${SPANISH_MONTH_NAMES[m]} ${y}`;
+        }
+        return {
+            type: 'range',
+            startDate,
+            endDate,
+            label: `Quincena pasada: ${qLabel}`,
+            periodo: 'quincena_pasada'
+        };
+    }
+
+    // 0.d "últimos 7 días", "últimos 3 días", "últimos X días"
+    const ultimosMatch = normalized.match(/\b(?:ultimos|ultimas)\s+([0-9]+|tres|siete)\s+dias?\b/i);
+    if (ultimosMatch) {
+        let numDays = parseInt(ultimosMatch[1], 10);
+        if (ultimosMatch[1].toLowerCase() === 'tres') numDays = 3;
+        if (ultimosMatch[1].toLowerCase() === 'siete') numDays = 7;
+        if (!isNaN(numDays) && numDays > 0) {
+            const endD = new Date(refDate);
+            const startD = new Date(refDate);
+            startD.setDate(startD.getDate() - numDays);
+            const startDate = formatYMD(startD.getFullYear(), startD.getMonth() + 1, startD.getDate());
+            const endDate = formatYMD(endD.getFullYear(), endD.getMonth() + 1, endD.getDate());
+            return {
+                type: 'range',
+                startDate,
+                endDate,
+                days: numDays,
+                label: `Últimos ${numDays} días (${toDisplayDate(startDate)} al ${toDisplayDate(endDate)})`,
+                periodo: `ultimos_${numDays}_dias`
+            };
+        }
+    }
 
     // 1. Detección de rangos de fechas: 'del 1 al 10 de octubre', 'entre el 5 y 15 de septiembre'
     const rangeRegex = /\b(?:del|desde|entre)\s+(?:el\s+)?([0-3]?[0-9])\s*(?:al|a|y|hasta)\s*(?:el\s+)?([0-3]?[0-9])\s*(?:de|\/|-)\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?\b/i;
@@ -257,7 +369,7 @@ const parseSpanishPeriodOrDate = (text, ref = 2026) => {
         const startDay = parseInt(rangeMatch[1], 10);
         const endDay = parseInt(rangeMatch[2], 10);
         const month = SPANISH_MONTHS[rangeMatch[3].toLowerCase()];
-        const year = rangeMatch[4] ? parseInt(rangeMatch[4], 10) : (typeof ref === 'number' ? ref : 2026);
+        const year = rangeMatch[4] ? parseInt(rangeMatch[4], 10) : defaultYear;
         return {
             type: 'range',
             startDate: formatYMD(year, month, startDay),
@@ -279,7 +391,7 @@ const parseSpanishPeriodOrDate = (text, ref = 2026) => {
         if (mMatch && mMatch[1]) {
             const month = SPANISH_MONTHS[mMatch[1].toLowerCase()];
             if (month) {
-                const year = mMatch[2] ? parseInt(mMatch[2], 10) : (typeof ref === 'number' ? ref : 2026);
+                const year = mMatch[2] ? parseInt(mMatch[2], 10) : defaultYear;
                 const lastDay = new Date(year, month, 0).getDate();
                 return {
                     type: 'month',
@@ -295,9 +407,8 @@ const parseSpanishPeriodOrDate = (text, ref = 2026) => {
 
         // 'este mes', 'mes actual', 'mes en curso', 'del mes'
         if (/\b(este\s+mes|mes\s+actual|mes\s+en\s+curso|del\s+mes)\b/i.test(normalized)) {
-            const now = new Date();
-            const y = now.getFullYear();
-            const m = now.getMonth() + 1;
+            const y = refDate.getFullYear();
+            const m = refDate.getMonth() + 1;
             const lastDay = new Date(y, m, 0).getDate();
             return {
                 type: 'month',
@@ -312,9 +423,8 @@ const parseSpanishPeriodOrDate = (text, ref = 2026) => {
 
         // 'mes pasado', 'mes anterior'
         if (/\b(mes\s+pasado|mes\s+anterior)\b/i.test(normalized)) {
-            const now = new Date();
-            let y = now.getFullYear();
-            let m = now.getMonth();
+            let y = refDate.getFullYear();
+            let m = refDate.getMonth();
             if (m === 0) { m = 12; y -= 1; }
             const lastDay = new Date(y, m, 0).getDate();
             return {
@@ -470,6 +580,82 @@ const editMessageReplyMarkup = async (chatId, messageId, replyMarkup = null) => 
 const pendingFeedbackUsers = new Map();
 
 /**
+ * Memoria de contexto conversacional multi-turno por usuario
+ * TTL: 20 minutos
+ * key: telegram_user_id (string) -> {
+ *   lastStationId, lastStationName, lastDate, lastProduct, lastTopic,
+ *   lastPeriod, lastHourReport, lastSolarReport, history: [], updatedAt
+ * }
+ */
+const userConversationContext = new Map();
+const CONVERSATION_CONTEXT_TTL = 20 * 60 * 1000; // 20 minutos
+
+const getUserConversationContext = (userId) => {
+    if (!userId) return null;
+    const key = String(userId);
+    const entry = userConversationContext.get(key);
+    if (!entry) return null;
+    if (Date.now() - (entry.updatedAt || 0) > CONVERSATION_CONTEXT_TTL) {
+        userConversationContext.delete(key);
+        return null;
+    }
+    return entry;
+};
+
+const setUserConversationContext = (userId, updates = {}) => {
+    if (!userId) return null;
+    const key = String(userId);
+    const existing = getUserConversationContext(userId) || {
+        lastStationId: null,
+        lastStationName: null,
+        lastDate: null,
+        lastProduct: null,
+        lastTopic: null,
+        lastPeriod: null,
+        lastHourReport: null,
+        lastSolarReport: null,
+        history: []
+    };
+
+    const newHistory = Array.isArray(existing.history) ? [...existing.history] : [];
+    if (updates.query) {
+        newHistory.push({
+            query: updates.query,
+            timestamp: Date.now(),
+            topic: updates.lastTopic || existing.lastTopic || 'general'
+        });
+        if (newHistory.length > 20) newHistory.shift();
+    }
+
+    const merged = {
+        lastStationId: updates.lastStationId !== undefined ? updates.lastStationId : existing.lastStationId,
+        lastStationName: updates.lastStationName !== undefined ? updates.lastStationName : existing.lastStationName,
+        lastDate: updates.lastDate !== undefined ? updates.lastDate : existing.lastDate,
+        lastProduct: updates.lastProduct !== undefined ? updates.lastProduct : existing.lastProduct,
+        lastTopic: updates.lastTopic !== undefined ? updates.lastTopic : existing.lastTopic,
+        lastPeriod: updates.lastPeriod !== undefined ? updates.lastPeriod : existing.lastPeriod,
+        lastHourReport: updates.lastHourReport !== undefined ? updates.lastHourReport : existing.lastHourReport,
+        lastSolarReport: updates.lastSolarReport !== undefined ? updates.lastSolarReport : existing.lastSolarReport,
+        history: newHistory,
+        updatedAt: Date.now()
+    };
+
+    userConversationContext.set(key, merged);
+    return merged;
+};
+
+const clearUserConversationContext = (userId) => {
+    if (!userId) return;
+    userConversationContext.delete(String(userId));
+};
+
+/**
+ * Mapa en memoria para el modo de justificación interactiva de descuadres
+ * key: telegram_user_id (string) -> { date, stationId, stationName, timestamp }
+ */
+const pendingAlertJustifications = new Map();
+
+/**
  * Registrar un nuevo evento de consulta para retroalimentación en telegram_feedback
  */
 const createFeedbackEntry = async ({
@@ -586,6 +772,16 @@ const handleCallbackQuery = async (cq) => {
         return;
     }
 
+    // Registrar callbacks de alerta o interactivos en el auditor forense
+    if (data.startsWith('alert_') || data.includes('alerta') || data.startsWith('ack_')) {
+        try {
+            const { recordAlertCallback } = require('./telegramAuditorService');
+            recordAlertCallback(fromId);
+        } catch (_) {
+            // Ignorar defensivamente
+        }
+    }
+
     // Caso 1: Calificación positiva (👍 Sí)
     if (data.startsWith('fb_ok:')) {
         const feedbackId = parseInt(data.replace('fb_ok:', ''), 10);
@@ -657,6 +853,163 @@ const handleCallbackQuery = async (cq) => {
                 `<i>(Escribe tu respuesta a continuación y la guardaremos en la bitácora de mejora continua)</i>`;
 
             await sendTelegramMessage(chatId, promptMsg, getMainReplyKeyboard());
+        }
+        return;
+    }
+
+    // Caso 3: Alertas Interactivas con botones de acción rápida
+    // 3.1 alert_dtl: Ver Detalle de Estación
+    if (data.startsWith('alert_dtl:')) {
+        const parts = data.split(':');
+        const targetDate = parts[1] || getDateStr(-1);
+        const stationId = parts[2] || '008';
+        await answerCallbackQuery(cq.id, 'Cargando detalle...');
+        try {
+            const consolData = await getConsolidadoVentas(targetDate);
+            const stObj = findStationById(stationId) || KNOWN_STATIONS.find(s => s.id === resolveStationId(stationId));
+            const stName = stObj ? stObj.name : (stationId || 'Estación');
+            const st = (consolData?.estaciones || []).find(e => 
+                String(e.id) === String(stationId) || 
+                String(e.saas_branch_id) === String(stationId) ||
+                normalizeText(e.empresa).includes(normalizeText(stName))
+            );
+            const stPista = (consolData?.resumen_cierre || []).find(r => 
+                normalizeText(r.estacion || r.empresa || '').includes(normalizeText(stName)) ||
+                String(r.estacion_id || r.branch_id) === String(stationId)
+            );
+            const stTienda = (consolData?.cortes_tienda || []).find(t => 
+                normalizeText(t.empresa || t.tienda_nombre || '').includes(normalizeText(stName)) ||
+                String(t.estacion_id || t.branch_id) === String(stationId)
+            );
+
+            let dtlMsg = `🔍 <b>Detalle Operativo de Auditoría</b>\n`;
+            dtlMsg += `⛽ <b>Estación:</b> ${escapeHtml(stName)}\n`;
+            dtlMsg += `📅 <b>Fecha Auditada:</b> ${toDisplayDate(targetDate)}\n`;
+            dtlMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+            if (st) {
+                dtlMsg += `📊 <b>Venta de Combustibles:</b>\n`;
+                dtlMsg += `• Total Dinero: <code>${moneyFmt(st.total_venta || 0)}</code>\n`;
+                dtlMsg += `• Total Galones: <code>${numFmt(st.galones || 0)} gal</code>\n`;
+                if (st.super) dtlMsg += `   └ Súper: <code>${numFmt(st.super)} gal</code>\n`;
+                if (st.regular) dtlMsg += `   └ Regular: <code>${numFmt(st.regular)} gal</code>\n`;
+                if (st.diesel) dtlMsg += `   └ Diésel: <code>${numFmt(st.diesel)} gal</code>\n`;
+                if (st.ion_diesel) dtlMsg += `   └ Ion Diésel: <code>${numFmt(st.ion_diesel)} gal</code>\n`;
+                dtlMsg += `\n`;
+            }
+
+            if (stPista) {
+                const dif = Number(stPista.diferencia !== undefined ? stPista.diferencia : (stPista.dif || 0));
+                const icon = dif < 0 ? '🔴 Faltante' : (dif > 0 ? '🟡 Sobrante' : '🟢 Cuadrado');
+                dtlMsg += `⛽ <b>Cuadre de Pista y Lecturas:</b>\n`;
+                dtlMsg += `• Diferencia: <code>${moneyFmt(dif)}</code> (${icon})\n`;
+                if (stPista.total_venta) dtlMsg += `• Venta en Pista: <code>${moneyFmt(stPista.total_venta)}</code>\n`;
+                dtlMsg += `\n`;
+            }
+
+            if (stTienda) {
+                const difT = Number(stTienda.dif !== undefined ? stTienda.dif : (stTienda.diferencia || 0));
+                const iconT = difT < 0 ? '🔴 Faltante' : (difT > 0 ? '🟡 Sobrante' : '🟢 Cuadrado');
+                dtlMsg += `🛒 <b>Tienda (${escapeHtml(stTienda.empresa || stTienda.tienda_nombre || 'Tienda')}):</b>\n`;
+                dtlMsg += `• Venta Tienda: <code>${moneyFmt(stTienda.venta || 0)}</code>\n`;
+                if (stTienda.gastos) dtlMsg += `• Gastos: <code>${moneyFmt(stTienda.gastos)}</code>\n`;
+                dtlMsg += `• Diferencia: <code>${moneyFmt(difT)}</code> (${iconT})\n\n`;
+            }
+
+            dtlMsg += `<i>Acción registrada en auditoría de SIPE Admin.</i>`;
+            await sendTelegramMessage(chatId, dtlMsg, getMainReplyKeyboard());
+        } catch (err) {
+            console.error('[TelegramBot] Error en alert_dtl:', err);
+            await sendTelegramMessage(chatId, '❌ Error al consultar detalle: ' + escapeHtml(err.message), getMainReplyKeyboard());
+        }
+        return;
+    }
+
+    // 3.2 alert_just: Justificar Descuadre de Estación
+    if (data.startsWith('alert_just:')) {
+        const parts = data.split(':');
+        const targetDate = parts[1] || getDateStr(-1);
+        const stationId = parts[2] || '008';
+        await answerCallbackQuery(cq.id, 'Modo justificación activado');
+        const stObj = findStationById(stationId) || KNOWN_STATIONS.find(s => s.id === resolveStationId(stationId));
+        const stName = stObj ? stObj.name : (stationId || 'Estación');
+
+        if (fromId) {
+            pendingAlertJustifications.set(fromId, {
+                date: targetDate,
+                stationId,
+                stationName: stName,
+                timestamp: Date.now()
+            });
+        }
+
+        const justMsg = `🏷️ <b>Justificación de Descuadre</b>\n\n` +
+            `⛽ <b>Estación:</b> ${escapeHtml(stName)}\n` +
+            `📅 <b>Fecha Auditada:</b> ${toDisplayDate(targetDate)}\n\n` +
+            `Por favor, escribe a continuación el motivo o justificación de esta discrepancia ` +
+            `(ej. calibración de mangueras, derrame menor reportado, turno en proceso de conciliación):\n\n` +
+            `<i>(Escribe tu justificación en el chat para registrarla en la bitácora de auditoría, o escribe /cancelar para abortar)</i>`;
+
+        await sendTelegramMessage(chatId, justMsg, getMainReplyKeyboard());
+        return;
+    }
+
+    // 3.3 alert_recheck: Re-verificar Turno en Tiempo Real
+    if (data.startsWith('alert_recheck:')) {
+        const parts = data.split(':');
+        const targetDate = parts[1] || getDateStr(-1);
+        const stationId = parts[2] || '008';
+        await answerCallbackQuery(cq.id, '🔄 Re-verificando en tiempo real...');
+        try {
+            const consolData = await getConsolidadoVentas(targetDate);
+            const stObj = findStationById(stationId) || KNOWN_STATIONS.find(s => s.id === resolveStationId(stationId));
+            const stName = stObj ? stObj.name : (stationId || 'Estación');
+            const stPista = (consolData?.resumen_cierre || []).find(r => 
+                normalizeText(r.estacion || r.empresa || '').includes(normalizeText(stName)) ||
+                String(r.estacion_id || r.branch_id) === String(stationId)
+            );
+            const pistaDif = stPista ? Number(stPista.diferencia !== undefined ? stPista.diferencia : (stPista.dif || 0)) : 0;
+            const isSquared = Math.abs(pistaDif) <= 10;
+
+            let recheckMsg = `🔄 <b>Re-verificación de Cuadre en Tiempo Real</b>\n`;
+            recheckMsg += `⛽ <b>Estación:</b> ${escapeHtml(stName)}\n`;
+            recheckMsg += `📅 <b>Fecha:</b> ${toDisplayDate(targetDate)}\n`;
+            recheckMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+            if (isSquared) {
+                recheckMsg += `✅ <b>¡Turno conciliado / cuadrado!</b>\n\n`;
+                recheckMsg += `• Diferencia actual en pista: <code>${moneyFmt(pistaDif)}</code>\n`;
+                recheckMsg += `• Estado: <b>En orden (dentro de tolerancia operativa)</b>\n\n`;
+                recheckMsg += `<i>El turno ya fue cuadrado satisfactoriamente en el sistema.</i>`;
+            } else {
+                recheckMsg += `⚠️ <b>Discrepancia aún pendiente de cuadre:</b>\n\n`;
+                recheckMsg += `• Diferencia en pista: <code>${moneyFmt(pistaDif)}</code> ${pistaDif < 0 ? '(🔴 Faltante)' : '(🟡 Sobrante)'}\n`;
+                if (stPista?.total_venta) {
+                    recheckMsg += `• Venta total en pista: <code>${moneyFmt(stPista.total_venta)}</code>\n`;
+                }
+                recheckMsg += `\n<i>Recomendación: Contactar al encargado de estación para completar la captura del cierre.</i>`;
+            }
+
+            await sendTelegramMessage(chatId, recheckMsg, getMainReplyKeyboard());
+        } catch (err) {
+            console.error('[TelegramBot] Error en alert_recheck:', err);
+            await sendTelegramMessage(chatId, '❌ Error al re-verificar estado: ' + escapeHtml(err.message), getMainReplyKeyboard());
+        }
+        return;
+    }
+
+    // 3.4 alert_sum: Resumen Global del Día
+    if (data.startsWith('alert_sum:')) {
+        const parts = data.split(':');
+        const targetDate = parts[1] || getDateStr(-1);
+        await answerCallbackQuery(cq.id, 'Cargando resumen del día...');
+        try {
+            const consolData = await getConsolidadoVentas(targetDate);
+            const sumMsg = formatVentasMessage(consolData, targetDate);
+            await sendTelegramMessage(chatId, sumMsg, getMainReplyKeyboard());
+        } catch (err) {
+            console.error('[TelegramBot] Error en alert_sum:', err);
+            await sendTelegramMessage(chatId, '❌ Error al cargar resumen del día: ' + escapeHtml(err.message), getMainReplyKeyboard());
         }
         return;
     }
@@ -817,8 +1170,8 @@ const getUserEffectivePermissions = async (user) => {
             };
         }
 
-        const isAdmin = su.role_name === 'Administrator';
         const permsList = (su.permissions || '').split(',');
+        const isAdmin = su.role_name === 'Administrator' || su.role_name === 'Super Administrator' || permsList.includes('/dashboard/seguridad/telegram') || permsList.includes('manage_telegram');
 
         const hasVentas = isAdmin || permsList.includes('/dashboard/consultas/estaciones/ventas');
         const hasBancos = isAdmin || permsList.includes('/dashboard/bancos/reportes/saldos-bancos') || permsList.includes('/dashboard/bancos/cuentas') || permsList.includes('/dashboard/bancos/movimientos');
@@ -829,6 +1182,7 @@ const getUserEffectivePermissions = async (user) => {
             isLinked: true,
             linkedUser: su,
             inactiveInSipe: false,
+            isAdmin: Boolean(isAdmin),
             ventas: hasVentas,
             saldos_banco: hasBancos,
             saldos_chequera: hasChequera,
@@ -840,6 +1194,7 @@ const getUserEffectivePermissions = async (user) => {
             isLinked: true,
             linkedUser: null,
             inactiveInSipe: false,
+            isAdmin: false,
             ventas: Boolean(user.permiso_ventas),
             saldos_banco: Boolean(user.permiso_saldos_banco),
             saldos_chequera: Boolean(user.permiso_saldos_chequera),
@@ -1307,14 +1662,60 @@ const KNOWN_BANKS = [
 ];
 
 /**
- * Analizador semántico de lenguaje natural para consultas específicas
+ * Resolver el ID interno de una estación a partir de su nombre o texto
  */
-const parseNaturalLanguageQuery = (rawText) => {
+const resolveStationId = (name) => {
+    if (!name) return '008';
+    const norm = normalizeText(name);
+    for (const st of KNOWN_STATIONS) {
+        for (const kw of st.keywords) {
+            if (norm.includes(normalizeText(kw))) return st.id;
+        }
+    }
+    return '008';
+};
+
+/**
+ * Buscar una estación conocida por su ID, branch_id o nombre/keyword
+ */
+const findStationById = (id) => {
+    if (!id) return null;
+    const clean = String(id).trim().toLowerCase();
+    return KNOWN_STATIONS.find(s => 
+        s.id.toLowerCase() === clean || 
+        String(s.saas_branch_id || '').toLowerCase() === clean ||
+        String(s.branch_id || '').toLowerCase() === clean ||
+        normalizeText(s.name).toLowerCase() === clean ||
+        normalizeText(s.name).includes(clean) ||
+        clean.includes(normalizeText(s.name)) ||
+        s.keywords.some(kw => normalizeText(kw) === clean || clean.includes(normalizeText(kw)))
+    ) || null;
+};
+
+/**
+ * Buscar un combustible conocido por su clave, nombre o keyword
+ */
+const findFuelByKey = (key) => {
+    if (!key) return null;
+    const clean = String(key).trim().toLowerCase();
+    return KNOWN_FUELS.find(f => 
+        f.key.toLowerCase() === clean || 
+        normalizeText(f.label).toLowerCase() === clean ||
+        normalizeText(f.key).toLowerCase() === clean ||
+        f.keywords.some(kw => normalizeText(kw) === clean)
+    ) || null;
+};
+
+/**
+ * Analizador semántico de lenguaje natural para consultas específicas con soporte de memoria de contexto multi-turno
+ */
+const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     if (!rawText) return null;
     const normalized = normalizeText(rawText);
 
     // 1. Detección de periodo o fecha en español natural
     const period = parseSpanishPeriodOrDate(rawText);
+    let hasExplicitDateOrPeriod = false;
     let targetDate = getDateStr(-1); // Ayer por defecto (cierres consolidados)
     let isRange = false;
     let startDate = null;
@@ -1325,6 +1726,7 @@ const parseNaturalLanguageQuery = (rawText) => {
     let targetPeriod = null;
 
     if (period) {
+        hasExplicitDateOrPeriod = true;
         if (period.type === 'month') {
             isMonthly = true;
             targetMonth = period.month;
@@ -1343,7 +1745,10 @@ const parseNaturalLanguageQuery = (rawText) => {
         }
     } else {
         const naturalDate = parseSpanishDateText(rawText);
-        if (naturalDate) targetDate = naturalDate;
+        if (naturalDate) {
+            hasExplicitDateOrPeriod = true;
+            targetDate = naturalDate;
+        }
     }
 
     // 2. Detección de estación con límites de palabra estricta (priorizando frases más largas)
@@ -1415,6 +1820,77 @@ const parseNaturalLanguageQuery = (rawText) => {
     // 9. Detección de consultas de horas pico / horario de ventas
     const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
                          (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized));
+
+    // RESOLUCIÓN DE CONTEXTO CONVERSACIONAL MULTI-TURNO
+    if (userContext) {
+        // a. Pregunta de seguimiento de fecha: "¿Y el día anterior?", "¿Y ayer?", "¿Y anteayer?"
+        const isPrevDayFollowUp = /\b(y\s+el\s+dia\s+anterior|el\s+dia\s+anterior|dia\s+anterior|un\s+dia\s+antes|y\s+ayer|y\s+el\s+de\s+ayer|y\s+el\s+dia\s+de\s+ayer)\b/i.test(normalized) || (/^(y\s+)?ayer$/i.test(normalized));
+        const isAnteayerFollowUp = /\b(y\s+anteayer|y\s+antier|anteayer|antier)\b/i.test(normalized);
+
+        if (userContext.lastDate && (isPrevDayFollowUp || isAnteayerFollowUp)) {
+            const offset = isAnteayerFollowUp ? -2 : -1;
+            targetDate = shiftDate(userContext.lastDate, offset);
+            hasExplicitDateOrPeriod = true;
+
+            if (!matchedStation && userContext.lastStationId) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+            if (!matchedFuel && userContext.lastProduct) {
+                matchedFuel = findFuelByKey(userContext.lastProduct);
+            }
+        }
+
+        // b. Pregunta de seguimiento de estación: "¿Y en Costa del Sol?", "¿Y Miraflores?"
+        if (matchedStation && !hasExplicitDateOrPeriod) {
+            if (userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+            if (userContext.lastPeriod && userContext.lastTopic === 'ventas_mensual') {
+                isMonthly = true;
+                targetMonth = userContext.lastMonth;
+                targetYear = userContext.lastYear;
+                targetPeriod = userContext.lastPeriod;
+            }
+            if (!matchedFuel && userContext.lastProduct) {
+                matchedFuel = findFuelByKey(userContext.lastProduct);
+            }
+        }
+
+        // c. Pregunta de seguimiento de combustible: "¿Y de diésel cuánto fue?", "¿Y regular?", "¿Y super?"
+        if (matchedFuel && !matchedStation && userContext.lastStationId) {
+            matchedStation = findStationById(userContext.lastStationId);
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+        }
+
+        // d. Pregunta de seguimiento de horas pico: "¿A qué horas vendió más?", "¿Horas pico?"
+        if (isHourlyPeak) {
+            if (!matchedStation && userContext.lastStationId) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+        }
+
+        // e. Pregunta de seguimiento de tiendas: "¿Y las tiendas?"
+        if (isTiendas) {
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+            if (!matchedStation && userContext.lastStationId) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+        }
+
+        // f. Pregunta de seguimiento solar: "¿Y el ahorro solar?"
+        if (isSolar) {
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+        }
+    }
 
     return {
         normalized,
@@ -1813,11 +2289,49 @@ Si te preguntan comparaciones o análisis, apóyate en el contexto de datos real
 };
 
 /**
+ * Transcribir nota de voz de Telegram a texto utilizando Gemini 2.0 Flash (@google/genai)
+ */
+const transcribeTelegramVoice = async (audioBuffer, mimeType = 'audio/ogg') => {
+    if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0) {
+        throw new Error('Buffer de audio inválido o vacío');
+    }
+    if (!process.env.GEMINI_API_KEY) {
+        throw new Error('GEMINI_API_KEY no configurado en el servidor');
+    }
+
+    const { GoogleGenAI } = require('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const prompt = 'Transcribe exactamente el siguiente mensaje de voz en español salvadoreño formal, sin añadir notas explicativas ni comentarios adicionales, únicamente el texto que dijo el usuario.';
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: [
+            prompt,
+            {
+                inlineData: {
+                    mimeType: mimeType || 'audio/ogg',
+                    data: audioBuffer.toString('base64')
+                }
+            }
+        ]
+    });
+
+    const text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text;
+    return text ? text.trim() : '';
+};
+
+/**
  * Despachador inteligente de lenguaje natural
  */
-const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectivePerms, keyboard) => {
-    const parsed = parseNaturalLanguageQuery(rawText);
+const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectivePerms, keyboard, contextOptions = {}) => {
+    const userContext = contextOptions.userContext || (user?.telegram_user_id ? getUserConversationContext(user.telegram_user_id) : null);
+    const parsed = parseNaturalLanguageQuery(rawText, userContext);
     if (!parsed) return false;
+
+    const sendFeedback = (cId, text, meta) => {
+        const fullText = (contextOptions.voicePrefix || '') + text;
+        return sendTelegramResponseWithFeedback(cId, fullText, meta);
+    };
 
     // 0.1 Consulta de Energía Solar y Baterías (Paneles, Ahorro, Estado de Batería, Autonomía)
     if (parsed.isSolar) {
@@ -1836,7 +2350,12 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const solarData = await solarEnergyService.getSolarEstadoActual();
                 const msg = formatSolarEnergyMessage(solarData, 'estado_actual');
                 await logTelegramQuery(user.telegram_user_id, rawText, 'Solar Estado Actual', 1);
-                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastTopic: 'solar',
+                    lastSolarReport: solarData,
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar estado actual:', err);
@@ -1854,7 +2373,13 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const solarData = await solarEnergyService.getSolarAhorroMensual(y, m);
                 const msg = formatSolarEnergyMessage(solarData, 'mensual', monthLabel);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Solar Mensual ${y}-${m}`, 1);
-                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastPeriod: `${y}-${m}`,
+                    lastTopic: 'solar',
+                    lastSolarReport: solarData,
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar mensual:', err);
@@ -1870,7 +2395,13 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const solarData = await solarEnergyService.getSolarAhorroRango(parsed.startDate, parsed.endDate);
                 const msg = formatSolarEnergyMessage(solarData, 'rango', rangeLabel);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Solar Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
-                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastPeriod: `${parsed.startDate}:${parsed.endDate}`,
+                    lastTopic: 'solar',
+                    lastSolarReport: solarData,
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar rango:', err);
@@ -1886,7 +2417,13 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const solarData = await solarEnergyService.getSolarAhorroDiario(targetDate);
             const msg = formatSolarEnergyMessage(solarData, 'diario', toDisplayDate(targetDate));
             await logTelegramQuery(user.telegram_user_id, rawText, `Solar Diario ${targetDate}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastDate: targetDate,
+                lastTopic: 'solar',
+                lastSolarReport: solarData,
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta solar diaria:', err);
@@ -1912,7 +2449,15 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
                 const msg = formatHorasPicoMessage(peakData, rangeLabel, true);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
-                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastStationId: parsed.matchedStation?.id || null,
+                    lastStationName: parsed.matchedStation?.name || null,
+                    lastPeriod: `${parsed.startDate}:${parsed.endDate}`,
+                    lastTopic: 'horas_pico',
+                    lastHourReport: peakData,
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en horas pico rango:', err);
@@ -1930,7 +2475,15 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
                 const msg = formatHorasPicoMessage(peakData, monthLabel, true);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico Mes ${y}-${m}`, 1);
-                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastStationId: parsed.matchedStation?.id || null,
+                    lastStationName: parsed.matchedStation?.name || null,
+                    lastPeriod: `${y}-${m}`,
+                    lastTopic: 'horas_pico',
+                    lastHourReport: peakData,
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en horas pico mensual:', err);
@@ -1947,7 +2500,15 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const peakData = await salesHourlyService.getHorasPicoVentas(targetDate, branchId);
             const msg = formatHorasPicoMessage(peakData, dateLabel, false);
             await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico ${targetDate}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastStationId: parsed.matchedStation?.id || null,
+                lastStationName: parsed.matchedStation?.name || null,
+                lastDate: targetDate,
+                lastTopic: 'horas_pico',
+                lastHourReport: peakData,
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en horas pico diario:', err);
@@ -1974,7 +2535,14 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getResumenMensualData(externalDb, y, m, accountingDb);
             const msg = formatVentasMensualMessage(data, y, m);
             await logTelegramQuery(user.telegram_user_id, rawText, `Ventas Mensual ${y}-${m}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastPeriod: `${y}-${String(m).padStart(2, '0')}`,
+                lastMonth: m,
+                lastYear: y,
+                lastTopic: 'ventas_mensual',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ventas mensual:', err);
@@ -1999,7 +2567,12 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getResumenRangoVentasData(externalDb, parsed.startDate, parsed.endDate, accountingDb);
             const msg = formatVentasRangoMessage(data, parsed.startDate, parsed.endDate, rangeLabel);
             await logTelegramQuery(user.telegram_user_id, rawText, `Ventas Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastPeriod: `${parsed.startDate}:${parsed.endDate}`,
+                lastTopic: 'ventas_rango',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ventas por rango:', err);
@@ -2021,7 +2594,13 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const metric = parsed.normalized.includes('galon') || parsed.normalized.includes('galones') ? 'galonaje' : 'venta';
             const msg = formatRankingMessage(data, parsed.targetDate, metric, parsed.matchedFuel);
             await logTelegramQuery(user.telegram_user_id, rawText, `Ranking ${metric}${parsed.matchedFuel ? ` (${parsed.matchedFuel.key})` : ''}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastDate: parsed.targetDate,
+                lastProduct: parsed.matchedFuel?.key || null,
+                lastTopic: 'ranking',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ranking:', err);
@@ -2063,7 +2642,15 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             } catch (aliasErr) {
                 // Aprendizaje opcional
             }
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastStationId: parsed.matchedStation.id,
+                lastStationName: parsed.matchedStation.name,
+                lastDate: parsed.targetDate,
+                lastProduct: parsed.matchedFuel?.key || null,
+                lastTopic: 'ventas_estacion',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de estación específica:', err);
@@ -2084,7 +2671,15 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatProductTotalMessage(data, parsed.matchedFuel, parsed.targetDate);
             await logTelegramQuery(user.telegram_user_id, rawText, `Total: ${parsed.matchedFuel.label}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastStationId: null,
+                lastStationName: null,
+                lastDate: parsed.targetDate,
+                lastProduct: parsed.matchedFuel.key,
+                lastTopic: 'ventas_producto',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de combustible global:', err);
@@ -2111,7 +2706,15 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             } catch (aliasErr) {
                 // Aprendizaje opcional
             }
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastStationId: null,
+                lastStationName: null,
+                lastProduct: null,
+                lastDate: null,
+                lastTopic: 'bancos',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de banco específico:', err);
@@ -2132,7 +2735,14 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatTiendasMessage(data, parsed.targetDate);
             await logTelegramQuery(user.telegram_user_id, rawText, 'Tiendas cortes', 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastDate: parsed.targetDate,
+                lastStationId: parsed.matchedStation?.id || null,
+                lastStationName: parsed.matchedStation?.name || null,
+                lastTopic: 'tiendas',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de tiendas:', err);
@@ -2153,7 +2763,14 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatAlertasMessage(data, parsed.targetDate);
             await logTelegramQuery(user.telegram_user_id, rawText, 'Alertas auditoría', 1);
-            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
+            setUserConversationContext(user?.telegram_user_id, {
+                lastDate: parsed.targetDate,
+                lastStationId: null,
+                lastStationName: null,
+                lastTopic: 'alertas',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de alertas:', err);
@@ -2178,7 +2795,11 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
             if (aiReply) {
                 await logTelegramQuery(user.telegram_user_id, rawText, 'Respuesta Gemini AI', 1);
-                await sendTelegramResponseWithFeedback(chatId, aiReply, { user, query: rawText });
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastDate: parsed.targetDate,
+                    query: rawText
+                });
+                await sendFeedback(chatId, aiReply, { user, query: rawText });
                 return true;
             }
         } catch (_) {
@@ -2218,11 +2839,84 @@ const formatHelpMessage = () => {
 /**
  * Procesar un mensaje entrante de Telegram
  */
-const handleIncomingMessage = async (msg) => {
+const handleIncomingMessage = async (msg, contextOptions = {}) => {
     if (!msg || !msg.chat || !msg.from) return;
 
     const chatId = msg.chat.id;
     const rawText = (msg.text || '').trim();
+    const voicePrefix = contextOptions.voicePrefix || '';
+
+    // Detección de notas de voz o audios entrantes (Soporte Gemini 2.0 Flash)
+    if (msg.voice || msg.audio) {
+        try {
+            const { recordVoiceNoteProcessed } = require('./telegramAuditorService');
+            recordVoiceNoteProcessed(msg.from.id);
+        } catch (_) {
+            // Ignorar defensivamente
+        }
+
+        // Envío de mensaje temporal
+        await sendTelegramMessage(chatId, '⏳ Escuchando y transcribiendo nota de voz...');
+
+        if (!process.env.GEMINI_API_KEY) {
+            await sendTelegramMessage(
+                chatId,
+                '🎙️ <b>Servicio de voz no disponible</b>\n\n' +
+                'La API de transcripción por IA no se encuentra configurada en el servidor. ' +
+                'Por favor, escribe tu consulta por texto para poder atenderte de inmediato.',
+                getMainReplyKeyboard()
+            );
+            return;
+        }
+
+        let transcribedText = null;
+        try {
+            const fileId = msg.voice?.file_id || msg.audio?.file_id;
+            const mimeType = msg.voice?.mime_type || msg.audio?.mime_type || 'audio/ogg';
+            const { token } = await getBotToken();
+            const fileRes = await axios.get(`${TELEGRAM_API_BASE}${token}/getFile?file_id=${fileId}`, { timeout: 15000 });
+            const filePath = fileRes.data?.result?.file_path;
+            if (!filePath) throw new Error('No se pudo resolver la ruta del audio en Telegram');
+
+            const audioRes = await axios.get(`https://api.telegram.org/file/bot${token}/${filePath}`, {
+                responseType: 'arraybuffer',
+                timeout: 30000
+            });
+            const audioBuffer = Buffer.from(audioRes.data);
+
+            transcribedText = await transcribeTelegramVoice(audioBuffer, mimeType);
+        } catch (voiceErr) {
+            console.error('[TelegramBot] Error en transcripción de audio:', voiceErr.message);
+            await sendTelegramMessage(
+                chatId,
+                '🎙️ <b>No se pudo procesar la nota de voz</b>\n\n' +
+                'Ocurrió un inconveniente al descargar o transcribir tu audio. ' +
+                'Por favor, escribe tu consulta por texto para atenderte de inmediato.',
+                getMainReplyKeyboard()
+            );
+            return;
+        }
+
+        if (!transcribedText || !transcribedText.trim()) {
+            await sendTelegramMessage(
+                chatId,
+                '🎙️ <b>Nota de voz no comprensible</b>\n\n' +
+                'No fue posible entender el audio o la grabación estaba vacía. ' +
+                'Por favor, escribe tu consulta por texto.',
+                getMainReplyKeyboard()
+            );
+            return;
+        }
+
+        const newVoicePrefix = `🎙️ <i>"«${escapeHtml(transcribedText.trim())}»"</i>\n\n`;
+        return await handleIncomingMessage({
+            ...msg,
+            text: transcribedText.trim(),
+            voice: null,
+            audio: null
+        }, { voicePrefix: newVoicePrefix });
+    }
+
     if (!rawText) return;
 
     // 1. Resolver usuario en la base de datos
@@ -2230,6 +2924,14 @@ const handleIncomingMessage = async (msg) => {
     if (!user) {
         await sendTelegramMessage(chatId, '⚠️ Error interno del sistema al identificar usuario.');
         return;
+    }
+
+    const queryStartTime = Date.now();
+    try {
+        const { recordQueryReceived } = require('./telegramAuditorService');
+        recordQueryReceived(user.telegram_user_id);
+    } catch (_) {
+        // Ignorar
     }
 
     // 2. Verificar si está autorizado (activo = 1)
@@ -2268,7 +2970,7 @@ const handleIncomingMessage = async (msg) => {
     if (pendingFb && (Date.now() - pendingFb.timestamp < 30 * 60 * 1000)) {
         if (cleanLower === 'cancelar' || cleanLower === '/cancelar') {
             pendingFeedbackUsers.delete(String(user.telegram_user_id));
-            await sendTelegramMessage(chatId, '👌 Retroalimentación cancelada. ¿En qué más puedo ayudarte hoy?', keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '👌 Retroalimentación cancelada. ¿En qué más puedo ayudarte hoy?', keyboard);
             return;
         }
 
@@ -2298,12 +3000,62 @@ const handleIncomingMessage = async (msg) => {
                 `💬 <i>«${escapeHtml(rawText)}»</i>\n\n` +
                 `Nuestro equipo y agentes de IA utilizarán este feedback para optimizar el modelo de consultas y no repetir este error. 🚀`;
 
-            await sendTelegramMessage(chatId, ackMsg, keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + ackMsg, keyboard);
             return;
         }
     }
 
-    // B. Detección en lenguaje natural de insatisfacción directa (ej. 'no contestaste bien', 'no me sirvio', 'esta mal')
+    // B. Interceptar si el usuario está en modo de justificación interactiva de alerta
+    const pendingJust = pendingAlertJustifications.get(String(user.telegram_user_id));
+    if (pendingJust && (Date.now() - pendingJust.timestamp < 30 * 60 * 1000)) {
+        if (cleanLower === 'cancelar' || cleanLower === '/cancelar') {
+            pendingAlertJustifications.delete(String(user.telegram_user_id));
+            await sendTelegramMessage(chatId, voicePrefix + '👌 Justificación cancelada. ¿En qué más puedo ayudarte hoy?', keyboard);
+            return;
+        }
+
+        try {
+            await logTelegramQuery(
+                user.telegram_user_id,
+                'JUSTIFICACION_DESCUADRE',
+                `Estación: ${pendingJust.stationName || pendingJust.stationId}, Fecha: ${pendingJust.date}, Motivo: ${rawText}`,
+                1
+            );
+
+            const db = getDb();
+            if (db) {
+                await db.query(
+                    `INSERT INTO bitacora_logs (user_id, username, accion, entidad, entidad_id, detalles, ip_address)
+                     VALUES (?, ?, 'JUSTIFY_DISCREPANCY', 'discrepancias', ?, ?, 'TelegramBot')`,
+                    [
+                        user.user_id || 1,
+                        user.telegram_username || user.first_name || 'telegram_user',
+                        pendingJust.stationId || '008',
+                        JSON.stringify({
+                            estacion: pendingJust.stationName || pendingJust.stationId,
+                            fecha: pendingJust.date,
+                            justificacion: rawText,
+                            telegram_user_id: user.telegram_user_id
+                        })
+                    ]
+                );
+            }
+        } catch (justErr) {
+            console.error('[TelegramBot] Error registrando justificación:', justErr.message);
+        }
+
+        pendingAlertJustifications.delete(String(user.telegram_user_id));
+
+        const ackJustMsg = `✅ <b>Justificación Registrada Exitosamente</b>\n\n` +
+            `Tu observación para <b>${escapeHtml(pendingJust.stationName || pendingJust.stationId)}</b> (${toDisplayDate(pendingJust.date)}) ha sido asentada en la bitácora de auditoría de SIPE Admin:\n\n` +
+            `📝 <i>«${escapeHtml(rawText)}»</i>\n\n` +
+            `👤 Registrado por: <b>${escapeHtml(user.first_name || user.telegram_username || 'Usuario')}</b>`;
+
+        await sendTelegramMessage(chatId, voicePrefix + ackJustMsg, keyboard);
+        return;
+    }
+
+    // C. Detección en lenguaje natural de insatisfacción directa (ej. 'no contestaste bien', 'no me sirvio', 'esta mal')
     const isExplicitNegativeFeedback = /\b(no\s+contestaste\s+bien|no\s+respondiste\s+bien|no\s+me\s+sirvio|no\s+me\s+sirve|esta\s+mal\s+la\s+respuesta|respuesta\s+incorrecta|no\s+es\s+lo\s+que\s+pedi|eso\s+no\s+es\s+lo\s+que\s+pregunte|te\s+equivocaste)\b/i.test(normalizeText(rawText));
     if (isExplicitNegativeFeedback) {
         let latestFeedbackId = null;
@@ -2339,11 +3091,11 @@ const handleIncomingMessage = async (msg) => {
             `¿Qué puedo mejorar o qué información esperabas encontrar?\n\n` +
             `<i>(Escribe tu respuesta a continuación y la guardaremos en la bitácora de mejora continua)</i>`;
 
-        await sendTelegramMessage(chatId, promptMsg, keyboard);
+        await sendTelegramMessage(chatId, voicePrefix + promptMsg, keyboard);
         return;
     }
 
-    // C. Detección en lenguaje natural de satisfacción directa (ej. 'contestaste bien', 'gracias, muy util')
+    // D. Detección en lenguaje natural de satisfacción directa (ej. 'contestaste bien', 'gracias, muy util')
     const isExplicitPositiveFeedback = !isExplicitNegativeFeedback && /\b(contestaste\s+bien|buena\s+respuesta|gracias\s+por\s+la\s+informacion|excelente\s+servicio|muy\s+util|me\s+sirvio)\b/i.test(normalizeText(rawText));
     if (isExplicitPositiveFeedback) {
         try {
@@ -2363,37 +3115,98 @@ const handleIncomingMessage = async (msg) => {
 
         const thanksMsg = `🙌 <b>¡Con mucho gusto!</b>\n\n` +
             `Me alegra que te haya sido de utilidad la respuesta. Quedo atento a tus próximas consultas en SIPE.`;
-        await sendTelegramMessage(chatId, thanksMsg, keyboard);
+        await sendTelegramMessage(chatId, voicePrefix + thanksMsg, keyboard);
         return;
     }
 
-    // Comandos de Saludo / Inicio
-    if (cleanLower === 'start' || cleanLower === 'menu' || cleanLower === 'hola' || cleanLower === 'inicio') {
-        await logTelegramQuery(user.telegram_user_id, '/start', 'Menú principal', 1);
+    // Comandos de Saludo / Inicio (Limpia contexto multi-turno)
+    if (cleanLower === 'start' || cleanLower === 'menu' || cleanLower === 'hola' || cleanLower === 'inicio' || cleanLower === 'cancelar') {
+        clearUserConversationContext(user.telegram_user_id);
+        await logTelegramQuery(user.telegram_user_id, `/${cleanLower}`, 'Menú principal / Reinicio de contexto', 1);
         const name = escapeHtml(user.first_name || 'Usuario');
         const welcome = `👋 ¡Hola <b>${name}</b>!\n` +
             `Bienvenido al asistente de consultas gerenciales de <b>SIPE Admin</b>.\n\n` +
             `Usa los botones inferiores para consultar información en tiempo real:`;
-        await sendTelegramMessage(chatId, welcome, keyboard);
+        await sendTelegramMessage(chatId, voicePrefix + welcome, keyboard);
+        return;
+    }
+
+    // Comando de Sugerencias / Feedback para Administradores
+    if (cleanLower === 'sugerencias' || cleanLower === '/sugerencias' || cleanLower === 'feedback' || cleanLower === '/feedback') {
+        const isAdmin = Boolean(
+            effectivePerms.isAdmin ||
+            user.is_admin ||
+            (effectivePerms.linkedUser && (
+                effectivePerms.linkedUser.role_name === 'Administrator' ||
+                effectivePerms.linkedUser.role_name === 'Super Administrator' ||
+                (effectivePerms.linkedUser.permissions && effectivePerms.linkedUser.permissions.includes('/dashboard/seguridad/telegram'))
+            ))
+        );
+
+        if (!isAdmin) {
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Permiso denegado sugerencias', 0);
+            const deniedMsg = `⛔ <b>Acceso Restringido</b>\n\nEl reporte de sugerencias de mejora está restringido exclusivamente a <b>Administradores</b> de SIPE Admin.`;
+            await sendTelegramMessage(chatId, voicePrefix + deniedMsg, keyboard);
+            return;
+        }
+
+        await logTelegramQuery(user.telegram_user_id, rawText, 'Listado de sugerencias de Telegram', 1);
+        const feedbackList = await getFeedbackList({ limit: 5 });
+        const listMsg = formatFeedbackListMessage(feedbackList);
+        await sendTelegramMessage(chatId, voicePrefix + listMsg, keyboard);
         return;
     }
 
     // Comandos de Perfil / ID
     if (cleanLower === 'perfil' || cleanLower === 'id' || cleanLower === 'mi_id' || cleanLower.includes('mi perfil')) {
         await logTelegramQuery(user.telegram_user_id, '/perfil', 'Consulta de perfil', 1);
-        await sendTelegramMessage(chatId, formatProfileMessage(user, effectivePerms), keyboard);
+        await sendTelegramMessage(chatId, voicePrefix + formatProfileMessage(user, effectivePerms), keyboard);
         return;
     }
 
     // Comandos de Ayuda
     if (cleanLower === 'ayuda' || cleanLower === 'help') {
         await logTelegramQuery(user.telegram_user_id, '/ayuda', 'Consulta de ayuda', 1);
-        await sendTelegramMessage(chatId, formatHelpMessage(), keyboard);
+        await sendTelegramMessage(chatId, voicePrefix + formatHelpMessage(), keyboard);
         return;
     }
 
-    // 1. Intentar resolver consultas estructuradas de lenguaje natural (Ventas mensuales/rango, Horas pico, Solar/baterías, Estaciones, Combustibles, Bancos, Rankings, Tiendas, Auditoría)
-    const handledNlu = await handleSmartNaturalLanguageQuery(user, rawText, chatId, effectivePerms, keyboard);
+    // Comandos de Salud / Diagnóstico / Auditoría
+    if (cleanLower === 'salud' || cleanLower === '/salud' || cleanLower === 'auditoria' || cleanLower === '/auditoria' || cleanLower === 'diagnostico' || cleanLower === '/diagnostico') {
+        const isAdmin = Boolean(
+            effectivePerms.isAdmin ||
+            (effectivePerms.linkedUser && (
+                effectivePerms.linkedUser.role_name === 'Administrator' ||
+                (effectivePerms.linkedUser.permissions && effectivePerms.linkedUser.permissions.includes('/dashboard/seguridad/telegram'))
+            ))
+        );
+
+        if (!isAdmin) {
+            await logTelegramQuery(user.telegram_user_id, `/${cleanLower.replace(/^\//, '')}`, 'Diagnóstico de salud (denegado)', 0);
+            const deniedMsg = `⛔ <b>Acceso Restringido</b>\n\nEl reporte de diagnóstico de salud y auditoría forense está restringido exclusivamente a <b>Administradores</b> de SIPE Admin.`;
+            await sendTelegramMessage(chatId, voicePrefix + deniedMsg, keyboard);
+            return;
+        }
+
+        await logTelegramQuery(user.telegram_user_id, `/${cleanLower.replace(/^\//, '')}`, 'Diagnóstico de salud ejecutado', 1);
+        await sendTelegramMessage(chatId, '🩺 <i>Ejecutando diagnóstico forense de salud del sistema...</i>');
+        try {
+            const { formatDiagnosticsMessage, recordQuerySuccess } = require('./telegramAuditorService');
+            const diagMsg = await formatDiagnosticsMessage();
+            recordQuerySuccess({ durationMs: Date.now() - queryStartTime, userIdOrChatId: user.telegram_user_id });
+            await sendTelegramMessage(chatId, voicePrefix + diagMsg, keyboard);
+        } catch (diagErr) {
+            console.error('[TelegramBot] Error al generar diagnóstico:', diagErr);
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error al generar diagnóstico: ' + escapeHtml(diagErr.message), keyboard);
+        }
+        return;
+    }
+
+    // 1. Intentar resolver consultas estructuradas de lenguaje natural con soporte multi-turno
+    const handledNlu = await handleSmartNaturalLanguageQuery(user, rawText, chatId, effectivePerms, keyboard, {
+        voicePrefix,
+        userContext: getUserConversationContext(user.telegram_user_id)
+    });
     if (handledNlu) return;
 
     // 2. Si no es una consulta estructurada directa, atender mediante el Agente Conversacional IA (con memoria contextual y datos en vivo de SIPE)
@@ -2402,7 +3215,10 @@ const handleIncomingMessage = async (msg) => {
         const aiResponse = await askConversationalAgent({ user, prompt: rawText, chatId, effectivePerms });
         if (aiResponse) {
             await logTelegramQuery(user.telegram_user_id, rawText, 'Conversación Asistente IA', 1);
-            await sendTelegramResponseWithFeedback(chatId, aiResponse, { user, query: rawText, responseSummary: 'Conversación Asistente IA' });
+            setUserConversationContext(user.telegram_user_id, {
+                query: rawText
+            });
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + aiResponse, { user, query: rawText, responseSummary: 'Conversación Asistente IA' });
             return;
         }
     } catch (aiErr) {
@@ -2413,7 +3229,7 @@ const handleIncomingMessage = async (msg) => {
     if (cleanLower.includes('saldo en banco') || cleanLower === 'bancos' || cleanLower === 'banco' || cleanLower === 'saldos') {
         if (!effectivePerms.saldos_banco) {
             await logTelegramQuery(user.telegram_user_id, 'bancos', 'Permiso denegado', 0);
-            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar saldos en bancos.', keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar saldos en bancos.', keyboard);
             return;
         }
 
@@ -2421,10 +3237,18 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getSaldosBancosData();
             await logTelegramQuery(user.telegram_user_id, 'bancos', `Total: ${data.total}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, formatBancosMessage(data), { user, query: 'Saldos en Bancos', responseSummary: `Total: ${data.total}` });
+            setUserConversationContext(user.telegram_user_id, {
+                lastStationId: null,
+                lastStationName: null,
+                lastProduct: null,
+                lastDate: null,
+                lastTopic: 'bancos',
+                query: rawText
+            });
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatBancosMessage(data), { user, query: 'Saldos en Bancos', responseSummary: `Total: ${data.total}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de bancos:', err);
-            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar saldos bancarios: ' + escapeHtml(err.message), keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Ocurrió un error al consultar saldos bancarios: ' + escapeHtml(err.message), keyboard);
         }
         return;
     }
@@ -2433,7 +3257,7 @@ const handleIncomingMessage = async (msg) => {
     if (cleanLower.includes('saldo en chequera') || cleanLower === 'chequera' || cleanLower === 'cheques' || cleanLower === 'saldo_chequera') {
         if (!effectivePerms.saldos_chequera) {
             await logTelegramQuery(user.telegram_user_id, 'chequera', 'Permiso denegado', 0);
-            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar saldos en chequera.', keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar saldos en chequera.', keyboard);
             return;
         }
 
@@ -2441,10 +3265,18 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getSaldosChequeraData();
             await logTelegramQuery(user.telegram_user_id, 'chequera', `Total: ${data.total}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, formatChequeraMessage(data), { user, query: 'Saldos en Chequera', responseSummary: `Total: ${data.total}` });
+            setUserConversationContext(user.telegram_user_id, {
+                lastStationId: null,
+                lastStationName: null,
+                lastProduct: null,
+                lastDate: null,
+                lastTopic: 'chequera',
+                query: rawText
+            });
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatChequeraMessage(data), { user, query: 'Saldos en Chequera', responseSummary: `Total: ${data.total}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de chequera:', err);
-            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar saldos en chequeras: ' + escapeHtml(err.message), keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Ocurrió un error al consultar saldos en chequeras: ' + escapeHtml(err.message), keyboard);
         }
         return;
     }
@@ -2453,7 +3285,7 @@ const handleIncomingMessage = async (msg) => {
     if (cleanLower.includes('alertas') || cleanLower.includes('descuadres') || cleanLower.includes('auditoria')) {
         if (!effectivePerms.alertas) {
             await logTelegramQuery(user.telegram_user_id, 'alertas', 'Permiso denegado', 0);
-            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar alertas operativas.', keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar alertas operativas.', keyboard);
             return;
         }
 
@@ -2464,10 +3296,18 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getConsolidadoVentas(targetDate);
             await logTelegramQuery(user.telegram_user_id, 'alertas', `Fecha: ${targetDate}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, formatAlertasMessage(data, targetDate), { user, query: `Alertas ${targetDate}`, responseSummary: `Fecha: ${targetDate}` });
+            setUserConversationContext(user.telegram_user_id, {
+                lastDate: targetDate,
+                lastStationId: null,
+                lastStationName: null,
+                lastProduct: null,
+                lastTopic: 'alertas',
+                query: rawText
+            });
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatAlertasMessage(data, targetDate), { user, query: `Alertas ${targetDate}`, responseSummary: `Fecha: ${targetDate}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de alertas:', err);
-            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar alertas operativas: ' + escapeHtml(err.message), keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Ocurrió un error al consultar alertas operativas: ' + escapeHtml(err.message), keyboard);
         }
         return;
     }
@@ -2476,7 +3316,7 @@ const handleIncomingMessage = async (msg) => {
     if (cleanLower.includes('ventas') || cleanLower.includes('venta') || cleanLower.includes('combustible')) {
         if (!effectivePerms.ventas) {
             await logTelegramQuery(user.telegram_user_id, 'ventas', 'Permiso denegado', 0);
-            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de estaciones.', keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar ventas de estaciones.', keyboard);
             return;
         }
 
@@ -2486,10 +3326,18 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getConsolidadoVentas(targetDate);
             await logTelegramQuery(user.telegram_user_id, 'ventas', `Fecha: ${targetDate}`, 1);
-            await sendTelegramResponseWithFeedback(chatId, formatVentasMessage(data, targetDate), { user, query: `Ventas ${targetDate}`, responseSummary: `Fecha: ${targetDate}` });
+            setUserConversationContext(user.telegram_user_id, {
+                lastDate: targetDate,
+                lastStationId: null,
+                lastStationName: null,
+                lastProduct: null,
+                lastTopic: 'ventas_global',
+                query: rawText
+            });
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatVentasMessage(data, targetDate), { user, query: `Ventas ${targetDate}`, responseSummary: `Fecha: ${targetDate}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ventas:', err);
-            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar las ventas: ' + escapeHtml(err.message), keyboard);
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Ocurrió un error al consultar las ventas: ' + escapeHtml(err.message), keyboard);
         }
         return;
     }
@@ -2498,7 +3346,7 @@ const handleIncomingMessage = async (msg) => {
     await logTelegramQuery(user.telegram_user_id, rawText, 'Comando no reconocido', 1);
     await sendTelegramResponseWithFeedback(
         chatId,
-        formatIntelligentGuidanceMessage(),
+        voicePrefix + formatIntelligentGuidanceMessage(),
         { user, query: rawText, responseSummary: 'Comando no reconocido' }
     );
 };
@@ -2562,6 +3410,17 @@ const runPollingLoop = async () => {
                 await new Promise(r => setTimeout(r, 1000));
             } else {
                 console.warn('[TelegramBot] Error en ciclo de polling:', err.message);
+                try {
+                    const { recordError } = require('./telegramAuditorService');
+                    recordError({
+                        type: 'POLLING_ERROR',
+                        message: err.message,
+                        stack: err.stack,
+                        details: { code: err.code, status: err.response?.status }
+                    });
+                } catch (_) {
+                    // Silencioso
+                }
                 await new Promise(r => setTimeout(r, 4000));
             }
         }
@@ -2655,9 +3514,29 @@ const getBotStatus = async () => {
 };
 
 /**
+ * Generar markup con botones inline para alertas interactivas de discrepancias
+ */
+const getDiscrepancyInlineMarkup = (date, stationId = '008') => {
+    const d = date || getDateStr(-1);
+    const sid = stationId || '008';
+    return {
+        inline_keyboard: [
+            [
+                { text: '🔍 Ver Detalle', callback_data: `alert_dtl:${d}:${sid}` },
+                { text: '🏷️ Justificar', callback_data: `alert_just:${d}:${sid}` }
+            ],
+            [
+                { text: '🔄 Re-verificar', callback_data: `alert_recheck:${d}:${sid}` },
+                { text: '📊 Resumen del Día', callback_data: `alert_sum:${d}` }
+            ]
+        ]
+    };
+};
+
+/**
  * Formatear mensaje de Alerta Gerencial Urgente de Discrepancias
  */
-const formatDiscrepancyAlertMessage = ({ effectiveDate, pistaDiscrepancies = [], tiendaDiscrepancies = [], mermasAnomalas = [] }) => {
+const formatDiscrepancyAlertMessage = ({ effectiveDate, pistaDiscrepancies = [], tiendaDiscrepancies = [], mermasAnomalas = [] }, options = {}) => {
     let msg = `🚨 <b>ALERTA GERENCIAL DE DISCREPANCIAS</b>\n`;
     msg += `📅 <b>Fecha Auditada:</b> ${toDisplayDate(effectiveDate)}\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -2719,8 +3598,23 @@ const formatDiscrepancyAlertMessage = ({ effectiveDate, pistaDiscrepancies = [],
 
     msg += `🚨 <i>Notificación automática gerencial emitida por SIPE Admin.</i>\n`;
     msg += `<i>Por favor verificar cierres y cuadres de caja correspondientes.</i>`;
+
+    if (options && (options.withMarkup || options.withButtons)) {
+        const primaryStationId = options.stationId || 
+                                 pistaDiscrepancies[0]?.estacion_id || 
+                                 pistaDiscrepancies[0]?.branch_id || 
+                                 resolveStationId(pistaDiscrepancies[0]?.estacion || pistaDiscrepancies[0]?.empresa) || 
+                                 '008';
+        return {
+            text: msg,
+            reply_markup: getDiscrepancyInlineMarkup(effectiveDate, primaryStationId)
+        };
+    }
+
     return msg;
 };
+formatDiscrepancyAlertMessage.getInlineMarkup = getDiscrepancyInlineMarkup;
+
 
 /**
  * Difusión Proactiva de Alertas de Discrepancias
@@ -2851,10 +3745,16 @@ const broadcastDiscrepancyAlerts = async (targetDate = null, customDataOrOptions
         mermasAnomalas
     });
 
+    const primaryStationId = pistaDiscrepancies[0]?.estacion_id || 
+                             pistaDiscrepancies[0]?.branch_id || 
+                             resolveStationId(pistaDiscrepancies[0]?.estacion || pistaDiscrepancies[0]?.empresa) || 
+                             '008';
+    const alertMarkup = getDiscrepancyInlineMarkup(effectiveDate, primaryStationId);
+
     const sendResults = [];
     for (const user of authorizedUsers) {
         try {
-            await sendTelegramMessage(user.telegram_user_id, alertMessage);
+            await sendTelegramMessage(user.telegram_user_id, alertMessage, alertMarkup);
             await logTelegramQuery(
                 user.telegram_user_id,
                 'BROADCAST_DISCREPANCY_ALERT',
@@ -3097,6 +3997,38 @@ const getFeedbackList = async ({ limit = 50, offset = 0, estado = null, califica
     }
 };
 
+/**
+ * Formatear lista de las últimas sugerencias/feedback para visualización de administradores
+ */
+const formatFeedbackListMessage = (feedbacks) => {
+    let msg = `📬 <b>ÚLTIMAS 5 SUGERENCIAS Y FEEDBACK</b>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    if (!feedbacks || feedbacks.length === 0) {
+        msg += `<i>No hay sugerencias registradas en la bitácora actualmente.</i>`;
+        return msg;
+    }
+
+    feedbacks.forEach((f, idx) => {
+        const califIcon = f.calificacion === 'UTIL' ? '👍 Útil' : (f.calificacion === 'NO_UTIL' ? '👎 No útil' : '⏳ Pendiente');
+        const estadoBadge = f.estado === 'COMPLETADO' ? '🟢 Completado' : (f.estado === 'ABIERTO' ? '🟡 Abierto' : `⚪ ${escapeHtml(f.estado || 'Pendiente')}`);
+        const userLabel = escapeHtml(f.first_name || f.telegram_username || f.telegram_user_id || 'Usuario');
+        const dStr = f.created_at ? toDisplayDate(new Date(f.created_at).toISOString().split('T')[0]) : '';
+
+        msg += `<b>${idx + 1}. ${userLabel}</b> ${dStr ? `(${dStr})` : ''}\n`;
+        msg += `   • <b>Calificación:</b> ${califIcon} | <b>Estado:</b> ${estadoBadge}\n`;
+        if (f.consulta_original) {
+            msg += `   • <b>Consulta:</b> <i>«${escapeHtml(f.consulta_original.substring(0, 80))}»</i>\n`;
+        }
+        if (f.comentario_mejora) {
+            msg += `   • <b>Sugerencia:</b> 💡 <i>«${escapeHtml(f.comentario_mejora)}»</i>\n`;
+        }
+        msg += `\n`;
+    });
+
+    msg += `<i>Gestiona el ciclo completo de feedback desde SIPE Admin Web.</i>`;
+    return msg;
+};
+
 module.exports = {
     initTelegramBot,
     stopTelegramBot,
@@ -3144,7 +4076,19 @@ module.exports = {
     editMessageReplyMarkup,
     getFeedbackStats,
     getFeedbackList,
+    formatFeedbackListMessage,
     pendingFeedbackUsers,
+    userConversationContext,
+    getUserConversationContext,
+    setUserConversationContext,
+    clearUserConversationContext,
+    pendingAlertJustifications,
+    getDiscrepancyInlineMarkup,
+    handleIncomingMessage,
+    shiftDate,
+    findStationById,
+    findFuelByKey,
+    transcribeTelegramVoice,
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS
