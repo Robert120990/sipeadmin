@@ -472,7 +472,9 @@ const initDB = async () => {
                 ['manage_users', 'Can create, edit, and delete users'],
                 ['manage_roles', 'Can manage roles and permissions'],
                 ['view_dashboard', 'Can view the main dashboard'],
-                ['view_bitacora', 'Can view audit logs']
+                ['view_bitacora', 'Can view audit logs'],
+                ['manage_telegram', 'Gestionar configuración y accesos de Telegram Bot'],
+                ['/dashboard/seguridad/telegram', 'Acceso a Gestión de Usuarios y Bot de Telegram']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -857,6 +859,82 @@ const initDB = async () => {
             }
         } catch (e) {
             console.error('Migration user/roles security permissions:', e.message);
+        }
+
+        // ==============================================================
+        // MIGRATION: Telegram Bot & Usuarios Autorizados
+        // ==============================================================
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS telegram_config (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    bot_token VARCHAR(255) NOT NULL,
+                    bot_username VARCHAR(100) NULL,
+                    bot_first_name VARCHAR(100) NULL,
+                    is_active TINYINT(1) DEFAULT 1,
+                    last_poll_at DATETIME NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                INSERT IGNORE INTO telegram_config (id, bot_token, bot_username, bot_first_name, is_active)
+                VALUES (1, '8852249993:AAHs51t4kIGqXfdEl8epRL0Le08PTZ52qu0', 'SIPE_IA_BOT', 'SIPE_BOT', 1);
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS telegram_usuarios (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    telegram_user_id VARCHAR(50) NOT NULL UNIQUE,
+                    telegram_username VARCHAR(100) NULL,
+                    first_name VARCHAR(100) NULL,
+                    last_name VARCHAR(100) NULL,
+                    user_id INT NULL,
+                    activo TINYINT(1) DEFAULT 0,
+                    permiso_ventas TINYINT(1) DEFAULT 1,
+                    permiso_saldos_banco TINYINT(1) DEFAULT 1,
+                    permiso_saldos_chequera TINYINT(1) DEFAULT 1,
+                    permiso_alertas TINYINT(1) DEFAULT 1,
+                    notas VARCHAR(255) NULL,
+                    last_interaction DATETIME NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_tg_uid (telegram_user_id),
+                    INDEX idx_tg_activo (activo)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS telegram_bitacora (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    telegram_user_id VARCHAR(50) NOT NULL,
+                    comando VARCHAR(100) NOT NULL,
+                    consulta TEXT NULL,
+                    autorizado TINYINT(1) DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_tg_bitacora_uid (telegram_user_id),
+                    INDEX idx_tg_bitacora_date (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            const telegramPerms = [
+                ['manage_telegram', 'Gestionar configuración y accesos de Telegram Bot'],
+                ['/dashboard/seguridad/telegram', 'Acceso a Gestión de Usuarios y Bot de Telegram']
+            ];
+            for (const [name, desc] of telegramPerms) {
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
+            }
+
+            const [adminRoles] = await pool.query("SELECT id FROM roles WHERE name IN ('admin', 'Administrator', 'Administrador', 'Super Admin', 'Superadmin', 'Super Administrador') OR id = 1");
+            const [allTgPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('manage_telegram', '/dashboard/seguridad/telegram')");
+            for (const r of adminRoles) {
+                for (const p of allTgPerms) {
+                    await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, p.id]);
+                }
+            }
+        } catch (e) {
+            console.error('Migration telegram tables and permissions:', e.message);
         }
 
         // ==============================================================

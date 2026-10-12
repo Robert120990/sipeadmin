@@ -844,15 +844,13 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefin
 };
 
 // --- Ventas ---
-router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
-    const { date } = req.params;
+const getConsolidadoVentasData = async (date) => {
+    let externalDb = null;
     try {
-        let externalDb = null;
-        try {
-            externalDb = await getExternalDb();
-        } catch (e) {
-            console.warn('[Consolidado Ventas] externalDb no disponible:', e.message);
-        }
+        externalDb = await getExternalDb();
+    } catch (e) {
+        console.warn('[Consolidado Ventas] externalDb no disponible:', e.message);
+    }
 
         let accountingDb = null;
         let useSaas = false;
@@ -1640,7 +1638,7 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
         auditoria.descuadres_pista_monto = Math.round(auditoria.descuadres_pista_monto * 100) / 100;
         auditoria.total_alertas = auditoria.gastos_tiendas_count + auditoria.descuadres_cortes_count + auditoria.descuadres_pista_count + auditoria.galonajes_incongruentes_count;
 
-        res.json({
+        return {
             tiendas: tiendasLocal,
             cortes_tienda: cortesTiendaLocal,
             estaciones: estacionesLocal,
@@ -1657,7 +1655,14 @@ router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ven
                 precio_ion: Number(quincenaRow.precio_ion || 0),
                 fuente: quincenaRow.fuente || 'Portal Puma / DGEHM'
             } : null
-        });
+        };
+};
+
+router.get('/ventas/consolidado/:date', authenticateToken, requirePermission(ventasViewPerms), async (req, res) => {
+    const { date } = req.params;
+    try {
+        const data = await getConsolidadoVentasData(date);
+        res.json(data);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar consolidado de ventas'); 
     }
@@ -4700,6 +4705,7 @@ router.isGenericDescription = isGenericDescription;
 router.generarAnalisisDescuadre = generarAnalisisDescuadre;
 router.getTurnosPorEmpresa = getTurnosPorEmpresa;
 router.mapCierreRowConExplicacion = mapCierreRowConExplicacion;
+router.getConsolidadoVentasData = getConsolidadoVentasData;
 
 module.exports = router;
 

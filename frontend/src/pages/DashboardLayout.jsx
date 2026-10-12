@@ -55,7 +55,8 @@ import {
     Tareas,
     ConsultaCambiosGithub,
     PlanillasRRHH,
-    PedidosProgramadosConsulta
+    PedidosProgramadosConsulta,
+    TelegramUsers
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -179,6 +180,7 @@ export default function DashboardLayout() {
         '/dashboard/estrategia/rentabilidad': <EstrategiaRentabilidad />,
         '/dashboard/estrategia/creditos': <EstrategiaCreditos />,
         '/dashboard/seguridad/cambios': <ConsultaCambiosGithub />,
+        '/dashboard/seguridad/telegram': <TelegramUsers />,
     };
 
     // Sync with URL location

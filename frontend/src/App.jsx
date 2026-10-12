@@ -55,7 +55,8 @@ import {
     ConsultaCambiosGithub,
     PlanillasRRHH,
     ConfiguracionTema,
-    PedidosProgramadosConsulta
+    PedidosProgramadosConsulta,
+    TelegramUsers
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -148,6 +149,7 @@ function App() {
                                     <Route path="permissions" element={<PermissionRoute pathKey="/dashboard/permissions"><Permissions /></PermissionRoute>} />
                                     <Route path="bitacora" element={<PermissionRoute pathKey="/dashboard/bitacora"><Bitacora /></PermissionRoute>} />
                                     <Route path="seguridad/cambios" element={<PermissionRoute pathKey="/dashboard/seguridad/cambios"><ConsultaCambiosGithub /></PermissionRoute>} />
+                                    <Route path="seguridad/telegram" element={<PermissionRoute pathKey="/dashboard/seguridad/telegram"><TelegramUsers /></PermissionRoute>} />
                                 </Route>
                                 <Route path="*" element={<Navigate to="/login" replace />} />
                             </Routes>

@@ -169,6 +169,7 @@ const tasksRoutes = require('./routes/tasks');
 const notificationsRoutes = require('./routes/notifications');
 const githubChangesRoutes = require('./routes/githubChanges').router;
 const rrhhRoutes = require('./routes/rrhh');
+const telegramRoutes = require('./routes/telegram');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
@@ -189,6 +190,7 @@ app.use('/api', onedriveRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api', bitacoraRoutes);
 app.use('/api/check-designer', checkDesignerRoutes);
+app.use('/api/telegram', telegramRoutes);
 
 // Health Check público
 app.get('/api/debug-ping', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
@@ -228,13 +230,15 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Expr
     });
 });
 
-// Initialize DB, Schedulers and Start Server
+// Initialize DB, Schedulers, Telegram Bot and Start Server
 const { initBirthdayScheduler } = require('./services/birthdayNotifier');
 const { initPaymentScheduler } = require('./services/paymentNotifier');
+const { initTelegramBot } = require('./services/telegramBotService');
 
 initDB().then(() => {
     initBirthdayScheduler();
     initPaymentScheduler();
+    initTelegramBot();
     server.listen(PORT, () => {
         console.log(`Server HTTP y Socket.io running on port ${PORT}`);
     });

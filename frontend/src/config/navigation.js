@@ -90,6 +90,7 @@ export const rrhhMenu = [
 export const securityItems = [
     { name: 'Usuarios', path: '/dashboard/users', icon: createColorIcon('flat-color-icons:businessman') },
     { name: 'Permisos', path: '/dashboard/permissions', icon: createColorIcon('flat-color-icons:privacy') },
+    { name: 'Usuarios de Telegram', path: '/dashboard/seguridad/telegram', icon: createColorIcon('flat-color-icons:comments') },
     { name: 'Bitácora', path: '/dashboard/bitacora', icon: createColorIcon('flat-color-icons:timeline') },
     { name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: createColorIcon('flat-color-icons:workflow') },
 ];
