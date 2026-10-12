@@ -709,15 +709,16 @@ const ConsultasPreciosCompetencia = () => {
                             fontSize: '0.8rem', 
                             padding: '0.25rem 0.75rem', 
                             borderRadius: '16px', 
-                            backgroundColor: 'rgba(59, 130, 246, 0.12)', 
-                            color: '#3b82f6', 
-                            border: '1px solid rgba(59, 130, 246, 0.3)',
+                            backgroundColor: 'rgba(34, 197, 94, 0.12)', 
+                            color: '#22c55e', 
+                            border: '1px solid rgba(34, 197, 94, 0.3)',
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '0.4rem',
                             fontWeight: '600'
-                        }} title="Actualización automática diaria 4 veces al día (8:00 AM, 11:00 AM, 2:00 PM y 4:00 PM en hora de El Salvador)">
-                            <Clock size={14} /> Auto: 8:00 AM, 11:00 AM, 2:00 PM, 4:00 PM
+                        }} title="Sincronización automática continua activa">
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block' }}></span>
+                            Sincronización automática activa
                         </span>
                     </div>
                     <p style={{ color: 'var(--text-muted)', marginTop: '0.25rem', marginBottom: 0 }}>

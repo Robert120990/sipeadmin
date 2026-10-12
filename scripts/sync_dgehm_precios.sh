@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# SIPE Admin - Sincronización Remota de Precios de Competencia DGEHM
+# Servidor Orquestador: 169.58.207.115 (Usuario: rsboosted)
+# Servidor Destino Producción: admin.sipesv.com (5.252.55.29)
+# ==============================================================================
+
+TASK_DIR="/home/rsboosted/sipe-tasks"
+LOG_FILE="$TASK_DIR/sync_dgehm.log"
+LOCK_FILE="/tmp/sipe_sync_dgehm.lock"
+API_URL="https://admin.sipesv.com/api/consultas/estaciones/precios-competencia/sync-dgehm"
+API_KEY="sipe_orchestrator_2026_secure_token"
+
+# Evitar traslape de ejecuciones concurrentes
+if [ -f "$LOCK_FILE" ]; then
+    PID=$(cat "$LOCK_FILE" 2>/dev/null || true)
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] Sincronización DGEHM previa aún en ejecución (PID: $PID). Omitiendo ciclo." >> "$LOG_FILE"
+        exit 0
+    fi
+fi
+
+echo "$$" > "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [START] 🚀 Disparando sincronización DGEHM hacia admin.sipesv.com..." >> "$LOG_FILE"
+
+START_TIME=$(date +%s)
+HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 120 -X POST "$API_URL" \
+    -H "Content-Type: application/json" \
+    -H "x-api-key: $API_KEY" \
+    -d "{\"source\": \"CRON_169.58.207.115\", \"triggered_at\": \"$(date -Iseconds)\"}")
+
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+
+HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n 1)
+
+if [ "$HTTP_STATUS" -eq 200 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] ✅ Precios DGEHM sincronizados en ${ELAPSED}s (HTTP $HTTP_STATUS): $HTTP_BODY" >> "$LOG_FILE"
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] ❌ Fallo en sincronización DGEHM (HTTP $HTTP_STATUS en ${ELAPSED}s): $HTTP_BODY" >> "$LOG_FILE"
+fi
+
+# Mantener log acotado
+if [ -f "$LOG_FILE" ] && [ $(wc -l < "$LOG_FILE") -gt 5000 ]; then
+    tail -n 2500 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+fi
