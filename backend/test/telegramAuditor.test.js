@@ -396,4 +396,38 @@ describe('Telegram Auditor Service Unit Tests', () => {
             assert.ok(html.includes('Tasa Global de Error: <b>30%</b>'));
         });
     });
+
+    describe('Seguridad y Enmascaramiento de Token de Telegram', () => {
+        const telegramRouter = require('../routes/telegram');
+        const maskToken = telegramRouter.maskToken;
+
+        it('debe enmascarar tokens preservando prefijo y sufijo para verificación segura', () => {
+            const token = '123456789:ABCdefGHIjklMNOpqrSTUvwxYZ';
+            const masked = maskToken(token);
+            assert.strictEqual(masked.startsWith('12345678'), true);
+            assert.strictEqual(masked.endsWith('wxYZ'), true);
+            assert.ok(masked.includes('••••••••'));
+            assert.ok(!masked.includes('ABCdefGHI'));
+        });
+
+        it('debe manejar tokens cortos o vacíos de forma segura sin exponer caracteres', () => {
+            assert.strictEqual(maskToken(''), '');
+            assert.strictEqual(maskToken(null), '');
+            assert.strictEqual(maskToken(undefined), '');
+            assert.strictEqual(maskToken('short_token'), '••••••••');
+        });
+
+        it('no debe existir ningún token de bot en código fuente o base de datos por defecto', () => {
+            const leakedToken = '8852249993:AAHs51t4kIGqXfdEl8epRL0Le08PTZ52qu0';
+            const fs = require('fs');
+            const path = require('path');
+            const botServiceContent = fs.readFileSync(path.join(__dirname, '../services/telegramBotService.js'), 'utf8');
+            const dbContent = fs.readFileSync(path.join(__dirname, '../db.js'), 'utf8');
+            const envExampleContent = fs.readFileSync(path.join(__dirname, '../.env.example'), 'utf8');
+
+            assert.strictEqual(botServiceContent.includes(leakedToken), false);
+            assert.strictEqual(dbContent.includes(leakedToken), false);
+            assert.strictEqual(envExampleContent.includes(leakedToken), false);
+        });
+    });
 });

@@ -4,7 +4,7 @@ const salesHourlyService = require('./salesHourlyService');
 const solarEnergyService = require('./solarEnergyService');
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org/bot';
-const DEFAULT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8852249993:AAHs51t4kIGqXfdEl8epRL0Le08PTZ52qu0';
+const DEFAULT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
 let isPollingActive = false;
 let lastPollAt = null;
@@ -3506,7 +3506,7 @@ const getBotStatus = async () => {
         isActive,
         lastPollAt,
         bot: details || {
-            id: 8852249993,
+            id: null,
             username: 'SIPE_IA_BOT',
             first_name: 'SIPE_BOT'
         }

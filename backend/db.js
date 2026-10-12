@@ -880,8 +880,8 @@ const initDB = async () => {
 
             await pool.query(`
                 INSERT IGNORE INTO telegram_config (id, bot_token, bot_username, bot_first_name, is_active)
-                VALUES (1, '8852249993:AAHs51t4kIGqXfdEl8epRL0Le08PTZ52qu0', 'SIPE_IA_BOT', 'SIPE_BOT', 1);
-            `);
+                VALUES (1, ?, 'SIPE_IA_BOT', 'SIPE_BOT', 1);
+            `, [process.env.TELEGRAM_BOT_TOKEN || '']);
 
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS telegram_usuarios (

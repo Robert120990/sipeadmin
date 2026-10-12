@@ -5,7 +5,7 @@ import {
     Activity, Power, HelpCircle, Check, Eye, EyeOff,
     UserCheck, ShieldAlert, ShieldCheck, Link2,
     ThumbsUp, ThumbsDown, MessageSquare, Database, Cpu, Radio,
-    Terminal, AlertOctagon
+    Terminal, AlertOctagon, Key
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -84,6 +84,13 @@ export default function TelegramUsers() {
     const [testMessageText, setTestMessageText] = useState('');
     const [sendingTest, setSendingTest] = useState(false);
 
+    // Modal y estado de configuración de Token
+    const [showTokenModal, setShowTokenModal] = useState(false);
+    const [tokenConfig, setTokenConfig] = useState(null);
+    const [newTokenInput, setNewTokenInput] = useState('');
+    const [showTokenText, setShowTokenText] = useState(false);
+    const [savingToken, setSavingToken] = useState(false);
+
     // Cargar estado del bot
     const fetchBotStatus = useCallback(async () => {
         try {
@@ -91,6 +98,18 @@ export default function TelegramUsers() {
             setBotStatus(res.data);
         } catch (e) {
             console.warn('Error cargando estado de Telegram:', e.message);
+        }
+    }, []);
+
+    // Cargar configuración de token
+    const fetchTokenConfig = useCallback(async () => {
+        try {
+            const res = await api.get('/telegram/config');
+            if (res.data?.ok) {
+                setTokenConfig(res.data);
+            }
+        } catch (e) {
+            console.warn('Error cargando configuración de token:', e.message);
         }
     }, []);
 
@@ -235,10 +254,11 @@ export default function TelegramUsers() {
 
     useEffect(() => {
         fetchBotStatus();
+        fetchTokenConfig();
         fetchUsers();
         fetchSystemUsers();
         fetchHealthDiagnostics();
-    }, [fetchBotStatus, fetchUsers, fetchSystemUsers, fetchHealthDiagnostics]);
+    }, [fetchBotStatus, fetchTokenConfig, fetchUsers, fetchSystemUsers, fetchHealthDiagnostics]);
 
     useEffect(() => {
         if (activeTab === 'bitacora') {
@@ -312,6 +332,41 @@ export default function TelegramUsers() {
             fetchBotStatus();
         } catch (err) {
             addToast('Error al alternar estado del bot', 'error');
+        }
+    };
+
+    // Abrir modal de token
+    const handleOpenTokenModal = async () => {
+        setNewTokenInput('');
+        setShowTokenText(false);
+        await fetchTokenConfig();
+        setShowTokenModal(true);
+    };
+
+    // Guardar nuevo token de bot
+    const handleSaveToken = async (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        const clean = newTokenInput.trim();
+        if (!clean || clean.length < 15) {
+            addToast('Ingresa un token de bot de Telegram válido (ej. 123456789:AAH...)', 'warning');
+            return;
+        }
+
+        setSavingToken(true);
+        try {
+            const res = await api.put('/telegram/config', { bot_token: clean });
+            if (res.data?.ok) {
+                addToast(res.data.message || 'Token actualizado con éxito', 'success');
+                setShowTokenModal(false);
+                setNewTokenInput('');
+                fetchBotStatus();
+                fetchTokenConfig();
+                fetchHealthDiagnostics();
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al actualizar y verificar el token', 'error');
+        } finally {
+            setSavingToken(false);
         }
     };
 
@@ -800,11 +855,32 @@ export default function TelegramUsers() {
                     </div>
 
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        HTTP API ID: <code>{botStatus?.bot?.id || '8852249993'}</code>
+                        HTTP API ID: <code>{botStatus?.bot?.id || '—'}</code>
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                        onClick={handleOpenTokenModal}
+                        className="btn-secondary"
+                        style={{ height: '32px', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0 0.75rem' }}
+                        title="Configurar o rotar Bot Token de Telegram"
+                    >
+                        <Key size={14} color="#0088cc" />
+                        Configurar Token
+                    </button>
+
+                    <button
+                        onClick={handleRestartBot}
+                        disabled={statusLoading}
+                        className="btn-secondary"
+                        style={{ height: '32px', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0 0.75rem' }}
+                        title="Reiniciar servicio de sondeo"
+                    >
+                        <RefreshCw size={14} className={statusLoading ? 'spin' : ''} />
+                        Reiniciar
+                    </button>
+
                     <button
                         onClick={handleToggleBotActive}
                         className={botStatus?.isActive ? 'btn-secondary' : 'btn-primary'}
@@ -2251,6 +2327,131 @@ export default function TelegramUsers() {
                         )}
                     </div>
                 )}
+            </Modal>
+
+            {/* Modal para Configuración de Token de Telegram */}
+            <Modal
+                open={showTokenModal}
+                onClose={() => !savingToken && setShowTokenModal(false)}
+                title="Configuración de Token del Bot de Telegram"
+                size="md"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', width: '100%' }}>
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setShowTokenModal(false)}
+                            disabled={savingToken}
+                            style={{ height: '36px', fontSize: '0.825rem' }}
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            type="button"
+                            className="btn-primary"
+                            onClick={handleSaveToken}
+                            disabled={savingToken || !newTokenInput.trim()}
+                            style={{ height: '36px', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                        >
+                            {savingToken ? (
+                                <>
+                                    <RefreshCw size={14} className="spin" />
+                                    Verificando y Guardando...
+                                </>
+                            ) : (
+                                <>
+                                    <Key size={14} />
+                                    Guardar y Reconectar
+                                </>
+                            )}
+                        </button>
+                    </div>
+                }
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{
+                        padding: '0.75rem 0.9rem',
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        borderLeft: '4px solid #EF4444',
+                        borderRadius: '0 6px 6px 0',
+                        fontSize: '0.8rem',
+                        color: 'var(--text-main)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.4rem'
+                    }}>
+                        <div style={{ fontWeight: 700, color: '#DC2626', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <AlertTriangle size={15} />
+                            Rotación de Seguridad y Revocación de Spam
+                        </div>
+                        <div>
+                            Si el bot responde con enlaces a canales de spam ajenos (ej. <i>TucosProfit</i> o <i>A_TOOLSx2</i>), significa que el token anterior fue filtrado y un bot externo no autorizado está leyendo los mensajes mediante polling.
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            <b>Instrucciones para rotar y cortar el spam:</b><br />
+                            1. Abre <b>@BotFather</b> en Telegram y envía <code>/mybots</code>.<br />
+                            2. Elige tu bot oficial &rarr; <i>API Token</i> &rarr; <b>Revoke current token</b>.<br />
+                            3. Copia el nuevo token generado e ingrésalo en el campo a continuación.
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                            Token Actualmente Activo
+                        </label>
+                        <div style={{
+                            padding: '0.55rem 0.75rem',
+                            background: 'var(--surface-color)',
+                            border: '1px solid var(--border)',
+                            borderRadius: '6px',
+                            fontFamily: 'monospace',
+                            fontSize: '0.85rem',
+                            color: tokenConfig?.has_token ? 'var(--text-main)' : 'var(--text-muted)'
+                        }}>
+                            {tokenConfig?.masked_token || (tokenConfig?.has_token ? '••••••••••••••••' : 'Ningún token configurado')}
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        <label htmlFor="new_bot_token_input" style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-main)', textTransform: 'uppercase' }}>
+                            Nuevo Token del Bot (proporcionado por @BotFather)
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                            <input
+                                id="new_bot_token_input"
+                                type={showTokenText ? 'text' : 'password'}
+                                value={newTokenInput}
+                                onChange={(e) => setNewTokenInput(e.target.value)}
+                                placeholder="123456789:AAH..."
+                                className="form-input"
+                                style={{ width: '100%', fontFamily: 'monospace', paddingRight: '2.5rem', height: '38px', fontSize: '0.85rem' }}
+                                disabled={savingToken}
+                                autoComplete="off"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowTokenText(!showTokenText)}
+                                style={{
+                                    position: 'absolute',
+                                    right: '8px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    color: 'var(--text-muted)',
+                                    padding: '4px'
+                                }}
+                                title={showTokenText ? 'Ocultar' : 'Mostrar'}
+                            >
+                                {showTokenText ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                        </div>
+                        <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                            Al guardar, el servidor validará el token directamente con la API de Telegram (<code>getMe</code>) antes de persistirlo y reactivar el servicio.
+                        </span>
+                    </div>
+                </div>
             </Modal>
         </div>
     );

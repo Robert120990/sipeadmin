@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791833554.2229657,
-    "seen": 1791833582.6796896,
-    "ast_hash": "9bcaa17ba4d9a02652b5095dd556d577",
+    "mtime": 1791833586.4236794,
+    "seen": 1791833854.7149916,
+    "ast_hash": "2dcf6c1609eafed40db20b8905dd1b1e",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -1239,6 +1239,12 @@
     "mtime": 1791833249.902285,
     "seen": 1791833582.6796896,
     "ast_hash": "e42527549ce4946b9e359ec7faf90db4",
+    "semantic_hash": ""
+  },
+  "backend/test/telegramAdvancedCapabilities.test.js": {
+    "mtime": 1791833810.9848833,
+    "seen": 1791833854.7149916,
+    "ast_hash": "3d326fa79bc302eeb3743bb9eaee11ff",
     "semantic_hash": ""
   }
 }

@@ -94,6 +94,103 @@ router.post('/toggle-active', authenticateToken, requirePermission(telegramPerms
 });
 
 /**
+ * Función auxiliar para enmascarar token sensible
+ */
+const maskToken = (token) => {
+    if (!token || typeof token !== 'string') return '';
+    const trimmed = token.trim();
+    if (trimmed.length <= 12) return '••••••••';
+    return trimmed.substring(0, 8) + '••••••••' + trimmed.substring(trimmed.length - 4);
+};
+
+/**
+ * GET /api/telegram/config
+ * Obtener configuración actual del bot (token enmascarado para seguridad)
+ */
+router.get('/config', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const [rows] = await db.query('SELECT bot_token, bot_username, bot_first_name, is_active, last_poll_at, updated_at FROM telegram_config WHERE id = 1 LIMIT 1');
+        const config = rows && rows.length > 0 ? rows[0] : null;
+        const currentToken = config?.bot_token || process.env.TELEGRAM_BOT_TOKEN || '';
+
+        res.json({
+            ok: true,
+            has_token: Boolean(currentToken),
+            masked_token: maskToken(currentToken),
+            bot_username: config?.bot_username || null,
+            bot_first_name: config?.bot_first_name || null,
+            is_active: config ? Boolean(config.is_active) : true,
+            last_poll_at: config?.last_poll_at || null,
+            updated_at: config?.updated_at || null
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener configuración de Telegram');
+    }
+});
+
+/**
+ * PUT /api/telegram/config
+ * Actualizar token del bot de Telegram, verificar conexión con Telegram API y reiniciar servicio
+ */
+router.put('/config', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const { bot_token, is_active } = req.body;
+        if (!bot_token || typeof bot_token !== 'string' || bot_token.trim().length < 15) {
+            return res.status(400).json({ message: 'El token de Telegram proporcionado no es válido o está incompleto' });
+        }
+
+        const cleanToken = bot_token.trim();
+
+        // 1. Probar conectividad inmediata con la API de Telegram (getMe) usando el nuevo token
+        let verifiedBot = null;
+        try {
+            verifiedBot = await testTelegramConnection(cleanToken);
+        } catch (connErr) {
+            return res.status(400).json({
+                message: `El token fue rechazado por la API de Telegram: ${connErr.message || 'Error de autenticación'}`
+            });
+        }
+
+        // 2. Persistir en telegram_config
+        const isActiveValue = is_active !== undefined ? (is_active ? 1 : 0) : 1;
+        await db.query(`
+            INSERT INTO telegram_config (id, bot_token, bot_username, bot_first_name, is_active, updated_at)
+            VALUES (1, ?, ?, ?, ?, NOW())
+            ON DUPLICATE KEY UPDATE
+                bot_token = VALUES(bot_token),
+                bot_username = VALUES(bot_username),
+                bot_first_name = VALUES(bot_first_name),
+                is_active = VALUES(is_active),
+                updated_at = NOW()
+        `, [
+            cleanToken,
+            verifiedBot?.username || 'SIPE_IA_BOT',
+            verifiedBot?.first_name || 'SIPE_BOT',
+            isActiveValue
+        ]);
+
+        // 3. Reiniciar bot con el nuevo token
+        await restartTelegramBot();
+        const updatedStatus = await getBotStatus();
+
+        res.json({
+            ok: true,
+            message: `Token actualizado y verificado con éxito (@${verifiedBot?.username || 'bot'}). Servicio reiniciado.`,
+            bot: verifiedBot,
+            status: updatedStatus
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar configuración de Telegram');
+    }
+});
+
+/**
  * GET /api/telegram/system-users
  * Lista de usuarios del sistema SIPE Admin con sus roles y permisos para vinculación
  */
@@ -659,5 +756,6 @@ router.post('/audit/clear-errors', authenticateN8nOrAdmin, async (req, res) => {
 });
 
 router.authenticateN8nOrAdmin = authenticateN8nOrAdmin;
+router.maskToken = maskToken;
 
 module.exports = router;
