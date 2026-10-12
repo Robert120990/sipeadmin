@@ -18,10 +18,10 @@
     "semantic_hash": "7beccc830c416d1a5d5a99d5fa6988b0"
   },
   "backend/db.js": {
-    "mtime": 1791817966.9737463,
-    "seen": 1791822880.7085679,
-    "ast_hash": "0a884b98ab1fefbdedf8b9e85c368cad",
-    "semantic_hash": "0a884b98ab1fefbdedf8b9e85c368cad"
+    "mtime": 1791826360.9261372,
+    "seen": 1791826455.8454368,
+    "ast_hash": "4233655a5e3be125669dd9ec9bb7353c",
+    "semantic_hash": ""
   },
   "backend/middleware/auth.js": {
     "mtime": 1791408358.543865,
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791825617.2978897,
-    "seen": 1791825704.2665868,
-    "ast_hash": "2aa11311d630a72402e89b8a25d42d5c",
+    "mtime": 1791826415.3422782,
+    "seen": 1791826455.8454368,
+    "ast_hash": "60cae72a7adc44e3b637be7959653cab",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -390,9 +390,9 @@
     "semantic_hash": "25bfd760ff5331823578d7070aaf98f7"
   },
   "deploy.sh": {
-    "mtime": 1791824154.5744789,
-    "seen": 1791824268.1699405,
-    "ast_hash": "d6acf0c90560377483270ebd948442d1",
+    "mtime": 1791826252.296578,
+    "seen": 1791826455.8454368,
+    "ast_hash": "b0d34c9a9a9cf096e728cd1dbd440b1e",
     "semantic_hash": ""
   },
   "ecosystem.config.cjs": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791825676.2160165,
-    "seen": 1791825704.2665868,
-    "ast_hash": "e74828a95968500e8ba9ff21058c5841",
+    "mtime": 1791826435.436036,
+    "seen": 1791826455.8454368,
+    "ast_hash": "0e64c760a166d1584368b021ffe48b86",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -1167,6 +1167,18 @@
     "mtime": 1791824626.8168716,
     "seen": 1791824699.3161483,
     "ast_hash": "e63977d5eb74c54422a4297532be9a33",
+    "semantic_hash": ""
+  },
+  "backend/services/conversationalAiService.js": {
+    "mtime": 1791826395.8023164,
+    "seen": 1791826455.8454368,
+    "ast_hash": "db1bd1aa3940df708612f4546feae1bb",
+    "semantic_hash": ""
+  },
+  "backend/test/conversationalAi.test.js": {
+    "mtime": 1791826338.3569129,
+    "seen": 1791826455.8454368,
+    "ast_hash": "22ba60664ff9be0e5b948180ff5e1319",
     "semantic_hash": ""
   }
 }

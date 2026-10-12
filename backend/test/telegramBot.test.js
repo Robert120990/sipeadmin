@@ -7,6 +7,7 @@ const {
     formatAlertasMessage,
     formatProfileMessage,
     parseUserDate,
+    parseSpanishDateText,
     moneyFmt,
     numFmt,
     normalizeText,
@@ -37,6 +38,63 @@ describe('Telegram Bot Service Unit Tests', () => {
             assert.strictEqual(parseUserDate(''), null);
             assert.strictEqual(parseUserDate(null), null);
             assert.strictEqual(parseUserDate('fecha_invalida'), null);
+        });
+    });
+
+    describe('parseSpanishDateText', () => {
+        it('debe reconocer fechas con nombre completo de mes y abreviaciones (año 2026 por defecto)', () => {
+            assert.strictEqual(parseSpanishDateText('5 de octubre'), '2026-10-05');
+            assert.strictEqual(parseSpanishDateText('15 de septiembre'), '2026-09-15');
+            assert.strictEqual(parseSpanishDateText('05 de oct'), '2026-10-05');
+            assert.strictEqual(parseSpanishDateText('1 de enero'), '2026-01-01');
+            assert.strictEqual(parseSpanishDateText('31 de dic'), '2026-12-31');
+        });
+
+        it('debe reconocer "el dia X" asociando mes y año correspondiente', () => {
+            assert.strictEqual(parseSpanishDateText('el dia 5'), '2026-10-05');
+            assert.strictEqual(parseSpanishDateText('dia 12'), '2026-10-12');
+            assert.strictEqual(parseSpanishDateText('el dia 15'), '2026-10-15');
+        });
+
+        it('debe reconocer años explícitos cuando se especifiquen', () => {
+            assert.strictEqual(parseSpanishDateText('5 de octubre del 2025'), '2025-10-05');
+            assert.strictEqual(parseSpanishDateText('15 de septiembre de 2024'), '2024-09-15');
+            assert.strictEqual(parseSpanishDateText('05 de oct 2027'), '2027-10-05');
+        });
+
+        it('debe extraer fechas relativas en español ("hoy", "ayer", "el dia de ayer", etc.)', () => {
+            const today = new Date();
+            const y = today.getFullYear();
+            const m = String(today.getMonth() + 1).padStart(2, '0');
+            const d = String(today.getDate()).padStart(2, '0');
+            const expectedToday = `${y}-${m}-${d}`;
+
+            const yest = new Date(today);
+            yest.setDate(yest.getDate() - 1);
+            const yY = yest.getFullYear();
+            const yM = String(yest.getMonth() + 1).padStart(2, '0');
+            const yD = String(yest.getDate()).padStart(2, '0');
+            const expectedYesterday = `${yY}-${yM}-${yD}`;
+
+            assert.strictEqual(parseSpanishDateText('hoy'), expectedToday);
+            assert.strictEqual(parseSpanishDateText('el dia de hoy'), expectedToday);
+            assert.strictEqual(parseSpanishDateText('ayer'), expectedYesterday);
+            assert.strictEqual(parseSpanishDateText('el dia de ayer'), expectedYesterday);
+        });
+
+        it('debe extraer la fecha inserta dentro de frases y preguntas completas', () => {
+            assert.strictEqual(parseSpanishDateText('que estacion vendio mas el dia de ayer?'), '2026-10-11');
+            assert.strictEqual(parseSpanishDateText('ventas del 5 de octubre'), '2026-10-05');
+            assert.strictEqual(parseSpanishDateText('cual vendio mas el 15 de septiembre'), '2026-09-15');
+            assert.strictEqual(parseSpanishDateText('descuadres del dia 5'), '2026-10-05');
+        });
+
+        it('debe retornar null para textos sin fecha válida o días inexistentes en calendario', () => {
+            assert.strictEqual(parseSpanishDateText(''), null);
+            assert.strictEqual(parseSpanishDateText(null), null);
+            assert.strictEqual(parseSpanishDateText('sin fecha'), null);
+            assert.strictEqual(parseSpanishDateText('32 de octubre'), null);
+            assert.strictEqual(parseSpanishDateText('30 de febrero'), null);
         });
     });
 
@@ -302,6 +360,56 @@ describe('Telegram Bot Service Unit Tests', () => {
             assert.strictEqual(parsed.matchedFuel?.key, 'regular');
             assert.strictEqual(parsed.matchedStation, null);
         });
+
+        it('debe resolver sin colisión la pregunta real: "que estacion vendio mas el dia de ayer?" (evitando match erróneo de "ion")', () => {
+            const query = 'que estacion vendio mas el dia de ayer?';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            // 1. "estacion" NO debe colisionar con combustible "ion"
+            assert.strictEqual(parsed.matchedFuel, null);
+            // 2. No debe asociarse a una estación fija
+            assert.strictEqual(parsed.matchedStation, null);
+            // 3. Debe identificarse como consulta de ranking
+            assert.strictEqual(parsed.isRanking, true);
+            // 4. Debe asociar la fecha correspondiente a ayer
+            assert.strictEqual(parsed.targetDate, parseSpanishDateText('ayer'));
+        });
+
+        it('debe respetar límites estrictos de palabra para combustible ion (\\bion\\b) y prohibir match de subcadenas', () => {
+            // "ion" como palabra aislada sí debe coincidir
+            const parsedIon1 = parseNaturalLanguageQuery('Venta de ion diesel de ayer');
+            assert.strictEqual(parsedIon1.matchedFuel?.key, 'ion');
+
+            const parsedIon2 = parseNaturalLanguageQuery('total ion ayer');
+            assert.strictEqual(parsedIon2.matchedFuel?.key, 'ion');
+
+            // Palabras que contienen "ion" como subcadena NO deben coincidir
+            const parsedNoIon1 = parseNaturalLanguageQuery('informacion de ventas');
+            assert.strictEqual(parsedNoIon1.matchedFuel, null);
+
+            const parsedNoIon2 = parseNaturalLanguageQuery('atencion al cliente');
+            assert.strictEqual(parsedNoIon2.matchedFuel, null);
+
+            const parsedNoIon3 = parseNaturalLanguageQuery('que estacion vendio mas');
+            assert.strictEqual(parsedNoIon3.matchedFuel, null);
+
+            const parsedNoIon4 = parseNaturalLanguageQuery('estacion lider en ventas');
+            assert.strictEqual(parsedNoIon4.matchedFuel, null);
+        });
+
+        it('debe integrar fechas en español natural en parseNaturalLanguageQuery ("5 de octubre", "15 de septiembre", "05 de oct", "el dia 5")', () => {
+            const parsed1 = parseNaturalLanguageQuery('Ventas del 5 de octubre');
+            assert.strictEqual(parsed1.targetDate, '2026-10-05');
+
+            const parsed2 = parseNaturalLanguageQuery('Consolidado del 15 de septiembre');
+            assert.strictEqual(parsed2.targetDate, '2026-09-15');
+
+            const parsed3 = parseNaturalLanguageQuery('Ventas del 05 de oct');
+            assert.strictEqual(parsed3.targetDate, '2026-10-05');
+
+            const parsed4 = parseNaturalLanguageQuery('Ventas el dia 5');
+            assert.strictEqual(parsed4.targetDate, '2026-10-05');
+        });
     });
 
     describe('NLU Formatters', () => {
@@ -396,6 +504,25 @@ describe('Telegram Bot Service Unit Tests', () => {
             assert.ok(msg.includes('¿Cuánto diesel vendió Costa del Sol?'));
             assert.ok(msg.includes('Ventas de Miraflores'));
             assert.ok(msg.includes('¿Cuánto tenemos en Promerica?'));
+        });
+
+        it('formatRankingMessage debe soportar ranking por combustible específico', () => {
+            const data = {
+                estaciones: [
+                    { empresa: 'Puma Miraflores', diesel: 1200, venta: 15000, galonaje: 3000 },
+                    { empresa: 'Puma Costa del Sol', diesel: 3500, venta: 26000, galonaje: 6500 }
+                ]
+            };
+            const fuel = { key: 'diesel', label: 'Diesel' };
+            const msg = formatRankingMessage(data, '2026-10-11', 'venta', fuel);
+            assert.ok(msg.includes('RANKING DE VENTA DE DIESEL POR ESTACIÓN'));
+            assert.ok(msg.includes('3,500.00 gal'));
+            assert.ok(msg.includes('1,200.00 gal'));
+            const idxCosta = msg.indexOf('Puma Costa del Sol');
+            const idxMira = msg.indexOf('Puma Miraflores');
+            assert.ok(idxCosta < idxMira);
+            assert.ok(msg.includes('🥇'));
+            assert.ok(msg.includes('🥈'));
         });
     });
 });

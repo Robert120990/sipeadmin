@@ -9,7 +9,9 @@ const {
     restartTelegramBot,
     initTelegramBot,
     stopTelegramBot,
-    sendTelegramMessage
+    sendTelegramMessage,
+    broadcastDiscrepancyAlerts,
+    broadcastCustomAlert
 } = require('../services/telegramBotService');
 
 const telegramPerms = [
@@ -485,5 +487,68 @@ router.post('/send-test-message', authenticateToken, requirePermission(telegramP
         sendSafeError(res, error, 'Error enviando mensaje de prueba: ' + error.message);
     }
 });
+
+/**
+ * Middleware para validar acceso de n8n (vía cabecera x-api-key o x-n8n-token) o administrador vía JWT
+ */
+const authenticateN8nOrAdmin = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'] || req.headers['x-n8n-key'] || req.headers['x-n8n-token'];
+    const validKey = process.env.N8N_API_KEY || process.env.INTERNAL_API_KEY || process.env.TELEGRAM_API_KEY || process.env.TELEGRAM_BROADCAST_KEY;
+
+    if (apiKey && validKey && apiKey === validKey) {
+        req.user = {
+            id: 0,
+            username: 'n8n-orchestrator',
+            role_name: 'Administrator',
+            role_id: 1,
+            permissions: telegramPerms
+        };
+        return next();
+    }
+
+    return authenticateToken(req, res, () => {
+        requirePermission(telegramPerms)(req, res, next);
+    });
+};
+
+/**
+ * POST /api/telegram/notify-discrepancies
+ * Dispara la revisión y notificación de discrepancias (puede recibir { fecha }).
+ * Protegido con authenticateToken y requirePermission(telegramPerms).
+ */
+router.post('/notify-discrepancies', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const { fecha } = req.body || {};
+        const result = await broadcastDiscrepancyAlerts(fecha || null);
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al procesar alertas de discrepancias');
+    }
+});
+
+/**
+ * POST /api/telegram/broadcast-alert
+ * Permite a n8n o administradores enviar una alerta broadcast personalizada a todos los directores con permiso de alertas.
+ */
+router.post('/broadcast-alert', authenticateN8nOrAdmin, async (req, res) => {
+    const { mensaje, message, titulo, title, severidad, severity } = req.body || {};
+    const textToSend = mensaje || message;
+    if (!textToSend || !String(textToSend).trim()) {
+        return res.status(400).json({ message: 'El mensaje de la alerta es obligatorio (campo mensaje o message).' });
+    }
+
+    try {
+        const result = await broadcastCustomAlert({
+            message: String(textToSend).trim(),
+            title: titulo || title,
+            severity: severidad || severity || 'alerta'
+        });
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al emitir alerta broadcast');
+    }
+});
+
+router.authenticateN8nOrAdmin = authenticateN8nOrAdmin;
 
 module.exports = router;

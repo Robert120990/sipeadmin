@@ -106,7 +106,138 @@ const getDateStr = (offsetDays = 0) => {
 };
 
 /**
- * Normalizar fecha enviada por el usuario (admite YYYY-MM-DD o DD/MM/YYYY)
+ * Normalizar texto eliminando tildes y caracteres especiales
+ */
+const normalizeText = (str) => {
+    return (str || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[¿?¡!,.;:()]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+};
+
+/**
+ * Escapar caracteres especiales para expresiones regulares
+ */
+const escapeRegex = (s) => (s || '').replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+/**
+ * Mapeo de meses en español y sus abreviaciones estándar
+ */
+const SPANISH_MONTHS = {
+    'enero': 1, 'ene': 1,
+    'febrero': 2, 'feb': 2,
+    'marzo': 3, 'mar': 3,
+    'abril': 4, 'abr': 4,
+    'mayo': 5, 'may': 5,
+    'junio': 6, 'jun': 6,
+    'julio': 7, 'jul': 7,
+    'agosto': 8, 'ago': 8,
+    'septiembre': 9, 'setiembre': 9, 'sep': 9, 'sept': 9, 'set': 9,
+    'octubre': 10, 'oct': 10,
+    'noviembre': 11, 'nov': 11,
+    'diciembre': 12, 'dic': 12
+};
+
+/**
+ * Formatear YYYY-MM-DD validando existencia en calendario
+ */
+const formatYMD = (y, m, d) => {
+    const year = Number(y);
+    const month = Number(m);
+    const day = Number(d);
+    if (!year || !month || !day || month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    if (day > daysInMonth) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+};
+
+/**
+ * Parser semántico completo de fechas en español natural:
+ * Reconoce '5 de octubre', '15 de septiembre', '05 de oct', 'el dia 5', 'el dia de ayer',
+ * formatos numéricos, etc., asociando el año correspondiente (por defecto año actual 2026).
+ */
+const parseSpanishDateText = (text, ref = 2026) => {
+    if (!text || typeof text !== 'string') return null;
+
+    let refDate = new Date();
+    let defaultYear = 2026;
+    if (ref instanceof Date && !isNaN(ref.getTime())) {
+        refDate = ref;
+        defaultYear = ref.getFullYear();
+    } else if (typeof ref === 'number' && ref > 1900 && ref < 3000) {
+        defaultYear = ref;
+        refDate.setFullYear(ref);
+    } else {
+        defaultYear = refDate.getFullYear() || 2026;
+    }
+    const defaultMonth = refDate.getMonth() + 1;
+    const normalized = normalizeText(text);
+
+    // 1. Expresiones relativas en español
+    if (/\b(el dia de hoy|hoy)\b/.test(normalized)) {
+        const d = new Date(refDate);
+        return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+    if (/\b(el dia de ayer|ayer)\b/.test(normalized)) {
+        const d = new Date(refDate);
+        d.setDate(d.getDate() - 1);
+        return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+    if (/\b(anteayer|antier|el dia de anteayer)\b/.test(normalized)) {
+        const d = new Date(refDate);
+        d.setDate(d.getDate() - 2);
+        return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+
+    // 2. Patrón día + mes + año opcional: '5 de octubre', '15 de septiembre', '05 de oct', 'el dia 5 de octubre del 2025'
+    const dayMonthRegex = /\b(?:el\s+)?(?:dia\s+)?([0-3]?[0-9])\s*(?:de|\/|-)\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?\b/i;
+    const dmMatch = normalized.match(dayMonthRegex);
+    if (dmMatch) {
+        const day = parseInt(dmMatch[1], 10);
+        const month = SPANISH_MONTHS[dmMatch[2].toLowerCase()];
+        const year = dmMatch[3] ? parseInt(dmMatch[3], 10) : defaultYear;
+        const res = formatYMD(year, month, day);
+        if (res) return res;
+    }
+
+    // 3. Patrón mes + día + año opcional: 'octubre 5', 'octubre 5 de 2026'
+    const monthDayRegex = /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)\s+(?:dia\s+|el\s+)?([0-3]?[0-9])(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?\b/i;
+    const mdMatch = normalized.match(monthDayRegex);
+    if (mdMatch) {
+        const month = SPANISH_MONTHS[mdMatch[1].toLowerCase()];
+        const day = parseInt(mdMatch[2], 10);
+        const year = mdMatch[3] ? parseInt(mdMatch[3], 10) : defaultYear;
+        const res = formatYMD(year, month, day);
+        if (res) return res;
+    }
+
+    // 4. Patrón 'el dia X' o 'dia X' (sin mes especificado -> mes actual y año actual)
+    const dayOnlyRegex = /\b(?:el\s+)?dia\s+([0-3]?[0-9])\b/i;
+    const dMatch = normalized.match(dayOnlyRegex);
+    if (dMatch) {
+        const day = parseInt(dMatch[1], 10);
+        const res = formatYMD(defaultYear, defaultMonth, day);
+        if (res) return res;
+    }
+
+    // 5. Formatos numéricos directos: YYYY-MM-DD o DD/MM/YYYY o DD-MM-YYYY
+    const isoMatch = normalized.match(/\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b/);
+    if (isoMatch) {
+        return formatYMD(isoMatch[1], isoMatch[2], isoMatch[3]);
+    }
+    const dmyMatch = normalized.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/);
+    if (dmyMatch) {
+        return formatYMD(dmyMatch[3], dmyMatch[2], dmyMatch[1]);
+    }
+
+    return null;
+};
+
+/**
+ * Normalizar fecha enviada por el usuario (admite YYYY-MM-DD, DD/MM/YYYY o lenguaje natural)
  */
 const parseUserDate = (input) => {
     if (!input) return null;
@@ -119,7 +250,7 @@ const parseUserDate = (input) => {
         const year = match[3];
         return `${year}-${month}-${day}`;
     }
-    return null;
+    return parseSpanishDateText(clean);
 };
 
 /**
@@ -776,18 +907,6 @@ const formatProfileMessage = (user, effectivePerms = null) => {
     return msg;
 };
 
-/**
- * Normalizar texto eliminando tildes y caracteres especiales
- */
-const normalizeText = (str) => {
-    return (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[¿?¡!,.;:()]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-};
 
 const KNOWN_STATIONS = [
     {
@@ -823,10 +942,10 @@ const KNOWN_STATIONS = [
 ];
 
 const KNOWN_FUELS = [
+    { key: 'ion', label: 'Ion Diesel', icon: '⚡', keywords: ['ion diesel', 'ion-diesel', 'ion'] },
     { key: 'diesel', label: 'Diesel', icon: '🛢️', keywords: ['diesel', 'diésel'] },
     { key: 'regular', label: 'Regular', icon: '🟢', keywords: ['regular', 'gasolina regular'] },
-    { key: 'super', label: 'Súper', icon: '🔴', keywords: ['super', 'súper', 'gasolina super', 'gasolina súper'] },
-    { key: 'ion', label: 'Ion Diesel', icon: '⚡', keywords: ['ion', 'ion diesel', 'ion-diesel'] }
+    { key: 'super', label: 'Súper', icon: '🔴', keywords: ['super', 'súper', 'gasolina super', 'gasolina súper'] }
 ];
 
 const KNOWN_BANKS = [
@@ -847,67 +966,65 @@ const parseNaturalLanguageQuery = (rawText) => {
     if (!rawText) return null;
     const normalized = normalizeText(rawText);
 
-    // 1. Detección de fecha
-    let targetDate = getDateStr(-1); // Ayer por defecto (cierres consolidados)
-    if (/\bhoy\b/.test(normalized)) {
-        targetDate = getDateStr(0);
-    } else if (/\banteayer\b/.test(normalized)) {
-        targetDate = getDateStr(-2);
-    } else if (/\bayer\b/.test(normalized)) {
-        targetDate = getDateStr(-1);
-    } else {
-        const words = rawText.split(/\s+/);
-        for (const w of words) {
-            const parsed = parseUserDate(w);
-            if (parsed) {
-                targetDate = parsed;
-                break;
-            }
-        }
-    }
+    // 1. Detección de fecha en español natural
+    const naturalDate = parseSpanishDateText(rawText);
+    const targetDate = naturalDate || getDateStr(-1); // Ayer por defecto (cierres consolidados)
 
-    // 2. Detección de estación
+    // 2. Detección de estación con límites de palabra estricta (priorizando frases más largas)
     let matchedStation = null;
+    const stationCandidates = [];
     for (const st of KNOWN_STATIONS) {
-        const sortedKeywords = [...st.keywords].sort((a, b) => b.length - a.length);
-        for (const kw of sortedKeywords) {
-            const normKw = normalizeText(kw);
-            if (normalized.includes(normKw)) {
-                matchedStation = st;
-                break;
-            }
+        for (const kw of st.keywords) {
+            stationCandidates.push({ station: st, normKw: normalizeText(kw) });
         }
-        if (matchedStation) break;
+    }
+    stationCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of stationCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedStation = cand.station;
+            break;
+        }
     }
 
-    // 3. Detección de combustible
+    // 3. Detección de combustible con límites de palabra estricta (\bion\b)
+    // PROHIBIDO usar normalized.includes(normKw) sin word boundary para evitar colisiones (ej: 'estacion' contiene 'ion')
+    // Las frases compuestas ('ion diesel') se evalúan antes de términos individuales ('diesel', 'ion')
     let matchedFuel = null;
+    const fuelCandidates = [];
     for (const f of KNOWN_FUELS) {
         for (const kw of f.keywords) {
-            const normKw = normalizeText(kw);
-            if (new RegExp(`\\b${normKw}\\b`).test(normalized) || normalized.includes(normKw)) {
-                matchedFuel = f;
-                break;
-            }
+            fuelCandidates.push({ fuel: f, normKw: normalizeText(kw) });
         }
-        if (matchedFuel) break;
+    }
+    fuelCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of fuelCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedFuel = cand.fuel;
+            break;
+        }
     }
 
-    // 4. Detección de banco
+    // 4. Detección de banco con límites de palabra estricta (priorizando nombres completos)
     let matchedBank = null;
+    const bankCandidates = [];
     for (const b of KNOWN_BANKS) {
         for (const kw of b.keywords) {
-            const normKw = normalizeText(kw);
-            if (normalized.includes(normKw)) {
-                matchedBank = b;
-                break;
-            }
+            bankCandidates.push({ bank: b, normKw: normalizeText(kw) });
         }
-        if (matchedBank) break;
+    }
+    bankCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of bankCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedBank = cand.bank;
+            break;
+        }
     }
 
     // 5. Detección de rankings o comparativas
-    const isRanking = /\b(cual|quien|que estacion)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
+    const isRanking = /\b(cual|quien|que estacion|estacion que|estaciones que)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
                       /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized);
 
     // 6. Detección de tiendas de conveniencia
@@ -982,23 +1099,31 @@ const formatProductTotalMessage = (data, fuel, date) => {
 };
 
 /**
- * Formatear ranking de estaciones
+ * Formatear ranking de estaciones (por venta en pista, galonaje total o combustible específico)
  */
-const formatRankingMessage = (data, date, metric = 'venta') => {
+const formatRankingMessage = (data, date, metric = 'venta', fuel = null) => {
     const estaciones = [...(data?.estaciones || [])];
-    if (metric === 'galonaje') {
+    if (fuel && fuel.key) {
+        estaciones.sort((a, b) => Number(b[fuel.key] || 0) - Number(a[fuel.key] || 0));
+    } else if (metric === 'galonaje') {
         estaciones.sort((a, b) => Number(b.galonaje || 0) - Number(a.galonaje || 0));
     } else {
         estaciones.sort((a, b) => Number(b.venta || 0) - Number(a.venta || 0));
     }
 
     const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
-    let msg = `🏆 <b>RANKING DE VENTAS POR ESTACIÓN</b>\n`;
+    let msg = fuel
+        ? `🏆 <b>RANKING DE VENTA DE ${escapeHtml(fuel.label.toUpperCase())} POR ESTACIÓN</b>\n`
+        : `🏆 <b>RANKING DE VENTAS POR ESTACIÓN</b>\n`;
     msg += `📅 <b>Fecha:</b> ${toDisplayDate(date)}\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
     estaciones.forEach((e, idx) => {
         const medal = medals[idx] || `${idx + 1}.`;
-        msg += `${medal} <b>${escapeHtml(e.empresa)}:</b> <b>${moneyFmt(e.venta)}</b> (<code>${numFmt(e.galonaje)} gal</code>)\n`;
+        if (fuel && fuel.key) {
+            msg += `${medal} <b>${escapeHtml(e.empresa)}:</b> <code>${numFmt(e[fuel.key] || 0)} gal</code>\n`;
+        } else {
+            msg += `${medal} <b>${escapeHtml(e.empresa)}:</b> <b>${moneyFmt(e.venta)}</b> (<code>${numFmt(e.galonaje)} gal</code>)\n`;
+        }
     });
     msg += `\n<i>SIPE Admin • Consulta Específica</i>`;
     return msg;
@@ -1117,7 +1242,29 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
     const parsed = parseNaturalLanguageQuery(rawText);
     if (!parsed) return false;
 
-    // 1. Consulta de Estación Específica (con o sin combustible)
+    // 1. Consulta de Rankings / Comparativas (PRIORIDAD ALTA: evaluada ANTES de combustibles globales)
+    if (parsed.isRanking) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar rankings de ventas.', keyboard);
+            return true;
+        }
+
+        await sendTelegramMessage(chatId, `⏳ Calculando ranking de estaciones...`);
+        try {
+            const data = await getConsolidadoVentas(parsed.targetDate);
+            const metric = parsed.normalized.includes('galon') || parsed.normalized.includes('galones') ? 'galonaje' : 'venta';
+            const msg = formatRankingMessage(data, parsed.targetDate, metric, parsed.matchedFuel);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Ranking ${metric}${parsed.matchedFuel ? ` (${parsed.matchedFuel.key})` : ''}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de ranking:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al generar ranking: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 2. Consulta de Estación Específica (con o sin combustible)
     if (parsed.matchedStation) {
         if (!effectivePerms.ventas) {
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de estaciones.', keyboard);
@@ -1159,7 +1306,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
     }
 
-    // 2. Consulta de Combustible Global (sin estación específica)
+    // 3. Consulta de Combustible Global (sin estación específica)
     if (parsed.matchedFuel && !parsed.matchedStation) {
         if (!effectivePerms.ventas) {
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de combustible.', keyboard);
@@ -1176,28 +1323,6 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de combustible global:', err);
             await sendTelegramMessage(chatId, '❌ Ocurrió un error al calcular el total: ' + escapeHtml(err.message), keyboard);
-            return true;
-        }
-    }
-
-    // 3. Consulta de Rankings / Comparativas
-    if (parsed.isRanking) {
-        if (!effectivePerms.ventas) {
-            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar rankings de ventas.', keyboard);
-            return true;
-        }
-
-        await sendTelegramMessage(chatId, `⏳ Calculando ranking de estaciones...`);
-        try {
-            const data = await getConsolidadoVentas(parsed.targetDate);
-            const metric = parsed.normalized.includes('galon') || parsed.normalized.includes('galones') ? 'galonaje' : 'venta';
-            const msg = formatRankingMessage(data, parsed.targetDate, metric);
-            await logTelegramQuery(user.telegram_user_id, rawText, `Ranking ${metric}`, 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
-            return true;
-        } catch (err) {
-            console.error('[TelegramBot] Error en consulta de ranking:', err);
-            await sendTelegramMessage(chatId, '❌ Ocurrió un error al generar ranking: ' + escapeHtml(err.message), keyboard);
             return true;
         }
     }
@@ -1463,14 +1588,7 @@ const handleIncomingMessage = async (msg) => {
         }
 
         // Determinar fecha (por defecto ayer, o la indicada)
-        let targetDate = getDateStr(-1);
-        const parts = rawText.split(/\s+/);
-        if (parts.length > 1) {
-            const parsed = parseUserDate(parts[1]);
-            if (parsed) targetDate = parsed;
-            if (parts[1].toLowerCase() === 'hoy') targetDate = getDateStr(0);
-            if (parts[1].toLowerCase() === 'ayer') targetDate = getDateStr(-1);
-        }
+        const targetDate = parseSpanishDateText(rawText) || getDateStr(-1);
 
         await sendTelegramMessage(chatId, `⏳ Analizando auditoría y descuadres del ${toDisplayDate(targetDate)}...`);
         try {
@@ -1492,22 +1610,7 @@ const handleIncomingMessage = async (msg) => {
             return;
         }
 
-        let targetDate = getDateStr(-1); // Ventas cerradas de ayer por defecto
-        if (cleanLower.includes('hoy') || rawText.includes('Hoy')) {
-            targetDate = getDateStr(0);
-        } else if (cleanLower.includes('ayer') || rawText.includes('Ayer')) {
-            targetDate = getDateStr(-1);
-        } else {
-            // Verificar si mandó una fecha específica ej. /ventas 2026-10-10
-            const words = rawText.split(/\s+/);
-            for (const w of words) {
-                const parsed = parseUserDate(w);
-                if (parsed) {
-                    targetDate = parsed;
-                    break;
-                }
-            }
-        }
+        const targetDate = parseSpanishDateText(rawText) || getDateStr(-1); // Ventas cerradas de ayer por defecto
 
         await sendTelegramMessage(chatId, `⏳ Consultando consolidado de ventas del ${toDisplayDate(targetDate)}...`);
         try {
@@ -1677,6 +1780,363 @@ const getBotStatus = async () => {
     };
 };
 
+/**
+ * Formatear mensaje de Alerta Gerencial Urgente de Discrepancias
+ */
+const formatDiscrepancyAlertMessage = ({ effectiveDate, pistaDiscrepancies = [], tiendaDiscrepancies = [], mermasAnomalas = [] }) => {
+    let msg = `🚨 <b>ALERTA GERENCIAL DE DISCREPANCIAS</b>\n`;
+    msg += `📅 <b>Fecha Auditada:</b> ${toDisplayDate(effectiveDate)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    const totalDescuadres = pistaDiscrepancies.length + tiendaDiscrepancies.length + mermasAnomalas.length;
+    msg += `⚠️ <b>Se detectaron ${totalDescuadres} discrepancia(s) que superan los umbrales de control:</b>\n\n`;
+
+    // 1. Descuadres en Pista (diferencia > $10)
+    if (pistaDiscrepancies.length > 0) {
+        msg += `⛽ <b>Descuadres en Pista (&gt;$10.00):</b>\n`;
+        pistaDiscrepancies.forEach(p => {
+            const dif = Number(p.diferencia !== undefined ? p.diferencia : (p.dif || 0));
+            const icon = dif < 0 ? '🔴 Faltante' : '🟡 Sobrante';
+            const estName = escapeHtml(p.estacion || p.empresa || p.titulo || 'Estación');
+            msg += `• ⚠️ <b>${estName}</b>\n`;
+            msg += `   └ ${icon}: <code>${moneyFmt(dif)}</code>`;
+            if (p.total_venta || p.venta) {
+                msg += ` | Venta: ${moneyFmt(p.total_venta || p.venta)}`;
+            }
+            msg += `\n`;
+        });
+        msg += `\n`;
+    }
+
+    // 2. Descuadres en Cortes de Tienda (diferencia > $5)
+    if (tiendaDiscrepancies.length > 0) {
+        msg += `🛒 <b>Descuadres en Cortes de Tienda (&gt;$5.00):</b>\n`;
+        tiendaDiscrepancies.forEach(t => {
+            const dif = Number(t.dif !== undefined ? t.dif : (t.diferencia || 0));
+            const icon = dif < 0 ? '🔴 Faltante' : '🟡 Sobrante';
+            const tiendaName = escapeHtml(t.empresa || t.tienda_nombre || t.titulo || 'Tienda');
+            msg += `• ⚠️ <b>${tiendaName}</b>\n`;
+            msg += `   └ ${icon}: <code>${moneyFmt(dif)}</code>`;
+            if (t.venta) {
+                msg += ` | Venta: ${moneyFmt(t.venta)}`;
+            }
+            if (t.gastos && Number(t.gastos) > 0) {
+                msg += ` | Gastos: ${moneyFmt(t.gastos)}`;
+            }
+            msg += `\n`;
+        });
+        msg += `\n`;
+    }
+
+    // 3. Mermas Anómalas / Variaciones
+    if (mermasAnomalas.length > 0) {
+        msg += `⚠️ <b>Mermas Anómalas / Variaciones de Galonaje:</b>\n`;
+        mermasAnomalas.forEach(m => {
+            const estName = escapeHtml(m.estacion || m.empresa || m.titulo || 'Estación');
+            const prod = escapeHtml(m.nombre_combustible || m.producto || m.tipo_combustible || 'Combustible');
+            msg += `• ⚠️ <b>${estName} - ${prod}</b>\n`;
+            const difGal = m.diferencia_galones !== undefined ? `${numFmt(m.diferencia_galones)} gal` : '';
+            const pct = m.porcentaje_variacion !== undefined ? `(${numFmt(m.porcentaje_variacion)}%)` : '';
+            const imp = m.impacto_usd ? ` | Impacto: <code>${moneyFmt(m.impacto_usd)}</code>` : '';
+            msg += `   └ Variación: ${difGal} ${pct}${imp}\n`;
+        });
+        msg += `\n`;
+    }
+
+    msg += `🚨 <i>Notificación automática gerencial emitida por SIPE Admin.</i>\n`;
+    msg += `<i>Por favor verificar cierres y cuadres de caja correspondientes.</i>`;
+    return msg;
+};
+
+/**
+ * Difusión Proactiva de Alertas de Discrepancias
+ * Analiza consolidado de ventas, filtra descuadres >$10 en pista, >$5 en tiendas o mermas anómalas
+ * y lo envía vía Telegram a todos los directores autorizados (activo = 1 y permiso_alertas = 1).
+ */
+const broadcastDiscrepancyAlerts = async (targetDate = null, customDataOrOptions = null) => {
+    const effectiveDate = targetDate ? (parseUserDate(targetDate) || targetDate) : getDateStr(-1);
+
+    let data = null;
+    let customUsers = null;
+
+    if (customDataOrOptions) {
+        if (customDataOrOptions.resumen_cierre || customDataOrOptions.cortes_tienda || customDataOrOptions.estaciones) {
+            data = customDataOrOptions;
+        } else if (customDataOrOptions.data) {
+            data = customDataOrOptions.data;
+            customUsers = customDataOrOptions.users || customDataOrOptions.recipients;
+        } else if (Array.isArray(customDataOrOptions)) {
+            customUsers = customDataOrOptions;
+        }
+    }
+
+    if (!data) {
+        data = await getConsolidadoVentas(effectiveDate);
+    }
+
+    // 1. Filtrar descuadres en pista (diferencia > $10)
+    const pistaDiscrepancies = (data?.resumen_cierre || []).filter(r => {
+        const dif = Math.abs(Number(r.diferencia !== undefined ? r.diferencia : (r.dif || 0)));
+        return dif > 10;
+    });
+
+    // 2. Filtrar descuadres en cortes de tienda (diferencia > $5)
+    const tiendaDiscrepancies = (data?.cortes_tienda || []).filter(t => {
+        const dif = Math.abs(Number(t.dif !== undefined ? t.dif : (t.diferencia || 0)));
+        return dif > 5;
+    });
+
+    // 3. Filtrar mermas anómalas
+    let mermasAnomalas = [];
+    if (Array.isArray(data?.mermas)) {
+        mermasAnomalas = data.mermas.filter(m => 
+            m.estado === 'critico' || 
+            Math.abs(Number(m.porcentaje_variacion || 0)) > 0.50 || 
+            Math.abs(Number(m.diferencia_galones || 0)) > 50 ||
+            Math.abs(Number(m.impacto_usd || 0)) > 50
+        );
+    } else {
+        try {
+            const { getAuditoriaMermas } = require('./fuelIntelligence');
+            if (typeof getAuditoriaMermas === 'function') {
+                const mData = await getAuditoriaMermas(effectiveDate, effectiveDate);
+                if (mData && Array.isArray(mData.auditorias)) {
+                    mermasAnomalas = mData.auditorias.filter(m => 
+                        m.estado === 'critico' || 
+                        Math.abs(Number(m.porcentaje_variacion || 0)) > 0.50 || 
+                        Math.abs(Number(m.diferencia_galones || 0)) > 50 ||
+                        Math.abs(Number(m.impacto_usd || 0)) > 50
+                    );
+                }
+            }
+        } catch (_) {
+            // Silencioso en caso de entorno sin BD de combustibles
+        }
+    }
+
+    const totalDiscrepancies = pistaDiscrepancies.length + tiendaDiscrepancies.length + mermasAnomalas.length;
+
+    // Si no existen discrepancias, no emitir alertas a usuarios
+    if (totalDiscrepancies === 0) {
+        return {
+            ok: true,
+            fecha: effectiveDate,
+            discrepancies_found: false,
+            total_discrepancies: 0,
+            descuadres_pista: 0,
+            descuadres_tienda: 0,
+            mermas_anomalas: 0,
+            recipients_count: 0,
+            recipients: [],
+            message: 'No se detectaron descuadres ni mermas anómalas superiores a los umbrales para la fecha auditada.'
+        };
+    }
+
+    // Obtener usuarios autorizados con activo = 1 y permiso_alertas = 1
+    let authorizedUsers = customUsers || [];
+    if (!customUsers) {
+        const db = getDb();
+        if (db) {
+            try {
+                const [users] = await db.query(`
+                    SELECT tu.*, u.status as sipe_status, r.name as sipe_role_name,
+                           GROUP_CONCAT(p.name) as sipe_permissions
+                    FROM telegram_usuarios tu
+                    LEFT JOIN users u ON tu.user_id = u.id
+                    LEFT JOIN roles r ON u.role_id = r.id
+                    LEFT JOIN role_permissions rp ON r.id = rp.role_id
+                    LEFT JOIN permissions p ON rp.permission_id = p.id
+                    WHERE tu.activo = 1
+                    GROUP BY tu.id
+                `);
+                authorizedUsers = (users || []).filter(u => {
+                    if (u.user_id && u.sipe_status === 'inactive') return false;
+                    if (Number(u.permiso_alertas) === 1) return true;
+                    if (u.user_id && (u.sipe_role_name === 'Administrator' || u.sipe_role_name === 'Super Administrator')) return true;
+                    const perms = (u.sipe_permissions || '').split(',');
+                    return perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') ||
+                           perms.includes('/dashboard/consultas/estaciones/resumen-cierre');
+                });
+            } catch (dbErr) {
+                try {
+                    const [simpleUsers] = await db.query(
+                        'SELECT * FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1'
+                    );
+                    authorizedUsers = simpleUsers || [];
+                } catch (sErr) {
+                    console.warn('[TelegramBot] Error consultando telegram_usuarios:', sErr.message);
+                }
+            }
+        }
+    }
+
+    const alertMessage = formatDiscrepancyAlertMessage({
+        effectiveDate,
+        pistaDiscrepancies,
+        tiendaDiscrepancies,
+        mermasAnomalas
+    });
+
+    const sendResults = [];
+    for (const user of authorizedUsers) {
+        try {
+            await sendTelegramMessage(user.telegram_user_id, alertMessage);
+            await logTelegramQuery(
+                user.telegram_user_id,
+                'BROADCAST_DISCREPANCY_ALERT',
+                `Alerta discrepancias ${effectiveDate}: ${pistaDiscrepancies.length} pista, ${tiendaDiscrepancies.length} tienda`,
+                1
+            );
+            sendResults.push({
+                telegram_user_id: user.telegram_user_id,
+                name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.telegram_username,
+                status: 'sent'
+            });
+        } catch (err) {
+            console.error(`[TelegramBot] Error al enviar alerta a chat ${user.telegram_user_id}:`, err.message);
+            sendResults.push({
+                telegram_user_id: user.telegram_user_id,
+                name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.telegram_username,
+                status: 'failed',
+                error: err.message
+            });
+        }
+    }
+
+    if (authorizedUsers.length === 0) {
+        await logTelegramQuery(
+            'SYSTEM',
+            'BROADCAST_DISCREPANCY_ALERT',
+            `Discrepancias detectadas (${effectiveDate}) sin destinatarios con permiso_alertas activo`,
+            0
+        );
+    }
+
+    return {
+        ok: true,
+        fecha: effectiveDate,
+        discrepancies_found: true,
+        total_discrepancies: totalDiscrepancies,
+        descuadres_pista: pistaDiscrepancies.length,
+        descuadres_tienda: tiendaDiscrepancies.length,
+        mermas_anomalas: mermasAnomalas.length,
+        recipients_count: authorizedUsers.length,
+        recipients: sendResults,
+        details: {
+            pista: pistaDiscrepancies.map(p => ({
+                estacion: p.estacion || p.empresa || p.titulo || 'Estación',
+                diferencia: Number(p.diferencia !== undefined ? p.diferencia : (p.dif || 0))
+            })),
+            tienda: tiendaDiscrepancies.map(t => ({
+                empresa: t.empresa || t.tienda_nombre || t.titulo || 'Tienda',
+                diferencia: Number(t.dif !== undefined ? t.dif : (t.diferencia || 0))
+            })),
+            mermas: mermasAnomalas.map(m => ({
+                estacion: m.estacion || m.empresa || m.titulo || 'Estación',
+                producto: m.nombre_combustible || m.producto || m.tipo_combustible || 'Combustible',
+                diferencia_galones: m.diferencia_galones,
+                porcentaje_variacion: m.porcentaje_variacion
+            }))
+        }
+    };
+};
+
+/**
+ * Difusión de Alerta Gerencial Personalizada (Para n8n o Administradores)
+ */
+const broadcastCustomAlert = async ({ message, title = null, severity = 'alerta' }, customUsers = null) => {
+    if (!message || !String(message).trim()) {
+        throw new Error('El mensaje de la alerta es obligatorio');
+    }
+
+    let authorizedUsers = customUsers || [];
+    if (!customUsers) {
+        const db = getDb();
+        if (db) {
+            try {
+                const [users] = await db.query(`
+                    SELECT tu.*, u.status as sipe_status, r.name as sipe_role_name,
+                           GROUP_CONCAT(p.name) as sipe_permissions
+                    FROM telegram_usuarios tu
+                    LEFT JOIN users u ON tu.user_id = u.id
+                    LEFT JOIN roles r ON u.role_id = r.id
+                    LEFT JOIN role_permissions rp ON r.id = rp.role_id
+                    LEFT JOIN permissions p ON rp.permission_id = p.id
+                    WHERE tu.activo = 1
+                    GROUP BY tu.id
+                `);
+                authorizedUsers = (users || []).filter(u => {
+                    if (u.user_id && u.sipe_status === 'inactive') return false;
+                    if (Number(u.permiso_alertas) === 1) return true;
+                    if (u.user_id && (u.sipe_role_name === 'Administrator' || u.sipe_role_name === 'Super Administrator')) return true;
+                    const perms = (u.sipe_permissions || '').split(',');
+                    return perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') ||
+                           perms.includes('/dashboard/consultas/estaciones/resumen-cierre');
+                });
+            } catch (dbErr) {
+                try {
+                    const [simpleUsers] = await db.query(
+                        'SELECT * FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1'
+                    );
+                    authorizedUsers = simpleUsers || [];
+                } catch (sErr) {
+                    console.warn('[TelegramBot] Error consultando telegram_usuarios:', sErr.message);
+                }
+            }
+        }
+    }
+
+    const sevIcon = severity === 'danger' || severity === 'critico' ? '🚨' : (severity === 'info' ? 'ℹ️' : '⚠️');
+    const headerTitle = title ? escapeHtml(title) : 'COMUNICADO GERENCIAL SIPE';
+
+    let formattedMsg = `${sevIcon} <b>${headerTitle}</b>\n`;
+    formattedMsg += `📅 <b>Fecha:</b> ${toDisplayDate(getDateStr(0))}\n`;
+    formattedMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    formattedMsg += `${escapeHtml(message)}\n\n`;
+    formattedMsg += `<i>Mensaje emitido vía SIPE Automation</i>`;
+
+    const sendResults = [];
+    for (const user of authorizedUsers) {
+        try {
+            await sendTelegramMessage(user.telegram_user_id, formattedMsg);
+            await logTelegramQuery(
+                user.telegram_user_id,
+                'BROADCAST_CUSTOM_ALERT',
+                message.slice(0, 200),
+                1
+            );
+            sendResults.push({
+                telegram_user_id: user.telegram_user_id,
+                name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.telegram_username,
+                status: 'sent'
+            });
+        } catch (err) {
+            sendResults.push({
+                telegram_user_id: user.telegram_user_id,
+                name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.telegram_username,
+                status: 'failed',
+                error: err.message
+            });
+        }
+    }
+
+    if (authorizedUsers.length === 0) {
+        await logTelegramQuery(
+            'SYSTEM',
+            'BROADCAST_CUSTOM_ALERT',
+            `Alerta broadcast emitida sin destinatarios con permiso_alertas activo: ${message.slice(0, 100)}`,
+            0
+        );
+    }
+
+    return {
+        ok: true,
+        recipients_count: authorizedUsers.length,
+        recipients: sendResults,
+        message: 'Alerta broadcast procesada con éxito'
+    };
+};
+
 module.exports = {
     initTelegramBot,
     stopTelegramBot,
@@ -1692,6 +2152,7 @@ module.exports = {
     formatHelpMessage,
     getUserEffectivePermissions,
     parseUserDate,
+    parseSpanishDateText,
     moneyFmt,
     numFmt,
     normalizeText,
@@ -1703,6 +2164,9 @@ module.exports = {
     formatTiendasMessage,
     formatIntelligentGuidanceMessage,
     handleSmartNaturalLanguageQuery,
+    formatDiscrepancyAlertMessage,
+    broadcastDiscrepancyAlerts,
+    broadcastCustomAlert,
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS
