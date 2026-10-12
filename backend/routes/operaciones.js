@@ -1253,17 +1253,50 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
         const db = getDb();
         await ensurePortalTablesAndSeed(db);
         const [rows] = await withRetry(() => db.query("SELECT * FROM portal_resumen_cuenta ORDER BY id DESC LIMIT 1"));
-        if (rows.length > 0) {
-            res.json(rows[0]);
-        } else {
-            res.json({
-                saldo_disponible: 633.00,
-                limite_credito: 2000.00,
-                porcentaje_disponible: 32.00,
-                cuenta_nombre: 'corina sosah',
-                cuenta_numero: '3409396'
-            });
+        let data = rows.length > 0 ? { ...rows[0] } : {
+            saldo_disponible: 633.00,
+            limite_credito: 2000.00,
+            porcentaje_disponible: 32.00,
+            cuenta_nombre: 'corina sosah',
+            cuenta_numero: '3409396',
+            ultima_sincronizacion: null
+        };
+
+        const { getAutoSyncStatus } = require('../services/autoSyncScheduler');
+        const autoSync = getAutoSyncStatus();
+
+        if (!data.ultima_sincronizacion) {
+            if (autoSync?.lastSync?.lastRunAt) {
+                data.ultima_sincronizacion = autoSync.lastSync.lastRunAt;
+            } else {
+                const [lastOrder] = await withRetry(() => db.query("SELECT MAX(created_at) as last_order_sync FROM portal_pedidos_cache")).catch(() => [[]]);
+                data.ultima_sincronizacion = lastOrder[0]?.last_order_sync || data.updated_at || new Date().toISOString();
+            }
         }
+
+        if (data.ultima_sincronizacion) {
+            try {
+                const d = new Date(data.ultima_sincronizacion);
+                if (!isNaN(d.getTime())) {
+                    data.ultima_sincronizacion_hora = d.toLocaleTimeString('es-SV', {
+                        timeZone: 'America/El_Salvador',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        hour12: true
+                    });
+                    data.ultima_sincronizacion_fecha = d.toLocaleDateString('es-SV', {
+                        timeZone: 'America/El_Salvador',
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric'
+                    });
+                }
+            } catch (err) {
+                // ignore
+            }
+        }
+
+        res.json(data);
     } catch (error) {
         sendSafeError(res, error, 'Error al obtener resumen de cuenta');
     }
@@ -1276,6 +1309,12 @@ router.post('/operaciones/portal/sincronizar', authenticateToken, requirePermiss
         const limitParam = req.body?.limit;
         const limit = limitParam !== undefined ? (limitParam === 'all' ? 50 : Math.min(50, Math.max(1, parseInt(limitParam, 10) || 10))) : 10;
         const result = await energyLatamService.syncFromPortal(io, null, limit);
+        try {
+            const db = getDb();
+            await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() WHERE id = 1"));
+        } catch (dbErr) {
+            console.warn('[sincronizar] Error al actualizar timestamp en portal_resumen_cuenta:', dbErr.message);
+        }
         res.json(result);
     } catch (error) {
         sendSafeError(res, error, 'Error al sincronizar con el portal Energy Latam');
@@ -1298,9 +1337,34 @@ router.post('/operaciones/portal/sincronizar-todo', authenticateToken, requirePe
         const io = req.app.get('io');
         const { executeAutoSyncCycle } = require('../services/autoSyncScheduler');
         const result = await executeAutoSyncCycle(io, 'MANUAL_DISPATCH');
+        try {
+            const db = getDb();
+            await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() WHERE id = 1"));
+        } catch (dbErr) {
+            console.warn('[sincronizar-todo] Error al actualizar timestamp en portal_resumen_cuenta:', dbErr.message);
+        }
         res.json(result);
     } catch (error) {
         sendSafeError(res, error, 'Error al ejecutar sincronización unificada');
+    }
+});
+
+// 3a3. Actualizar explícitamente la hora registrada de sincronización
+router.post('/operaciones/portal/actualizar-hora-sincronizacion', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const db = getDb();
+        await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() WHERE id = 1"));
+        const [rows] = await withRetry(() => db.query("SELECT * FROM portal_resumen_cuenta ORDER BY id DESC LIMIT 1"));
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('portal_pedidos_updated', {
+                timestamp: new Date().toISOString(),
+                resumen: rows[0]
+            });
+        }
+        res.json({ success: true, message: 'Hora de sincronización actualizada exitosamente', resumen: rows[0] });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar hora de sincronización');
     }
 });
 

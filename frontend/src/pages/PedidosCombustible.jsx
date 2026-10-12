@@ -26,6 +26,46 @@ export default function PedidosCombustible() {
         return dStr;
     };
 
+    const fmtDateTime = (dStr, horaStr = null, fechaStr = null) => {
+        if (!dStr) return 'Hoy (Activo)';
+        try {
+            // Si el backend ya nos envía la hora formateada exacta en zona horaria El Salvador:
+            if (horaStr) {
+                const f = fechaStr || fmtDateArray(dStr);
+                return `${f} • ${horaStr}`;
+            }
+
+            let d;
+            if (dStr instanceof Date) {
+                d = dStr;
+            } else if (typeof dStr === 'string') {
+                if (dStr.includes(' ') && !dStr.includes('T')) {
+                    d = new Date(dStr.replace(' ', 'T'));
+                } else {
+                    d = new Date(dStr);
+                }
+            } else {
+                d = new Date(dStr);
+            }
+
+            if (isNaN(d.getTime())) return fmtDateArray(dStr);
+
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+
+            let hours = d.getHours();
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12;
+
+            return `${day}/${month}/${year} • ${hours}:${minutes} ${ampm}`;
+        } catch (e) {
+            return fmtDateArray(dStr);
+        }
+    };
+
     const numFmt = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
     const numFmt4 = (val) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(val || 0);
     const pctFmt = (val) => new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2 }).format(val || 0);
@@ -357,13 +397,14 @@ export default function PedidosCombustible() {
             const res = await api.post('/operaciones/portal/sincronizar', { limit: portalLimit });
             if (res.data?.success) {
                 addToast(res.data.message || 'Sincronización completada con éxito', 'success');
-                fetchPortalOrders(true);
-                fetchPortalResumen();
             } else {
-                addToast(res.data?.message || 'Error en sincronización', 'warning');
+                addToast(res.data?.message || 'Sincronización completada con advertencias', 'warning');
             }
+            fetchPortalOrders(true);
+            fetchPortalResumen();
         } catch (e) {
             addToast(e.response?.data?.message || 'Error al conectar con el sincronizador del portal', 'error');
+            fetchPortalResumen();
         } finally {
             setIsSyncingPortal(false);
         }
@@ -377,10 +418,11 @@ export default function PedidosCombustible() {
             const res = await api.post(`/operaciones/portal/actualizar-pedido/${orderNum}`);
             if (res.data?.success) {
                 addToast(`Orden #${orderNum} actualizada`, 'success');
-                fetchPortalOrders();
             } else {
                 addToast(res.data?.message || 'Error actualizando orden', 'warning');
             }
+            fetchPortalOrders();
+            fetchPortalResumen();
         } catch (e) {
             addToast('Error al actualizar la orden', 'error');
         } finally {
@@ -1549,9 +1591,9 @@ export default function PedidosCombustible() {
 
                 <div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>Última Sincronización</div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
                         <Clock size={14} color="var(--primary)" />
-                        {portalResumen.ultima_sincronizacion ? fmtDateArray(portalResumen.ultima_sincronizacion) : 'Hoy (Activo)'}
+                        <span>{portalResumen.ultima_sincronizacion ? fmtDateTime(portalResumen.ultima_sincronizacion, portalResumen.ultima_sincronizacion_hora, portalResumen.ultima_sincronizacion_fecha) : 'Hoy (Activo)'}</span>
                     </div>
                     <div style={{ fontSize: '0.7rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '2px' }} title="Horarios programados: 8:00 AM, 11:00 AM, 2:00 PM y 4:00 PM">
                         <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }}></span>

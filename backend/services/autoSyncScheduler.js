@@ -118,6 +118,16 @@ async function executeAutoSyncCycle(io = null, source = 'CRON', syncRunners = {}
     };
     isSyncInProgress = false;
 
+    try {
+        const { getDb } = require('../db');
+        const db = getDb();
+        if (db) {
+            await db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() WHERE id = 1").catch(() => {});
+        }
+    } catch (e) {
+        // ignore
+    }
+
     console.log(`[AutoSync Scheduler] ✅ Ciclo de sincronización [${source}] completado en ${(result.durationMs / 1000).toFixed(1)}s.`);
     return result;
 }

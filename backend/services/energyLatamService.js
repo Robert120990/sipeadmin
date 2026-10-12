@@ -310,6 +310,16 @@ async function processAndSaveOrders(orders, userSummary = null) {
         } catch (e) {
             console.error('[energyLatamService] Error saving summary to DB:', e.message);
         }
+    } else {
+        try {
+            await withRetry(() => db.query(`
+                UPDATE portal_resumen_cuenta 
+                SET ultima_sincronizacion = NOW() 
+                WHERE id = 1
+            `));
+        } catch (e) {
+            // ignore
+        }
     }
 
     return savedCount;
