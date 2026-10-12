@@ -1144,6 +1144,12 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
             const msg = formatSpecificStationMessage(st, parsed.matchedFuel, parsed.targetDate, tienda);
             await logTelegramQuery(user.telegram_user_id, rawText, `Estación: ${st.empresa}`, 1);
+            try {
+                const { learnAlias } = require('./conversationalAiService');
+                learnAlias('station', parsed.matchedStation.id, rawText).catch(() => {});
+            } catch (aliasErr) {
+                // Aprendizaje opcional
+            }
             await sendTelegramMessage(chatId, msg, keyboard);
             return true;
         } catch (err) {
@@ -1208,6 +1214,12 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getSaldosBancosData();
             const msg = formatSpecificBankMessage(data, parsed.matchedBank);
             await logTelegramQuery(user.telegram_user_id, rawText, `Banco: ${parsed.matchedBank.label}`, 1);
+            try {
+                const { learnAlias } = require('./conversationalAiService');
+                learnAlias('bank', parsed.matchedBank.key, rawText).catch(() => {});
+            } catch (aliasErr) {
+                // Aprendizaje opcional
+            }
             await sendTelegramMessage(chatId, msg, keyboard);
             return true;
         } catch (err) {
@@ -1385,7 +1397,20 @@ const handleIncomingMessage = async (msg) => {
         return;
     }
 
-    // Intentar resolver consultas específicas de lenguaje natural (Estaciones, Combustibles, Bancos, Rankings, Tiendas, Auditoría, IA)
+    // 1. Intentar responder mediante el Agente Conversacional IA (con memoria contextual y datos en vivo de SIPE)
+    try {
+        const { askConversationalAgent } = require('./conversationalAiService');
+        const aiResponse = await askConversationalAgent({ user, prompt: rawText, chatId, effectivePerms });
+        if (aiResponse) {
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Conversación Asistente IA', 1);
+            await sendTelegramMessage(chatId, aiResponse, keyboard);
+            return;
+        }
+    } catch (aiErr) {
+        console.warn('[TelegramBot] Agente conversacional no disponible, ejecutando extractor semántico:', aiErr.message);
+    }
+
+    // 2. Intentar resolver consultas específicas de lenguaje natural (Estaciones, Combustibles, Bancos, Rankings, Tiendas, Auditoría)
     const handledNlu = await handleSmartNaturalLanguageQuery(user, rawText, chatId, effectivePerms, keyboard);
     if (handledNlu) return;
 

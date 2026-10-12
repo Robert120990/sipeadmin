@@ -66,21 +66,36 @@ done
 echo "PM2 detectado: ${PM2_BIN:-ninguno}" >> "$DEBUG_FILE"
 
 if [ -n "$PM2_BIN" ]; then
-    echo "--- PM2 List antes de reiniciar ---" >> "$DEBUG_FILE"
-    $PM2_BIN list >> "$DEBUG_FILE" 2>&1 || true
+    echo "--- Detención y recreación limpia de sipeadmin-backend ---" >> "$DEBUG_FILE"
+    $PM2_BIN delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
     if command -v sudo >/dev/null 2>&1; then
-        sudo -n "$PM2_BIN" list >> "$DEBUG_FILE" 2>&1 || true
+        sudo -n "$PM2_BIN" delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
     fi
-    
-    echo "--- Ejecutando reinicio/inicio de sipeadmin-backend (exclusivo) ---" >> "$DEBUG_FILE"
-    $PM2_BIN startOrRestart "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || \
-    $PM2_BIN restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
 
-    if command -v sudo >/dev/null 2>&1; then
-        sudo -n "$PM2_BIN" startOrRestart "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || \
-        sudo -n "$PM2_BIN" restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+    # Liberar puerto 5001 si queda algún proceso zombie
+    PORT_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+    if [ -z "$PORT_PIDS" ] && command -v sudo >/dev/null 2>&1; then
+        PORT_PIDS=$(sudo -n lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || sudo -n ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
     fi
-    
+    for pid in $PORT_PIDS; do
+        if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
+            echo "Terminando proceso en 5001: $pid..." >> "$DEBUG_FILE"
+            kill -9 "$pid" 2>/dev/null || sudo -n kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || sudo -n fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || true
+    fi
+
+    sleep 1
+
+    echo "--- Iniciando sipeadmin-backend con código nuevo y variables actualizadas ---" >> "$DEBUG_FILE"
+    $PM2_BIN start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -n "$PM2_BIN" start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+    fi
+
     $PM2_BIN save >> "$DEBUG_FILE" 2>&1 || true
     if command -v sudo >/dev/null 2>&1; then
         sudo -n "$PM2_BIN" save >> "$DEBUG_FILE" 2>&1 || true
@@ -94,43 +109,6 @@ sleep 3
 echo "--- Verificando respuesta del backend en puerto 5001 ---" >> "$DEBUG_FILE"
 SYSTEM_USERS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5001/api/telegram/system-users 2>/dev/null || true)
 echo "HTTP telegram/system-users inicial: $SYSTEM_USERS_STATUS (401 o 200 esperado)" >> "$DEBUG_FILE"
-
-# Si devuelve 404 (código viejo) o no responde (000 o vacío), liberar puerto 5001 y reiniciar limpio
-if [ "$SYSTEM_USERS_STATUS" = "404" ] || [ "$SYSTEM_USERS_STATUS" = "000" ] || [ -z "$SYSTEM_USERS_STATUS" ]; then
-    echo "ATENCIÓN: Backend devolvió $SYSTEM_USERS_STATUS. Forzando terminación de procesos en puerto 5001..." >> "$DEBUG_FILE"
-    PORT_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
-    if [ -z "$PORT_PIDS" ] && command -v sudo >/dev/null 2>&1; then
-        PORT_PIDS=$(sudo -n lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || sudo -n ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
-    fi
-    echo "PIDs puerto 5001: $PORT_PIDS" >> "$DEBUG_FILE"
-    for pid in $PORT_PIDS; do
-        if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
-            echo "Matando proceso $pid..." >> "$DEBUG_FILE"
-            kill -15 "$pid" 2>/dev/null || sudo -n kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || sudo -n kill -9 "$pid" 2>/dev/null || true
-        fi
-    done
-
-    if command -v fuser >/dev/null 2>&1; then
-        fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || sudo -n fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || true
-    fi
-
-    sleep 2
-
-    if [ -n "$PM2_BIN" ]; then
-        if command -v sudo >/dev/null 2>&1; then
-            sudo -n "$PM2_BIN" delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
-            sudo -n "$PM2_BIN" start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
-            sudo -n "$PM2_BIN" save >> "$DEBUG_FILE" 2>&1 || true
-        fi
-        $PM2_BIN delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
-        $PM2_BIN start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
-        $PM2_BIN save >> "$DEBUG_FILE" 2>&1 || true
-    fi
-
-    sleep 3
-    RETRY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5001/api/telegram/system-users 2>/dev/null || true)
-    echo "HTTP telegram/system-users tras reinicio limpio: $RETRY_STATUS" >> "$DEBUG_FILE"
-fi
 
 echo ">> 5. Verificando estado del proxy Caddy..." >> "$DEBUG_FILE"
 if ! systemctl is-active --quiet caddy 2>/dev/null; then

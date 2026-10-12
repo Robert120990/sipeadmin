@@ -918,6 +918,70 @@ const initDB = async () => {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
 
+            // Tabla de automejora semántica de alias y apodos
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS telegram_aliases (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    entity_type VARCHAR(50) NOT NULL,
+                    entity_key VARCHAR(50) NOT NULL,
+                    alias VARCHAR(100) NOT NULL UNIQUE,
+                    usage_count INT DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_alias (alias)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            // Migración para configuración de IA y Gemini en telegram_config
+            try {
+                await pool.query("ALTER TABLE telegram_config ADD COLUMN IF NOT EXISTS gemini_api_key VARCHAR(255) NULL");
+                await pool.query("ALTER TABLE telegram_config ADD COLUMN IF NOT EXISTS openclaw_url VARCHAR(255) NULL");
+            } catch (err) {
+                // Columnas ya existentes o base de datos no compatible
+            }
+
+            // Sembrar alias iniciales del proyecto para automejora
+            await pool.query(`
+                INSERT IGNORE INTO telegram_aliases (entity_type, entity_key, alias) VALUES
+                ('station', '008', 'costa del sol'),
+                ('station', '008', 'la costa'),
+                ('station', '008', 'puma costa'),
+                ('station', '008', 'super 7 costa'),
+                ('station', '008', 'costa'),
+                ('station', '002', 'miraflores'),
+                ('station', '002', 'puma miraflores'),
+                ('station', '002', 'e-market miraflores'),
+                ('station', '006', 'chalchuapa'),
+                ('station', '006', 'shell chalchuapa'),
+                ('station', '006', 'santa ana'),
+                ('station', '014', 'la loma'),
+                ('station', '014', 'san martin'),
+                ('station', '014', 'san martín'),
+                ('station', '014', 'loma'),
+                ('station', '014', 'puma la loma'),
+                ('station', '015', '14 avenida'),
+                ('station', '015', '14 ave'),
+                ('station', '015', 'catorce avenida'),
+                ('station', '015', 'shell 14'),
+                ('fuel', 'diesel', 'diesel'),
+                ('fuel', 'diesel', 'diésel'),
+                ('fuel', 'regular', 'regular'),
+                ('fuel', 'super', 'super'),
+                ('fuel', 'super', 'súper'),
+                ('fuel', 'ion', 'ion diesel'),
+                ('bank', 'PROMERICA', 'promerica'),
+                ('bank', 'AGRICOLA', 'agricola'),
+                ('bank', 'AGRICOLA', 'agrícola'),
+                ('bank', 'DAVIVIENDA', 'davivienda'),
+                ('bank', 'HIPOTECARIO', 'hipotecario'),
+                ('bank', 'ATLANTIDA', 'atlantida'),
+                ('bank', 'ATLANTIDA', 'atlántida'),
+                ('bank', 'CUSCATLAN', 'cuscatlan'),
+                ('bank', 'CUSCATLAN', 'cuscatlán'),
+                ('bank', 'BAC', 'bac'),
+                ('bank', 'AZUL', 'azul');
+            `);
+
             const telegramPerms = [
                 ['manage_telegram', 'Gestionar configuración y accesos de Telegram Bot'],
                 ['/dashboard/seguridad/telegram', 'Acceso a Gestión de Usuarios y Bot de Telegram']
