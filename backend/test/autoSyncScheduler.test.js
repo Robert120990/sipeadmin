@@ -1,6 +1,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const {
+    AUTO_SYNC_INTERVAL_MINUTES,
     AUTO_SYNC_HOURS,
     AUTO_SYNC_FORMATTED_HOURS,
     AUTO_SYNC_CRON_EXPRESSION,
@@ -25,26 +26,25 @@ describe('AutoSync Scheduler Service Tests', () => {
         }
     });
 
-    it('debe definir correctamente las 4 horas del día requeridas: 8am, 11am, 2pm y 4pm', () => {
-        assert.deepStrictEqual(AUTO_SYNC_HOURS, [8, 11, 14, 16]);
-        assert.strictEqual(AUTO_SYNC_FORMATTED_HOURS.length, 4);
-        assert.strictEqual(AUTO_SYNC_FORMATTED_HOURS[0], '08:00 AM');
-        assert.strictEqual(AUTO_SYNC_FORMATTED_HOURS[1], '11:00 AM');
-        assert.strictEqual(AUTO_SYNC_FORMATTED_HOURS[2], '02:00 PM');
-        assert.strictEqual(AUTO_SYNC_FORMATTED_HOURS[3], '04:00 PM');
+    it('debe configurar la sincronización continua cada 30 minutos', () => {
+        assert.strictEqual(AUTO_SYNC_INTERVAL_MINUTES, 30);
+        assert.strictEqual(AUTO_SYNC_TIMEZONE, 'America/El_Salvador');
+        assert.strictEqual(AUTO_SYNC_CRON_EXPRESSION, '*/30 * * * *');
+        assert.strictEqual(AUTO_SYNC_HOURS.length, 24);
+        assert.strictEqual(AUTO_SYNC_FORMATTED_HOURS.length, 24);
     });
 
     it('debe utilizar la zona horaria oficial America/El_Salvador y expresión cron válida', () => {
         assert.strictEqual(AUTO_SYNC_TIMEZONE, 'America/El_Salvador');
-        assert.strictEqual(AUTO_SYNC_CRON_EXPRESSION, '0 8,11,14,16 * * *');
+        assert.strictEqual(AUTO_SYNC_CRON_EXPRESSION, '*/30 * * * *');
     });
 
     it('debe retornar la estructura correcta en getAutoSyncStatus()', () => {
         const status = getAutoSyncStatus();
         assert.strictEqual(status.enabled, true);
-        assert.deepStrictEqual(status.hours, [8, 11, 14, 16]);
+        assert.strictEqual(status.intervalMinutes, 30);
         assert.strictEqual(status.timezone, 'America/El_Salvador');
-        assert.strictEqual(status.cronExpression, '0 8,11,14,16 * * *');
+        assert.strictEqual(status.cronExpression, '*/30 * * * *');
         assert.strictEqual(typeof status.isSyncInProgress, 'boolean');
         assert.ok(status.lastSync !== undefined);
     });

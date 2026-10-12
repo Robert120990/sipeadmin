@@ -2,20 +2,14 @@ const cron = require('node-cron');
 const energyLatamService = require('./energyLatamService');
 const syncDGEHM = require('../sync-dgehm-direct');
 
-/**
- * Horarios de sincronización automática (4 veces al día):
- * - 08:00 AM (08:00)
- * - 11:00 AM (11:00)
- * - 02:00 PM (14:00)
- * - 04:00 PM (16:00)
- *
- * Zona horaria oficial: America/El_Salvador (UTC-6)
- * Expresión Cron: '0 8,11,14,16 * * *'
- */
-const AUTO_SYNC_HOURS = [8, 11, 14, 16];
-const AUTO_SYNC_FORMATTED_HOURS = ['08:00 AM', '11:00 AM', '02:00 PM', '04:00 PM'];
-const AUTO_SYNC_CRON_EXPRESSION = '0 8,11,14,16 * * *';
+// Sincronización automática continua (cada 30 minutos, 24/7)
+// Zona horaria oficial: America/El_Salvador (UTC-6)
+// Expresión Cron: cada 30 minutos (0 y 30)
+const AUTO_SYNC_INTERVAL_MINUTES = 30;
+const AUTO_SYNC_CRON_EXPRESSION = '*/30 * * * *';
 const AUTO_SYNC_TIMEZONE = 'America/El_Salvador';
+const AUTO_SYNC_HOURS = Array.from({ length: 24 }, (_, i) => i);
+const AUTO_SYNC_FORMATTED_HOURS = AUTO_SYNC_HOURS.map(h => `${h.toString().padStart(2, '0')}:00`);
 
 let isSyncInProgress = false;
 let globalIo = null;
@@ -128,12 +122,24 @@ async function executeAutoSyncCycle(io = null, source = 'CRON', syncRunners = {}
         // ignore
     }
 
+    if (activeIo) {
+        try {
+            activeIo.emit('portal_pedidos_updated', {
+                source,
+                timestamp: runTimestamp,
+                pedidos: result.pedidos
+            });
+        } catch (emitErr) {
+            console.warn('[AutoSync Scheduler] Error al emitir portal_pedidos_updated:', emitErr.message);
+        }
+    }
+
     console.log(`[AutoSync Scheduler] ✅ Ciclo de sincronización [${source}] completado en ${(result.durationMs / 1000).toFixed(1)}s.`);
     return result;
 }
 
 /**
- * Inicializa el cron job que ejecuta la sincronización 4 veces al día (8:00 AM, 11:00 AM, 2:00 PM, 4:00 PM)
+ * Inicializa el cron job continuo (cada 30 minutos)
  * @param {object|null} io - Instancia de Socket.io
  * @returns {object|null} Instancia de la tarea programada de cron o null si es réplica PM2
  */
@@ -155,15 +161,41 @@ function initAutoSyncScheduler(io = null) {
             minute: '2-digit',
             hour12: true
         });
-        console.log(`[AutoSync Scheduler] ⏰ Despertador de sincronización disparado para turno: ${slotHour}`);
+        console.log(`[AutoSync Scheduler] ⏰ Despertador de sincronización disparado a las: ${slotHour}`);
         lastSyncMetadata.lastScheduledSlot = slotHour;
         await executeAutoSyncCycle(globalIo, `CRON_${slotHour}`);
     }, {
         timezone: AUTO_SYNC_TIMEZONE
     });
 
-    console.log(`[AutoSync Scheduler] Programador de sincronización automática inicializado:`);
-    console.log(`[AutoSync Scheduler] Horarios: 08:00 AM, 11:00 AM, 02:00 PM, 04:00 PM (Zona horaria: ${AUTO_SYNC_TIMEZONE}).`);
+    console.log(`[AutoSync Scheduler] Programador de sincronización automática continua inicializado (cada 30 min, Zona horaria: ${AUTO_SYNC_TIMEZONE}).`);
+
+    // Chequeo inicial post-arranque: si los datos son más antiguos de 25 minutos, ejecutar sincronización
+    const startupTimer = setTimeout(async () => {
+        try {
+            const { getDb } = require('../db');
+            const db = getDb();
+            let shouldSync = true;
+            if (db) {
+                const [rows] = await db.query("SELECT ultima_sincronizacion FROM portal_resumen_cuenta ORDER BY id DESC LIMIT 1").catch(() => [[]]);
+                if (rows && rows[0]?.ultima_sincronizacion) {
+                    const diffMs = Date.now() - new Date(rows[0].ultima_sincronizacion).getTime();
+                    if (!isNaN(diffMs) && diffMs < 25 * 60 * 1000) {
+                        shouldSync = false;
+                    }
+                }
+            }
+            if (shouldSync && !isSyncInProgress) {
+                console.log('[AutoSync Scheduler] Sincronización inicial post-arranque disparada (datos ausentes o >25min)...');
+                await executeAutoSyncCycle(globalIo, 'SERVER_STARTUP');
+            }
+        } catch (initErr) {
+            console.warn('[AutoSync Scheduler] Chequeo post-arranque omitido:', initErr.message);
+        }
+    }, 15000);
+    if (startupTimer && typeof startupTimer.unref === 'function') {
+        startupTimer.unref();
+    }
 
     return scheduledTask;
 }
@@ -174,6 +206,7 @@ function initAutoSyncScheduler(io = null) {
 function getAutoSyncStatus() {
     return {
         enabled: true,
+        intervalMinutes: AUTO_SYNC_INTERVAL_MINUTES,
         hours: AUTO_SYNC_HOURS,
         formattedHours: AUTO_SYNC_FORMATTED_HOURS,
         timezone: AUTO_SYNC_TIMEZONE,
@@ -184,6 +217,7 @@ function getAutoSyncStatus() {
 }
 
 module.exports = {
+    AUTO_SYNC_INTERVAL_MINUTES,
     AUTO_SYNC_HOURS,
     AUTO_SYNC_FORMATTED_HOURS,
     AUTO_SYNC_CRON_EXPRESSION,

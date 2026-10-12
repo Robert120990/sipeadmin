@@ -1262,7 +1262,7 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
             ultima_sincronizacion: null
         };
 
-        const { getAutoSyncStatus } = require('../services/autoSyncScheduler');
+        const { getAutoSyncStatus, executeAutoSyncCycle } = require('../services/autoSyncScheduler');
         const autoSync = getAutoSyncStatus();
 
         if (!data.ultima_sincronizacion) {
@@ -1271,6 +1271,18 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
             } else {
                 const [lastOrder] = await withRetry(() => db.query("SELECT MAX(created_at) as last_order_sync FROM portal_pedidos_cache")).catch(() => [[]]);
                 data.ultima_sincronizacion = lastOrder[0]?.last_order_sync || data.updated_at || new Date().toISOString();
+            }
+        }
+
+        // Sincronización proactiva en segundo plano si pasaron más de 30 minutos desde la última sincronización
+        if (data.ultima_sincronizacion && !autoSync.isSyncInProgress) {
+            const lastTime = new Date(data.ultima_sincronizacion).getTime();
+            const elapsedMin = (Date.now() - lastTime) / (1000 * 60);
+            if (isNaN(lastTime) || elapsedMin > 30) {
+                const io = req.app.get('io');
+                executeAutoSyncCycle(io, 'AUTO_STALE_BACKGROUND').catch(err => {
+                    console.warn('[resumen-cuenta] Error en sincronización proactiva en segundo plano:', err.message);
+                });
             }
         }
 

@@ -346,6 +346,12 @@ export default function PedidosCombustible() {
             }
         };
 
+        // Refresco periódico en segundo plano cada 60 segundos
+        const autoRefreshInterval = setInterval(() => {
+            fetchPortalResumen();
+            fetchPortalOrders();
+        }, 60000);
+
         socket.on('portal_pedidos_updated', handlePortalUpdate);
         socket.on('combustible_precios_updated', handlePreciosUpdate);
         socket.on('carriers_updated', fetchMaster);
@@ -353,6 +359,7 @@ export default function PedidosCombustible() {
         document.addEventListener('visibilitychange', handleVisibilityChange);
 
         return () => {
+            clearInterval(autoRefreshInterval);
             socket.off('portal_pedidos_updated', handlePortalUpdate);
             socket.off('combustible_precios_updated', handlePreciosUpdate);
             socket.off('carriers_updated', fetchMaster);
@@ -1541,21 +1548,6 @@ export default function PedidosCombustible() {
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    <span style={{
-                        fontSize: '0.75rem',
-                        color: 'var(--text-muted)',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.35rem',
-                        padding: '0.35rem 0.65rem',
-                        borderRadius: '6px',
-                        backgroundColor: 'var(--card-bg, rgba(255,255,255,0.05))',
-                        border: '1px solid var(--border)',
-                        fontWeight: '500'
-                    }} title="Sincronización automática programada 4 veces al día (8:00 AM, 11:00 AM, 2:00 PM y 4:00 PM)">
-                        <Clock size={13} color="var(--primary)" />
-                        Auto: 8am • 11am • 2pm • 4pm
-                    </span>
                     <button
                         onClick={handleSyncPortal}
                         disabled={isSyncingPortal}
@@ -1595,9 +1587,9 @@ export default function PedidosCombustible() {
                         <Clock size={14} color="var(--primary)" />
                         <span>{portalResumen.ultima_sincronizacion ? fmtDateTime(portalResumen.ultima_sincronizacion, portalResumen.ultima_sincronizacion_hora, portalResumen.ultima_sincronizacion_fecha) : 'Hoy (Activo)'}</span>
                     </div>
-                    <div style={{ fontSize: '0.7rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '2px' }} title="Horarios programados: 8:00 AM, 11:00 AM, 2:00 PM y 4:00 PM">
+                    <div style={{ fontSize: '0.7rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '2px' }} title="Sincronización automática continua activa">
                         <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }}></span>
-                        Auto: 8am, 11am, 2pm, 4pm
+                        Sincronización automática activa
                     </div>
                 </div>
             </div>
