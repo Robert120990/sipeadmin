@@ -81,9 +81,39 @@ export default function TelegramUsers() {
         setLoadingSystemUsers(true);
         try {
             const res = await api.get('/telegram/system-users');
-            setSystemUsers(res.data || []);
+            if (Array.isArray(res.data) && res.data.length > 0) {
+                setSystemUsers(res.data);
+                return;
+            }
         } catch (e) {
-            console.warn('Error cargando usuarios de SIPE:', e.message);
+            console.warn('Error cargando /telegram/system-users:', e.message);
+        }
+
+        // Fallback defensivo a /users si /telegram/system-users no está disponible aún
+        try {
+            const fallbackRes = await api.get('/users');
+            const list = Array.isArray(fallbackRes.data) ? fallbackRes.data : (fallbackRes.data?.users || []);
+            if (list.length > 0) {
+                const mapped = list.map(u => ({
+                    id: u.id,
+                    username: u.username,
+                    nombre: u.nombre || u.username,
+                    email: u.email || '',
+                    role_id: u.role_id,
+                    role_name: u.role_name || 'Sin Rol',
+                    status: u.status || 'active',
+                    permissions: {
+                        ventas: u.role_name === 'Administrator',
+                        saldos_banco: u.role_name === 'Administrator',
+                        saldos_chequera: u.role_name === 'Administrator',
+                        alertas: u.role_name === 'Administrator'
+                    }
+                }));
+                setSystemUsers(mapped);
+                return;
+            }
+        } catch (fallbackErr) {
+            console.warn('Fallback a /users falló:', fallbackErr.message);
         } finally {
             setLoadingSystemUsers(false);
         }
@@ -197,10 +227,10 @@ export default function TelegramUsers() {
                 heredar_permisos: true,
                 first_name: prev.first_name || (matched.nombre || '').split(' ')[0] || '',
                 last_name: prev.last_name || (matched.nombre || '').split(' ').slice(1).join(' ') || '',
-                permiso_ventas: matched.permissions.ventas ? 1 : 0,
-                permiso_saldos_banco: matched.permissions.saldos_banco ? 1 : 0,
-                permiso_saldos_chequera: matched.permissions.saldos_chequera ? 1 : 0,
-                permiso_alertas: matched.permissions.alertas ? 1 : 0
+                permiso_ventas: matched.permissions?.ventas ? 1 : 0,
+                permiso_saldos_banco: matched.permissions?.saldos_banco ? 1 : 0,
+                permiso_saldos_chequera: matched.permissions?.saldos_chequera ? 1 : 0,
+                permiso_alertas: matched.permissions?.alertas ? 1 : 0
             }));
         }
     };
@@ -930,20 +960,32 @@ export default function TelegramUsers() {
                                     <UserCheck size={16} color={formData.user_id ? '#3B82F6' : 'var(--text-muted)'} />
                                     Vincular con Usuario del Sistema SIPE Admin
                                 </label>
-                                {formData.user_id ? (
-                                    <span style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', padding: '0.12rem 0.45rem', borderRadius: '4px' }}>
-                                        ✓ Vinculado
-                                    </span>
-                                ) : (
-                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                        (Opcional)
-                                    </span>
-                                )}
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <button
+                                        type="button"
+                                        onClick={fetchSystemUsers}
+                                        className="icon-btn"
+                                        title="Recargar usuarios de SIPE Admin"
+                                        style={{ width: '24px', height: '24px', padding: 0 }}
+                                    >
+                                        <RefreshCw size={13} className={loadingSystemUsers ? 'spin' : ''} />
+                                    </button>
+                                    {formData.user_id ? (
+                                        <span style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', padding: '0.12rem 0.45rem', borderRadius: '4px' }}>
+                                            ✓ Vinculado
+                                        </span>
+                                    ) : (
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            (Opcional)
+                                        </span>
+                                    )}
+                                </div>
                             </div>
 
                             <select
                                 value={formData.user_id || ''}
                                 onChange={e => handleSystemUserSelect(e.target.value)}
+                                disabled={loadingSystemUsers}
                                 style={{
                                     width: '100%',
                                     height: '38px',
@@ -955,7 +997,9 @@ export default function TelegramUsers() {
                                     color: 'var(--text-main)'
                                 }}
                             >
-                                <option value="">-- Sin vincular a SIPE (Permisos manuales) --</option>
+                                <option value="">
+                                    {loadingSystemUsers ? '-- Cargando usuarios de SIPE... --' : '-- Sin vincular a SIPE (Permisos manuales) --'}
+                                </option>
                                 {systemUsers.map(su => (
                                     <option key={su.id} value={su.id}>
                                         {su.nombre} ({su.username}) — Rol: {su.role_name}
@@ -993,10 +1037,10 @@ export default function TelegramUsers() {
                                                     ...prev,
                                                     heredar_permisos: checked,
                                                     ...(checked ? {
-                                                        permiso_ventas: selectedSystemUser.permissions.ventas ? 1 : 0,
-                                                        permiso_saldos_banco: selectedSystemUser.permissions.saldos_banco ? 1 : 0,
-                                                        permiso_saldos_chequera: selectedSystemUser.permissions.saldos_chequera ? 1 : 0,
-                                                        permiso_alertas: selectedSystemUser.permissions.alertas ? 1 : 0
+                                                        permiso_ventas: selectedSystemUser.permissions?.ventas ? 1 : 0,
+                                                        permiso_saldos_banco: selectedSystemUser.permissions?.saldos_banco ? 1 : 0,
+                                                        permiso_saldos_chequera: selectedSystemUser.permissions?.saldos_chequera ? 1 : 0,
+                                                        permiso_alertas: selectedSystemUser.permissions?.alertas ? 1 : 0
                                                     } : {})
                                                 }));
                                             }}
@@ -1013,40 +1057,40 @@ export default function TelegramUsers() {
                                                 padding: '0.1rem 0.4rem',
                                                 borderRadius: '3px',
                                                 fontWeight: 600,
-                                                background: selectedSystemUser.permissions.ventas ? 'rgba(16, 185, 129, 0.15)' : 'rgba(107, 114, 128, 0.1)',
-                                                color: selectedSystemUser.permissions.ventas ? '#10B981' : '#9CA3AF'
+                                                background: selectedSystemUser.permissions?.ventas ? 'rgba(16, 185, 129, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions?.ventas ? '#10B981' : '#9CA3AF'
                                             }}>
-                                                {selectedSystemUser.permissions.ventas ? '✓ Ventas' : '✗ Ventas'}
+                                                {selectedSystemUser.permissions?.ventas ? '✓ Ventas' : '✗ Ventas'}
                                             </span>
                                             <span style={{
                                                 fontSize: '0.72rem',
                                                 padding: '0.1rem 0.4rem',
                                                 borderRadius: '3px',
                                                 fontWeight: 600,
-                                                background: selectedSystemUser.permissions.saldos_banco ? 'rgba(59, 130, 246, 0.15)' : 'rgba(107, 114, 128, 0.1)',
-                                                color: selectedSystemUser.permissions.saldos_banco ? '#3B82F6' : '#9CA3AF'
+                                                background: selectedSystemUser.permissions?.saldos_banco ? 'rgba(59, 130, 246, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions?.saldos_banco ? '#3B82F6' : '#9CA3AF'
                                             }}>
-                                                {selectedSystemUser.permissions.saldos_banco ? '✓ Bancos' : '✗ Bancos'}
+                                                {selectedSystemUser.permissions?.saldos_banco ? '✓ Bancos' : '✗ Bancos'}
                                             </span>
                                             <span style={{
                                                 fontSize: '0.72rem',
                                                 padding: '0.1rem 0.4rem',
                                                 borderRadius: '3px',
                                                 fontWeight: 600,
-                                                background: selectedSystemUser.permissions.saldos_chequera ? 'rgba(139, 92, 246, 0.15)' : 'rgba(107, 114, 128, 0.1)',
-                                                color: selectedSystemUser.permissions.saldos_chequera ? '#8B5CF6' : '#9CA3AF'
+                                                background: selectedSystemUser.permissions?.saldos_chequera ? 'rgba(139, 92, 246, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions?.saldos_chequera ? '#8B5CF6' : '#9CA3AF'
                                             }}>
-                                                {selectedSystemUser.permissions.saldos_chequera ? '✓ Chequera' : '✗ Chequera'}
+                                                {selectedSystemUser.permissions?.saldos_chequera ? '✓ Chequera' : '✗ Chequera'}
                                             </span>
                                             <span style={{
                                                 fontSize: '0.72rem',
                                                 padding: '0.1rem 0.4rem',
                                                 borderRadius: '3px',
                                                 fontWeight: 600,
-                                                background: selectedSystemUser.permissions.alertas ? 'rgba(245, 158, 11, 0.15)' : 'rgba(107, 114, 128, 0.1)',
-                                                color: selectedSystemUser.permissions.alertas ? '#F59E0B' : '#9CA3AF'
+                                                background: selectedSystemUser.permissions?.alertas ? 'rgba(245, 158, 11, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                                color: selectedSystemUser.permissions?.alertas ? '#F59E0B' : '#9CA3AF'
                                             }}>
-                                                {selectedSystemUser.permissions.alertas ? '✓ Alertas' : '✗ Alertas'}
+                                                {selectedSystemUser.permissions?.alertas ? '✓ Alertas' : '✗ Alertas'}
                                             </span>
                                         </div>
                                     )}

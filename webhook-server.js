@@ -80,7 +80,7 @@ const server = http.createServer((req, res) => {
                 PATH: `/home/sistemas/.local/share/pnpm:/home/sistemas/.pnpm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}`
             };
 
-            exec(`bash "${path.join(PROJECT_DIR, 'deploy.sh')}"`, { env: deployEnv, cwd: PROJECT_DIR }, (error, stdout, stderr) => {
+            exec(`bash "${path.join(PROJECT_DIR, 'deploy.sh')}"`, { env: deployEnv, cwd: PROJECT_DIR, maxBuffer: 25 * 1024 * 1024 }, (error, stdout, stderr) => {
                 isDeploying = false;
                 if (error) {
                     console.error(`Deploy error: ${error.message}`);

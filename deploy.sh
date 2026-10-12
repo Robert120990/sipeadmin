@@ -25,7 +25,7 @@ export PATH="$HOME/.nvm/versions/node/$(node -v 2>/dev/null)/bin:$HOME/.local/sh
 PROJECT_DIR="${PROJECT_DIR:-$ORIGINAL_DIR}"
 cd "$PROJECT_DIR"
 
-DEBUG_FILE="$PROJECT_DIR/frontend/dist/deploy-debug.txt"
+DEBUG_FILE="/tmp/sipeadmin-deploy-debug.txt"
 mkdir -p "$PROJECT_DIR/frontend/dist"
 mkdir -p "$PROJECT_DIR/frontend/public"
 
@@ -47,7 +47,6 @@ echo ">> 3. Compilando frontend SPA para producción..."
 pnpm --filter frontend run build >> "$DEBUG_FILE" 2>&1
 
 echo ">> 4. Reiniciando backend..."
-# Desactivar set -e para que las alternativas de reinicio se ejecuten sin abortar
 set +e
 
 # Detectar binario de PM2
@@ -69,55 +68,69 @@ echo "PM2 detectado: ${PM2_BIN:-ninguno}" >> "$DEBUG_FILE"
 if [ -n "$PM2_BIN" ]; then
     echo "--- PM2 List antes de reiniciar ---" >> "$DEBUG_FILE"
     $PM2_BIN list >> "$DEBUG_FILE" 2>&1 || true
-    
-    echo "--- Ejecutando reinicio en PM2 ---" >> "$DEBUG_FILE"
-    $PM2_BIN restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || \
-    $PM2_BIN restart backend --update-env >> "$DEBUG_FILE" 2>&1 || \
-    $PM2_BIN restart 0 --update-env >> "$DEBUG_FILE" 2>&1 || \
-    $PM2_BIN restart all --update-env >> "$DEBUG_FILE" 2>&1 || \
-    $PM2_BIN startOrRestart "$PROJECT_DIR/ecosystem.config.cjs" --update-env >> "$DEBUG_FILE" 2>&1 || true
-
-    # Si PM2 corre bajo otro perfil de usuario (/root o /home/sistemas)
-    if [ -d "/root/.pm2" ]; then
-        PM2_HOME="/root/.pm2" $PM2_BIN restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
-        PM2_HOME="/root/.pm2" $PM2_BIN restart all --update-env >> "$DEBUG_FILE" 2>&1 || true
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -n "$PM2_BIN" list >> "$DEBUG_FILE" 2>&1 || true
     fi
-    if [ -d "$HOME/.pm2" ]; then
-        PM2_HOME="$HOME/.pm2" $PM2_BIN restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
-        PM2_HOME="$HOME/.pm2" $PM2_BIN restart all --update-env >> "$DEBUG_FILE" 2>&1 || true
+    
+    echo "--- Ejecutando reinicio/inicio de sipeadmin-backend (exclusivo) ---" >> "$DEBUG_FILE"
+    $PM2_BIN startOrRestart "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || \
+    $PM2_BIN restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -n "$PM2_BIN" startOrRestart "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || \
+        sudo -n "$PM2_BIN" restart sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
     fi
     
     $PM2_BIN save >> "$DEBUG_FILE" 2>&1 || true
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -n "$PM2_BIN" save >> "$DEBUG_FILE" 2>&1 || true
+    fi
 fi
 
-# Fallback robusto: Terminar el proceso Node de server.js para que PM2 supervisor lo reviva automáticamente
-echo "--- Verificando procesos Node escuchando en puerto 5001 ---" >> "$DEBUG_FILE"
-PORT_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || fuser 5001/tcp 2>/dev/null || true)
-echo "PIDs puerto 5001: $PORT_PIDS" >> "$DEBUG_FILE"
+# Esperar a que el backend inicialice
+sleep 3
 
-for pid in $PORT_PIDS; do
-    if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
-        PROC_NAME=$(ps -p "$pid" -o comm= 2>/dev/null || true)
-        if [[ "$PROC_NAME" == *"node"* ]]; then
-            echo "Terminando proceso Node en puerto 5001: PID $pid ($PROC_NAME)" >> "$DEBUG_FILE"
-            kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
-        else
-            echo "Ignorando PID $pid ($PROC_NAME) porque no es un proceso Node." >> "$DEBUG_FILE"
+# Verificación de salud y respuesta de endpoints
+echo "--- Verificando respuesta del backend en puerto 5001 ---" >> "$DEBUG_FILE"
+SYSTEM_USERS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5001/api/telegram/system-users 2>/dev/null || true)
+echo "HTTP telegram/system-users inicial: $SYSTEM_USERS_STATUS (401 o 200 esperado)" >> "$DEBUG_FILE"
+
+# Si devuelve 404 (código viejo) o no responde (000 o vacío), liberar puerto 5001 y reiniciar limpio
+if [ "$SYSTEM_USERS_STATUS" = "404" ] || [ "$SYSTEM_USERS_STATUS" = "000" ] || [ -z "$SYSTEM_USERS_STATUS" ]; then
+    echo "ATENCIÓN: Backend devolvió $SYSTEM_USERS_STATUS. Forzando terminación de procesos en puerto 5001..." >> "$DEBUG_FILE"
+    PORT_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+    if [ -z "$PORT_PIDS" ] && command -v sudo >/dev/null 2>&1; then
+        PORT_PIDS=$(sudo -n lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || sudo -n ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+    fi
+    echo "PIDs puerto 5001: $PORT_PIDS" >> "$DEBUG_FILE"
+    for pid in $PORT_PIDS; do
+        if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
+            echo "Matando proceso $pid..." >> "$DEBUG_FILE"
+            kill -15 "$pid" 2>/dev/null || sudo -n kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || sudo -n kill -9 "$pid" 2>/dev/null || true
         fi
-    fi
-done
+    done
 
-# Buscar cualquier proceso Node corriendo server.js (excluyendo webhook-server.js)
-echo "--- Verificando procesos server.js ---" >> "$DEBUG_FILE"
-SERVER_PIDS=$(pgrep -f "server.js" 2>/dev/null || true)
-echo "PIDs server.js encontrados: $SERVER_PIDS" >> "$DEBUG_FILE"
-for pid in $SERVER_PIDS; do
-    CMD_LINE=$(ps -p "$pid" -o args= 2>/dev/null || true)
-    if [[ "$CMD_LINE" == *"server.js"* ]] && [[ "$CMD_LINE" != *"webhook"* ]]; then
-        echo "Terminando server.js PID $pid ($CMD_LINE)..." >> "$DEBUG_FILE"
-        kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || sudo -n fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || true
     fi
-done
+
+    sleep 2
+
+    if [ -n "$PM2_BIN" ]; then
+        if command -v sudo >/dev/null 2>&1; then
+            sudo -n "$PM2_BIN" delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
+            sudo -n "$PM2_BIN" start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+            sudo -n "$PM2_BIN" save >> "$DEBUG_FILE" 2>&1 || true
+        fi
+        $PM2_BIN delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
+        $PM2_BIN start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+        $PM2_BIN save >> "$DEBUG_FILE" 2>&1 || true
+    fi
+
+    sleep 3
+    RETRY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5001/api/telegram/system-users 2>/dev/null || true)
+    echo "HTTP telegram/system-users tras reinicio limpio: $RETRY_STATUS" >> "$DEBUG_FILE"
+fi
 
 echo ">> 5. Verificando estado del proxy Caddy..." >> "$DEBUG_FILE"
 if ! systemctl is-active --quiet caddy 2>/dev/null; then
@@ -128,7 +141,9 @@ fi
 echo "Fecha fin: $(date)" >> "$DEBUG_FILE"
 echo "=== Despliegue completado con éxito ===" >> "$DEBUG_FILE"
 
-# Copiar DEBUG_FILE a frontend/dist para disponibilidad web inmediata
+# Copiar DEBUG_FILE a frontend/dist y frontend/public para disponibilidad web inmediata
+mkdir -p "$PROJECT_DIR/frontend/dist"
+mkdir -p "$PROJECT_DIR/frontend/public"
 cp "$DEBUG_FILE" "$PROJECT_DIR/frontend/dist/deploy-debug.txt" 2>/dev/null || true
 cp "$DEBUG_FILE" "$PROJECT_DIR/frontend/public/deploy-debug.txt" 2>/dev/null || true
 

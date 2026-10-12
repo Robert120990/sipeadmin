@@ -390,10 +390,10 @@
     "semantic_hash": "25bfd760ff5331823578d7070aaf98f7"
   },
   "deploy.sh": {
-    "mtime": 1791819082.594664,
-    "seen": 1791822880.7085679,
-    "ast_hash": "fb5f29f86b9a81573adf36db25bf2a98",
-    "semantic_hash": "fb5f29f86b9a81573adf36db25bf2a98"
+    "mtime": 1791824154.5744789,
+    "seen": 1791824268.1699405,
+    "ast_hash": "d6acf0c90560377483270ebd948442d1",
+    "semantic_hash": ""
   },
   "ecosystem.config.cjs": {
     "mtime": 1789924958.9067423,
@@ -414,10 +414,10 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791821159.9824014,
-    "seen": 1791822880.7085679,
-    "ast_hash": "4dadd791e4581268f64948e24df4a111",
-    "semantic_hash": "4dadd791e4581268f64948e24df4a111"
+    "mtime": 1791824243.498679,
+    "seen": 1791824268.1699405,
+    "ast_hash": "93e82e84492e3f6757e13b36f31b3d8f",
+    "semantic_hash": ""
   },
   "frontend/public/sw.js": {
     "mtime": 1789924529.4528816,
@@ -924,10 +924,10 @@
     "semantic_hash": "4f19518f5045ed51d3fdfa818e2f1a92"
   },
   "frontend/src/pages/TelegramUsers.jsx": {
-    "mtime": 1791821130.515231,
-    "seen": 1791822880.7085679,
-    "ast_hash": "7c791f54e3fd31ed0a30dee54182c692",
-    "semantic_hash": "7c791f54e3fd31ed0a30dee54182c692"
+    "mtime": 1791824201.1022148,
+    "seen": 1791824268.1699405,
+    "ast_hash": "6854d1f219ffdeff61ae30c15867fb7c",
+    "semantic_hash": ""
   },
   "frontend/src/pages/Users.jsx": {
     "mtime": 1791408358.5627363,
@@ -1038,9 +1038,123 @@
     "semantic_hash": "65aa1bbe220125f99b207398fefdbfcc"
   },
   "webhook-server.js": {
-    "mtime": 1791408358.564824,
-    "seen": 1791822880.7085679,
-    "ast_hash": "dba8b7569c76c3dff773e3ae01efb6f0",
-    "semantic_hash": "dba8b7569c76c3dff773e3ae01efb6f0"
+    "mtime": 1791824208.2297013,
+    "seen": 1791824268.1699405,
+    "ast_hash": "7596fd707b5f329aedb2721f7a6160b0",
+    "semantic_hash": ""
+  },
+  ".agents/rules/git_workflow.md": {
+    "mtime": 1789949211.042829,
+    "seen": 1791824268.1699405,
+    "ast_hash": "233d8e3f370b372fcfc73ea299974d87",
+    "semantic_hash": ""
+  },
+  ".agents/workflows/agregar_nuevo_modulo.md": {
+    "mtime": 1788265759.5813696,
+    "seen": 1791824268.1699405,
+    "ast_hash": "e9dd083937bd83baa274f2c32677d5fe",
+    "semantic_hash": ""
+  },
+  ".agents/workflows/ui_standards.md": {
+    "mtime": 1789924527.2071664,
+    "seen": 1791824268.1699405,
+    "ast_hash": "d793883f32b263a52966ea6cd782c756",
+    "semantic_hash": ""
+  },
+  ".agents/workflows/verificar_consulta_mysql.md": {
+    "mtime": 1788265759.5813696,
+    "seen": 1791824268.1699405,
+    "ast_hash": "8d64a1a5731ebe5fb9c6ce9bced7c874",
+    "semantic_hash": ""
+  },
+  ".github/workflows/ci.yml": {
+    "mtime": 1791036939.93124,
+    "seen": 1791824268.1699405,
+    "ast_hash": "92946531e3dbd3e4d32b2c5d515f816d",
+    "semantic_hash": ""
+  },
+  ".github/workflows/npm-publish-github-packages.yml": {
+    "mtime": 1788265759.5833714,
+    "seen": 1791824268.1699405,
+    "ast_hash": "912734f30b86211b96ab7850cb2d6c9e",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1791822960.081609,
+    "seen": 1791824268.1699405,
+    "ast_hash": "886a8a914075759e179babeacd796122",
+    "semantic_hash": ""
+  },
+  "PLAN_ESTRATEGICO_INTEGRACION_IA.md": {
+    "mtime": 1791408358.5423217,
+    "seen": 1791824268.1699405,
+    "ast_hash": "4aab9ae1a9df10a22f40c645df82dfc3",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1789924527.2095828,
+    "seen": 1791824268.1699405,
+    "ast_hash": "d10fd961d528be634f6c1a21c92258bf",
+    "semantic_hash": ""
+  },
+  "backend/BACKEND_STANDARDS.md": {
+    "mtime": 1788265759.5833714,
+    "seen": 1791824268.1699405,
+    "ast_hash": "3e8b307544bfb74699526a172b909b36",
+    "semantic_hash": ""
+  },
+  "backend/NOVA_SAAS_DATABASE_SCHEMA.md": {
+    "mtime": 1789924527.2095828,
+    "seen": 1791824268.1699405,
+    "ast_hash": "9662da0bd81b6cf5b07c3ba8bc96fccc",
+    "semantic_hash": ""
+  },
+  "docker-compose.yml": {
+    "mtime": 1789924527.2295203,
+    "seen": 1791824268.1699405,
+    "ast_hash": "380c3eb293cbfca06e3daaec7da438ad",
+    "semantic_hash": ""
+  },
+  "frontend/index.html": {
+    "mtime": 1791408358.554219,
+    "seen": 1791824268.1699405,
+    "ast_hash": "dcdcbe51d8081090cd1285e045cc5a20",
+    "semantic_hash": ""
+  },
+  "pnpm-workspace.yaml": {
+    "mtime": 1789924527.2468903,
+    "seen": 1791824268.1699405,
+    "ast_hash": "6eb38e48a1ab249033cc0362779eea6c",
+    "semantic_hash": ""
+  },
+  "frontend/public/favicon.svg": {
+    "mtime": 1788265759.5991726,
+    "seen": 1791824268.1699405,
+    "ast_hash": "198b0699b6146a7e6fbe421802050fba",
+    "semantic_hash": ""
+  },
+  "frontend/public/icons/apple-touch-icon.png": {
+    "mtime": 1788265759.602064,
+    "seen": 1791824268.1699405,
+    "ast_hash": "564bc44ec8dd63da24a64f1308f8abd1",
+    "semantic_hash": ""
+  },
+  "frontend/public/icons/icon-192.png": {
+    "mtime": 1788265759.602064,
+    "seen": 1791824268.1699405,
+    "ast_hash": "ca65d76e3536589cf26bdc0a505e0e27",
+    "semantic_hash": ""
+  },
+  "frontend/public/icons/icon-512.png": {
+    "mtime": 1788265759.602064,
+    "seen": 1791824268.1699405,
+    "ast_hash": "0b3aa3c4576e857fcbcfafed8b37eb69",
+    "semantic_hash": ""
+  },
+  "frontend/public/icons/icon-maskable-512.png": {
+    "mtime": 1788265759.602064,
+    "seen": 1791824268.1699405,
+    "ast_hash": "cc24c9e0fe22ecd038334bfb8ad3ad1a",
+    "semantic_hash": ""
   }
 }
