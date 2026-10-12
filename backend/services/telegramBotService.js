@@ -777,6 +777,516 @@ const formatProfileMessage = (user, effectivePerms = null) => {
 };
 
 /**
+ * Normalizar texto eliminando tildes y caracteres especiales
+ */
+const normalizeText = (str) => {
+    return (str || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[¿?¡!,.;:()]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+};
+
+const KNOWN_STATIONS = [
+    {
+        id: '008',
+        name: 'Puma Costa del Sol',
+        keywords: ['costa del sol', 'costa', 'la costa', 'puma costa', 'super 7 costa', '008'],
+        tiendaKey: 'costa'
+    },
+    {
+        id: '002',
+        name: 'Puma Miraflores',
+        keywords: ['miraflores', 'puma miraflores', 'e-market miraflores', '002'],
+        tiendaKey: 'miraflores'
+    },
+    {
+        id: '006',
+        name: 'Shell Chalchuapa',
+        keywords: ['chalchuapa', 'shell chalchuapa', 'e-market chalchuapa', '006'],
+        tiendaKey: 'chalchuapa'
+    },
+    {
+        id: '014',
+        name: 'Puma La Loma (San Martín)',
+        keywords: ['la loma', 'san martin', 'san martín', 'loma', 'puma la loma', 'puma san martin', '014'],
+        tiendaKey: 'san martin'
+    },
+    {
+        id: '015',
+        name: 'Shell 14 Avenida',
+        keywords: ['14 avenida', '14 ave', 'catorce avenida', 'shell 14', '015'],
+        tiendaKey: '14'
+    }
+];
+
+const KNOWN_FUELS = [
+    { key: 'diesel', label: 'Diesel', icon: '🛢️', keywords: ['diesel', 'diésel'] },
+    { key: 'regular', label: 'Regular', icon: '🟢', keywords: ['regular', 'gasolina regular'] },
+    { key: 'super', label: 'Súper', icon: '🔴', keywords: ['super', 'súper', 'gasolina super', 'gasolina súper'] },
+    { key: 'ion', label: 'Ion Diesel', icon: '⚡', keywords: ['ion', 'ion diesel', 'ion-diesel'] }
+];
+
+const KNOWN_BANKS = [
+    { key: 'AGRICOLA', label: 'Banco Agrícola', keywords: ['agricola', 'agrícola', 'banco agricola'] },
+    { key: 'PROMERICA', label: 'Banco Promerica', keywords: ['promerica', 'banco promerica'] },
+    { key: 'DAVIVIENDA', label: 'Banco Davivienda', keywords: ['davivienda', 'banco davivienda'] },
+    { key: 'HIPOTECARIO', label: 'Banco Hipotecario', keywords: ['hipotecario', 'banco hipotecario'] },
+    { key: 'ATLANTIDA', label: 'Banco Atlántida', keywords: ['atlantida', 'atlántida', 'banco atlantida'] },
+    { key: 'CUSCATLAN', label: 'Banco Cuscatlán', keywords: ['cuscatlan', 'cuscatlán', 'banco cuscatlan'] },
+    { key: 'BAC', label: 'BAC Credomatic', keywords: ['bac', 'credomatic', 'america central'] },
+    { key: 'AZUL', label: 'Banco Azul', keywords: ['azul', 'banco azul'] }
+];
+
+/**
+ * Analizador semántico de lenguaje natural para consultas específicas
+ */
+const parseNaturalLanguageQuery = (rawText) => {
+    if (!rawText) return null;
+    const normalized = normalizeText(rawText);
+
+    // 1. Detección de fecha
+    let targetDate = getDateStr(-1); // Ayer por defecto (cierres consolidados)
+    if (/\bhoy\b/.test(normalized)) {
+        targetDate = getDateStr(0);
+    } else if (/\banteayer\b/.test(normalized)) {
+        targetDate = getDateStr(-2);
+    } else if (/\bayer\b/.test(normalized)) {
+        targetDate = getDateStr(-1);
+    } else {
+        const words = rawText.split(/\s+/);
+        for (const w of words) {
+            const parsed = parseUserDate(w);
+            if (parsed) {
+                targetDate = parsed;
+                break;
+            }
+        }
+    }
+
+    // 2. Detección de estación
+    let matchedStation = null;
+    for (const st of KNOWN_STATIONS) {
+        const sortedKeywords = [...st.keywords].sort((a, b) => b.length - a.length);
+        for (const kw of sortedKeywords) {
+            const normKw = normalizeText(kw);
+            if (normalized.includes(normKw)) {
+                matchedStation = st;
+                break;
+            }
+        }
+        if (matchedStation) break;
+    }
+
+    // 3. Detección de combustible
+    let matchedFuel = null;
+    for (const f of KNOWN_FUELS) {
+        for (const kw of f.keywords) {
+            const normKw = normalizeText(kw);
+            if (new RegExp(`\\b${normKw}\\b`).test(normalized) || normalized.includes(normKw)) {
+                matchedFuel = f;
+                break;
+            }
+        }
+        if (matchedFuel) break;
+    }
+
+    // 4. Detección de banco
+    let matchedBank = null;
+    for (const b of KNOWN_BANKS) {
+        for (const kw of b.keywords) {
+            const normKw = normalizeText(kw);
+            if (normalized.includes(normKw)) {
+                matchedBank = b;
+                break;
+            }
+        }
+        if (matchedBank) break;
+    }
+
+    // 5. Detección de rankings o comparativas
+    const isRanking = /\b(cual|quien|que estacion)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
+                      /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized);
+
+    // 6. Detección de tiendas de conveniencia
+    const isTiendas = /\b(tienda|tiendas|conveniencia|cortes|corte|e-market|super 7|pedregal)\b/.test(normalized);
+
+    // 7. Detección de auditoría / descuadres
+    const isAlertas = /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
+
+    return {
+        normalized,
+        targetDate,
+        matchedStation,
+        matchedFuel,
+        matchedBank,
+        isRanking,
+        isTiendas,
+        isAlertas
+    };
+};
+
+/**
+ * Formatear respuesta de estación específica
+ */
+const formatSpecificStationMessage = (st, fuel, date, tienda) => {
+    let msg = `⛽ <b>${escapeHtml(st.empresa)}</b>\n`;
+    msg += `📅 <b>Fecha:</b> ${toDisplayDate(date)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    if (fuel) {
+        const gal = Number(st[fuel.key] || 0);
+        msg += `${fuel.icon} <b>Venta de ${fuel.label}:</b> <code>${numFmt(gal)} gal</code>\n\n`;
+        msg += `📊 <b>Resumen General de la Estación:</b>\n`;
+    } else {
+        msg += `📊 <b>Desglose de Combustibles:</b>\n`;
+    }
+
+    msg += `• 🛢️ <b>Diesel:</b> ${numFmt(st.diesel)} gal\n`;
+    msg += `• 🟢 <b>Regular:</b> ${numFmt(st.regular)} gal\n`;
+    msg += `• 🔴 <b>Súper:</b> ${numFmt(st.super)} gal\n`;
+    if (Number(st.ion || 0) > 0) {
+        msg += `• ⚡ <b>Ion Diesel:</b> ${numFmt(st.ion)} gal\n`;
+    }
+    msg += `• ⛽ <b>Galonaje Total:</b> <code>${numFmt(st.galonaje)} gal</code>\n`;
+    msg += `• 💰 <b>Venta en Pista:</b> <b>${moneyFmt(st.venta)}</b>\n`;
+
+    if (tienda && Number(tienda.venta || 0) > 0) {
+        msg += `• 🛒 <b>Venta Tienda (${escapeHtml(tienda.empresa)}):</b> ${moneyFmt(tienda.venta)}\n`;
+        msg += `• 💵 <b>Total Estación + Tienda:</b> <b>${moneyFmt(Number(st.venta || 0) + Number(tienda.venta || 0))}</b>\n`;
+    }
+
+    msg += `\n<i>SIPE Admin • Consulta Específica</i>`;
+    return msg;
+};
+
+/**
+ * Formatear venta total de un combustible específico entre todas las estaciones
+ */
+const formatProductTotalMessage = (data, fuel, date) => {
+    const estaciones = data?.estaciones || [];
+    const totalGal = estaciones.reduce((acc, e) => acc + Number(e[fuel.key] || 0), 0);
+
+    let msg = `${fuel.icon} <b>VENTA TOTAL DE ${fuel.label.toUpperCase()}</b>\n`;
+    msg += `📅 <b>Fecha:</b> ${toDisplayDate(date)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `• <b>Total Consolidado:</b> <code>${numFmt(totalGal)} gal</code>\n\n`;
+    msg += `🏪 <b>Desglose por Estación:</b>\n`;
+    estaciones.forEach((e, idx) => {
+        msg += `${idx + 1}. <b>${escapeHtml(e.empresa)}:</b> ${numFmt(e[fuel.key] || 0)} gal\n`;
+    });
+    msg += `\n<i>SIPE Admin • Consulta Específica</i>`;
+    return msg;
+};
+
+/**
+ * Formatear ranking de estaciones
+ */
+const formatRankingMessage = (data, date, metric = 'venta') => {
+    const estaciones = [...(data?.estaciones || [])];
+    if (metric === 'galonaje') {
+        estaciones.sort((a, b) => Number(b.galonaje || 0) - Number(a.galonaje || 0));
+    } else {
+        estaciones.sort((a, b) => Number(b.venta || 0) - Number(a.venta || 0));
+    }
+
+    const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
+    let msg = `🏆 <b>RANKING DE VENTAS POR ESTACIÓN</b>\n`;
+    msg += `📅 <b>Fecha:</b> ${toDisplayDate(date)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    estaciones.forEach((e, idx) => {
+        const medal = medals[idx] || `${idx + 1}.`;
+        msg += `${medal} <b>${escapeHtml(e.empresa)}:</b> <b>${moneyFmt(e.venta)}</b> (<code>${numFmt(e.galonaje)} gal</code>)\n`;
+    });
+    msg += `\n<i>SIPE Admin • Consulta Específica</i>`;
+    return msg;
+};
+
+/**
+ * Formatear consulta específica de un banco
+ */
+const formatSpecificBankMessage = (data, bank) => {
+    const cuentas = (data?.cuentas || []).filter(c => {
+        const norm = normalizeText(c.banco);
+        return bank.keywords.some(kw => norm.includes(normalizeText(kw)));
+    });
+    const totalBanco = cuentas.reduce((sum, c) => sum + Number(c.saldo || 0), 0);
+
+    let msg = `🏛️ <b>${escapeHtml(bank.label)}</b>\n`;
+    msg += `📅 <b>Fecha:</b> ${toDisplayDate(data.fecha)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💰 <b>Saldo Total en el Banco:</b> <b>${moneyFmt(totalBanco)}</b>\n\n`;
+
+    if (cuentas.length === 0) {
+        msg += `<i>No se registraron cuentas con saldo positivo en este banco.</i>\n`;
+    } else {
+        msg += `📋 <b>Cuentas Asociadas:</b>\n`;
+        cuentas.forEach((c, idx) => {
+            msg += `${idx + 1}. ${escapeHtml(c.cuenta)}: <code>${moneyFmt(c.saldo)}</code>\n`;
+        });
+    }
+    msg += `\n<i>SIPE Admin • Consulta Específica</i>`;
+    return msg;
+};
+
+/**
+ * Formatear consulta de tiendas
+ */
+const formatTiendasMessage = (data, date) => {
+    const tiendas = data?.tiendas || [];
+    const totalTiendas = tiendas.reduce((sum, t) => sum + Number(t.venta || 0), 0);
+
+    let msg = `🛒 <b>VENTAS EN TIENDAS DE CONVENIENCIA</b>\n`;
+    msg += `📅 <b>Fecha:</b> ${toDisplayDate(date)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💰 <b>Venta Total Tiendas:</b> <b>${moneyFmt(totalTiendas)}</b>\n\n`;
+    if (tiendas.length === 0) {
+        msg += `<i>No se registraron cortes de tienda para esta fecha.</i>\n`;
+    } else {
+        tiendas.forEach((t, idx) => {
+            msg += `${idx + 1}. <b>${escapeHtml(t.empresa)}:</b> <code>${moneyFmt(t.venta)}</code>\n`;
+        });
+    }
+    msg += `\n<i>SIPE Admin • Consulta Específica</i>`;
+    return msg;
+};
+
+/**
+ * Mensaje de orientación cuando la consulta libre no coincide con una entidad conocida
+ */
+const formatIntelligentGuidanceMessage = () => {
+    let msg = `❓ No pude identificar con certeza tu consulta específica.\n\n`;
+    msg += `💡 <b>Preguntas que puedes hacerme directamente:</b>\n`;
+    msg += `• ⛽ <b>Por estación y producto:</b>\n`;
+    msg += `   <i>"¿Cuánto diesel vendió Costa del Sol?"</i>\n`;
+    msg += `   <i>"Ventas de Miraflores"</i>\n`;
+    msg += `   <i>"¿Cuánto vendió San Martín ayer?"</i>\n`;
+    msg += `• 🛢️ <b>Por combustible global:</b>\n`;
+    msg += `   <i>"¿Cuánto diesel se vendió en total ayer?"</i>\n`;
+    msg += `   <i>"Venta total de regular"</i>\n`;
+    msg += `• 🏆 <b>Rankings y comparativas:</b>\n`;
+    msg += `   <i>"¿Cuál estación vendió más ayer?"</i>\n`;
+    msg += `• 🛒 <b>Tiendas de conveniencia:</b>\n`;
+    msg += `   <i>"¿Cuánto vendieron las tiendas?"</i>\n`;
+    msg += `   <i>"Ventas de E-Market"</i>\n`;
+    msg += `• 🏦 <b>Bancos específicos:</b>\n`;
+    msg += `   <i>"¿Cuánto tenemos en Promerica?"</i>\n`;
+    msg += `   <i>"Saldo de Banco Agrícola"</i>\n`;
+    msg += `• 🚨 <b>Auditoría:</b>\n`;
+    msg += `   <i>"¿Hubo algún descuadre ayer?"</i>\n\n`;
+    msg += `<i>O pulsa los botones del menú inferior para consultar los resúmenes consolidados.</i>`;
+    return msg;
+};
+
+/**
+ * Consulta con Gemini API (GenAI) si está configurado en el servidor
+ */
+const askGeminiAssistant = async (prompt, dataContext) => {
+    if (!process.env.GEMINI_API_KEY) return null;
+    try {
+        const { GoogleGenAI } = require('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const systemInstruction = `Eres el asistente gerencial de SIPE Admin para estaciones de servicio de combustible en El Salvador.
+Responde de forma ejecutiva, concisa, cálida y directa en español salvadoreño formal.
+Usa viñetas limpias y negritas en HTML para Telegram (<b>texto</b>, <code>código</code>).
+Si te preguntan comparaciones o análisis, apóyate en el contexto de datos reales proporcionado.`;
+
+        const result = await ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: [{
+                role: 'user',
+                parts: [{ text: `CONTEXTO OPERATIVO REAL: ${JSON.stringify(dataContext)}\n\nPREGUNTA DEL USUARIO: ${prompt}` }]
+            }],
+            config: { systemInstruction }
+        });
+
+        const reply = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text;
+        return reply ? reply.trim() : null;
+    } catch (e) {
+        console.warn('[TelegramBot] Gemini fallback error:', e.message);
+        return null;
+    }
+};
+
+/**
+ * Despachador inteligente de lenguaje natural
+ */
+const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectivePerms, keyboard) => {
+    const parsed = parseNaturalLanguageQuery(rawText);
+    if (!parsed) return false;
+
+    // 1. Consulta de Estación Específica (con o sin combustible)
+    if (parsed.matchedStation) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de estaciones.', keyboard);
+            return true;
+        }
+
+        await sendTelegramMessage(chatId, `⏳ Consultando datos de ${parsed.matchedStation.name}...`);
+        try {
+            const data = await getConsolidadoVentas(parsed.targetDate);
+            const estaciones = data?.estaciones || [];
+            const st = estaciones.find(e => 
+                e.id_empresa === parsed.matchedStation.id || 
+                normalizeText(e.empresa).includes(normalizeText(parsed.matchedStation.name)) ||
+                parsed.matchedStation.keywords.some(kw => normalizeText(e.empresa).includes(normalizeText(kw)))
+            );
+
+            if (!st) {
+                await sendTelegramMessage(chatId, `⚠️ No se encontraron registros de ventas para ${parsed.matchedStation.name} en la fecha ${toDisplayDate(parsed.targetDate)}.`, keyboard);
+                return true;
+            }
+
+            const tiendas = data?.tiendas || [];
+            const tienda = tiendas.find(t => normalizeText(t.empresa).includes(parsed.matchedStation.tiendaKey));
+
+            const msg = formatSpecificStationMessage(st, parsed.matchedFuel, parsed.targetDate, tienda);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Estación: ${st.empresa}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de estación específica:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al procesar la consulta: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 2. Consulta de Combustible Global (sin estación específica)
+    if (parsed.matchedFuel && !parsed.matchedStation) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de combustible.', keyboard);
+            return true;
+        }
+
+        await sendTelegramMessage(chatId, `⏳ Calculando total de ${parsed.matchedFuel.label}...`);
+        try {
+            const data = await getConsolidadoVentas(parsed.targetDate);
+            const msg = formatProductTotalMessage(data, parsed.matchedFuel, parsed.targetDate);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Total: ${parsed.matchedFuel.label}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de combustible global:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al calcular el total: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 3. Consulta de Rankings / Comparativas
+    if (parsed.isRanking) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar rankings de ventas.', keyboard);
+            return true;
+        }
+
+        await sendTelegramMessage(chatId, `⏳ Calculando ranking de estaciones...`);
+        try {
+            const data = await getConsolidadoVentas(parsed.targetDate);
+            const metric = parsed.normalized.includes('galon') || parsed.normalized.includes('galones') ? 'galonaje' : 'venta';
+            const msg = formatRankingMessage(data, parsed.targetDate, metric);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Ranking ${metric}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de ranking:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al generar ranking: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 4. Consulta de Banco Específico
+    if (parsed.matchedBank) {
+        if (!effectivePerms.saldos_banco) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar saldos bancarios.', keyboard);
+            return true;
+        }
+
+        await sendTelegramMessage(chatId, `⏳ Consultando cuentas de ${parsed.matchedBank.label}...`);
+        try {
+            const data = await getSaldosBancosData();
+            const msg = formatSpecificBankMessage(data, parsed.matchedBank);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Banco: ${parsed.matchedBank.label}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de banco específico:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar el banco: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 5. Consulta de Tiendas
+    if (parsed.isTiendas) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de tiendas.', keyboard);
+            return true;
+        }
+
+        await sendTelegramMessage(chatId, `⏳ Consultando cortes de tiendas...`);
+        try {
+            const data = await getConsolidadoVentas(parsed.targetDate);
+            const msg = formatTiendasMessage(data, parsed.targetDate);
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Tiendas cortes', 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de tiendas:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar tiendas: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 6. Consulta de Alertas / Auditoría
+    if (parsed.isAlertas) {
+        if (!effectivePerms.alertas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar alertas operativas.', keyboard);
+            return true;
+        }
+
+        await sendTelegramMessage(chatId, `⏳ Analizando auditoría y descuadres del ${toDisplayDate(parsed.targetDate)}...`);
+        try {
+            const data = await getConsolidadoVentas(parsed.targetDate);
+            const msg = formatAlertasMessage(data, parsed.targetDate);
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Alertas auditoría', 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de alertas:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar alertas: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 7. Si Gemini API está activo, intentar respuesta generativa
+    if (process.env.GEMINI_API_KEY) {
+        try {
+            const data = await getConsolidadoVentas(parsed.targetDate);
+            const aiReply = await askGeminiAssistant(rawText, {
+                fecha: parsed.targetDate,
+                resumen: {
+                    total_galones: (data.estaciones || []).reduce((s, e) => s + Number(e.galonaje || 0), 0),
+                    total_venta: (data.estaciones || []).reduce((s, e) => s + Number(e.venta || 0), 0)
+                },
+                estaciones: data.estaciones,
+                tiendas: data.tiendas
+            });
+
+            if (aiReply) {
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Respuesta Gemini AI', 1);
+                await sendTelegramMessage(chatId, aiReply, keyboard);
+                return true;
+            }
+        } catch (_) {
+            // Continuar con sugerencias
+        }
+    }
+
+    return false;
+};
+
+/**
  * Mensaje de Ayuda
  */
 const formatHelpMessage = () => {
@@ -791,6 +1301,13 @@ const formatHelpMessage = () => {
     msg += `🚨 <b>/alertas</b> - Descuadres de pista, cortes y gastos de tiendas\n`;
     msg += `ℹ️ <b>/perfil</b> o <b>/id</b> - Ver tu ID y permisos asignados\n`;
     msg += `❓ <b>/ayuda</b> - Ver esta guía de comandos\n\n`;
+    msg += `💡 <b>¡También puedes hacerme preguntas específicas en texto libre!</b>\n`;
+    msg += `• <i>"¿Cuánto diesel vendió Costa del Sol?"</i>\n`;
+    msg += `• <i>"Ventas de Miraflores"</i>\n`;
+    msg += `• <i>"¿Cuál estación vendió más ayer?"</i>\n`;
+    msg += `• <i>"¿Cuánto tenemos en Promerica?"</i>\n`;
+    msg += `• <i>"¿Cuánto vendieron las tiendas?"</i>\n`;
+    msg += `• <i>"¿Hubo algún descuadre ayer?"</i>\n\n`;
     msg += `<i>Acceso restringido a usuarios autorizados por el Administrador.</i>`;
     return msg;
 };
@@ -867,6 +1384,10 @@ const handleIncomingMessage = async (msg) => {
         await sendTelegramMessage(chatId, formatHelpMessage(), keyboard);
         return;
     }
+
+    // Intentar resolver consultas específicas de lenguaje natural (Estaciones, Combustibles, Bancos, Rankings, Tiendas, Auditoría, IA)
+    const handledNlu = await handleSmartNaturalLanguageQuery(user, rawText, chatId, effectivePerms, keyboard);
+    if (handledNlu) return;
 
     // 3. CONSULTA: SALDO EN BANCO
     if (cleanLower.includes('saldo en banco') || cleanLower === 'bancos' || cleanLower === 'banco' || cleanLower === 'saldos') {
@@ -975,11 +1496,11 @@ const handleIncomingMessage = async (msg) => {
         return;
     }
 
-    // Mensaje no reconocido
+    // Mensaje no reconocido - enviar orientación inteligente
     await logTelegramQuery(user.telegram_user_id, rawText, 'Comando no reconocido', 1);
     await sendTelegramMessage(
         chatId,
-        '❓ No reconocí esa opción. Por favor selecciona una de las opciones del menú interactivo inferior o escribe <b>/ayuda</b>.',
+        formatIntelligentGuidanceMessage(),
         keyboard
     );
 };
@@ -1147,5 +1668,17 @@ module.exports = {
     getUserEffectivePermissions,
     parseUserDate,
     moneyFmt,
-    numFmt
+    numFmt,
+    normalizeText,
+    parseNaturalLanguageQuery,
+    formatSpecificStationMessage,
+    formatProductTotalMessage,
+    formatRankingMessage,
+    formatSpecificBankMessage,
+    formatTiendasMessage,
+    formatIntelligentGuidanceMessage,
+    handleSmartNaturalLanguageQuery,
+    KNOWN_STATIONS,
+    KNOWN_FUELS,
+    KNOWN_BANKS
 };

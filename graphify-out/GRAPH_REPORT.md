@@ -1,17 +1,17 @@
 # Graph Report - SIPEOFI  (2026-10-12)
 
 ## Corpus Check
-- 184 files · ~411,009 words
+- 184 files · ~413,944 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 9 file(s) not represented in the graph (top: .example 2, (none) 2, .bat 2)
 
 ## Summary
-- 1217 nodes · 3190 edges · 59 communities (54 shown, 5 thin omitted)
-- Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 116 edges (avg confidence: 0.87)
+- 1230 nodes · 3250 edges · 59 communities (54 shown, 5 thin omitted)
+- Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 125 edges (avg confidence: 0.87)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `7686892c`
+- Built from commit: `5715e1a6`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -24,12 +24,12 @@
 - operaciones.js
 - consultas.js
 - middleware/auth.js
-- FinanzasPrestamos.jsx
+- FinanzasInversiones.jsx
 - getDb
-- Dashboard.jsx
+- date.js
 - errorHandler.js
 - inteligencia.js
-- DesignerView.jsx
+- Cheques.jsx
 - errorDiagnostics.js
 - dependencies
 - githubChanges.js
@@ -102,7 +102,7 @@
 ## Communities (59 total, 5 thin omitted)
 
 ### Community 0 - "useToast"
-Cohesion: 0.06
+Cohesion: 0.07
 Nodes (97): Regla obligatoria para NUEVAS pantallas (no opcional), 4. Modales de Creación y Edición de Registros, Reglas para Formularios:, ConfirmContext, useConfirm(), Modal(), ReportPreviewModal(), ToastContext (+89 more)
 
 ### Community 1 - "lazyPages.js"
@@ -110,15 +110,15 @@ Cohesion: 0.07
 Nodes (88): Frontend Conventions, Responsive / Mobile, 1. Definir el Módulo en `navigation.js`, 2. ¡CRÍTICO! Registrar en `allNavCategories`, 3. Registrar las Rutas en `App.jsx`, App(), DashboardLayout, Login (+80 more)
 
 ### Community 2 - "telegramBotService.js"
-Cohesion: 0.11
-Nodes (41): { authenticateToken, requirePermission }, express, {
+Cohesion: 0.10
+Nodes (54): { authenticateToken, requirePermission }, express, {
     getBotStatus,
     testTelegramConnection,
     restartTelegramBot,
     initTelegramBot,
     stopTelegramBot,
     sendTelegramMessage
-}, { getDb }, router, { sendSafeError }, telegramPerms, axios (+33 more)
+}, { getDb }, router, { sendSafeError }, telegramPerms, askGeminiAssistant() (+46 more)
 
 ### Community 3 - "frontend/package.json"
 Cohesion: 0.04
@@ -140,16 +140,16 @@ Nodes (38): withRetry(), { authenticateToken, requirePermission }, branchToEmpId
 Cohesion: 0.10
 Nodes (26): authenticateToken(), isAdminUser(), isUserRevoked(), jwt, requirePermission(), requireRole(), restoreUser(), revokedUsers (+18 more)
 
-### Community 8 - "FinanzasPrestamos.jsx"
-Cohesion: 0.22
-Nodes (23): FinanzasCalculadora(), FinanzasInversiones(), FinanzasPrestamos(), calculateBCRatio(), calculateDiscountedPayback(), calculateIRR(), calculateNPV(), calculatePayback() (+15 more)
+### Community 8 - "FinanzasInversiones.jsx"
+Cohesion: 0.64
+Nodes (8): FinanzasInversiones(), calculateBCRatio(), calculateDiscountedPayback(), calculateIRR(), calculateNPV(), calculatePayback(), calculateROI(), generateSensitivityScenarios()
 
 ### Community 9 - "getDb"
 Cohesion: 0.11
 Nodes (26): configCache, dbConfig, dotenv, externalPools, fetchCachedExternalConfig(), getDb(), getExternalDb(), initDB() (+18 more)
 
-### Community 10 - "Dashboard.jsx"
-Cohesion: 0.16
+### Community 10 - "date.js"
+Cohesion: 0.18
 Nodes (20): CalendarGrid(), DAYS, getStatusColor(), MONTHS, ColorIcon(), createColorIcon(), ICON_ALIASES, bundledCollections (+12 more)
 
 ### Community 11 - "errorHandler.js"
@@ -160,9 +160,9 @@ Nodes (26): { authenticateToken, requirePermission }, bitacoraPerms, express, { 
 Cohesion: 0.11
 Nodes (22): { authenticateToken, requirePermission }, express, { getFlashEjecutivo, enviarFlashPorEmail }, { getFlujoCajaProyectado }, { getRentabilidadPorEstacion }, { getRiesgoCreditoFlotas, getDetalleDtesCliente }, { getTanquesAutonomia, calcularSimuladorDGEHM, getAuditoriaMermas }, router (+14 more)
 
-### Community 13 - "DesignerView.jsx"
-Cohesion: 0.14
-Nodes (17): applySnap(), DesignCanvas(), PropertyPanel(), DesignerView(), ZOOM_LEVELS, ICON_MAP, Toolbox(), CalibrationDialog() (+9 more)
+### Community 13 - "Cheques.jsx"
+Cohesion: 0.09
+Nodes (32): applySnap(), DesignCanvas(), PropertyPanel(), DesignerView(), ZOOM_LEVELS, ICON_MAP, Toolbox(), CalibrationDialog() (+24 more)
 
 ### Community 14 - "errorDiagnostics.js"
 Cohesion: 0.14
@@ -326,22 +326,22 @@ Nodes (4): 1. Verificación y Sincronización Previa a cualquier Push, 2. Commit
 
 ## Knowledge Gaps
 - **18 isolated node(s):** `axios`, `axios-cookiejar-support`, `tough-cookie`, `eslint`, `nodemon` (+13 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 577 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 580 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
 - **5 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `getDb()` connect `getDb` to `telegramBotService.js`, `server.js`, `operaciones.js`, `consultas.js`, `middleware/auth.js`, `errorHandler.js`, `inteligencia.js`, `paymentNotifier.js`, `finanzas.js`, `rrhh.test.js`, `config.js`, `conciliacion.js`, `bancos.js`, `cheques.js`, `sync-dgehm-direct.js`, `tasks.js`, `dgehmService.js`, `checkDesigner.js`, `middleware/bitacora.js`?**
-  _High betweenness centrality (0.085) - this node is a cross-community bridge._
+  _High betweenness centrality (0.091) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `useToast()` (e.g. with `Frontend Conventions` and `Regla obligatoria para NUEVAS pantallas (no opcional)`) actually correct?**
   _`useToast()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `axios`, `axios-cookiejar-support`, `tough-cookie` to the rest of the system?**
   _18 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `useToast` be split into smaller, more focused modules?**
-  _Cohesion score 0.06339468302658487 - nodes in this community are weakly interconnected._
-- **Why does `authenticateToken()` connect `middleware/auth.js` to `cheques.js`, `telegramBotService.js`, `server.js`, `operaciones.js`, `consultas.js`, `tasks.js`, `checkDesigner.js`, `errorHandler.js`, `inteligencia.js`, `middleware/bitacora.js`, `githubChanges.js`, `onedrive.js`, `ai.js`, `finanzas.js`, `config.js`, `conciliacion.js`, `bancos.js`?**
-  _High betweenness centrality (0.051) - this node is a cross-community bridge._
+  _Cohesion score 0.06544064962980654 - nodes in this community are weakly interconnected._
+- **Why does `react` connect `useToast` to `lazyPages.js`, `frontend/package.json`, `FinanzasInversiones.jsx`, `date.js`, `Cheques.jsx`, `errorDiagnostics.js`, `themeUtils.js`, `AGENTS.md`?**
+  _High betweenness centrality (0.050) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `Modal()` (e.g. with `Regla obligatoria para NUEVAS pantallas (no opcional)` and `Responsive / Mobile`) actually correct?**
   _`Modal()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **Should `lazyPages.js` be split into smaller, more focused modules?**

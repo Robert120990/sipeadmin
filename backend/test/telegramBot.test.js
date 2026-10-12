@@ -8,7 +8,15 @@ const {
     formatProfileMessage,
     parseUserDate,
     moneyFmt,
-    numFmt
+    numFmt,
+    normalizeText,
+    parseNaturalLanguageQuery,
+    formatSpecificStationMessage,
+    formatProductTotalMessage,
+    formatRankingMessage,
+    formatSpecificBankMessage,
+    formatTiendasMessage,
+    formatIntelligentGuidanceMessage
 } = require('../services/telegramBotService');
 
 describe('Telegram Bot Service Unit Tests', () => {
@@ -229,6 +237,165 @@ describe('Telegram Bot Service Unit Tests', () => {
             assert.ok(msg.includes('✅ <b>Saldo en Bancos</b>'));
             assert.ok(msg.includes('✅ <b>Saldo en Chequera</b>'));
             assert.ok(msg.includes('✅ <b>Alertas en Estaciones</b>'));
+        });
+    });
+
+    describe('NLU: normalizeText', () => {
+        it('debe remover tildes, signos de puntuación y dobles espacios', () => {
+            const raw = '  ¿Cuánto diésel vendió Costa del Sol, ayer?  ';
+            const normalized = normalizeText(raw);
+            assert.strictEqual(normalized, 'cuanto diesel vendio costa del sol ayer');
+        });
+    });
+
+    describe('NLU: parseNaturalLanguageQuery', () => {
+        it('debe resolver la pregunta exacta del usuario: "Cuanto diesel vendió costa del sol?"', () => {
+            const query = 'Cuanto diesel vendió costa del sol?';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            assert.strictEqual(parsed.matchedStation?.id, '008');
+            assert.strictEqual(parsed.matchedStation?.name, 'Puma Costa del Sol');
+            assert.strictEqual(parsed.matchedFuel?.key, 'diesel');
+            assert.strictEqual(parsed.isRanking, false);
+        });
+
+        it('debe resolver consultas de estación sin producto específico: "Ventas de Miraflores"', () => {
+            const query = 'Ventas de Miraflores';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            assert.strictEqual(parsed.matchedStation?.id, '002');
+            assert.strictEqual(parsed.matchedFuel, null);
+        });
+
+        it('debe detectar preguntas de ranking: "¿Cuál estación vendió más ayer?"', () => {
+            const query = '¿Cuál estación vendió más ayer?';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            assert.strictEqual(parsed.isRanking, true);
+        });
+
+        it('debe resolver consultas de banco específico: "¿Cuánto tenemos en Promerica?"', () => {
+            const query = '¿Cuánto tenemos en Promerica?';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            assert.strictEqual(parsed.matchedBank?.key, 'PROMERICA');
+        });
+
+        it('debe resolver consultas de auditoría: "¿Hubo algún descuadre ayer?"', () => {
+            const query = '¿Hubo algún descuadre ayer?';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            assert.strictEqual(parsed.isAlertas, true);
+        });
+
+        it('debe resolver consultas de tiendas: "Cortes de tienda de hoy"', () => {
+            const query = 'Cortes de tienda de hoy';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            assert.strictEqual(parsed.isTiendas, true);
+        });
+
+        it('debe resolver combustible global: "Venta total de regular"', () => {
+            const query = 'Venta total de regular';
+            const parsed = parseNaturalLanguageQuery(query);
+            assert.ok(parsed);
+            assert.strictEqual(parsed.matchedFuel?.key, 'regular');
+            assert.strictEqual(parsed.matchedStation, null);
+        });
+    });
+
+    describe('NLU Formatters', () => {
+        const mockEstacion = {
+            id_empresa: '008',
+            empresa: 'Puma Costa del Sol',
+            diesel: 3200,
+            regular: 1800,
+            super: 1500,
+            ion: 0,
+            galonaje: 6500,
+            venta: 26000
+        };
+
+        it('formatSpecificStationMessage debe incluir el combustible destacado y los totales', () => {
+            const fuel = { key: 'diesel', label: 'Diesel', icon: '🛢️' };
+            const tienda = { empresa: 'Super 7 Costa del Sol', venta: 1200 };
+            const msg = formatSpecificStationMessage(mockEstacion, fuel, '2026-10-11', tienda);
+
+            assert.ok(msg.includes('Puma Costa del Sol'));
+            assert.ok(msg.includes('Venta de Diesel'));
+            assert.ok(msg.includes('3,200.00 gal'));
+            assert.ok(msg.includes('$26,000.00'));
+            assert.ok(msg.includes('Super 7 Costa del Sol'));
+            assert.ok(msg.includes('$27,200.00')); // Estación + Tienda
+        });
+
+        it('formatProductTotalMessage debe totalizar el combustible entre todas las estaciones', () => {
+            const fuel = { key: 'diesel', label: 'Diesel', icon: '🛢️' };
+            const data = {
+                estaciones: [
+                    mockEstacion,
+                    { id_empresa: '002', empresa: 'Puma Miraflores', diesel: 2000 }
+                ]
+            };
+            const msg = formatProductTotalMessage(data, fuel, '2026-10-11');
+            assert.ok(msg.includes('VENTA TOTAL DE DIESEL'));
+            assert.ok(msg.includes('5,200.00 gal')); // 3200 + 2000
+            assert.ok(msg.includes('Puma Costa del Sol'));
+            assert.ok(msg.includes('Puma Miraflores'));
+        });
+
+        it('formatRankingMessage debe ordenar las estaciones de mayor a menor con medallas', () => {
+            const data = {
+                estaciones: [
+                    { empresa: 'Puma Miraflores', venta: 15000, galonaje: 3800 },
+                    { empresa: 'Puma Costa del Sol', venta: 26000, galonaje: 6500 }
+                ]
+            };
+            const msg = formatRankingMessage(data, '2026-10-11', 'venta');
+            assert.ok(msg.includes('RANKING DE VENTAS'));
+            // Primero Puma Costa del Sol (26000)
+            const idxCosta = msg.indexOf('Puma Costa del Sol');
+            const idxMira = msg.indexOf('Puma Miraflores');
+            assert.ok(idxCosta < idxMira);
+            assert.ok(msg.includes('🥇'));
+            assert.ok(msg.includes('🥈'));
+        });
+
+        it('formatSpecificBankMessage debe filtrar únicamente las cuentas del banco consultado', () => {
+            const data = {
+                fecha: '2026-10-12',
+                cuentas: [
+                    { banco: 'Banco Promerica', cuenta: 'Cta Recaudo (111)', saldo: 80000 },
+                    { banco: 'Banco Agrícola', cuenta: 'Cta Principal (222)', saldo: 50000 }
+                ]
+            };
+            const bank = { key: 'PROMERICA', label: 'Banco Promerica', keywords: ['promerica'] };
+            const msg = formatSpecificBankMessage(data, bank);
+            assert.ok(msg.includes('Banco Promerica'));
+            assert.ok(msg.includes('$80,000.00'));
+            assert.ok(msg.includes('Cta Recaudo (111)'));
+            assert.ok(!msg.includes('Banco Agrícola'));
+        });
+
+        it('formatTiendasMessage debe formatear el listado de ventas en tiendas', () => {
+            const data = {
+                tiendas: [
+                    { empresa: 'Super 7 Costa del Sol', venta: 1500.50 },
+                    { empresa: 'E-Market Miraflores', venta: 800.00 }
+                ]
+            };
+            const msg = formatTiendasMessage(data, '2026-10-11');
+            assert.ok(msg.includes('VENTAS EN TIENDAS DE CONVENIENCIA'));
+            assert.ok(msg.includes('$2,300.50')); // Total tiendas
+            assert.ok(msg.includes('Super 7 Costa del Sol'));
+            assert.ok(msg.includes('E-Market Miraflores'));
+        });
+
+        it('formatIntelligentGuidanceMessage debe contener ejemplos concretos de preguntas', () => {
+            const msg = formatIntelligentGuidanceMessage();
+            assert.ok(msg.includes('¿Cuánto diesel vendió Costa del Sol?'));
+            assert.ok(msg.includes('Ventas de Miraflores'));
+            assert.ok(msg.includes('¿Cuánto tenemos en Promerica?'));
         });
     });
 });

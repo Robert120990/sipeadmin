@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791824243.498679,
-    "seen": 1791824268.1699405,
-    "ast_hash": "93e82e84492e3f6757e13b36f31b3d8f",
+    "mtime": 1791824663.3653448,
+    "seen": 1791824699.3161483,
+    "ast_hash": "0447d14adce98a15f2e1bf0a5be69b2b",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -1155,6 +1155,18 @@
     "mtime": 1788265759.602064,
     "seen": 1791824268.1699405,
     "ast_hash": "cc24c9e0fe22ecd038334bfb8ad3ad1a",
+    "semantic_hash": ""
+  },
+  "backend/scripts/generate-guide-pdf.js": {
+    "mtime": 1791824620.9552107,
+    "seen": 1791824699.3161483,
+    "ast_hash": "170daa94bcad2663f4ccb0d919b04ffd",
+    "semantic_hash": ""
+  },
+  "frontend/public/docs/GUIA_OFICIAL_TELEGRAM_N8N_OPENCLAW_SIPE.pdf": {
+    "mtime": 1791824626.8168716,
+    "seen": 1791824699.3161483,
+    "ast_hash": "e63977d5eb74c54422a4297532be9a33",
     "semantic_hash": ""
   }
 }
