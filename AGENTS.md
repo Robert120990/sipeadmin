@@ -135,3 +135,70 @@ Toda pantalla nueva DEBE cumplir esta checklist, verificada en DevTools a 375px 
 - `vercel.json` sets `no-cache` for `sw.js`, `manifest.webmanifest`, `version.json`, `index.html`; immutable for `/icons/*`
 - Update flow: `UpdateNotifier` checks `/version.json` on load, on tab focus, and every 60 min → banner + `skipWaiting` + single reload (guard in sessionStorage prevents loops)
 - `frontend/scripts/` is Node/CommonJS (`.cjs`) and has an ESLint override for `node` env
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.
+
+## Ecosistema de Agentes IA, n8n y OpenClaw (Servidor 169.58.207.115)
+
+### 1. Arquitectura de Dos Servidores y Cero Afectación a Producción
+- **Servidor de Producción Principal (VPS Linux `5.252.55.29`)**:
+  - Aloja `admin.sipesv.com` (SIPE Admin SPA + Backend Express en puerto 5001).
+  - Aloja las bases de datos transaccionales `db_sistema_saas` y `db_sipe_admin`.
+  - **Regla de Oro de Cero Impacto**: Ningún agente externo, script o flujo de n8n/OpenClaw ejecuta operaciones de escritura destructivas o bloqueantes sobre las bases de producción. Todo acceso externo hacia la base de datos se realiza a través de consultas con privilegios estrictos de **Solo Lectura (`SELECT`)** y mediante endpoints protegidos del API Gateway de SIPE Admin con límites de tiempo (`timeout: 10s`).
+- **Servidor de Automatizaciones y Agentes (`169.58.207.115`)**:
+  - **OpenClaw (`bot.how2getfun.com`)**: Gateway de agentes conversacionales para mensajería (Telegram). Ofrece una interfaz de lenguaje natural humana y ergonómica para socios, gerentes y contadores.
+  - **n8n**: Motor de flujos de trabajo programados (crons) y webhooks asíncronos para tareas desatendidas (envío de Flash matutino a las 7:00 AM, alertas automáticas de descuadres y mermas).
+  - **Sinergia**: OpenClaw asume la conversación humana en Telegram y n8n asume la orquestación programada y webhooks.
+
+### 2. Integración con Graphify (`Graphify-Labs/graphify`)
+- **Propósito**: Convierte todo el código fuente de SIPE Admin, esquemas SQL (`backend/db.js`, migraciones), controladores (`backend/routes/`) y servicios de negocio en un **Grafo de Conocimiento Determinista (AST)** sin requerir bases de datos vectoriales.
+- **Artefactos Locales Generados**:
+  - `graphify-out/graph.json`: 1,107+ nodos, 3,060+ aristas y 54 comunidades que modelan todas las entidades y llamadas del sistema.
+  - `graphify-out/graph.html`: Visualizador interactivo del grafo de dependencias y modelos para inspección en navegador.
+- **Uso para Agentes**:
+  - Antes de ejecutar o responder a una consulta en Telegram, OpenClaw o el subagente consulta el grafo con:
+    ```bash
+    graphify query "<pregunta o entidad>"
+    graphify explain "<concepto>"
+    ```
+  - Esto proporciona el subgrafo exacto con las tablas (`gas_station_closeouts`, `sales_headers`, `cuentas_bancarias`, etc.) y endpoints correspondientes, eliminando alucinaciones y reduciendo el consumo de tokens en 70x.
+
+### 3. Grupo de Subagentes Especializados
+- `sipe_graphify_architect`: Mantiene y consulta el grafo de conocimiento del código, esquemas y rutas.
+- `openclaw_telegram_agent`: Transforma solicitudes en lenguaje natural en Telegram en respuestas ejecutivas, cálidas y ergonómicas con formato HTML limpio y emojis clave.
+- `n8n_integration_orchestrator`: Orquesta flujos de automatización programados y webhooks entre `169.58.207.115` y `5.252.55.29`.
+
+### 4. Nuevas Funciones y Endpoints en Backend (API Gateway para Agentes IA)
+- `POST /api/ai/query`: Recibe intenciones y preguntas de agentes, valida permisos del usuario de Telegram mediante `getUserEffectivePermissions` y entrega datos formateados.
+- `GET /api/ai/schema-context`: Expone el diccionario de datos y metadatos de entidades operativas para que OpenClaw y n8n reconozcan campos y tablas.
+- `POST /api/ai/webhooks/trigger`: Despachador de eventos de SIPE hacia n8n en `169.58.207.115` (cierre de turnos con anomalías, emisión de cheques, alertas operativas).
+
+### 5. Nuevas Pantallas Proyectadas en Frontend (SIPE Admin)
+- `/dashboard/seguridad/telegram` (Activa): Gestión y vinculación de usuarios de Telegram con usuarios de SIPE y herencia de permisos.
+- `/dashboard/configuracion/agentes-ia`: Tablero de control de agentes (estado de OpenClaw y n8n en `169.58.207.115`, visor de grafo Graphify interactivo y log de consultas de IA).
+- `/dashboard/consultas/ia-asistente`: Panel web interactivo para dialogar con el asistente usando la misma inteligencia que Telegram.
+
+### 6. Catálogo de Actividades Automatizadas en n8n
+- **Actividad 1: Flash Ejecutivo Matutino (7:00 AM)**:
+  - Disparador: Cron en n8n a las 7:00 AM de lunes a domingo.
+  - Consumo: `GET /api/inteligencia/flash-ejecutivo` en `admin.sipesv.com`.
+  - Acción: Distribución a través de Telegram y WhatsApp a los directores registrados.
+- **Actividad 2: Centinela de Mermas y Descuadres de Pista**:
+  - Disparador: Webhook al registrarse un cierre con descuadre $> \$50$ o merma $> 0.4\%$.
+  - Acción: Alerta inmediata con botón interactivo de revisión en Telegram.
+- **Actividad 3: Monitor de Precios Pre-DGEHM**:
+  - Disparador: Cron quincenal los lunes a las 6:00 PM.
+  - Acción: Evalúa variación de precios de referencia y recomienda estrategia de compra de cisternas.
+

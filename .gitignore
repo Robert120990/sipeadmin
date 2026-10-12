@@ -18,3 +18,4 @@ backend/tmp_*.js
 backend/*_output.txt
 backend/keys.txt
 backend/scratch/
+graphify-out/cache/
