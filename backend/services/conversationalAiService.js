@@ -224,6 +224,51 @@ const buildLiveProjectContext = async (targetDate = null) => {
         // Tanques opcionales
     }
 
+    // 5. Energía Solar y Baterías
+    try {
+        const { getSolarEstadoActual, getSolarAhorroMensual } = require('./solarEnergyService');
+        const estadoSolar = await getSolarEstadoActual();
+        const nowD = new Date();
+        const ahorroMes = await getSolarAhorroMensual(nowD.getFullYear(), nowD.getMonth() + 1);
+        context.energia_solar = {
+            potencia_total_kwp: estadoSolar.potencia_total_kwp,
+            capacidad_bateria_total_kwh: estadoSolar.capacidad_bateria_total_kwh,
+            potencia_actual_estimada_kw: estadoSolar.potencia_actual_estimada_kw,
+            bateria_promedio_soc_pct: estadoSolar.bateria_promedio_soc_pct,
+            horas_autonomia_estimadas: estadoSolar.horas_autonomia_estimadas,
+            ahorro_acumulado_mes_actual_usd: ahorroMes.total_ahorro_usd,
+            generacion_mes_actual_kwh: ahorroMes.total_generacion_kwh,
+            instalaciones: (estadoSolar.instalaciones || []).map(i => ({
+                estacion: i.estacion_nombre,
+                potencia_kwp: i.potencia_kwp,
+                tiene_baterias: i.tiene_baterias === 1,
+                capacidad_bateria_kwh: i.capacidad_bateria_kwh,
+                bateria_soc_pct: i.bateria_soc_pct,
+                horas_autonomia: i.horas_autonomia
+            }))
+        };
+    } catch (e) {
+        console.warn('[ConversationalAI] No se pudo cargar energia_solar:', e.message);
+    }
+
+    // 6. Análisis de Horas Pico de Venta
+    try {
+        const { getHorasPicoVentas } = require('./salesHourlyService');
+        const peakData = await getHorasPicoVentas(finalDate);
+        if (peakData) {
+            context.horas_pico = {
+                fecha: finalDate,
+                hora_pico_principal: peakData.hora_pico,
+                venta_hora_pico_usd: peakData.venta_hora_pico,
+                transacciones_hora_pico: peakData.transacciones_hora_pico,
+                pct_hora_pico: peakData.pct_hora_pico,
+                top_3_horas: peakData.top_3_horas
+            };
+        }
+    } catch (e) {
+        console.warn('[ConversationalAI] No se pudo cargar horas_pico:', e.message);
+    }
+
     return context;
 };
 
@@ -246,6 +291,8 @@ const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms }) 
             if (!effectivePerms.saldos_banco) delete liveContext.bancos;
             if (!effectivePerms.saldos_chequera) delete liveContext.chequeras;
             if (!effectivePerms.alertas) delete liveContext.alertas;
+            if (!effectivePerms.ventas && !effectivePerms.alertas) delete liveContext.energia_solar;
+            if (!effectivePerms.ventas) delete liveContext.horas_pico;
         }
 
         const history = getFormattedHistory(chatId);
@@ -265,8 +312,11 @@ TU PERSONALIDAD:
 REGLAS DE DATOS:
 - Usa EXCLUSIVAMENTE los datos del CONTEXTO OPERATIVO REAL que te proporcionamos abajo. NUNCA inventes cifras.
 - Si te preguntan por un combustible específico (Diesel, Regular, Súper, Ion Diesel) o una estación (Costa del Sol, Miraflores, Chalchuapa, San Martín o 14 Ave), da el dato exacto con unidades (galones) e importe en dólares ($).
+- PANELES SOLARES Y BATERÍAS: En la red existen 2 ubicaciones con paneles solares: Puma Miraflores (45.0 kWp paneles + sistema de almacenamiento en batería BESS de 60.0 kWh con ~9.3 horas de autonomía para cargas críticas) y Puma Costa del Sol (35.0 kWp paneles on-grid sin baterías). Total instalado en la red: 80.0 kWp. Las demás 3 estaciones no poseen paneles solares ni baterías. Si preguntan por ahorro o estado, proporciona los kWh generados, ahorro en dólares y estado de carga de la batería (SoC %).
+- HORAS PICO DE VENTA: Identifica los momentos de mayor volumen del día (típicamente pico de tarde 17:00-19:00 hrs y mañana 07:00-09:00 hrs). Menciona la hora pico principal, monto de venta y porcentaje sobre el total del día.
+- RANGOS Y MESES: Si preguntan por ventas por rango de fechas o mes completo (ej. octubre), contextualiza con los datos del período.
 - Formatea en HTML para Telegram: usa <b>negrita</b> para destacar cifras y nombres, <code>código</code> para galonajes exactos y listas con viñetas limpias.
-- Usa emojis con criterio gerencial (⛽, 🛢️, 🟢, 🔴, ⚡, 🏦, 🛒, 🚨, 💵, 🏆, 🥇).
+- Usa emojis con criterio gerencial (⛽, 🛢️, 🟢, 🔴, ⚡, ☀️, 🔋, ⏰, 🏦, 🛒, 🚨, 💵, 🏆, 🥇).
 
 CONTEXTO OPERATIVO REAL DE SIPE ADMIN:
 ${JSON.stringify(liveContext)}`;

@@ -4,6 +4,8 @@ const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const energyLatamService = require('../services/energyLatamService');
+const solarEnergyService = require('../services/solarEnergyService');
+const salesHourlyService = require('../services/salesHourlyService');
 
 const vencimientosViewPerms = [
     '/dashboard',
@@ -1622,6 +1624,82 @@ router.post('/operaciones/portal/ajustar-costos-pedido', authenticateToken, requ
         res.json({ success: true, message: 'Costos de combustible ajustados para el pedido', nuevo_total: nuevoTotal });
     } catch (error) {
         sendSafeError(res, error, 'Error al ajustar costos del pedido');
+    }
+});
+
+// =========================================================================
+// SERVICIOS DE ENERGÍA SOLAR Y ALMACENAMIENTO (BATERÍAS)
+// =========================================================================
+
+router.get('/energia/instalaciones', authenticateToken, async (req, res) => {
+    try {
+        const data = await solarEnergyService.getInstalacionesSolares();
+        res.json({ success: true, data });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener instalaciones solares');
+    }
+});
+
+router.get('/energia/ahorro-diario', authenticateToken, async (req, res) => {
+    try {
+        const { fecha, estacion_id } = req.query;
+        const data = await solarEnergyService.getSolarAhorroDiario(fecha, estacion_id);
+        res.json({ success: true, data });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener ahorro solar diario');
+    }
+});
+
+router.get('/energia/ahorro-mensual', authenticateToken, async (req, res) => {
+    try {
+        const { anio, mes, year, month, estacion_id } = req.query;
+        const data = await solarEnergyService.getSolarAhorroMensual(year || anio, month || mes, estacion_id);
+        res.json({ success: true, data });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener ahorro solar mensual');
+    }
+});
+
+router.get('/energia/ahorro-rango', authenticateToken, async (req, res) => {
+    try {
+        const { fecha_desde, fecha_hasta, estacion_id } = req.query;
+        const data = await solarEnergyService.getSolarAhorroRango(fecha_desde, fecha_hasta, estacion_id);
+        res.json({ success: true, data });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener ahorro solar por rango');
+    }
+});
+
+router.get('/energia/estado-actual', authenticateToken, async (req, res) => {
+    try {
+        const data = await solarEnergyService.getSolarEstadoActual();
+        res.json({ success: true, data });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener estado solar actual');
+    }
+});
+
+// =========================================================================
+// SERVICIOS DE ANÁLISIS DE HORAS PICO DE VENTA
+// =========================================================================
+
+router.get('/ventas/horas-pico', authenticateToken, async (req, res) => {
+    try {
+        const { fecha, branch_id } = req.query;
+        const data = await salesHourlyService.getHorasPicoVentas(fecha, branch_id);
+        res.json({ success: true, data });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener horas pico de venta');
+    }
+});
+
+router.get('/ventas/horas-pico-rango', authenticateToken, async (req, res) => {
+    try {
+        const { fecha_desde, fecha_hasta, branch_id } = req.query;
+        const data = await salesHourlyService.getHorasPicoRango(fecha_desde, fecha_hasta, branch_id);
+        res.json({ success: true, data });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener análisis consolidado de horas pico');
     }
 });
 

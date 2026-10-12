@@ -1,5 +1,7 @@
 const axios = require('axios');
-const { getDb, getExternalDb } = require('../db');
+const { getDb, getExternalDb, getAccountingDb } = require('../db');
+const salesHourlyService = require('./salesHourlyService');
+const solarEnergyService = require('./solarEnergyService');
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org/bot';
 const DEFAULT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8852249993:AAHs51t4kIGqXfdEl8epRL0Le08PTZ52qu0';
@@ -231,6 +233,110 @@ const parseSpanishDateText = (text, ref = 2026) => {
     const dmyMatch = normalized.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/);
     if (dmyMatch) {
         return formatYMD(dmyMatch[3], dmyMatch[2], dmyMatch[1]);
+    }
+
+    return null;
+};
+
+const SPANISH_MONTH_NAMES = [
+    '', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+];
+
+/**
+ * Parsea un periodo (mes completo, rango de fechas) o una fecha individual en lenguaje natural
+ */
+const parseSpanishPeriodOrDate = (text, ref = 2026) => {
+    if (!text || typeof text !== 'string') return null;
+    const normalized = normalizeText(text);
+
+    // 1. Detección de rangos de fechas: 'del 1 al 10 de octubre', 'entre el 5 y 15 de septiembre'
+    const rangeRegex = /\b(?:del|desde|entre)\s+(?:el\s+)?([0-3]?[0-9])\s*(?:al|a|y|hasta)\s*(?:el\s+)?([0-3]?[0-9])\s*(?:de|\/|-)\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?\b/i;
+    const rangeMatch = normalized.match(rangeRegex);
+    if (rangeMatch) {
+        const startDay = parseInt(rangeMatch[1], 10);
+        const endDay = parseInt(rangeMatch[2], 10);
+        const month = SPANISH_MONTHS[rangeMatch[3].toLowerCase()];
+        const year = rangeMatch[4] ? parseInt(rangeMatch[4], 10) : (typeof ref === 'number' ? ref : 2026);
+        return {
+            type: 'range',
+            startDate: formatYMD(year, month, startDay),
+            endDate: formatYMD(year, month, endDay),
+            year,
+            month,
+            label: `Del ${startDay} al ${endDay} de ${SPANISH_MONTH_NAMES[month]} ${year}`
+        };
+    }
+
+    // 2. Detección de mes completo:
+    // Cuidado: solo tratar como mes si NO hay un número de día antes o después
+    const hasDayNumber = /\b([0-3]?[0-9])\s*(?:de|\/|-)\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)\b/i.test(normalized) ||
+                         /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)\s+(?:dia\s+|el\s+)?([0-3]?[0-9])\b/i.test(normalized);
+
+    if (!hasDayNumber) {
+        const monthRegex = /\b(?:mes\s+(?:de\s+)?|mensual\s+(?:de\s+)?|del\s+mes\s+de\s+|ventas\s+(?:de|en)\s+|en\s+|de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?/i;
+        const mMatch = normalized.match(monthRegex);
+        if (mMatch && mMatch[1]) {
+            const month = SPANISH_MONTHS[mMatch[1].toLowerCase()];
+            if (month) {
+                const year = mMatch[2] ? parseInt(mMatch[2], 10) : (typeof ref === 'number' ? ref : 2026);
+                const lastDay = new Date(year, month, 0).getDate();
+                return {
+                    type: 'month',
+                    year,
+                    month,
+                    startDate: formatYMD(year, month, 1),
+                    endDate: formatYMD(year, month, lastDay),
+                    periodo: `${year}-${String(month).padStart(2, '0')}`,
+                    label: `${SPANISH_MONTH_NAMES[month]} ${year}`
+                };
+            }
+        }
+
+        // 'este mes', 'mes actual', 'mes en curso', 'del mes'
+        if (/\b(este\s+mes|mes\s+actual|mes\s+en\s+curso|del\s+mes)\b/i.test(normalized)) {
+            const now = new Date();
+            const y = now.getFullYear();
+            const m = now.getMonth() + 1;
+            const lastDay = new Date(y, m, 0).getDate();
+            return {
+                type: 'month',
+                year: y,
+                month: m,
+                startDate: formatYMD(y, m, 1),
+                endDate: formatYMD(y, m, lastDay),
+                periodo: `${y}-${String(m).padStart(2, '0')}`,
+                label: `${SPANISH_MONTH_NAMES[m]} ${y}`
+            };
+        }
+
+        // 'mes pasado', 'mes anterior'
+        if (/\b(mes\s+pasado|mes\s+anterior)\b/i.test(normalized)) {
+            const now = new Date();
+            let y = now.getFullYear();
+            let m = now.getMonth();
+            if (m === 0) { m = 12; y -= 1; }
+            const lastDay = new Date(y, m, 0).getDate();
+            return {
+                type: 'month',
+                year: y,
+                month: m,
+                startDate: formatYMD(y, m, 1),
+                endDate: formatYMD(y, m, lastDay),
+                periodo: `${y}-${String(m).padStart(2, '0')}`,
+                label: `${SPANISH_MONTH_NAMES[m]} ${y}`
+            };
+        }
+    }
+
+    // 3. Fallback a fecha individual
+    const single = parseSpanishDateText(text, ref);
+    if (single) {
+        return {
+            type: 'single',
+            date: single,
+            label: toDisplayDate(single)
+        };
     }
 
     return null;
@@ -966,9 +1072,38 @@ const parseNaturalLanguageQuery = (rawText) => {
     if (!rawText) return null;
     const normalized = normalizeText(rawText);
 
-    // 1. Detección de fecha en español natural
-    const naturalDate = parseSpanishDateText(rawText);
-    const targetDate = naturalDate || getDateStr(-1); // Ayer por defecto (cierres consolidados)
+    // 1. Detección de periodo o fecha en español natural
+    const period = parseSpanishPeriodOrDate(rawText);
+    let targetDate = getDateStr(-1); // Ayer por defecto (cierres consolidados)
+    let isRange = false;
+    let startDate = null;
+    let endDate = null;
+    let isMonthly = false;
+    let targetMonth = null;
+    let targetYear = null;
+    let targetPeriod = null;
+
+    if (period) {
+        if (period.type === 'month') {
+            isMonthly = true;
+            targetMonth = period.month;
+            targetYear = period.year;
+            targetPeriod = period.periodo;
+            startDate = period.startDate;
+            endDate = period.endDate;
+            targetDate = period.endDate;
+        } else if (period.type === 'range') {
+            isRange = true;
+            startDate = period.startDate;
+            endDate = period.endDate;
+            targetDate = period.endDate;
+        } else if (period.type === 'single') {
+            targetDate = period.date;
+        }
+    } else {
+        const naturalDate = parseSpanishDateText(rawText);
+        if (naturalDate) targetDate = naturalDate;
+    }
 
     // 2. Detección de estación con límites de palabra estricta (priorizando frases más largas)
     let matchedStation = null;
@@ -1033,6 +1168,13 @@ const parseNaturalLanguageQuery = (rawText) => {
     // 7. Detección de auditoría / descuadres
     const isAlertas = /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
 
+    // 8. Detección de consultas de energía solar / batería
+    const isSolar = /\b(solar|solares|panel|paneles|fotovoltaic[oa]s?|bateria|baterias|inversor|autonomia|kwh|kwp|ahorro solar|energia solar)\b/i.test(normalized);
+
+    // 9. Detección de consultas de horas pico / horario de ventas
+    const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
+                         (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized));
+
     return {
         normalized,
         targetDate,
@@ -1041,7 +1183,21 @@ const parseNaturalLanguageQuery = (rawText) => {
         matchedBank,
         isRanking,
         isTiendas,
-        isAlertas
+        isAlertas,
+        isSolar,
+        isEnergy: isSolar,
+        isHourlyPeak,
+        isHorasPico: isHourlyPeak,
+        isRange,
+        isRango: isRange,
+        startDate,
+        endDate,
+        dateRange: isRange ? { start: startDate, end: endDate } : null,
+        isMonthly,
+        isMensual: isMonthly,
+        targetMonth,
+        targetYear,
+        targetPeriod
     };
 };
 
@@ -1179,6 +1335,186 @@ const formatTiendasMessage = (data, date) => {
 };
 
 /**
+ * Formatear reporte de ventas consolidadas mensuales
+ */
+const formatVentasMensualMessage = (data, year, month) => {
+    const monthNum = Number(month);
+    const monthLabel = SPANISH_MONTH_NAMES[monthNum] || `Mes ${month}`;
+    const tot = data?.totales || {};
+    const estaciones = data?.estaciones || [];
+    const tiendas = data?.tiendas || [];
+
+    let msg = `📅 <b>VENTAS CONSOLIDADAS • ${monthLabel.toUpperCase()} ${year}</b>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `⛽ <b>Total Galonaje Red:</b> <code>${numFmt(tot.galonaje || 0)} gal</code>\n`;
+    msg += `💰 <b>Venta Combustible:</b> <b>${moneyFmt(tot.venta_estacion || tot.venta || 0)}</b>\n`;
+    if (Number(tot.venta_tienda || 0) > 0) {
+        msg += `🛒 <b>Venta Tiendas:</b> ${moneyFmt(tot.venta_tienda || 0)}\n`;
+        msg += `💵 <b>Venta Total Red:</b> <b>${moneyFmt(tot.venta_total || 0)}</b>\n`;
+    }
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    // Ranking de Estaciones por Galonaje y Venta
+    msg += `🏆 <b>Resumen por Gasolinera (${monthLabel} ${year}):</b>\n`;
+    const sorted = [...estaciones].sort((a, b) => Number(b.galonaje || 0) - Number(a.galonaje || 0));
+    sorted.forEach((e, idx) => {
+        const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '📍';
+        const vTot = Number(e.venta_estacion || e.venta || 0);
+        msg += `${medal} <b>${escapeHtml(e.empresa)}:</b>\n`;
+        msg += `   • Galonaje: <code>${numFmt(e.galonaje || 0)} gal</code>\n`;
+        msg += `   • Venta Pista: <b>${moneyFmt(vTot)}</b>\n`;
+        msg += `   • 🛢️ ${numFmt(e.diesel || 0)} | 🟢 ${numFmt(e.regular || 0)} | 🔴 ${numFmt(e.super || 0)}${Number(e.ion || 0) > 0 ? ` | ⚡ ${numFmt(e.ion)}` : ''}\n`;
+    });
+
+    if (tiendas.length > 0) {
+        msg += `\n🛒 <b>Ventas en Tiendas de Conveniencia:</b>\n`;
+        tiendas.forEach((t) => {
+            msg += `• <b>${escapeHtml(t.empresa)}:</b> ${moneyFmt(t.venta || 0)}\n`;
+        });
+    }
+
+    msg += `\n<i>SIPE Admin • Reporte Mensual Consolidado</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de ventas por rango de fechas
+ */
+const formatVentasRangoMessage = (data, startDate, endDate, label = null) => {
+    const tot = data?.totales || {};
+    const estaciones = data?.estaciones || [];
+    const tiendas = data?.tiendas || [];
+    const rangeLabel = label || `Del ${toDisplayDate(startDate)} al ${toDisplayDate(endDate)}`;
+
+    let msg = `📅 <b>VENTAS POR RANGO DE FECHAS</b>\n`;
+    msg += `🗓️ <b>Período:</b> ${escapeHtml(rangeLabel)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `⛽ <b>Total Galonaje Red:</b> <code>${numFmt(tot.galonaje || 0)} gal</code>\n`;
+    msg += `💰 <b>Venta Combustible:</b> <b>${moneyFmt(tot.venta_estacion || tot.venta || 0)}</b>\n`;
+    if (Number(tot.venta_tienda || 0) > 0) {
+        msg += `🛒 <b>Venta Tiendas:</b> ${moneyFmt(tot.venta_tienda || 0)}\n`;
+        msg += `💵 <b>Venta Total Red:</b> <b>${moneyFmt(tot.venta_total || ((tot.venta_estacion || 0) + (tot.venta_tienda || 0)))}</b>\n`;
+    }
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    if (estaciones.length > 0) {
+        msg += `🏆 <b>Resumen por Gasolinera:</b>\n`;
+        const sorted = [...estaciones].sort((a, b) => Number(b.galonaje || 0) - Number(a.galonaje || 0));
+        sorted.forEach((e, idx) => {
+            const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '📍';
+            const vTot = Number(e.venta_estacion || e.venta || 0);
+            msg += `${medal} <b>${escapeHtml(e.empresa)}:</b>\n`;
+            msg += `   • Galonaje: <code>${numFmt(e.galonaje || 0)} gal</code> | Venta: <b>${moneyFmt(vTot)}</b>\n`;
+            msg += `   • 🛢️ ${numFmt(e.diesel || 0)} | 🟢 ${numFmt(e.regular || 0)} | 🔴 ${numFmt(e.super || 0)}${Number(e.ion || 0) > 0 ? ` | ⚡ ${numFmt(e.ion)}` : ''}\n`;
+        });
+    }
+
+    if (tiendas.length > 0) {
+        msg += `\n🛒 <b>Ventas en Tiendas:</b>\n`;
+        tiendas.forEach((t) => {
+            msg += `• <b>${escapeHtml(t.empresa)}:</b> ${moneyFmt(t.venta || 0)}\n`;
+        });
+    }
+
+    msg += `\n<i>SIPE Admin • Consulta por Rango</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de análisis de horas pico de venta
+ */
+const formatHorasPicoMessage = (peakData, targetPeriodLabel) => {
+    let msg = `⏰ <b>ANÁLISIS DE HORAS PICO DE VENTA</b>\n`;
+    msg += `📅 <b>Período:</b> ${escapeHtml(targetPeriodLabel || 'Consolidado')}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    msg += `🥇 <b>Hora Pico Principal:</b> <code>${peakData?.hora_pico || '17:00 - 18:00'}</code>\n`;
+    msg += `💰 <b>Venta en Hora Pico:</b> <b>${moneyFmt(peakData?.venta_hora_pico || 0)}</b> (${Number(peakData?.pct_hora_pico || 0).toFixed(1)}% del día)\n`;
+    msg += `🧾 <b>Transacciones en Pico:</b> <code>${Math.round(peakData?.transacciones_hora_pico || 0).toLocaleString('en-US')} tickets</code>\n`;
+    msg += `📊 <b>Ticket Promedio:</b> ${moneyFmt(peakData?.ticket_promedio_pico || 0)}\n\n`;
+
+    if (Array.isArray(peakData?.top_3_horas) && peakData.top_3_horas.length > 0) {
+        msg += `🔥 <b>Top 3 Horas con Mayor Venta:</b>\n`;
+        const medals = ['1️⃣', '2️⃣', '3️⃣'];
+        peakData.top_3_horas.forEach((h, idx) => {
+            msg += `${medals[idx]} <b>${h.franja}:</b> ${moneyFmt(h.total_venta)} (${Math.round(h.transacciones || 0).toLocaleString('en-US')} tickets • ${Number(h.porcentaje_total || 0).toFixed(1)}%)\n`;
+        });
+        msg += `\n`;
+    }
+
+    if (peakData?.distribucion_franjas) {
+        msg += `🕒 <b>Distribución por Franjas Horarias:</b>\n`;
+        const f = peakData.distribucion_franjas;
+        if (f.manana) msg += `• ☀️ <b>Mañana (06:00 - 12:00):</b> ${moneyFmt(f.manana.total_venta)} (${Number(f.manana.porcentaje_total || 0).toFixed(1)}%)\n`;
+        if (f.mediodia) msg += `• 🌤️ <b>Mediodía/Tarde (12:00 - 18:00):</b> ${moneyFmt(f.mediodia.total_venta)} (${Number(f.mediodia.porcentaje_total || 0).toFixed(1)}%)\n`;
+        if (f.noche) msg += `• 🌙 <b>Noche (18:00 - 24:00):</b> ${moneyFmt(f.noche.total_venta)} (${Number(f.noche.porcentaje_total || 0).toFixed(1)}%)\n`;
+        if (f.madrugada) msg += `• 🌅 <b>Madrugada (00:00 - 06:00):</b> ${moneyFmt(f.madrugada.total_venta)} (${Number(f.madrugada.porcentaje_total || 0).toFixed(1)}%)\n`;
+    }
+
+    msg += `\n💵 <b>Venta Total Acumulada:</b> <b>${moneyFmt(peakData?.total_venta || 0)}</b> (<code>${Math.round(peakData?.total_transacciones || 0).toLocaleString('en-US')} tickets</code>)\n`;
+    msg += `<i>SIPE Admin • Análisis Horario de Flujo</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de energía solar y baterías
+ */
+const formatSolarEnergyMessage = (solarData, tipo = 'diario', periodoLabel = null) => {
+    let msg = `☀️ <b>SISTEMA SOLAR FOTOVOLTAICO Y BATERÍAS</b>\n`;
+    if (periodoLabel) {
+        msg += `📅 <b>Período:</b> ${escapeHtml(periodoLabel)}\n`;
+    }
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    if (tipo === 'estado_actual') {
+        msg += `⚡ <b>Estado en Tiempo Real:</b>\n`;
+        msg += `• ☀️ <b>Capacidad Solar Total:</b> <code>${solarData?.potencia_total_kwp || 80.0} kWp</code> (2 estaciones)\n`;
+        msg += `• 🔋 <b>Capacidad BESS Total:</b> <code>${solarData?.capacidad_bateria_total_kwh || 60.0} kWh</code> (Miraflores)\n`;
+        msg += `• 🔌 <b>Potencia Instantánea Estimada:</b> <code>${solarData?.potencia_actual_estimada_kw || 0.0} kW</code>\n`;
+        msg += `• 🔋 <b>Estado de Carga Batería (SoC):</b> <b>${solarData?.bateria_promedio_soc_pct || 85.0}%</b>\n`;
+        msg += `• ⏱️ <b>Autonomía Cargas Críticas:</b> <code>${solarData?.horas_autonomia_estimadas || 9.3} hrs</code>\n\n`;
+
+        msg += `📍 <b>Ubicaciones con Instalación:</b>\n`;
+        (solarData?.instalaciones || []).forEach(inst => {
+            const hasBat = inst.tiene_baterias === 1;
+            msg += `• <b>${escapeHtml(inst.estacion_nombre)}:</b>\n`;
+            msg += `   Paneles: <code>${inst.potencia_kwp} kWp</code>`;
+            if (hasBat) {
+                msg += ` | Batería: <code>${inst.capacidad_bateria_kwh} kWh</code> (SoC: <b>${inst.bateria_soc_pct}%</b>)\n`;
+                msg += `   Autonomía: <code>${inst.horas_autonomia} hrs</code> (${inst.bateria_estado})\n`;
+            } else {
+                msg += ` | Sistema On-Grid (sin batería)\n`;
+            }
+        });
+    } else {
+        const tituloAhorro = tipo === 'mensual' ? 'Ahorro Mensual Acumulado' : tipo === 'rango' ? 'Ahorro en Rango Acumulado' : 'Ahorro Diario';
+        msg += `💰 <b>${tituloAhorro}:</b> <b>${moneyFmt(solarData?.total_ahorro_usd || 0)}</b>\n`;
+        msg += `⚡ <b>Generación Solar:</b> <code>${numFmt(solarData?.total_generacion_kwh || 0)} kWh</code>\n`;
+        msg += `🔄 <b>Autoconsumo Directo:</b> <code>${numFmt(solarData?.total_autoconsumo_kwh || 0)} kWh</code>\n`;
+        if (Number(solarData?.total_bateria_descarga_kwh || 0) > 0) {
+            msg += `🔋 <b>Aporte de Batería:</b> <code>${numFmt(solarData?.total_bateria_descarga_kwh || 0)} kWh</code>\n`;
+        }
+        msg += `🌱 <b>CO₂ Evitado:</b> <code>${numFmt(solarData?.total_co2_evitado_kg || 0)} kg</code>\n\n`;
+
+        if (Array.isArray(solarData?.estaciones) && solarData.estaciones.length > 0) {
+            msg += `📍 <b>Desglose por Ubicación:</b>\n`;
+            solarData.estaciones.forEach(est => {
+                const batDesc = est.bateria_descarga_kwh > 0 ? ` | 🔋 ${numFmt(est.bateria_descarga_kwh)} kWh` : (est.tiene_baterias ? ` | 🔋 SoC ${est.bateria_soc_pct}%` : '');
+                msg += `• <b>${escapeHtml(est.estacion_nombre)}</b> (${est.potencia_kwp} kWp):\n`;
+                msg += `   Ahorro: <b>${moneyFmt(est.ahorro_usd)}</b> | Gen: <code>${numFmt(est.generacion_kwh)} kWh</code>${batDesc}\n`;
+            });
+        }
+
+        if (solarData?.bateria_miraflores_soc_pct !== undefined) {
+            msg += `\n🔋 <b>Batería Miraflores (60 kWh):</b> SoC actual <b>${solarData.bateria_miraflores_soc_pct}%</b> (<code>${solarData.horas_autonomia_miraflores || 9.3} hrs</code> autonomía cargas críticas)\n`;
+        }
+    }
+
+    msg += `\n<i>SIPE Admin • Eficiencia Energética & Sostenibilidad</i>`;
+    return msg;
+};
+
+/**
  * Mensaje de orientación cuando la consulta libre no coincide con una entidad conocida
  */
 const formatIntelligentGuidanceMessage = () => {
@@ -1241,6 +1577,195 @@ Si te preguntan comparaciones o análisis, apóyate en el contexto de datos real
 const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectivePerms, keyboard) => {
     const parsed = parseNaturalLanguageQuery(rawText);
     if (!parsed) return false;
+
+    // 0.1 Consulta de Energía Solar y Baterías (Paneles, Ahorro, Estado de Batería, Autonomía)
+    if (parsed.isSolar) {
+        if (!effectivePerms.ventas && !effectivePerms.alertas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar datos de energía solar.', keyboard);
+            return true;
+        }
+
+        const norm = parsed.normalized;
+        const wantsRealtime = /\b(estado|actual|tiempo real|ahorita|bateria|baterias|soc|autonomia|carga)\b/i.test(norm) &&
+                              !/\b(ahorro|mes|mensual|ayer|dia|rango|total)\b/i.test(norm);
+
+        if (wantsRealtime) {
+            await sendTelegramMessage(chatId, `⏳ Consultando estado en tiempo real de paneles y batería...`);
+            try {
+                const solarData = await solarEnergyService.getSolarEstadoActual();
+                const msg = formatSolarEnergyMessage(solarData, 'estado_actual');
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Solar Estado Actual', 1);
+                await sendTelegramMessage(chatId, msg, keyboard);
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en consulta solar estado actual:', err);
+                await sendTelegramMessage(chatId, '❌ Error al consultar estado de energía solar: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isMonthly) {
+            const y = parsed.targetYear || 2026;
+            const m = parsed.targetMonth || 10;
+            const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}`;
+            await sendTelegramMessage(chatId, `⏳ Calculando ahorro solar acumulado de ${monthLabel}...`);
+            try {
+                const solarData = await solarEnergyService.getSolarAhorroMensual(y, m);
+                const msg = formatSolarEnergyMessage(solarData, 'mensual', monthLabel);
+                await logTelegramQuery(user.telegram_user_id, rawText, `Solar Mensual ${y}-${m}`, 1);
+                await sendTelegramMessage(chatId, msg, keyboard);
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en consulta solar mensual:', err);
+                await sendTelegramMessage(chatId, '❌ Error al calcular ahorro solar mensual: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isRange) {
+            const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}`;
+            await sendTelegramMessage(chatId, `⏳ Calculando ahorro solar ${rangeLabel}...`);
+            try {
+                const solarData = await solarEnergyService.getSolarAhorroRango(parsed.startDate, parsed.endDate);
+                const msg = formatSolarEnergyMessage(solarData, 'rango', rangeLabel);
+                await logTelegramQuery(user.telegram_user_id, rawText, `Solar Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
+                await sendTelegramMessage(chatId, msg, keyboard);
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en consulta solar rango:', err);
+                await sendTelegramMessage(chatId, '❌ Error al calcular ahorro solar por rango: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        // Por defecto: Ahorro Diario (de la fecha indicada o ayer)
+        const targetDate = parsed.targetDate;
+        await sendTelegramMessage(chatId, `⏳ Consultando ahorro de paneles solares del ${toDisplayDate(targetDate)}...`);
+        try {
+            const solarData = await solarEnergyService.getSolarAhorroDiario(targetDate);
+            const msg = formatSolarEnergyMessage(solarData, 'diario', toDisplayDate(targetDate));
+            await logTelegramQuery(user.telegram_user_id, rawText, `Solar Diario ${targetDate}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta solar diaria:', err);
+            await sendTelegramMessage(chatId, '❌ Error al consultar ahorro solar: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 0.2 Consulta de Horas Pico de Venta / Horarios de Mayor Flujo
+    if (parsed.isHourlyPeak) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar análisis de ventas por hora.', keyboard);
+            return true;
+        }
+
+        const branchId = parsed.matchedStation ? (parsed.matchedStation.saas_branch_id || parsed.matchedStation.branch_id || null) : null;
+        const stationSuffix = parsed.matchedStation ? ` en ${parsed.matchedStation.name}` : ' en la red';
+
+        if (parsed.isRange) {
+            const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}${stationSuffix}`;
+            await sendTelegramMessage(chatId, `⏳ Analizando horas pico ${rangeLabel}...`);
+            try {
+                const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
+                const msg = formatHorasPicoMessage(peakData, rangeLabel, true);
+                await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
+                await sendTelegramMessage(chatId, msg, keyboard);
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en horas pico rango:', err);
+                await sendTelegramMessage(chatId, '❌ Error al analizar horas pico: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isMonthly) {
+            const y = parsed.targetYear || 2026;
+            const m = parsed.targetMonth || 10;
+            const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}${stationSuffix}`;
+            await sendTelegramMessage(chatId, `⏳ Analizando horas pico del mes de ${monthLabel}...`);
+            try {
+                const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
+                const msg = formatHorasPicoMessage(peakData, monthLabel, true);
+                await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico Mes ${y}-${m}`, 1);
+                await sendTelegramMessage(chatId, msg, keyboard);
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en horas pico mensual:', err);
+                await sendTelegramMessage(chatId, '❌ Error al analizar horas pico mensuales: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        // Por defecto: Horas pico del día objetivo (ayer o fecha específica)
+        const targetDate = parsed.targetDate;
+        const dateLabel = `${toDisplayDate(targetDate)}${stationSuffix}`;
+        await sendTelegramMessage(chatId, `⏳ Analizando momentos de mayor venta del ${dateLabel}...`);
+        try {
+            const peakData = await salesHourlyService.getHorasPicoVentas(targetDate, branchId);
+            const msg = formatHorasPicoMessage(peakData, dateLabel, false);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico ${targetDate}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en horas pico diario:', err);
+            await sendTelegramMessage(chatId, '❌ Error al analizar horas pico: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 0.3 Consulta de Ventas Mensuales Consolidadas (ej. 'resumen de ventas por gasolinera mes de octubre')
+    if (parsed.isMonthly) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas consolidadas.', keyboard);
+            return true;
+        }
+
+        const y = parsed.targetYear || 2026;
+        const m = parsed.targetMonth || 10;
+        const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}`;
+        await sendTelegramMessage(chatId, `⏳ Generando resumen mensual consolidado de ${monthLabel}...`);
+        try {
+            const externalDb = await getExternalDb().catch(() => null);
+            const accountingDb = await getAccountingDb().catch(() => null);
+            const { getResumenMensualData } = require('../routes/consultas');
+            const data = await getResumenMensualData(externalDb, y, m, accountingDb);
+            const msg = formatVentasMensualMessage(data, y, m);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Ventas Mensual ${y}-${m}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de ventas mensual:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar el resumen mensual: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 0.4 Consulta de Ventas por Rango de Fechas (ej. 'ventas del 1 al 10 de octubre')
+    if (parsed.isRange) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas por rango.', keyboard);
+            return true;
+        }
+
+        const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}`;
+        await sendTelegramMessage(chatId, `⏳ Consultando ventas en rango ${rangeLabel}...`);
+        try {
+            const externalDb = await getExternalDb().catch(() => null);
+            const accountingDb = await getAccountingDb().catch(() => null);
+            const { getResumenRangoVentasData } = require('../routes/consultas');
+            const data = await getResumenRangoVentasData(externalDb, parsed.startDate, parsed.endDate, accountingDb);
+            const msg = formatVentasRangoMessage(data, parsed.startDate, parsed.endDate, rangeLabel);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Ventas Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
+            await sendTelegramMessage(chatId, msg, keyboard);
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de ventas por rango:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar el rango de fechas: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
 
     // 1. Consulta de Rankings / Comparativas (PRIORIDAD ALTA: evaluada ANTES de combustibles globales)
     if (parsed.isRanking) {
@@ -1522,7 +2047,11 @@ const handleIncomingMessage = async (msg) => {
         return;
     }
 
-    // 1. Intentar responder mediante el Agente Conversacional IA (con memoria contextual y datos en vivo de SIPE)
+    // 1. Intentar resolver consultas estructuradas de lenguaje natural (Ventas mensuales/rango, Horas pico, Solar/baterías, Estaciones, Combustibles, Bancos, Rankings, Tiendas, Auditoría)
+    const handledNlu = await handleSmartNaturalLanguageQuery(user, rawText, chatId, effectivePerms, keyboard);
+    if (handledNlu) return;
+
+    // 2. Si no es una consulta estructurada directa, atender mediante el Agente Conversacional IA (con memoria contextual y datos en vivo de SIPE)
     try {
         const { askConversationalAgent } = require('./conversationalAiService');
         const aiResponse = await askConversationalAgent({ user, prompt: rawText, chatId, effectivePerms });
@@ -1532,12 +2061,8 @@ const handleIncomingMessage = async (msg) => {
             return;
         }
     } catch (aiErr) {
-        console.warn('[TelegramBot] Agente conversacional no disponible, ejecutando extractor semántico:', aiErr.message);
+        console.warn('[TelegramBot] Agente conversacional no disponible:', aiErr.message);
     }
-
-    // 2. Intentar resolver consultas específicas de lenguaje natural (Estaciones, Combustibles, Bancos, Rankings, Tiendas, Auditoría)
-    const handledNlu = await handleSmartNaturalLanguageQuery(user, rawText, chatId, effectivePerms, keyboard);
-    if (handledNlu) return;
 
     // 3. CONSULTA: SALDO EN BANCO
     if (cleanLower.includes('saldo en banco') || cleanLower === 'bancos' || cleanLower === 'banco' || cleanLower === 'saldos') {
@@ -2153,6 +2678,8 @@ module.exports = {
     getUserEffectivePermissions,
     parseUserDate,
     parseSpanishDateText,
+    parseSpanishPeriodOrDate,
+    SPANISH_MONTH_NAMES,
     moneyFmt,
     numFmt,
     normalizeText,
@@ -2162,11 +2689,18 @@ module.exports = {
     formatRankingMessage,
     formatSpecificBankMessage,
     formatTiendasMessage,
+    formatVentasMensualMessage,
+    formatVentasRangoMessage,
+    formatHorasPicoMessage,
+    formatSolarEnergyMessage,
     formatIntelligentGuidanceMessage,
     handleSmartNaturalLanguageQuery,
     formatDiscrepancyAlertMessage,
     broadcastDiscrepancyAlerts,
     broadcastCustomAlert,
+    getConsolidadoVentas,
+    getSaldosBancosData,
+    getSaldosChequeraData,
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS

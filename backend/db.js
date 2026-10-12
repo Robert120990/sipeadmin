@@ -1240,6 +1240,51 @@ const initDB = async () => {
             console.error('Migration portal_pedidos & combustible_precios:', e.message);
         }
 
+        // Tablas y migración para Energía Solar y Almacenamiento (Baterías)
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS energia_instalaciones (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    id_empresa VARCHAR(50) NULL,
+                    estacion_nombre VARCHAR(100) NOT NULL,
+                    branch_id INT NULL,
+                    saas_branch_id INT NULL,
+                    tiene_paneles TINYINT(1) DEFAULT 0,
+                    potencia_kwp DECIMAL(8,2) DEFAULT 0.00,
+                    tiene_baterias TINYINT(1) DEFAULT 0,
+                    capacidad_bateria_kwh DECIMAL(8,2) DEFAULT 0.00,
+                    tarifa_kwh DECIMAL(8,4) DEFAULT 0.1800,
+                    activo TINYINT(1) DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_branch_id (branch_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS energia_registros_diarios (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    instalacion_id INT NOT NULL,
+                    fecha DATE NOT NULL,
+                    generacion_kwh DECIMAL(10,2) DEFAULT 0.00,
+                    autoconsumo_kwh DECIMAL(10,2) DEFAULT 0.00,
+                    bateria_carga_kwh DECIMAL(10,2) DEFAULT 0.00,
+                    bateria_descarga_kwh DECIMAL(10,2) DEFAULT 0.00,
+                    bateria_soc_pct DECIMAL(5,2) DEFAULT 0.00,
+                    ahorro_usd DECIMAL(10,2) DEFAULT 0.00,
+                    co2_evitado_kg DECIMAL(10,2) DEFAULT 0.00,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (instalacion_id) REFERENCES energia_instalaciones(id) ON DELETE CASCADE,
+                    UNIQUE KEY uk_instalacion_fecha (instalacion_id, fecha)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            `);
+
+            const { seedSolarEnergyData } = require('./services/solarEnergyService');
+            await seedSolarEnergyData(pool);
+        } catch (e) {
+            console.error('Migration energia_instalaciones & registros_diarios:', e.message);
+        }
+
         return pool;
     } catch (error) {
         console.error('DATABASE INITIALIZATION ERROR:', error.message);

@@ -180,10 +180,10 @@
     "semantic_hash": "ed18a2399dbfc0ef94ecbb1b3d58ea07"
   },
   "backend/routes/telegram.js": {
-    "mtime": 1791820811.6680942,
-    "seen": 1791822880.7085679,
-    "ast_hash": "c0156ee2aba7adfd0449371d7a092737",
-    "semantic_hash": "c0156ee2aba7adfd0449371d7a092737"
+    "mtime": 1791827612.1395383,
+    "seen": 1791827913.4200578,
+    "ast_hash": "0f3d3cb1274e420ff0c2ff2b5d851cb7",
+    "semantic_hash": ""
   },
   "backend/scripts/backup-db.js": {
     "mtime": 1791031862.6628635,
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791826415.3422782,
-    "seen": 1791826455.8454368,
-    "ast_hash": "60cae72a7adc44e3b637be7959653cab",
+    "mtime": 1791827721.0904312,
+    "seen": 1791827913.4200578,
+    "ast_hash": "cc5b886b6323fbcfed587147f04c68bf",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -360,9 +360,9 @@
     "semantic_hash": "dfb39fd9e8c657a413eff933a1801c93"
   },
   "backend/test/telegramBot.test.js": {
-    "mtime": 1791825656.9903116,
-    "seen": 1791825704.2665868,
-    "ast_hash": "fa319cc17ce621657c1f0f4e6eb2b5a2",
+    "mtime": 1791827697.7891786,
+    "seen": 1791827913.4200578,
+    "ast_hash": "65c01cc88617fcfb59256d591863089f",
     "semantic_hash": ""
   },
   "backend/test/ventasMensual.test.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791826435.436036,
-    "seen": 1791826455.8454368,
-    "ast_hash": "0e64c760a166d1584368b021ffe48b86",
+    "mtime": 1791827831.6534758,
+    "seen": 1791827913.4200578,
+    "ast_hash": "7955fc690cc9cd2a6e79b2085f2a408f",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -1179,6 +1179,12 @@
     "mtime": 1791826338.3569129,
     "seen": 1791826455.8454368,
     "ast_hash": "22ba60664ff9be0e5b948180ff5e1319",
+    "semantic_hash": ""
+  },
+  "backend/test/telegramAlerts.test.js": {
+    "mtime": 1791827803.3831713,
+    "seen": 1791827913.4200578,
+    "ast_hash": "52d5977b4b3362799060f88291809507",
     "semantic_hash": ""
   }
 }
