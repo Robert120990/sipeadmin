@@ -393,7 +393,7 @@ const testTelegramConnection = async (customToken = null) => {
  */
 const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
     const { token } = await getBotToken();
-    if (!token) return;
+    if (!token) return null;
 
     const payload = {
         chat_id: chatId,
@@ -407,17 +407,258 @@ const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
     }
 
     try {
-        await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
+        const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
+        return res.data?.result || null;
     } catch (err) {
         // Si falló por formato HTML, intentar enviar como texto plano
         if (err.response?.data?.description?.includes('can\'t parse entities')) {
             const plainText = text.replace(/<[^>]*>?/gm, '');
             delete payload.parse_mode;
             payload.text = plainText;
-            await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
+            try {
+                const fallbackRes = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
+                return fallbackRes.data?.result || null;
+            } catch (fbErr) {
+                console.error('[TelegramBot] Error enviando mensaje plano fallback:', fbErr.message);
+                return null;
+            }
         } else {
             console.error('[TelegramBot] Error enviando mensaje a chat:', chatId, err.message);
+            return null;
         }
+    }
+};
+
+/**
+ * Responder a un callback query de Telegram (evita spinner en botón y muestra toast)
+ */
+const answerCallbackQuery = async (callbackQueryId, text = '', showAlert = false) => {
+    try {
+        const { token } = await getBotToken();
+        if (!token) return;
+        await axios.post(`${TELEGRAM_API_BASE}${token}/answerCallbackQuery`, {
+            callback_query_id: callbackQueryId,
+            text,
+            show_alert: showAlert
+        }, { timeout: 10000 });
+    } catch (err) {
+        console.warn('[TelegramBot] Error en answerCallbackQuery:', err.message);
+    }
+};
+
+/**
+ * Modificar el teclado inline de un mensaje existente
+ */
+const editMessageReplyMarkup = async (chatId, messageId, replyMarkup = null) => {
+    try {
+        const { token } = await getBotToken();
+        if (!token) return;
+        await axios.post(`${TELEGRAM_API_BASE}${token}/editMessageReplyMarkup`, {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: replyMarkup || { inline_keyboard: [] }
+        }, { timeout: 10000 });
+    } catch (err) {
+        console.warn('[TelegramBot] Error en editMessageReplyMarkup:', err.message);
+    }
+};
+
+/**
+ * Mapa en memoria para seguimiento de comentarios de mejora pendientes por usuario
+ * key: telegramUserId (string) -> { feedbackId, timestamp }
+ */
+const pendingFeedbackUsers = new Map();
+
+/**
+ * Registrar un nuevo evento de consulta para retroalimentación en telegram_feedback
+ */
+const createFeedbackEntry = async ({
+    telegramUserId,
+    telegramUsername = null,
+    firstName = null,
+    chatId,
+    mensajeId = null,
+    consultaOriginal,
+    respuestaResumen = null,
+    calificacion = 'PENDIENTE'
+}) => {
+    try {
+        const db = getDb();
+        if (!db) return null;
+
+        const [res] = await db.query(
+            `INSERT INTO telegram_feedback 
+             (telegram_user_id, telegram_username, first_name, chat_id, mensaje_id, consulta_original, respuesta_resumen, calificacion, estado)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ABIERTO')`,
+            [
+                String(telegramUserId),
+                telegramUsername || null,
+                firstName || null,
+                String(chatId),
+                mensajeId ? String(mensajeId) : null,
+                String(consultaOriginal || ''),
+                respuestaResumen ? String(respuestaResumen).substring(0, 1000) : null,
+                calificacion
+            ]
+        );
+        return res?.insertId || null;
+    } catch (err) {
+        console.error('[TelegramBot] Error al registrar feedback:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Generar markup de teclado inline para calificar la respuesta (Sí / No)
+ */
+const getFeedbackInlineMarkup = (feedbackId) => {
+    if (!feedbackId) return null;
+    return {
+        inline_keyboard: [
+            [
+                { text: '👍 Sí', callback_data: `fb_ok:${feedbackId}` },
+                { text: '👎 No', callback_data: `fb_no:${feedbackId}` }
+            ]
+        ]
+    };
+};
+
+/**
+ * Enviar mensaje con botones interactivos de retroalimentación (Sí / No)
+ */
+const sendTelegramResponseWithFeedback = async (chatId, text, { user, query, responseSummary = null }) => {
+    let feedbackId = null;
+    try {
+        feedbackId = await createFeedbackEntry({
+            telegramUserId: user?.telegram_user_id || chatId,
+            telegramUsername: user?.telegram_username,
+            firstName: user?.first_name,
+            chatId,
+            consultaOriginal: query || 'Consulta directa',
+            respuestaResumen: responseSummary || text.substring(0, 500),
+            calificacion: 'PENDIENTE'
+        });
+    } catch (fbErr) {
+        console.error('[TelegramBot] Error al preparar feedback:', fbErr.message);
+    }
+
+    let finalMarkup = null;
+    let finalText = text;
+    if (feedbackId) {
+        finalText = `${text}\n\n<i>¿Contesté bien a tu pregunta?</i>`;
+        finalMarkup = getFeedbackInlineMarkup(feedbackId);
+    } else {
+        finalMarkup = getMainReplyKeyboard();
+    }
+
+    const sent = await sendTelegramMessage(chatId, finalText, finalMarkup);
+
+    if (sent?.message_id && feedbackId) {
+        try {
+            const db = getDb();
+            if (db) {
+                await db.query('UPDATE telegram_feedback SET mensaje_id = ? WHERE id = ?', [
+                    String(sent.message_id),
+                    feedbackId
+                ]);
+            }
+        } catch (_) {
+            // Silenciosamente ignorar fallo de actualización de mensaje_id
+        }
+    }
+
+    return sent;
+};
+
+/**
+ * Manejar eventos de callback_query provenientes de botones inline en Telegram
+ */
+const handleCallbackQuery = async (cq) => {
+    if (!cq || !cq.id || !cq.data) return;
+
+    const data = String(cq.data).trim();
+    const fromId = cq.from ? String(cq.from.id) : null;
+    const chatId = cq.message?.chat?.id || fromId;
+    const messageId = cq.message?.message_id;
+
+    if (data === 'noop') {
+        await answerCallbackQuery(cq.id, 'Ya has calificado esta respuesta.');
+        return;
+    }
+
+    // Caso 1: Calificación positiva (👍 Sí)
+    if (data.startsWith('fb_ok:')) {
+        const feedbackId = parseInt(data.replace('fb_ok:', ''), 10);
+        if (feedbackId) {
+            try {
+                const db = getDb();
+                if (db) {
+                    await db.query(
+                        `UPDATE telegram_feedback 
+                         SET calificacion = 'UTIL', estado = 'COMPLETADO', updated_at = NOW() 
+                         WHERE id = ?`,
+                        [feedbackId]
+                    );
+                }
+            } catch (err) {
+                console.error('[TelegramBot] Error actualizando feedback UTIL:', err);
+            }
+        }
+
+        await answerCallbackQuery(cq.id, '¡Muchas gracias por confirmar! 🙌 Me alegra haber ayudado.');
+
+        if (chatId && messageId) {
+            await editMessageReplyMarkup(chatId, messageId, {
+                inline_keyboard: [
+                    [{ text: '✅ Marcado: Contestó bien 👍', callback_data: 'noop' }]
+                ]
+            });
+        }
+        return;
+    }
+
+    // Caso 2: Calificación negativa (👎 No)
+    if (data.startsWith('fb_no:')) {
+        const feedbackId = parseInt(data.replace('fb_no:', ''), 10);
+        if (feedbackId) {
+            try {
+                const db = getDb();
+                if (db) {
+                    await db.query(
+                        `UPDATE telegram_feedback 
+                         SET calificacion = 'NO_UTIL', estado = 'ABIERTO', updated_at = NOW() 
+                         WHERE id = ?`,
+                        [feedbackId]
+                    );
+                }
+            } catch (err) {
+                console.error('[TelegramBot] Error actualizando feedback NO_UTIL:', err);
+            }
+        }
+
+        await answerCallbackQuery(cq.id, 'Registrado. Cuéntanos qué podemos mejorar.');
+
+        if (chatId && messageId) {
+            await editMessageReplyMarkup(chatId, messageId, {
+                inline_keyboard: [
+                    [{ text: '❌ Marcado: Necesita mejorar 👎', callback_data: 'noop' }]
+                ]
+            });
+        }
+
+        if (fromId) {
+            pendingFeedbackUsers.set(fromId, {
+                feedbackId,
+                timestamp: Date.now()
+            });
+
+            const promptMsg = `✍️ <b>Lamento no haber respondido adecuadamente.</b>\n\n` +
+                `¿Qué puedo mejorar o qué información esperabas encontrar?\n\n` +
+                `<i>(Escribe tu respuesta a continuación y la guardaremos en la bitácora de mejora continua)</i>`;
+
+            await sendTelegramMessage(chatId, promptMsg, getMainReplyKeyboard());
+        }
+        return;
     }
 };
 
@@ -1595,7 +1836,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const solarData = await solarEnergyService.getSolarEstadoActual();
                 const msg = formatSolarEnergyMessage(solarData, 'estado_actual');
                 await logTelegramQuery(user.telegram_user_id, rawText, 'Solar Estado Actual', 1);
-                await sendTelegramMessage(chatId, msg, keyboard);
+                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar estado actual:', err);
@@ -1613,7 +1854,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const solarData = await solarEnergyService.getSolarAhorroMensual(y, m);
                 const msg = formatSolarEnergyMessage(solarData, 'mensual', monthLabel);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Solar Mensual ${y}-${m}`, 1);
-                await sendTelegramMessage(chatId, msg, keyboard);
+                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar mensual:', err);
@@ -1629,7 +1870,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const solarData = await solarEnergyService.getSolarAhorroRango(parsed.startDate, parsed.endDate);
                 const msg = formatSolarEnergyMessage(solarData, 'rango', rangeLabel);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Solar Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
-                await sendTelegramMessage(chatId, msg, keyboard);
+                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar rango:', err);
@@ -1645,7 +1886,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const solarData = await solarEnergyService.getSolarAhorroDiario(targetDate);
             const msg = formatSolarEnergyMessage(solarData, 'diario', toDisplayDate(targetDate));
             await logTelegramQuery(user.telegram_user_id, rawText, `Solar Diario ${targetDate}`, 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta solar diaria:', err);
@@ -1671,7 +1912,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
                 const msg = formatHorasPicoMessage(peakData, rangeLabel, true);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
-                await sendTelegramMessage(chatId, msg, keyboard);
+                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en horas pico rango:', err);
@@ -1689,7 +1930,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
                 const msg = formatHorasPicoMessage(peakData, monthLabel, true);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico Mes ${y}-${m}`, 1);
-                await sendTelegramMessage(chatId, msg, keyboard);
+                await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en horas pico mensual:', err);
@@ -1706,7 +1947,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const peakData = await salesHourlyService.getHorasPicoVentas(targetDate, branchId);
             const msg = formatHorasPicoMessage(peakData, dateLabel, false);
             await logTelegramQuery(user.telegram_user_id, rawText, `Horas Pico ${targetDate}`, 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en horas pico diario:', err);
@@ -1733,7 +1974,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getResumenMensualData(externalDb, y, m, accountingDb);
             const msg = formatVentasMensualMessage(data, y, m);
             await logTelegramQuery(user.telegram_user_id, rawText, `Ventas Mensual ${y}-${m}`, 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ventas mensual:', err);
@@ -1758,7 +1999,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getResumenRangoVentasData(externalDb, parsed.startDate, parsed.endDate, accountingDb);
             const msg = formatVentasRangoMessage(data, parsed.startDate, parsed.endDate, rangeLabel);
             await logTelegramQuery(user.telegram_user_id, rawText, `Ventas Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ventas por rango:', err);
@@ -1780,7 +2021,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const metric = parsed.normalized.includes('galon') || parsed.normalized.includes('galones') ? 'galonaje' : 'venta';
             const msg = formatRankingMessage(data, parsed.targetDate, metric, parsed.matchedFuel);
             await logTelegramQuery(user.telegram_user_id, rawText, `Ranking ${metric}${parsed.matchedFuel ? ` (${parsed.matchedFuel.key})` : ''}`, 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ranking:', err);
@@ -1822,7 +2063,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             } catch (aliasErr) {
                 // Aprendizaje opcional
             }
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de estación específica:', err);
@@ -1843,7 +2084,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatProductTotalMessage(data, parsed.matchedFuel, parsed.targetDate);
             await logTelegramQuery(user.telegram_user_id, rawText, `Total: ${parsed.matchedFuel.label}`, 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de combustible global:', err);
@@ -1870,7 +2111,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             } catch (aliasErr) {
                 // Aprendizaje opcional
             }
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de banco específico:', err);
@@ -1891,7 +2132,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatTiendasMessage(data, parsed.targetDate);
             await logTelegramQuery(user.telegram_user_id, rawText, 'Tiendas cortes', 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de tiendas:', err);
@@ -1912,7 +2153,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatAlertasMessage(data, parsed.targetDate);
             await logTelegramQuery(user.telegram_user_id, rawText, 'Alertas auditoría', 1);
-            await sendTelegramMessage(chatId, msg, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, msg, { user, query: rawText });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de alertas:', err);
@@ -1937,7 +2178,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
             if (aiReply) {
                 await logTelegramQuery(user.telegram_user_id, rawText, 'Respuesta Gemini AI', 1);
-                await sendTelegramMessage(chatId, aiReply, keyboard);
+                await sendTelegramResponseWithFeedback(chatId, aiReply, { user, query: rawText });
                 return true;
             }
         } catch (_) {
@@ -2022,6 +2263,110 @@ const handleIncomingMessage = async (msg) => {
     const keyboard = getMainReplyKeyboard();
     const cleanLower = rawText.toLowerCase().replace(/^[/\s]+/, '');
 
+    // A. Interceptar respuesta si el usuario tiene una retroalimentación de mejora pendiente
+    const pendingFb = pendingFeedbackUsers.get(String(user.telegram_user_id));
+    if (pendingFb && (Date.now() - pendingFb.timestamp < 30 * 60 * 1000)) {
+        if (cleanLower === 'cancelar' || cleanLower === '/cancelar') {
+            pendingFeedbackUsers.delete(String(user.telegram_user_id));
+            await sendTelegramMessage(chatId, '👌 Retroalimentación cancelada. ¿En qué más puedo ayudarte hoy?', keyboard);
+            return;
+        }
+
+        // Si el usuario presionó menú o start, cancelar feedback y continuar con el menú
+        if (cleanLower === 'start' || cleanLower === 'menu' || cleanLower === 'inicio') {
+            pendingFeedbackUsers.delete(String(user.telegram_user_id));
+        } else {
+            // Guardar el comentario de mejora en el log de mejora continua
+            try {
+                const db = getDb();
+                if (db && pendingFb.feedbackId) {
+                    await db.query(
+                        `UPDATE telegram_feedback 
+                         SET comentario_mejora = ?, estado = 'COMPLETADO', updated_at = NOW() 
+                         WHERE id = ?`,
+                        [rawText, pendingFb.feedbackId]
+                    );
+                }
+            } catch (fbSaveErr) {
+                console.error('[TelegramBot] Error guardando comentario de mejora:', fbSaveErr);
+            }
+
+            pendingFeedbackUsers.delete(String(user.telegram_user_id));
+
+            const ackMsg = `🙏 <b>¡Muchas gracias por tu sugerencia!</b>\n\n` +
+                `Tu comentario ha sido guardado exitosamente en la bitácora de mejora continua:\n` +
+                `💬 <i>«${escapeHtml(rawText)}»</i>\n\n` +
+                `Nuestro equipo y agentes de IA utilizarán este feedback para optimizar el modelo de consultas y no repetir este error. 🚀`;
+
+            await sendTelegramMessage(chatId, ackMsg, keyboard);
+            return;
+        }
+    }
+
+    // B. Detección en lenguaje natural de insatisfacción directa (ej. 'no contestaste bien', 'no me sirvio', 'esta mal')
+    const isExplicitNegativeFeedback = /\b(no\s+contestaste\s+bien|no\s+respondiste\s+bien|no\s+me\s+sirvio|no\s+me\s+sirve|esta\s+mal\s+la\s+respuesta|respuesta\s+incorrecta|no\s+es\s+lo\s+que\s+pedi|eso\s+no\s+es\s+lo\s+que\s+pregunte|te\s+equivocaste)\b/i.test(normalizeText(rawText));
+    if (isExplicitNegativeFeedback) {
+        let latestFeedbackId = null;
+        try {
+            const db = getDb();
+            if (db) {
+                const [recentRows] = await db.query(
+                    `SELECT id FROM telegram_feedback 
+                     WHERE telegram_user_id = ? 
+                     ORDER BY created_at DESC LIMIT 1`,
+                    [String(user.telegram_user_id)]
+                );
+                if (recentRows.length > 0) {
+                    latestFeedbackId = recentRows[0].id;
+                    await db.query(
+                        `UPDATE telegram_feedback 
+                         SET calificacion = 'NO_UTIL', estado = 'ABIERTO', updated_at = NOW() 
+                         WHERE id = ?`,
+                        [latestFeedbackId]
+                    );
+                }
+            }
+        } catch (_) {
+            // Silenciosamente ignorar fallo si la BD no está disponible
+        }
+
+        pendingFeedbackUsers.set(String(user.telegram_user_id), {
+            feedbackId: latestFeedbackId,
+            timestamp: Date.now()
+        });
+
+        const promptMsg = `✍️ <b>Lamento no haber respondido adecuadamente.</b>\n\n` +
+            `¿Qué puedo mejorar o qué información esperabas encontrar?\n\n` +
+            `<i>(Escribe tu respuesta a continuación y la guardaremos en la bitácora de mejora continua)</i>`;
+
+        await sendTelegramMessage(chatId, promptMsg, keyboard);
+        return;
+    }
+
+    // C. Detección en lenguaje natural de satisfacción directa (ej. 'contestaste bien', 'gracias, muy util')
+    const isExplicitPositiveFeedback = !isExplicitNegativeFeedback && /\b(contestaste\s+bien|buena\s+respuesta|gracias\s+por\s+la\s+informacion|excelente\s+servicio|muy\s+util|me\s+sirvio)\b/i.test(normalizeText(rawText));
+    if (isExplicitPositiveFeedback) {
+        try {
+            const db = getDb();
+            if (db) {
+                await db.query(
+                    `UPDATE telegram_feedback 
+                     SET calificacion = 'UTIL', estado = 'COMPLETADO', updated_at = NOW() 
+                     WHERE telegram_user_id = ? AND calificacion = 'PENDIENTE' 
+                     ORDER BY created_at DESC LIMIT 1`,
+                    [String(user.telegram_user_id)]
+                );
+            }
+        } catch (_) {
+            // Silenciosamente ignorar fallo si la BD no está disponible
+        }
+
+        const thanksMsg = `🙌 <b>¡Con mucho gusto!</b>\n\n` +
+            `Me alegra que te haya sido de utilidad la respuesta. Quedo atento a tus próximas consultas en SIPE.`;
+        await sendTelegramMessage(chatId, thanksMsg, keyboard);
+        return;
+    }
+
     // Comandos de Saludo / Inicio
     if (cleanLower === 'start' || cleanLower === 'menu' || cleanLower === 'hola' || cleanLower === 'inicio') {
         await logTelegramQuery(user.telegram_user_id, '/start', 'Menú principal', 1);
@@ -2057,7 +2402,7 @@ const handleIncomingMessage = async (msg) => {
         const aiResponse = await askConversationalAgent({ user, prompt: rawText, chatId, effectivePerms });
         if (aiResponse) {
             await logTelegramQuery(user.telegram_user_id, rawText, 'Conversación Asistente IA', 1);
-            await sendTelegramMessage(chatId, aiResponse, keyboard);
+            await sendTelegramResponseWithFeedback(chatId, aiResponse, { user, query: rawText, responseSummary: 'Conversación Asistente IA' });
             return;
         }
     } catch (aiErr) {
@@ -2076,7 +2421,7 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getSaldosBancosData();
             await logTelegramQuery(user.telegram_user_id, 'bancos', `Total: ${data.total}`, 1);
-            await sendTelegramMessage(chatId, formatBancosMessage(data), keyboard);
+            await sendTelegramResponseWithFeedback(chatId, formatBancosMessage(data), { user, query: 'Saldos en Bancos', responseSummary: `Total: ${data.total}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de bancos:', err);
             await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar saldos bancarios: ' + escapeHtml(err.message), keyboard);
@@ -2096,7 +2441,7 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getSaldosChequeraData();
             await logTelegramQuery(user.telegram_user_id, 'chequera', `Total: ${data.total}`, 1);
-            await sendTelegramMessage(chatId, formatChequeraMessage(data), keyboard);
+            await sendTelegramResponseWithFeedback(chatId, formatChequeraMessage(data), { user, query: 'Saldos en Chequera', responseSummary: `Total: ${data.total}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de chequera:', err);
             await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar saldos en chequeras: ' + escapeHtml(err.message), keyboard);
@@ -2119,7 +2464,7 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getConsolidadoVentas(targetDate);
             await logTelegramQuery(user.telegram_user_id, 'alertas', `Fecha: ${targetDate}`, 1);
-            await sendTelegramMessage(chatId, formatAlertasMessage(data, targetDate), keyboard);
+            await sendTelegramResponseWithFeedback(chatId, formatAlertasMessage(data, targetDate), { user, query: `Alertas ${targetDate}`, responseSummary: `Fecha: ${targetDate}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de alertas:', err);
             await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar alertas operativas: ' + escapeHtml(err.message), keyboard);
@@ -2141,7 +2486,7 @@ const handleIncomingMessage = async (msg) => {
         try {
             const data = await getConsolidadoVentas(targetDate);
             await logTelegramQuery(user.telegram_user_id, 'ventas', `Fecha: ${targetDate}`, 1);
-            await sendTelegramMessage(chatId, formatVentasMessage(data, targetDate), keyboard);
+            await sendTelegramResponseWithFeedback(chatId, formatVentasMessage(data, targetDate), { user, query: `Ventas ${targetDate}`, responseSummary: `Fecha: ${targetDate}` });
         } catch (err) {
             console.error('[TelegramBot] Error en consulta de ventas:', err);
             await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar las ventas: ' + escapeHtml(err.message), keyboard);
@@ -2151,10 +2496,10 @@ const handleIncomingMessage = async (msg) => {
 
     // Mensaje no reconocido - enviar orientación inteligente
     await logTelegramQuery(user.telegram_user_id, rawText, 'Comando no reconocido', 1);
-    await sendTelegramMessage(
+    await sendTelegramResponseWithFeedback(
         chatId,
         formatIntelligentGuidanceMessage(),
-        keyboard
+        { user, query: rawText, responseSummary: 'Comando no reconocido' }
     );
 };
 
@@ -2199,6 +2544,10 @@ const runPollingLoop = async () => {
                         // Procesar de manera asíncrona sin bloquear la recepción
                         handleIncomingMessage(update.message).catch(err => {
                             console.error('[TelegramBot] Error procesando mensaje:', err.message);
+                        });
+                    } else if (update.callback_query) {
+                        handleCallbackQuery(update.callback_query).catch(err => {
+                            console.error('[TelegramBot] Error procesando callback query:', err.message);
                         });
                     }
                 }
@@ -2662,6 +3011,92 @@ const broadcastCustomAlert = async ({ message, title = null, severity = 'alerta'
     };
 };
 
+/**
+ * Obtener estadísticas consolidadas de satisfacción y retroalimentación del bot
+ */
+const getFeedbackStats = async () => {
+    try {
+        const db = getDb();
+        if (!db) {
+            return {
+                total: 0,
+                utiles: 0,
+                no_utiles: 0,
+                pendientes: 0,
+                con_comentarios: 0,
+                tasa_satisfaccion: 100.0
+            };
+        }
+
+        const [rows] = await db.query(`
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN calificacion = 'UTIL' THEN 1 ELSE 0 END) as utiles,
+                SUM(CASE WHEN calificacion = 'NO_UTIL' THEN 1 ELSE 0 END) as no_utiles,
+                SUM(CASE WHEN calificacion = 'PENDIENTE' THEN 1 ELSE 0 END) as pendientes,
+                SUM(CASE WHEN comentario_mejora IS NOT NULL AND TRIM(comentario_mejora) != '' THEN 1 ELSE 0 END) as con_comentarios
+            FROM telegram_feedback
+        `);
+
+        const r = rows?.[0] || {};
+        const total = Number(r.total || 0);
+        const utiles = Number(r.utiles || 0);
+        const no_utiles = Number(r.no_utiles || 0);
+        const evaluados = utiles + no_utiles;
+        const tasa = evaluados > 0 ? Number(((utiles / evaluados) * 100).toFixed(1)) : 100.0;
+
+        return {
+            total,
+            utiles,
+            no_utiles,
+            pendientes: Number(r.pendientes || 0),
+            con_comentarios: Number(r.con_comentarios || 0),
+            tasa_satisfaccion: tasa
+        };
+    } catch (err) {
+        console.error('[TelegramBot] Error al obtener estadísticas de feedback:', err);
+        return {
+            total: 0,
+            utiles: 0,
+            no_utiles: 0,
+            pendientes: 0,
+            con_comentarios: 0,
+            tasa_satisfaccion: 100.0
+        };
+    }
+};
+
+/**
+ * Obtener listado de registros de retroalimentación para mejora continua
+ */
+const getFeedbackList = async ({ limit = 50, offset = 0, estado = null, calificacion = null } = {}) => {
+    try {
+        const db = getDb();
+        if (!db) return [];
+
+        let sql = 'SELECT * FROM telegram_feedback WHERE 1=1';
+        const params = [];
+
+        if (estado) {
+            sql += ' AND estado = ?';
+            params.push(estado);
+        }
+        if (calificacion) {
+            sql += ' AND calificacion = ?';
+            params.push(calificacion);
+        }
+
+        sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+        params.push(Number(limit) || 50, Number(offset) || 0);
+
+        const [rows] = await db.query(sql, params);
+        return rows || [];
+    } catch (err) {
+        console.error('[TelegramBot] Error al obtener listado de feedback:', err);
+        return [];
+    }
+};
+
 module.exports = {
     initTelegramBot,
     stopTelegramBot,
@@ -2701,6 +3136,15 @@ module.exports = {
     getConsolidadoVentas,
     getSaldosBancosData,
     getSaldosChequeraData,
+    createFeedbackEntry,
+    getFeedbackInlineMarkup,
+    sendTelegramResponseWithFeedback,
+    handleCallbackQuery,
+    answerCallbackQuery,
+    editMessageReplyMarkup,
+    getFeedbackStats,
+    getFeedbackList,
+    pendingFeedbackUsers,
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS

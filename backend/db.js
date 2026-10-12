@@ -918,6 +918,32 @@ const initDB = async () => {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
 
+            // Tabla de retroalimentación y mejora continua de respuestas del bot
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS telegram_feedback (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    telegram_user_id VARCHAR(50) NOT NULL,
+                    telegram_username VARCHAR(100) NULL,
+                    first_name VARCHAR(100) NULL,
+                    chat_id VARCHAR(50) NOT NULL,
+                    mensaje_id VARCHAR(50) NULL,
+                    consulta_original TEXT NOT NULL,
+                    respuesta_resumen TEXT NULL,
+                    calificacion ENUM('UTIL', 'NO_UTIL', 'PENDIENTE') DEFAULT 'PENDIENTE',
+                    comentario_mejora TEXT NULL,
+                    estado ENUM('ABIERTO', 'COMPLETADO', 'REVISADO') DEFAULT 'ABIERTO',
+                    notas_resolucion TEXT NULL,
+                    revisado_por INT NULL,
+                    revisado_at DATETIME NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_tg_fb_uid (telegram_user_id),
+                    INDEX idx_tg_fb_calif (calificacion),
+                    INDEX idx_tg_fb_estado (estado),
+                    INDEX idx_tg_fb_date (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
             // Tabla de automejora semántica de alias y apodos
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS telegram_aliases (

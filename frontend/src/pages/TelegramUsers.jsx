@@ -3,7 +3,8 @@ import {
     Bot, RefreshCw, Plus, Edit2, Trash2, CheckCircle2,
     XCircle, Clock, Shield, Search, Send, Copy, AlertTriangle,
     Activity, Power, HelpCircle, Check, Eye, EyeOff,
-    UserCheck, ShieldAlert, ShieldCheck, Link2
+    UserCheck, ShieldAlert, ShieldCheck, Link2,
+    ThumbsUp, ThumbsDown, MessageSquare
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -21,7 +22,7 @@ export default function TelegramUsers() {
     const [botStatus, setBotStatus] = useState(null);
     const [statusLoading, setStatusLoading] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
-    const [activeTab, setActiveTab] = useState('users'); // 'users' | 'bitacora'
+    const [activeTab, setActiveTab] = useState('users'); // 'users' | 'bitacora' | 'feedback'
 
     // Catálogo de usuarios de SIPE Admin para vinculación
     const [systemUsers, setSystemUsers] = useState([]);
@@ -30,6 +31,12 @@ export default function TelegramUsers() {
     // Bitácora
     const [bitacora, setBitacora] = useState([]);
     const [loadingBitacora, setLoadingBitacora] = useState(false);
+
+    // Retroalimentación & Mejora Continua
+    const [feedbacks, setFeedbacks] = useState([]);
+    const [feedbackStats, setFeedbackStats] = useState({ total: 0, utiles: 0, no_utiles: 0, pendientes: 0, con_comentarios: 0, tasa_satisfaccion: 100 });
+    const [loadingFeedback, setLoadingFeedback] = useState(false);
+    const [feedbackFilter, setFeedbackFilter] = useState('ALL');
 
     // Modal de usuario
     const [modalOpen, setModalOpen] = useState(false);
@@ -146,6 +153,27 @@ export default function TelegramUsers() {
         }
     }, [addToast]);
 
+    // Cargar retroalimentación & sugerencias de mejora
+    const fetchFeedback = useCallback(async () => {
+        setLoadingFeedback(true);
+        try {
+            const [statsRes, listRes] = await Promise.all([
+                api.get('/telegram/feedback/stats'),
+                api.get('/telegram/feedback', { params: { limit: 100 } })
+            ]);
+            if (statsRes.data?.ok) {
+                setFeedbackStats(statsRes.data.stats || {});
+            }
+            if (listRes.data?.ok) {
+                setFeedbacks(listRes.data.feedbacks || []);
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al cargar retroalimentación de Telegram', 'error');
+        } finally {
+            setLoadingFeedback(false);
+        }
+    }, [addToast]);
+
     useEffect(() => {
         fetchBotStatus();
         fetchUsers();
@@ -155,8 +183,29 @@ export default function TelegramUsers() {
     useEffect(() => {
         if (activeTab === 'bitacora') {
             fetchBitacora();
+        } else if (activeTab === 'feedback') {
+            fetchFeedback();
         }
-    }, [activeTab, fetchBitacora]);
+    }, [activeTab, fetchBitacora, fetchFeedback]);
+
+    // Marcar retroalimentación como revisada
+    const handleMarkFeedbackReviewed = async (fb) => {
+        const ok = await confirm(
+            `¿Marcar como revisada la sugerencia de @${fb.telegram_username || fb.first_name || fb.telegram_user_id}?`,
+            { title: 'Revisión de Mejora Continua', confirmText: 'Marcar como Revisado' }
+        );
+        if (!ok) return;
+
+        try {
+            await api.patch(`/telegram/feedback/${fb.id}/revisar`, {
+                notas_resolucion: 'Revisado y registrado para optimización de consultas'
+            });
+            addToast('Retroalimentación marcada como revisada', 'success');
+            fetchFeedback();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al marcar retroalimentación', 'error');
+        }
+    };
 
     // Probar conexión
     const handleTestConnection = async () => {
@@ -549,9 +598,40 @@ export default function TelegramUsers() {
                 >
                     Bitácora de Consultas Telegram
                 </button>
+                <button
+                    onClick={() => setActiveTab('feedback')}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: '0.45rem 1rem',
+                        fontSize: '0.825rem',
+                        fontWeight: activeTab === 'feedback' ? 700 : 500,
+                        color: activeTab === 'feedback' ? 'var(--primary)' : 'var(--text-muted)',
+                        borderBottom: activeTab === 'feedback' ? '2px solid var(--primary)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem'
+                    }}
+                >
+                    <MessageSquare size={13} />
+                    Mejora Continua & Feedback
+                    {feedbackStats.no_utiles > 0 && (
+                        <span style={{
+                            background: '#EF4444',
+                            color: '#fff',
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            padding: '0.1rem 0.35rem',
+                            borderRadius: '10px'
+                        }}>
+                            {feedbackStats.no_utiles}
+                        </span>
+                    )}
+                </button>
             </div>
 
-            {activeTab === 'users' ? (
+            {activeTab === 'users' && (
                 <>
                     {/* Barra de Filtros y Búsqueda */}
                     <div className="card glass" style={{ padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -839,7 +919,9 @@ export default function TelegramUsers() {
                         </table>
                     </div>
                 </>
-            ) : (
+            )}
+
+            {activeTab === 'bitacora' && (
                 /* Tab de Bitácora de Consultas */
                 <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
                     <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
@@ -912,6 +994,193 @@ export default function TelegramUsers() {
                             )}
                         </tbody>
                     </table>
+                </div>
+            )}
+
+            {activeTab === 'feedback' && (
+                /* Tab de Retroalimentación & Mejora Continua */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    {/* Tarjetas KPI de Satisfacción */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <div style={{
+                                width: '42px', height: '42px', borderRadius: '10px',
+                                background: feedbackStats.tasa_satisfaccion >= 80 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                                color: feedbackStats.tasa_satisfaccion >= 80 ? '#10B981' : '#EF4444',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.9rem'
+                            }}>
+                                {feedbackStats.tasa_satisfaccion}%
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Tasa de Satisfacción</div>
+                                <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                    {feedbackStats.tasa_satisfaccion >= 80 ? 'Excelente 👍' : 'Requiere Ajustes ⚠️'}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(59, 130, 246, 0.15)', color: '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <Activity size={20} />
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Total Evaluadas</div>
+                                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-main)' }}>{feedbackStats.total}</div>
+                            </div>
+                        </div>
+
+                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(16, 185, 129, 0.15)', color: '#10B981', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <ThumbsUp size={20} />
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Contestó Bien (Útil)</div>
+                                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#10B981' }}>{feedbackStats.utiles}</div>
+                            </div>
+                        </div>
+
+                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.15)', color: '#EF4444', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <ThumbsDown size={20} />
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Por Mejorar / No Útil</div>
+                                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#EF4444' }}>{feedbackStats.no_utiles}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Tabla de Retroalimentación Forense */}
+                    <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
+                        <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                <span style={{ fontSize: '0.825rem', fontWeight: 600 }}>Registro Forense de Retroalimentación & Sugerencias</span>
+                                <select
+                                    value={feedbackFilter}
+                                    onChange={e => setFeedbackFilter(e.target.value)}
+                                    style={{ height: '30px', fontSize: '0.76rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-main)', padding: '0 0.5rem' }}
+                                >
+                                    <option value="ALL">Todas las calificaciones</option>
+                                    <option value="NO_UTIL">👎 Por Mejorar / No Útiles</option>
+                                    <option value="UTIL">👍 Útiles / Bien contestadas</option>
+                                    <option value="PENDIENTE">⏳ Pendientes de calificar</option>
+                                </select>
+                            </div>
+                            <button
+                                className="btn-secondary"
+                                onClick={fetchFeedback}
+                                disabled={loadingFeedback}
+                                style={{ height: '30px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                            >
+                                <RefreshCw size={13} className={loadingFeedback ? 'spin' : ''} /> Actualizar
+                            </button>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '950px' }}>
+                            <thead>
+                                <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha / Hora</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Usuario</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Pregunta / Consulta</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Calificación</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>¿Qué Esperaba o Qué Mejorar?</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Estado</th>
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loadingFeedback ? (
+                                    <tr>
+                                        <td colSpan="7" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            Cargando retroalimentación de usuarios...
+                                        </td>
+                                    </tr>
+                                ) : feedbacks.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="7" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            No se han registrado calificaciones de usuarios todavía.
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    feedbacks
+                                        .filter(fb => feedbackFilter === 'ALL' || fb.calificacion === feedbackFilter)
+                                        .map(fb => (
+                                            <tr key={fb.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.76rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                                    {new Date(fb.created_at).toLocaleString('es-SV', {
+                                                        day: '2-digit', month: '2-digit', year: 'numeric',
+                                                        hour: '2-digit', minute: '2-digit'
+                                                    })}
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem' }}>
+                                                    <div style={{ fontWeight: 600 }}>{fb.first_name || fb.telegram_username || 'Usuario'}</div>
+                                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>ID: <code>{fb.telegram_user_id}</code></div>
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem', maxWidth: '250px' }}>
+                                                    <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>«{fb.consulta_original}»</span>
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
+                                                    <span style={{
+                                                        fontSize: '0.72rem',
+                                                        padding: '0.2rem 0.5rem',
+                                                        borderRadius: '4px',
+                                                        fontWeight: 700,
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.3rem',
+                                                        color: fb.calificacion === 'UTIL' ? '#10B981' : fb.calificacion === 'NO_UTIL' ? '#EF4444' : '#F59E0B',
+                                                        background: fb.calificacion === 'UTIL' ? 'rgba(16, 185, 129, 0.12)' : fb.calificacion === 'NO_UTIL' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.12)'
+                                                    }}>
+                                                        {fb.calificacion === 'UTIL' ? '👍 Útil' : fb.calificacion === 'NO_UTIL' ? '👎 Por Mejorar' : '⏳ Pendiente'}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem', maxWidth: '300px' }}>
+                                                    {fb.comentario_mejora ? (
+                                                        <div style={{
+                                                            background: 'rgba(239, 68, 68, 0.06)',
+                                                            borderLeft: '3px solid #EF4444',
+                                                            padding: '0.35rem 0.55rem',
+                                                            borderRadius: '0 4px 4px 0',
+                                                            fontSize: '0.78rem',
+                                                            color: 'var(--text-main)'
+                                                        }}>
+                                                            <strong>💬 Esperaba:</strong> {fb.comentario_mejora}
+                                                        </div>
+                                                    ) : (
+                                                        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Sin comentario específico</span>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
+                                                    <span style={{
+                                                        fontSize: '0.72rem',
+                                                        padding: '0.15rem 0.45rem',
+                                                        borderRadius: '4px',
+                                                        fontWeight: 600,
+                                                        color: fb.estado === 'REVISADO' ? '#10B981' : fb.estado === 'COMPLETADO' ? '#3B82F6' : '#F59E0B',
+                                                        background: fb.estado === 'REVISADO' ? 'rgba(16, 185, 129, 0.1)' : fb.estado === 'COMPLETADO' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(245, 158, 11, 0.1)'
+                                                    }}>
+                                                        {fb.estado === 'REVISADO' ? 'Revisado' : fb.estado === 'COMPLETADO' ? 'Registrado' : 'Abierto'}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
+                                                    {fb.estado !== 'REVISADO' ? (
+                                                        <button
+                                                            className="btn-secondary"
+                                                            onClick={() => handleMarkFeedbackReviewed(fb)}
+                                                            title="Marcar como revisado en la mejora continua"
+                                                            style={{ height: '26px', fontSize: '0.72rem', padding: '0 0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                                        >
+                                                            <Check size={12} color="#10B981" /> Revisar
+                                                        </button>
+                                                    ) : (
+                                                        <span style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600 }}>✓ Listo</span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             )}
 

@@ -22,7 +22,10 @@ const {
     formatVentasRangoMessage,
     formatHorasPicoMessage,
     formatSolarEnergyMessage,
-    formatIntelligentGuidanceMessage
+    formatIntelligentGuidanceMessage,
+    getFeedbackInlineMarkup,
+    pendingFeedbackUsers,
+    getFeedbackStats
 } = require('../services/telegramBotService');
 
 describe('Telegram Bot Service Unit Tests', () => {
@@ -784,6 +787,89 @@ describe('Telegram Bot Service Unit Tests', () => {
             assert.ok(msgMensual.includes('3,530.90 kg'));
             assert.ok(msgMensual.includes('Puma Miraflores'));
             assert.ok(msgMensual.includes('Puma Costa del Sol'));
+        });
+    });
+
+    describe('Sistema de Retroalimentación y Mejora Continua', () => {
+        it('getFeedbackInlineMarkup debe generar los botones interactivos Sí / No con sus callback_data', () => {
+            const markup = getFeedbackInlineMarkup(42);
+            assert.ok(markup);
+            assert.ok(Array.isArray(markup.inline_keyboard));
+            assert.strictEqual(markup.inline_keyboard.length, 1);
+
+            const row = markup.inline_keyboard[0];
+            assert.strictEqual(row.length, 2);
+
+            assert.strictEqual(row[0].text, '👍 Sí');
+            assert.strictEqual(row[0].callback_data, 'fb_ok:42');
+
+            assert.strictEqual(row[1].text, '👎 No');
+            assert.strictEqual(row[1].callback_data, 'fb_no:42');
+        });
+
+        it('getFeedbackInlineMarkup debe retornar null para IDs falsy o no definidos', () => {
+            assert.strictEqual(getFeedbackInlineMarkup(null), null);
+            assert.strictEqual(getFeedbackInlineMarkup(0), null);
+            assert.strictEqual(getFeedbackInlineMarkup(undefined), null);
+        });
+
+        it('debe gestionar correctamente el estado de pendingFeedbackUsers para usuarios insatisfechos', () => {
+            const testUserId = 'test_user_999';
+            pendingFeedbackUsers.set(testUserId, {
+                feedbackId: 101,
+                timestamp: Date.now()
+            });
+
+            assert.ok(pendingFeedbackUsers.has(testUserId));
+            const entry = pendingFeedbackUsers.get(testUserId);
+            assert.strictEqual(entry.feedbackId, 101);
+
+            // Simular guardado de comentario y limpieza de estado
+            pendingFeedbackUsers.delete(testUserId);
+            assert.strictEqual(pendingFeedbackUsers.has(testUserId), false);
+        });
+
+        it('debe detectar expresiones en lenguaje natural de insatisfacción del usuario', () => {
+            const negativeRegex = /\b(no\s+contestaste\s+bien|no\s+respondiste\s+bien|no\s+me\s+sirvio|no\s+me\s+sirve|esta\s+mal\s+la\s+respuesta|respuesta\s+incorrecta|no\s+es\s+lo\s+que\s+pedi|eso\s+no\s+es\s+lo\s+que\s+pregunte|te\s+equivocaste)\b/i;
+
+            assert.ok(negativeRegex.test(normalizeText('no contestaste bien')));
+            assert.ok(negativeRegex.test(normalizeText('no respondiste bien a la pregunta')));
+            assert.ok(negativeRegex.test(normalizeText('eso no es lo que pedi')));
+            assert.ok(negativeRegex.test(normalizeText('no me sirvio esa informacion')));
+            assert.ok(negativeRegex.test(normalizeText('esta mal la respuesta')));
+            assert.ok(negativeRegex.test(normalizeText('te equivocaste en los datos')));
+
+            assert.strictEqual(negativeRegex.test(normalizeText('ventas de ayer')), false);
+            assert.strictEqual(negativeRegex.test(normalizeText('gracias')), false);
+        });
+
+        it('debe detectar expresiones en lenguaje natural de satisfacción del usuario', () => {
+            const negativeRegex = /\b(no\s+contestaste\s+bien|no\s+respondiste\s+bien|no\s+me\s+sirvio|no\s+me\s+sirve|esta\s+mal\s+la\s+respuesta|respuesta\s+incorrecta|no\s+es\s+lo\s+que\s+pedi|eso\s+no\s+es\s+lo\s+que\s+pregunte|te\s+equivocaste)\b/i;
+            const positiveRegex = /\b(contestaste\s+bien|buena\s+respuesta|gracias\s+por\s+la\s+informacion|excelente\s+servicio|muy\s+util|me\s+sirvio)\b/i;
+
+            const checkPositive = (text) => {
+                const norm = normalizeText(text);
+                return !negativeRegex.test(norm) && positiveRegex.test(norm);
+            };
+
+            assert.ok(checkPositive('contestaste bien'));
+            assert.ok(checkPositive('buena respuesta, gracias'));
+            assert.ok(checkPositive('muchas gracias por la informacion'));
+            assert.ok(checkPositive('muy util'));
+            assert.ok(checkPositive('me sirvio bastante'));
+
+            assert.strictEqual(checkPositive('no me sirvio'), false);
+            assert.strictEqual(checkPositive('cuanto hay en bancos'), false);
+        });
+
+        it('debe calcular correctamente las estadísticas de retroalimentación de forma segura', async () => {
+            const stats = await getFeedbackStats();
+            assert.ok(stats);
+            assert.strictEqual(typeof stats.total, 'number');
+            assert.strictEqual(typeof stats.utiles, 'number');
+            assert.strictEqual(typeof stats.no_utiles, 'number');
+            assert.strictEqual(typeof stats.tasa_satisfaccion, 'number');
+            assert.ok(stats.tasa_satisfaccion >= 0 && stats.tasa_satisfaccion <= 100);
         });
     });
 });

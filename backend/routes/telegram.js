@@ -11,7 +11,9 @@ const {
     stopTelegramBot,
     sendTelegramMessage,
     broadcastDiscrepancyAlerts,
-    broadcastCustomAlert
+    broadcastCustomAlert,
+    getFeedbackStats,
+    getFeedbackList
 } = require('../services/telegramBotService');
 
 const telegramPerms = [
@@ -546,6 +548,68 @@ router.post('/broadcast-alert', authenticateN8nOrAdmin, async (req, res) => {
         res.json(result);
     } catch (error) {
         sendSafeError(res, error, 'Error al emitir alerta broadcast');
+    }
+});
+
+/**
+ * GET /api/telegram/feedback/stats
+ * Obtener métricas y KPI de satisfacción del bot de Telegram
+ */
+router.get('/feedback/stats', authenticateN8nOrAdmin, async (req, res) => {
+    try {
+        const stats = await getFeedbackStats();
+        res.json({ ok: true, stats });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener estadísticas de retroalimentación');
+    }
+});
+
+/**
+ * GET /api/telegram/feedback
+ * Listar registros de retroalimentación y sugerencias de mejora continua
+ */
+router.get('/feedback', authenticateN8nOrAdmin, async (req, res) => {
+    try {
+        const { limit = 50, offset = 0, estado, calificacion } = req.query;
+        const feedbacks = await getFeedbackList({
+            limit: Number(limit) || 50,
+            offset: Number(offset) || 0,
+            estado: estado || null,
+            calificacion: calificacion || null
+        });
+        res.json({ ok: true, feedbacks });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al listar registros de retroalimentación');
+    }
+});
+
+/**
+ * PATCH /api/telegram/feedback/:id/revisar
+ * Marcar una retroalimentación como revisada con notas de resolución
+ */
+router.patch('/feedback/:id/revisar', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    const feedbackId = parseInt(req.params.id, 10);
+    if (!feedbackId) {
+        return res.status(400).json({ message: 'ID de feedback inválido' });
+    }
+
+    const { notas, notas_resolucion } = req.body || {};
+    const finalNotas = notas || notas_resolucion || null;
+
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        await db.query(
+            `UPDATE telegram_feedback 
+             SET estado = 'REVISADO', notas_resolucion = ?, revisado_por = ?, revisado_at = NOW(), updated_at = NOW() 
+             WHERE id = ?`,
+            [finalNotas, req.user?.id || null, feedbackId]
+        );
+
+        res.json({ ok: true, message: 'Retroalimentación marcada como revisada exitosamente' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar estado de retroalimentación');
     }
 });
 
