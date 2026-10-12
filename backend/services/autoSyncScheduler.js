@@ -154,6 +154,16 @@ function initAutoSyncScheduler(io = null) {
         return null;
     }
 
+    // Delegación a servidor dedicado de automatizaciones (169.58.207.115) para no recargar el servidor de producción
+    const isProduction = process.env.NODE_ENV === 'production';
+    const forceLocal = process.env.ENABLE_LOCAL_AUTOSYNC === 'true';
+    const delegateRemote = process.env.DELEGATE_AUTOSYNC_REMOTE === 'true' || process.env.DISABLE_LOCAL_AUTOSYNC === 'true' || (isProduction && !forceLocal);
+
+    if (process.env.NODE_ENV !== 'test' && delegateRemote) {
+        console.log(`[AutoSync Scheduler] Programación automática delegada al servidor de automatizaciones 169.58.207.115. Cron local omitido para no recargar el servidor.`);
+        return null;
+    }
+
     const scheduledTask = cron.schedule(AUTO_SYNC_CRON_EXPRESSION, async () => {
         const slotHour = new Date().toLocaleTimeString('es-SV', {
             timeZone: AUTO_SYNC_TIMEZONE,

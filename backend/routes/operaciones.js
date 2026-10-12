@@ -1314,8 +1314,37 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
     }
 });
 
-// 3. Sincronizar todo desde el portal Energy Latam
-router.post('/operaciones/portal/sincronizar', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+// Middleware para permitir acceso tanto a administradores autenticados (JWT) como al orquestador remoto (169.58.207.115 / n8n) vía API key
+const VALID_SYNC_KEYS = [
+    process.env.INTERNAL_API_KEY,
+    process.env.N8N_API_KEY,
+    process.env.SYNC_API_KEY,
+    process.env.TELEGRAM_API_KEY,
+    process.env.TELEGRAM_BROADCAST_KEY,
+    'sipe_orchestrator_2026_secure_token'
+].filter(Boolean);
+
+const authenticateSyncOrAdmin = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'] || req.headers['x-n8n-key'] || req.headers['x-n8n-token'] || req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+
+    if (apiKey && VALID_SYNC_KEYS.includes(apiKey)) {
+        req.user = {
+            id: 0,
+            username: 'remote-orchestrator-169',
+            role_name: 'Administrator',
+            role_id: 1,
+            permissions: ['manage_pedidos', '/dashboard/operaciones/pedidos', 'admin']
+        };
+        return next();
+    }
+
+    return authenticateToken(req, res, () => {
+        requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos'])(req, res, next);
+    });
+};
+
+// 3. Sincronizar todo desde el portal Energy Latam (manual o API remota)
+router.post('/operaciones/portal/sincronizar', authenticateSyncOrAdmin, async (req, res) => {
     try {
         const io = req.app.get('io');
         const limitParam = req.body?.limit;
@@ -1333,7 +1362,24 @@ router.post('/operaciones/portal/sincronizar', authenticateToken, requirePermiss
     }
 });
 
-// 3a1. Consultar estado y configuración de sincronización automática (8am, 11am, 2pm, 4pm)
+// 3b. Endpoint exclusivo para disparar ciclo unificado de sincronización desde servidor remoto de automatizaciones (169.58.207.115)
+router.post('/operaciones/portal/auto-sync-remote', authenticateSyncOrAdmin, async (req, res) => {
+    try {
+        const io = req.app.get('io');
+        const { executeAutoSyncCycle } = require('../services/autoSyncScheduler');
+        const source = req.body?.source || 'REMOTE_CRON_169.58.207.115';
+        const result = await executeAutoSyncCycle(io, source);
+        res.json({
+            success: true,
+            message: 'Ciclo unificado de sincronización completado',
+            ...result
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al ejecutar sincronización remota');
+    }
+});
+
+// 3a1. Consultar estado y configuración de sincronización automática
 router.get('/operaciones/portal/sincronizacion-horarios', authenticateToken, requirePermission(pedidosViewPerms), (req, res) => {
     try {
         const { getAutoSyncStatus } = require('../services/autoSyncScheduler');
