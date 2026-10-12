@@ -91,14 +91,19 @@ if [ -n "$PM2_BIN" ]; then
 fi
 
 # Fallback robusto: Terminar el proceso Node de server.js para que PM2 supervisor lo reviva automáticamente
-echo "--- Verificando procesos escuchando en puerto 5001 ---" >> "$DEBUG_FILE"
-PORT_PIDS=$(lsof -t -i:5001 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || fuser 5001/tcp 2>/dev/null || true)
+echo "--- Verificando procesos Node escuchando en puerto 5001 ---" >> "$DEBUG_FILE"
+PORT_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || fuser 5001/tcp 2>/dev/null || true)
 echo "PIDs puerto 5001: $PORT_PIDS" >> "$DEBUG_FILE"
 
 for pid in $PORT_PIDS; do
     if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
-        echo "Terminando PID de puerto 5001: $pid" >> "$DEBUG_FILE"
-        kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+        PROC_NAME=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+        if [[ "$PROC_NAME" == *"node"* ]]; then
+            echo "Terminando proceso Node en puerto 5001: PID $pid ($PROC_NAME)" >> "$DEBUG_FILE"
+            kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+        else
+            echo "Ignorando PID $pid ($PROC_NAME) porque no es un proceso Node." >> "$DEBUG_FILE"
+        fi
     fi
 done
 
@@ -113,6 +118,12 @@ for pid in $SERVER_PIDS; do
         kill -15 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
     fi
 done
+
+echo ">> 5. Verificando estado del proxy Caddy..." >> "$DEBUG_FILE"
+if ! systemctl is-active --quiet caddy 2>/dev/null; then
+    echo "Caddy no está activo, intentando reiniciar servicio..." >> "$DEBUG_FILE"
+    sudo systemctl restart caddy >> "$DEBUG_FILE" 2>&1 || sudo service caddy restart >> "$DEBUG_FILE" 2>&1 || true
+fi
 
 echo "Fecha fin: $(date)" >> "$DEBUG_FILE"
 echo "=== Despliegue completado con éxito ===" >> "$DEBUG_FILE"
