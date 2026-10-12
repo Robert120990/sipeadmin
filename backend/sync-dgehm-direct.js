@@ -30,7 +30,7 @@ const writeLog = (msg) => {
     }
 };
 
-async function syncDGEHM() {
+async function syncDGEHM(io = null) {
     writeLog('=== INICIANDO SINCRONIZACIÓN DIRECTA DGEHM -> BD ===');
     writeLog('1. Conectando al portal oficial de DGEHM...');
     
@@ -182,7 +182,18 @@ async function syncDGEHM() {
 
         await conn.commit();
         writeLog(`✅ ¡ÉXITO! Se actualizaron correctamente ${matchedRows.length} estaciones en snapshot e historial.`);
-        return { success: true, count: matchedRows.length, total: mappedStations.length };
+        if (io) {
+            try {
+                io.emit('precios_competencia_updated', {
+                    timestamp: new Date().toISOString(),
+                    count: matchedRows.length,
+                    total: mappedStations.length
+                });
+            } catch (ioErr) {
+                writeLog(`⚠️ Error emitiendo evento socket: ${ioErr.message}`);
+            }
+        }
+        return { success: true, count: matchedRows.length, total: mappedStations.length, timestamp: new Date().toISOString() };
     } catch (err) {
         await conn.rollback();
         throw err;

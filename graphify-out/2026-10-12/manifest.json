@@ -18,9 +18,9 @@
     "semantic_hash": "7beccc830c416d1a5d5a99d5fa6988b0"
   },
   "backend/db.js": {
-    "mtime": 1791826360.9261372,
-    "seen": 1791826455.8454368,
-    "ast_hash": "4233655a5e3be125669dd9ec9bb7353c",
+    "mtime": 1791828935.2609856,
+    "seen": 1791829945.761573,
+    "ast_hash": "1322f3e191d89aa4624afab4071527dd",
     "semantic_hash": ""
   },
   "backend/middleware/auth.js": {
@@ -126,10 +126,10 @@
     "semantic_hash": "6a29c4719b1366a4420a1b4e8908d7a1"
   },
   "backend/routes/consultas.js": {
-    "mtime": 1791817941.2675207,
-    "seen": 1791822880.7085679,
-    "ast_hash": "0072bfa5066e325b8d4bdf8b1a67cede",
-    "semantic_hash": "0072bfa5066e325b8d4bdf8b1a67cede"
+    "mtime": 1791829708.3759444,
+    "seen": 1791829945.761573,
+    "ast_hash": "ab9f7eee53d6a9d7a2e5f14b04b7bf44",
+    "semantic_hash": ""
   },
   "backend/routes/finanzas.js": {
     "mtime": 1791033552.5333161,
@@ -162,10 +162,10 @@
     "semantic_hash": "96ee2b6fd4ff1e69439260af844420aa"
   },
   "backend/routes/operaciones.js": {
-    "mtime": 1791817624.9844837,
-    "seen": 1791822880.7085679,
-    "ast_hash": "90a767d2c1ebcff596108659a1ecafc3",
-    "semantic_hash": "90a767d2c1ebcff596108659a1ecafc3"
+    "mtime": 1791828967.337148,
+    "seen": 1791829945.761573,
+    "ast_hash": "e61c5caa0a4ec509fc83bc7ed086e13c",
+    "semantic_hash": ""
   },
   "backend/routes/rrhh.js": {
     "mtime": 1790867300.905999,
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791827721.0904312,
-    "seen": 1791827913.4200578,
-    "ast_hash": "cc5b886b6323fbcfed587147f04c68bf",
+    "mtime": 1791829890.9680457,
+    "seen": 1791829945.761573,
+    "ast_hash": "d25afcffd928215a09acc801905dec18",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -360,9 +360,9 @@
     "semantic_hash": "dfb39fd9e8c657a413eff933a1801c93"
   },
   "backend/test/telegramBot.test.js": {
-    "mtime": 1791827697.7891786,
-    "seen": 1791827913.4200578,
-    "ast_hash": "65c01cc88617fcfb59256d591863089f",
+    "mtime": 1791829904.8937159,
+    "seen": 1791829945.7626367,
+    "ast_hash": "d79a1afe4ddd51ea1065368639474c42",
     "semantic_hash": ""
   },
   "backend/test/ventasMensual.test.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791827831.6534758,
-    "seen": 1791827913.4200578,
-    "ast_hash": "7955fc690cc9cd2a6e79b2085f2a408f",
+    "mtime": 1791829925.5268142,
+    "seen": 1791829945.7626367,
+    "ast_hash": "bb4f1cf38cfd71a2ced89ab5b3da42b2",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -1170,9 +1170,9 @@
     "semantic_hash": ""
   },
   "backend/services/conversationalAiService.js": {
-    "mtime": 1791826395.8023164,
-    "seen": 1791826455.8454368,
-    "ast_hash": "db1bd1aa3940df708612f4546feae1bb",
+    "mtime": 1791829778.8378656,
+    "seen": 1791829945.761573,
+    "ast_hash": "b051cd55bfabf0789e3cdc9af005c413",
     "semantic_hash": ""
   },
   "backend/test/conversationalAi.test.js": {
@@ -1185,6 +1185,36 @@
     "mtime": 1791827803.3831713,
     "seen": 1791827913.4200578,
     "ast_hash": "52d5977b4b3362799060f88291809507",
+    "semantic_hash": ""
+  },
+  "backend/services/salesHourlyService.js": {
+    "mtime": 1791828919.553084,
+    "seen": 1791829945.761573,
+    "ast_hash": "f284cf3f51631c9328f1956a8d5ed0b2",
+    "semantic_hash": ""
+  },
+  "backend/services/solarEnergyService.js": {
+    "mtime": 1791828882.5129724,
+    "seen": 1791829945.761573,
+    "ast_hash": "08d0d1934dab5e35a9fb02102925f51c",
+    "semantic_hash": ""
+  },
+  "backend/test/salesHourly.test.js": {
+    "mtime": 1791829182.205926,
+    "seen": 1791829945.7626367,
+    "ast_hash": "1376efa55e088f7bebb6f10510dc0bd5",
+    "semantic_hash": ""
+  },
+  "backend/test/solarAndSalesHourly.test.js": {
+    "mtime": 1791828985.577846,
+    "seen": 1791829945.7626367,
+    "ast_hash": "ce57e06503cd09bd14342445b0fa0d56",
+    "semantic_hash": ""
+  },
+  "backend/test/solarEnergy.test.js": {
+    "mtime": 1791829231.3184013,
+    "seen": 1791829945.7626367,
+    "ast_hash": "fa0c1e7800ec7b658e95d41df9b3b337",
     "semantic_hash": ""
   }
 }

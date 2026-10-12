@@ -1282,6 +1282,28 @@ router.post('/operaciones/portal/sincronizar', authenticateToken, requirePermiss
     }
 });
 
+// 3a1. Consultar estado y configuración de sincronización automática (8am, 11am, 2pm, 4pm)
+router.get('/operaciones/portal/sincronizacion-horarios', authenticateToken, requirePermission(pedidosViewPerms), (req, res) => {
+    try {
+        const { getAutoSyncStatus } = require('../services/autoSyncScheduler');
+        res.json(getAutoSyncStatus());
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar horarios de sincronización automática');
+    }
+});
+
+// 3a2. Disparar sincronización manual completa (Portal Pedidos + Precios Competencia)
+router.post('/operaciones/portal/sincronizar-todo', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
+    try {
+        const io = req.app.get('io');
+        const { executeAutoSyncCycle } = require('../services/autoSyncScheduler');
+        const result = await executeAutoSyncCycle(io, 'MANUAL_DISPATCH');
+        res.json(result);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al ejecutar sincronización unificada');
+    }
+});
+
 // 3b. Diagnosticar estado de conexión con el portal Puma / Salesforce
 router.get('/operaciones/portal/diagnostico', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {

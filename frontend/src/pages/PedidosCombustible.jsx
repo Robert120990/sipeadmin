@@ -299,16 +299,25 @@ export default function PedidosCombustible() {
             fetchPortalOrders();
         };
 
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                fetchPortalOrders();
+                fetchPortalResumen();
+            }
+        };
+
         socket.on('portal_pedidos_updated', handlePortalUpdate);
         socket.on('combustible_precios_updated', handlePreciosUpdate);
         socket.on('carriers_updated', fetchMaster);
         socket.on('tankers_updated', fetchMaster);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
 
         return () => {
             socket.off('portal_pedidos_updated', handlePortalUpdate);
             socket.off('combustible_precios_updated', handlePreciosUpdate);
             socket.off('carriers_updated', fetchMaster);
             socket.off('tankers_updated', fetchMaster);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
     }, []);
 
@@ -1489,7 +1498,22 @@ export default function PedidosCombustible() {
                     </span>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <span style={{
+                        fontSize: '0.75rem',
+                        color: 'var(--text-muted)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.35rem 0.65rem',
+                        borderRadius: '6px',
+                        backgroundColor: 'var(--card-bg, rgba(255,255,255,0.05))',
+                        border: '1px solid var(--border)',
+                        fontWeight: '500'
+                    }} title="Sincronización automática programada 4 veces al día (8:00 AM, 11:00 AM, 2:00 PM y 4:00 PM)">
+                        <Clock size={13} color="var(--primary)" />
+                        Auto: 8am • 11am • 2pm • 4pm
+                    </span>
                     <button
                         onClick={handleSyncPortal}
                         disabled={isSyncingPortal}
@@ -1529,7 +1553,10 @@ export default function PedidosCombustible() {
                         <Clock size={14} color="var(--primary)" />
                         {portalResumen.ultima_sincronizacion ? fmtDateArray(portalResumen.ultima_sincronizacion) : 'Hoy (Activo)'}
                     </div>
-                    <div style={{ fontSize: '0.7rem', color: '#10b981' }}>Enlace seguro backend activo</div>
+                    <div style={{ fontSize: '0.7rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '2px' }} title="Horarios programados: 8:00 AM, 11:00 AM, 2:00 PM y 4:00 PM">
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }}></span>
+                        Auto: 8am, 11am, 2pm, 4pm
+                    </div>
                 </div>
             </div>
 

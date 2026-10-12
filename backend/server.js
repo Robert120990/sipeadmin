@@ -234,11 +234,13 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Expr
 const { initBirthdayScheduler } = require('./services/birthdayNotifier');
 const { initPaymentScheduler } = require('./services/paymentNotifier');
 const { initTelegramBot } = require('./services/telegramBotService');
+const { initAutoSyncScheduler } = require('./services/autoSyncScheduler');
 
 initDB().then(() => {
     initBirthdayScheduler();
     initPaymentScheduler();
     initTelegramBot();
+    initAutoSyncScheduler(io);
     server.listen(PORT, () => {
         console.log(`Server HTTP y Socket.io running on port ${PORT}`);
     });

@@ -18,4 +18,6 @@ backend/tmp_*.js
 backend/*_output.txt
 backend/keys.txt
 backend/scratch/
+backend/data/puppeteer_session/
+backend/tmp_dgehm_downloads/
 graphify-out/cache/

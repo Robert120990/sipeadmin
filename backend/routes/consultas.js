@@ -4604,6 +4604,20 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
             }
 
             await conn.commit();
+            const io = req.app.get('io');
+            if (io) {
+                try {
+                    io.emit('precios_competencia_updated', {
+                        timestamp: new Date().toISOString(),
+                        count: matchedRows.length,
+                        totalConfigured: mappedStations.length,
+                        totalDGEHM: parsedRows.length,
+                        source: 'API_SYNC_DGEHM'
+                    });
+                } catch (ioErr) {
+                    console.warn('[Consultas] Error emitiendo socket precios_competencia_updated:', ioErr.message);
+                }
+            }
             res.json({
                 message: `Precios sincronizados exitosamente desde DGEHM (${matchedRows.length} estaciones actualizadas)`,
                 count: matchedRows.length,
@@ -4618,6 +4632,15 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
         }
     } catch (error) {
         sendSafeError(res, error, 'Error al sincronizar precios con DGEHM');
+    }
+});
+
+router.get('/consultas/estaciones/precios-competencia/sincronizacion-horarios', authenticateToken, requirePermission(preciosCompetenciaViewPerms), (req, res) => {
+    try {
+        const { getAutoSyncStatus } = require('../services/autoSyncScheduler');
+        res.json(getAutoSyncStatus());
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar horarios de sincronización automática');
     }
 });
 
@@ -4672,6 +4695,18 @@ router.post('/consultas/estaciones/precios-competencia/upload', express.json({ l
             }
 
             await conn.commit();
+            const io = req.app.get('io');
+            if (io) {
+                try {
+                    io.emit('precios_competencia_updated', {
+                        timestamp: new Date().toISOString(),
+                        count: data.length,
+                        source: 'CSV_UPLOAD'
+                    });
+                } catch (ioErr) {
+                    console.warn('[Consultas] Error emitiendo socket precios_competencia_updated:', ioErr.message);
+                }
+            }
             res.json({ message: 'Precios actualizados exitosamente', count: data.length });
         } catch (err) {
             await conn.rollback();

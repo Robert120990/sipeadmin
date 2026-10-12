@@ -15,6 +15,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import dgehmEstacionesList from '../data/dgehm_estaciones.json';
+import socket from '../services/socket';
 
 const ConsultasPreciosCompetencia = () => {
     const [activeTab, setActiveTab] = useState('actuales'); // 'actuales' | 'historial' | 'bi'
@@ -144,6 +145,32 @@ const ConsultasPreciosCompetencia = () => {
             setBiLoading(false);
         }
     };
+
+    // Sincronización en tiempo real vía WebSockets y detección de retorno a pestaña
+    useEffect(() => {
+        const handlePreciosUpdate = () => {
+            fetchCurrentData();
+            if (activeTab === 'historial') {
+                fetchHistorial();
+            } else if (activeTab === 'bi') {
+                fetchBiAnalytics();
+            }
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                fetchCurrentData();
+            }
+        };
+
+        socket.on('precios_competencia_updated', handlePreciosUpdate);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            socket.off('precios_competencia_updated', handlePreciosUpdate);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, [activeTab]);
 
     // --- Automatic DGEHM Sync ---
     const handleSyncDgehm = async () => {
@@ -677,6 +704,21 @@ const ConsultasPreciosCompetencia = () => {
                                 <Clock size={14} /> Consultando última validación...
                             </span>
                         )}
+
+                        <span style={{ 
+                            fontSize: '0.8rem', 
+                            padding: '0.25rem 0.75rem', 
+                            borderRadius: '16px', 
+                            backgroundColor: 'rgba(59, 130, 246, 0.12)', 
+                            color: '#3b82f6', 
+                            border: '1px solid rgba(59, 130, 246, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            fontWeight: '600'
+                        }} title="Actualización automática diaria 4 veces al día (8:00 AM, 11:00 AM, 2:00 PM y 4:00 PM en hora de El Salvador)">
+                            <Clock size={14} /> Auto: 8:00 AM, 11:00 AM, 2:00 PM, 4:00 PM
+                        </span>
                     </div>
                     <p style={{ color: 'var(--text-muted)', marginTop: '0.25rem', marginBottom: 0 }}>
                         Monitoreo de precios oficiales DGEHM, gestión de estaciones vinculadas, historial y análisis de mercado.
