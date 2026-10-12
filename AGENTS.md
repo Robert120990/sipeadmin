@@ -184,13 +184,14 @@ Rules:
 - `POST /api/ai/query`: Recibe intenciones y preguntas de agentes, valida permisos del usuario de Telegram mediante `getUserEffectivePermissions` y entrega datos formateados.
 - `GET /api/ai/schema-context`: Expone el diccionario de datos y metadatos de entidades operativas para que OpenClaw y n8n reconozcan campos y tablas.
 - `POST /api/ai/webhooks/trigger`: Despachador de eventos de SIPE hacia n8n en `169.58.207.115` (cierre de turnos con anomalías, emisión de cheques, alertas operativas).
+- `POST /api/operaciones/portal/auto-sync-remote`: Endpoint seguro (vía `x-api-key`) para recibir disparos periódicos de sincronización de pedidos y precios desde `169.58.207.115`, liberando de sobrecarga de timers al host de producción.
 
 ### 5. Nuevas Pantallas Proyectadas en Frontend (SIPE Admin)
 - `/dashboard/seguridad/telegram` (Activa): Gestión y vinculación de usuarios de Telegram con usuarios de SIPE y herencia de permisos.
 - `/dashboard/configuracion/agentes-ia`: Tablero de control de agentes (estado de OpenClaw y n8n en `169.58.207.115`, visor de grafo Graphify interactivo y log de consultas de IA).
 - `/dashboard/consultas/ia-asistente`: Panel web interactivo para dialogar con el asistente usando la misma inteligencia que Telegram.
 
-### 6. Catálogo de Actividades Automatizadas en n8n
+### 6. Catálogo de Actividades Automatizadas en n8n y Servidor de Automatizaciones
 - **Actividad 1: Flash Ejecutivo Matutino (7:00 AM)**:
   - Disparador: Cron en n8n a las 7:00 AM de lunes a domingo.
   - Consumo: `GET /api/inteligencia/flash-ejecutivo` en `admin.sipesv.com`.
@@ -201,4 +202,8 @@ Rules:
 - **Actividad 3: Monitor de Precios Pre-DGEHM**:
   - Disparador: Cron quincenal los lunes a las 6:00 PM.
   - Acción: Evalúa variación de precios de referencia y recomienda estrategia de compra de cisternas.
+- **Actividad 4: Orquestación Continua de Pedidos Puma y Precios (Cada 30 minutos)**:
+  - Disparador: Crontab en `169.58.207.115` (`*/30 * * * * /home/rsboosted/sipe-tasks/sync_portal_pedidos.sh`).
+  - Consumo: `POST /api/operaciones/portal/auto-sync-remote` en `admin.sipesv.com` vía cabecera `x-api-key`.
+  - Acción: Descentraliza la programación periódica para no sobrecargar el servidor de producción (`5.252.55.29`), manteniendo la última hora y pedidos siempre frescos.
 
