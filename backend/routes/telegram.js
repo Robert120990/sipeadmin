@@ -218,14 +218,17 @@ router.get('/config', authenticateToken, requirePermission(telegramPerms), async
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
 
-        const [rows] = await db.query('SELECT bot_token, bot_username, bot_first_name, is_active, last_poll_at, updated_at FROM telegram_config WHERE id = 1 LIMIT 1');
+        const [rows] = await db.query('SELECT bot_token, gemini_api_key, bot_username, bot_first_name, is_active, last_poll_at, updated_at FROM telegram_config WHERE id = 1 LIMIT 1');
         const config = rows && rows.length > 0 ? rows[0] : null;
         const currentToken = config?.bot_token || process.env.TELEGRAM_BOT_TOKEN || '';
+        const currentGeminiKey = config?.gemini_api_key || process.env.GEMINI_API_KEY || '';
 
         res.json({
             ok: true,
             has_token: Boolean(currentToken),
             masked_token: maskToken(currentToken),
+            has_gemini_key: Boolean(currentGeminiKey && currentGeminiKey.trim().length > 10),
+            masked_gemini_key: maskToken(currentGeminiKey),
             bot_username: config?.bot_username || null,
             bot_first_name: config?.bot_first_name || null,
             is_active: config ? Boolean(config.is_active) : true,
@@ -239,60 +242,158 @@ router.get('/config', authenticateToken, requirePermission(telegramPerms), async
 
 /**
  * PUT /api/telegram/config
- * Actualizar token del bot de Telegram, verificar conexión con Telegram API y reiniciar servicio
+ * Actualizar token del bot de Telegram y/o clave de Gemini API, verificar conexión y reiniciar servicio
  */
 router.put('/config', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
     try {
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
 
-        const { bot_token, is_active } = req.body;
-        if (!bot_token || typeof bot_token !== 'string' || bot_token.trim().length < 15) {
-            return res.status(400).json({ message: 'El token de Telegram proporcionado no es válido o está incompleto' });
+        const { bot_token, gemini_api_key, is_active } = req.body;
+
+        if ((!bot_token || typeof bot_token !== 'string' || bot_token.trim().length < 15) &&
+            (!gemini_api_key || typeof gemini_api_key !== 'string' || gemini_api_key.trim().length < 10) &&
+            is_active === undefined) {
+            return res.status(400).json({ message: 'Debes proporcionar un token de Telegram o una clave de Gemini válidos' });
         }
 
-        const cleanToken = bot_token.trim();
-
-        // 1. Probar conectividad inmediata con la API de Telegram (getMe) usando el nuevo token
         let verifiedBot = null;
-        try {
-            verifiedBot = await testTelegramConnection(cleanToken);
-        } catch (connErr) {
-            return res.status(400).json({
-                message: `El token fue rechazado por la API de Telegram: ${connErr.message || 'Error de autenticación'}`
-            });
+        const isActiveValue = is_active !== undefined ? (is_active ? 1 : 0) : 1;
+
+        // 1. Si se actualiza bot_token, probarlo de inmediato
+        if (bot_token && typeof bot_token === 'string' && bot_token.trim().length >= 15) {
+            const cleanToken = bot_token.trim();
+            try {
+                verifiedBot = await testTelegramConnection(cleanToken);
+            } catch (connErr) {
+                return res.status(400).json({
+                    message: `El token fue rechazado por la API de Telegram: ${connErr.message || 'Error de autenticación'}`
+                });
+            }
+
+            if (gemini_api_key && gemini_api_key.trim().length >= 10) {
+                await db.query(`
+                    INSERT INTO telegram_config (id, bot_token, gemini_api_key, bot_username, bot_first_name, is_active, updated_at)
+                    VALUES (1, ?, ?, ?, ?, ?, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        bot_token = VALUES(bot_token),
+                        gemini_api_key = VALUES(gemini_api_key),
+                        bot_username = VALUES(bot_username),
+                        bot_first_name = VALUES(bot_first_name),
+                        is_active = VALUES(is_active),
+                        updated_at = NOW()
+                `, [
+                    cleanToken,
+                    gemini_api_key.trim(),
+                    verifiedBot?.username || 'SIPE_IA_BOT',
+                    verifiedBot?.first_name || 'SIPE_BOT',
+                    isActiveValue
+                ]);
+            } else {
+                await db.query(`
+                    INSERT INTO telegram_config (id, bot_token, bot_username, bot_first_name, is_active, updated_at)
+                    VALUES (1, ?, ?, ?, ?, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        bot_token = VALUES(bot_token),
+                        bot_username = VALUES(bot_username),
+                        bot_first_name = VALUES(bot_first_name),
+                        is_active = VALUES(is_active),
+                        updated_at = NOW()
+                `, [
+                    cleanToken,
+                    verifiedBot?.username || 'SIPE_IA_BOT',
+                    verifiedBot?.first_name || 'SIPE_BOT',
+                    isActiveValue
+                ]);
+            }
+
+            await restartTelegramBot();
+        } else if (gemini_api_key && gemini_api_key.trim().length >= 10) {
+            // Solo se actualiza la clave de Gemini
+            await db.query(`
+                INSERT INTO telegram_config (id, gemini_api_key, is_active, updated_at)
+                VALUES (1, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE
+                    gemini_api_key = VALUES(gemini_api_key),
+                    is_active = VALUES(is_active),
+                    updated_at = NOW()
+            `, [
+                gemini_api_key.trim(),
+                isActiveValue
+            ]);
+        } else if (is_active !== undefined) {
+            await db.query(`
+                UPDATE telegram_config SET is_active = ?, updated_at = NOW() WHERE id = 1
+            `, [isActiveValue]);
         }
 
-        // 2. Persistir en telegram_config
-        const isActiveValue = is_active !== undefined ? (is_active ? 1 : 0) : 1;
-        await db.query(`
-            INSERT INTO telegram_config (id, bot_token, bot_username, bot_first_name, is_active, updated_at)
-            VALUES (1, ?, ?, ?, ?, NOW())
-            ON DUPLICATE KEY UPDATE
-                bot_token = VALUES(bot_token),
-                bot_username = VALUES(bot_username),
-                bot_first_name = VALUES(bot_first_name),
-                is_active = VALUES(is_active),
-                updated_at = NOW()
-        `, [
-            cleanToken,
-            verifiedBot?.username || 'SIPE_IA_BOT',
-            verifiedBot?.first_name || 'SIPE_BOT',
-            isActiveValue
-        ]);
-
-        // 3. Reiniciar bot con el nuevo token
-        await restartTelegramBot();
         const updatedStatus = await getBotStatus();
 
         res.json({
             ok: true,
-            message: `Token actualizado y verificado con éxito (@${verifiedBot?.username || 'bot'}). Servicio reiniciado.`,
+            message: 'Configuración actualizada exitosamente.',
             bot: verifiedBot,
             status: updatedStatus
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar configuración de Telegram');
+    }
+});
+
+/**
+ * POST /api/telegram/test-gemini
+ * Probar conectividad y validez de la clave de Gemini API
+ */
+router.post('/test-gemini', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    const startTime = Date.now();
+    try {
+        let apiKey = req.body?.gemini_api_key;
+        if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
+            const { getGeminiApiKey } = require('../services/telegramBotService');
+            apiKey = await getGeminiApiKey();
+        }
+
+        if (!apiKey) {
+            return res.status(400).json({
+                ok: false,
+                message: 'No se ha proporcionado ni se encuentra configurada ninguna clave de Gemini API'
+            });
+        }
+
+        const { GoogleGenAI } = require('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+
+        let modelUsed = 'gemini-2.0-flash';
+        let response = null;
+        try {
+            response = await ai.models.generateContent({
+                model: 'gemini-2.0-flash',
+                contents: 'Responde únicamente con la palabra OK.'
+            });
+        } catch (e2) {
+            modelUsed = 'gemini-1.5-flash';
+            response = await ai.models.generateContent({
+                model: 'gemini-1.5-flash',
+                contents: 'Responde únicamente con la palabra OK.'
+            });
+        }
+
+        const latencyMs = Date.now() - startTime;
+        const text = response?.text || '';
+
+        res.json({
+            ok: true,
+            model: modelUsed,
+            latencyMs,
+            reply: text.trim(),
+            message: `Conexión con Gemini AI exitosa (${modelUsed}, latencia: ${latencyMs}ms)`
+        });
+    } catch (error) {
+        res.status(400).json({
+            ok: false,
+            latencyMs: Date.now() - startTime,
+            message: `Error al probar Gemini API: ${error.message || 'Clave inválida o sin cuota'}`
+        });
     }
 });
 

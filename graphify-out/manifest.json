@@ -180,9 +180,9 @@
     "semantic_hash": "ed18a2399dbfc0ef94ecbb1b3d58ea07"
   },
   "backend/routes/telegram.js": {
-    "mtime": 1791903976.127283,
-    "seen": 1791904200.294297,
-    "ast_hash": "d7e2f60f52dddad0d532530fac127407",
+    "mtime": 1791932284.303462,
+    "seen": 1791932510.9971354,
+    "ast_hash": "52c3d8ea8ae6162dd4ed6c507170af0a",
     "semantic_hash": ""
   },
   "backend/scripts/backup-db.js": {
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791904140.5115833,
-    "seen": 1791904200.294297,
-    "ast_hash": "0dac8c33d76fab6d570f24d041c92237",
+    "mtime": 1791932456.461821,
+    "seen": 1791932510.9971354,
+    "ast_hash": "78d3a2db698721f92cc00f578489e54e",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791899173.2568917,
-    "seen": 1791904200.294297,
-    "ast_hash": "1cd7070b67a7794a0737145aba21b5a1",
+    "mtime": 1791932490.0329874,
+    "seen": 1791932510.9971354,
+    "ast_hash": "675da6e85486fe6351d7fca5d0892a76",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -924,9 +924,9 @@
     "semantic_hash": "4f19518f5045ed51d3fdfa818e2f1a92"
   },
   "frontend/src/pages/TelegramUsers.jsx": {
-    "mtime": 1791835305.8223512,
-    "seen": 1791845837.400197,
-    "ast_hash": "65ac558ee0fa15c6bd5058c01c374ee0",
+    "mtime": 1791932399.575119,
+    "seen": 1791932510.9971354,
+    "ast_hash": "11758d44c005f8262b12ad346d4662d6",
     "semantic_hash": ""
   },
   "frontend/src/pages/Users.jsx": {
@@ -1230,9 +1230,9 @@
     "semantic_hash": ""
   },
   "backend/services/telegramAuditorService.js": {
-    "mtime": 1791833118.2892354,
-    "seen": 1791833582.6796896,
-    "ast_hash": "0f339618a089c055e17e69021869c397",
+    "mtime": 1791932272.5351787,
+    "seen": 1791932510.9971354,
+    "ast_hash": "ab68e3915b095f4d52a7850b43f92759",
     "semantic_hash": ""
   },
   "backend/test/telegramAuditor.test.js": {
@@ -1242,9 +1242,9 @@
     "semantic_hash": ""
   },
   "backend/test/telegramAdvancedCapabilities.test.js": {
-    "mtime": 1791833810.9848833,
-    "seen": 1791833854.7149916,
-    "ast_hash": "3d326fa79bc302eeb3743bb9eaee11ff",
+    "mtime": 1791932466.6670864,
+    "seen": 1791932510.9971354,
+    "ast_hash": "c0c2698984dbe029b621a0fd1b853f45",
     "semantic_hash": ""
   },
   "scripts/sync_portal_pedidos.sh": {
@@ -1281,6 +1281,12 @@
     "mtime": 1791904059.7955563,
     "seen": 1791904200.294297,
     "ast_hash": "ee35830b6ccddfbf792ad9a1b3c741fe",
+    "semantic_hash": ""
+  },
+  "backend/test/telegramVoice.test.js": {
+    "mtime": 1791932291.388658,
+    "seen": 1791932510.9971354,
+    "ast_hash": "31b76540436f14ef0f0bfd7b1cfdcc52",
     "semantic_hash": ""
   }
 }

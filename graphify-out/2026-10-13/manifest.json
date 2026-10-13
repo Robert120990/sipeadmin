@@ -180,9 +180,9 @@
     "semantic_hash": "ed18a2399dbfc0ef94ecbb1b3d58ea07"
   },
   "backend/routes/telegram.js": {
-    "mtime": 1791834973.447808,
-    "seen": 1791835046.8077536,
-    "ast_hash": "e2eaa21765a2727c149c06a3250dc34b",
+    "mtime": 1791903976.127283,
+    "seen": 1791904200.294297,
+    "ast_hash": "d7e2f60f52dddad0d532530fac127407",
     "semantic_hash": ""
   },
   "backend/scripts/backup-db.js": {
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791899074.214917,
-    "seen": 1791899168.9237237,
-    "ast_hash": "5cb6273b530acd4561f1aa00a5e437db",
+    "mtime": 1791904140.5115833,
+    "seen": 1791904200.294297,
+    "ast_hash": "0dac8c33d76fab6d570f24d041c92237",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791846668.4814572,
-    "seen": 1791846878.4962602,
-    "ast_hash": "6a99830060aa76bfc27272958481915d",
+    "mtime": 1791899173.2568917,
+    "seen": 1791904200.294297,
+    "ast_hash": "1cd7070b67a7794a0737145aba21b5a1",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -1194,9 +1194,9 @@
     "semantic_hash": ""
   },
   "backend/services/solarEnergyService.js": {
-    "mtime": 1791898778.598708,
-    "seen": 1791899168.9237237,
-    "ast_hash": "f74b72af07d8564b83b4850e3135926c",
+    "mtime": 1791904132.6649537,
+    "seen": 1791904200.294297,
+    "ast_hash": "f7843f5026bcb44a1ee76051bd4369bb",
     "semantic_hash": ""
   },
   "backend/test/salesHourly.test.js": {
@@ -1260,9 +1260,9 @@
     "semantic_hash": ""
   },
   "backend/services/sysSaasService.js": {
-    "mtime": 1791898683.9836006,
-    "seen": 1791899168.9237237,
-    "ast_hash": "1b191ce29c67de19bd5cafd84f08ddd3",
+    "mtime": 1791903942.5489483,
+    "seen": 1791904200.294297,
+    "ast_hash": "8764b91963aa56c2407250a9f6b04a0c",
     "semantic_hash": ""
   },
   "backend/test/andelsaTelegramBot.test.js": {
@@ -1275,6 +1275,12 @@
     "mtime": 1791898738.5556417,
     "seen": 1791899168.9237237,
     "ast_hash": "741ca5ff96efdf708805b35f7b014992",
+    "semantic_hash": ""
+  },
+  "backend/test/telegramPerformance.test.js": {
+    "mtime": 1791904059.7955563,
+    "seen": 1791904200.294297,
+    "ast_hash": "ee35830b6ccddfbf792ad9a1b3c741fe",
     "semantic_hash": ""
   }
 }

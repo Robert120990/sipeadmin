@@ -240,8 +240,14 @@ describe('OpenClaw Telegram Bot - Advanced Capabilities', () => {
                     this.models = {
                         generateContent: async ({ model, contents }) => {
                             capturedModel = model;
-                            capturedPrompt = contents[0];
-                            capturedMime = contents[1]?.inlineData?.mimeType;
+                            const firstContent = contents[0];
+                            if (firstContent?.parts) {
+                                capturedPrompt = firstContent.parts[0]?.text || '';
+                                capturedMime = firstContent.parts[1]?.inlineData?.mimeType;
+                            } else {
+                                capturedPrompt = contents[0];
+                                capturedMime = contents[1]?.inlineData?.mimeType;
+                            }
                             return { text: 'cuanto vendio miraflores el dia de ayer' };
                         }
                     };

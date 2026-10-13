@@ -440,9 +440,23 @@ const getHealthDiagnostics = async () => {
     // 2. Conectividad a bases de datos (db_sipe_admin y db_sistema_saas)
     const databases = await checkDatabasesHealth();
 
-    // 3. Estado de Gemini API (configured: !!process.env.GEMINI_API_KEY)
+    // 3. Estado de Gemini API (verificar tanto process.env como tabla telegram_config)
+    let geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 10);
+    if (!geminiConfigured) {
+        try {
+            const db = getDb();
+            if (db) {
+                const [cfgRows] = await db.query('SELECT gemini_api_key FROM telegram_config WHERE id = 1 LIMIT 1');
+                if (cfgRows && cfgRows.length > 0 && cfgRows[0].gemini_api_key && cfgRows[0].gemini_api_key.trim().length > 10) {
+                    geminiConfigured = true;
+                }
+            }
+        } catch (_) {
+            // Ignorar de forma segura si la BD no está disponible
+        }
+    }
     const gemini = {
-        configured: !!process.env.GEMINI_API_KEY,
+        configured: geminiConfigured,
         model: 'gemini-2.0-flash'
     };
 

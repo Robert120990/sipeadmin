@@ -479,6 +479,7 @@ const getMainReplyKeyboard = () => {
         keyboard: [
             [{ text: '⛽ Ventas de Hoy' }, { text: '⛽ Ventas de Ayer' }],
             [{ text: '🏦 Saldo en Banco' }, { text: '🧾 Saldo en Chequera' }],
+            [{ text: '☀️ Paneles Solares' }, { text: '🏛️ Andelsa (sys)' }],
             [{ text: '🚨 Alertas en Estaciones' }, { text: 'ℹ️ Mi Perfil' }]
         ],
         resize_keyboard: true,
@@ -2758,13 +2759,54 @@ const formatIntelligentGuidanceMessage = () => {
 };
 
 /**
+ * Obtener clave de Gemini API (desde tabla telegram_config o variable de entorno)
+ */
+const getGeminiApiKey = async () => {
+    try {
+        const db = getDb();
+        if (db) {
+            const [rows] = await db.query('SELECT gemini_api_key FROM telegram_config WHERE id = 1 LIMIT 1');
+            if (rows && rows.length > 0 && rows[0].gemini_api_key && rows[0].gemini_api_key.trim().length > 10) {
+                return rows[0].gemini_api_key.trim();
+            }
+        }
+    } catch (_) {
+        // Base de datos ocupada o no disponible en pruebas
+    }
+    return (process.env.GEMINI_API_KEY || '').trim() || null;
+};
+
+/**
+ * Sanitizar el tipo MIME de audio para la API de Gemini
+ * Telegram envía notas de voz con parámetros como 'audio/ogg; codecs=opus', 'audio/oga' o 'audio/opus'
+ * Gemini API requiere un MIME type estricto y limpio sin parámetros (ej. 'audio/ogg', 'audio/mp3')
+ */
+const sanitizeAudioMimeType = (rawMime = '') => {
+    let clean = (rawMime || 'audio/ogg').split(';')[0].trim().toLowerCase();
+    if (clean === 'audio/oga' || clean === 'audio/opus' || clean === 'audio/x-opus') {
+        clean = 'audio/ogg';
+    }
+    if (clean === 'audio/mp4' || clean === 'audio/m4a' || clean === 'audio/x-m4a') {
+        clean = 'audio/mp4';
+    }
+    if (clean === 'audio/mpeg' || clean === 'audio/mp3') {
+        clean = 'audio/mp3';
+    }
+    if (clean === 'audio/wav' || clean === 'audio/x-wav') {
+        clean = 'audio/wav';
+    }
+    return clean || 'audio/ogg';
+};
+
+/**
  * Consulta con Gemini API (GenAI) si está configurado en el servidor
  */
 const askGeminiAssistant = async (prompt, dataContext) => {
-    if (!process.env.GEMINI_API_KEY) return null;
+    const apiKey = await getGeminiApiKey();
+    if (!apiKey) return null;
     try {
         const { GoogleGenAI } = require('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const ai = new GoogleGenAI({ apiKey });
         const systemInstruction = `Eres el asistente gerencial de SIPE Admin para estaciones de servicio de combustible en El Salvador.
 Responde de forma ejecutiva, concisa, cálida y directa en español salvadoreño formal.
 Usa viñetas limpias y negritas en HTML para Telegram (<b>texto</b>, <code>código</code>).
@@ -2794,26 +2836,44 @@ const transcribeTelegramVoice = async (audioBuffer, mimeType = 'audio/ogg') => {
     if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0) {
         throw new Error('Buffer de audio inválido o vacío');
     }
-    if (!process.env.GEMINI_API_KEY) {
-        throw new Error('GEMINI_API_KEY no configurado en el servidor');
+
+    const apiKey = await getGeminiApiKey();
+    if (!apiKey) {
+        throw new Error('GEMINI_API_KEY no configurado en el servidor ni en telegram_config');
     }
 
     const { GoogleGenAI } = require('@google/genai');
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const prompt = 'Transcribe exactamente el siguiente mensaje de voz en español salvadoreño formal, sin añadir notas explicativas ni comentarios adicionales, únicamente el texto que dijo el usuario.';
+    const ai = new GoogleGenAI({ apiKey });
+    const cleanMime = sanitizeAudioMimeType(mimeType);
+    const base64Audio = audioBuffer.toString('base64');
+    const prompt = 'Transcribe exactamente el siguiente mensaje de voz en español salvadoreño formal, sin añadir notas explicativas, etiquetas ni comentarios adicionales, únicamente el texto que dijo el usuario.';
 
-    const response = await ai.models.generateContent({
+    const payload = {
         model: 'gemini-2.0-flash',
         contents: [
-            prompt,
             {
-                inlineData: {
-                    mimeType: mimeType || 'audio/ogg',
-                    data: audioBuffer.toString('base64')
-                }
+                role: 'user',
+                parts: [
+                    { text: prompt },
+                    {
+                        inlineData: {
+                            mimeType: cleanMime,
+                            data: base64Audio
+                        }
+                    }
+                ]
             }
         ]
-    });
+    };
+
+    let response;
+    try {
+        response = await ai.models.generateContent(payload);
+    } catch (primaryErr) {
+        console.warn('[TelegramBot] Fallo transcripción con gemini-2.0-flash, reintentando con gemini-1.5-flash:', primaryErr.message);
+        payload.model = 'gemini-1.5-flash';
+        response = await ai.models.generateContent(payload);
+    }
 
     const text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text;
     return text ? text.trim() : '';
@@ -3492,19 +3552,23 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             // Ignorar defensivamente
         }
 
-        // Envío de mensaje temporal
-        await sendTelegramMessage(chatId, '⏳ Escuchando y transcribiendo nota de voz...');
+        sendChatAction(chatId, 'record_voice').catch(() => {});
 
-        if (!process.env.GEMINI_API_KEY) {
+        const apiKey = await getGeminiApiKey();
+        if (!apiKey) {
             await sendTelegramMessage(
                 chatId,
                 '🎙️ <b>Servicio de voz no disponible</b>\n\n' +
-                'La API de transcripción por IA no se encuentra configurada en el servidor. ' +
-                'Por favor, escribe tu consulta por texto para poder atenderte de inmediato.',
+                'La clave de API de Gemini no se encuentra configurada en el servidor ni en la base de datos.\n' +
+                'Un administrador puede ingresarla desde <b>Seguridad &gt; Usuarios de Telegram &gt; Configuración</b> en SIPE Admin.\n\n' +
+                'Por favor, escribe tu consulta por texto para atenderte de inmediato.',
                 getMainReplyKeyboard()
             );
             return;
         }
+
+        // Envío de feedback de progreso
+        await sendTelegramMessage(chatId, '⏳ Escuchando y transcribiendo nota de voz...');
 
         let transcribedText = null;
         try {
@@ -3515,6 +3579,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             const filePath = fileRes.data?.result?.file_path;
             if (!filePath) throw new Error('No se pudo resolver la ruta del audio en Telegram');
 
+            sendChatAction(chatId, 'typing').catch(() => {});
             const audioRes = await axios.get(`https://api.telegram.org/file/bot${token}/${filePath}`, {
                 responseType: 'arraybuffer',
                 timeout: 30000
@@ -3524,11 +3589,24 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             transcribedText = await transcribeTelegramVoice(audioBuffer, mimeType);
         } catch (voiceErr) {
             console.error('[TelegramBot] Error en transcripción de audio:', voiceErr.message);
+            try {
+                const { recordVoiceNoteFailed, recordError } = require('./telegramAuditorService');
+                recordVoiceNoteFailed(msg.from.id);
+                recordError({
+                    type: 'VOICE_TRANSCRIPTION_ERROR',
+                    message: voiceErr.message,
+                    userId: msg.from.id,
+                    chatId
+                });
+            } catch (_) {
+                // Ignorar fallo de registro en auditoría
+            }
+
             await sendTelegramMessage(
                 chatId,
                 '🎙️ <b>No se pudo procesar la nota de voz</b>\n\n' +
-                'Ocurrió un inconveniente al descargar o transcribir tu audio. ' +
-                'Por favor, escribe tu consulta por texto para atenderte de inmediato.',
+                'Ocurrió un inconveniente al descargar o transcribir tu audio (' + escapeHtml(voiceErr.message || 'error de procesamiento') + ').\n' +
+                'Por favor, intenta nuevamente o escribe tu consulta por texto para atenderte de inmediato.',
                 getMainReplyKeyboard()
             );
             return;
@@ -3538,8 +3616,8 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             await sendTelegramMessage(
                 chatId,
                 '🎙️ <b>Nota de voz no comprensible</b>\n\n' +
-                'No fue posible entender el audio o la grabación estaba vacía. ' +
-                'Por favor, escribe tu consulta por texto.',
+                'No fue posible entender el audio o la grabación no contenía voz clara.\n' +
+                'Por favor, intenta enviar una nueva nota de voz o escribe tu consulta por texto.',
                 getMainReplyKeyboard()
             );
             return;
@@ -4738,6 +4816,8 @@ module.exports = {
     findStationById,
     findFuelByKey,
     transcribeTelegramVoice,
+    getGeminiApiKey,
+    sanitizeAudioMimeType,
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS,

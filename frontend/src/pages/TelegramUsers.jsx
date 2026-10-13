@@ -84,11 +84,14 @@ export default function TelegramUsers() {
     const [testMessageText, setTestMessageText] = useState('');
     const [sendingTest, setSendingTest] = useState(false);
 
-    // Modal y estado de configuración de Token
+    // Modal y estado de configuración de Token y Gemini AI
     const [showTokenModal, setShowTokenModal] = useState(false);
     const [tokenConfig, setTokenConfig] = useState(null);
     const [newTokenInput, setNewTokenInput] = useState('');
+    const [newGeminiKeyInput, setNewGeminiKeyInput] = useState('');
     const [savingToken, setSavingToken] = useState(false);
+    const [testingGemini, setTestingGemini] = useState(false);
+    const [geminiTestResult, setGeminiTestResult] = useState(null);
 
     // Cargar estado del bot
     const fetchBotStatus = useCallback(async () => {
@@ -358,32 +361,79 @@ export default function TelegramUsers() {
         }
     };
 
-    // Guardar nuevo token de bot
+    // Pegar clave de Gemini desde el portapapeles
+    const handlePasteGeminiClipboard = async () => {
+        try {
+            if (navigator?.clipboard?.readText) {
+                const text = await navigator.clipboard.readText();
+                if (text && text.trim()) {
+                    setNewGeminiKeyInput(text.trim());
+                    addToast('Clave de Gemini pegada desde el portapapeles', 'info');
+                    return;
+                }
+            }
+            addToast('Usa Ctrl+V para pegar en el campo de texto', 'info');
+        } catch (_) {
+            addToast('Usa Ctrl+V para pegar en el campo de texto', 'info');
+        }
+    };
+
+    // Probar conectividad en vivo con Gemini AI
+    const handleTestGemini = async () => {
+        setTestingGemini(true);
+        setGeminiTestResult(null);
+        try {
+            const res = await api.post('/telegram/test-gemini', {
+                gemini_api_key: newGeminiKeyInput.trim() || undefined
+            });
+            if (res.data?.ok) {
+                setGeminiTestResult(res.data);
+                addToast(res.data.message || 'Gemini AI conectado exitosamente', 'success');
+            }
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Error al conectar con Gemini AI';
+            setGeminiTestResult({ ok: false, message: msg });
+            addToast(msg, 'error');
+        } finally {
+            setTestingGemini(false);
+        }
+    };
+
+    // Guardar nuevo token de bot y/o clave de Gemini API
     const handleSaveToken = async (e) => {
         if (e && e.preventDefault) e.preventDefault();
-        const clean = newTokenInput.trim();
-        if (!clean) {
-            addToast('Por favor escribe o pega el nuevo token del bot', 'warning');
+        const cleanToken = newTokenInput.trim();
+        const cleanGemini = newGeminiKeyInput.trim();
+
+        if (!cleanToken && !cleanGemini) {
+            addToast('Ingresa un nuevo token de bot o una clave de Gemini para guardar', 'warning');
             return;
         }
-        if (!clean.includes(':') || clean.length < 20) {
-            addToast('Formato de token inválido. Debe contener números seguidos de ":" y la clave alfanumérica', 'warning');
+
+        if (cleanToken && (!cleanToken.includes(':') || cleanToken.length < 20)) {
+            addToast('Formato de token de Telegram inválido. Debe contener números seguidos de ":" y la clave alfanumérica', 'warning');
             return;
         }
 
         setSavingToken(true);
         try {
-            const res = await api.put('/telegram/config', { bot_token: clean });
+            const payload = {};
+            if (cleanToken) payload.bot_token = cleanToken;
+            if (cleanGemini) payload.gemini_api_key = cleanGemini;
+
+            const res = await api.put('/telegram/config', payload);
             if (res.data?.ok) {
-                addToast(res.data.message || 'Token actualizado con éxito', 'success');
+                addToast(res.data.message || 'Configuración actualizada con éxito', 'success');
                 setShowTokenModal(false);
                 setNewTokenInput('');
+                setNewGeminiKeyInput('');
+                setGeminiTestResult(null);
                 fetchBotStatus();
                 fetchTokenConfig();
                 fetchHealthDiagnostics();
             }
         } catch (err) {
-            addToast(err.response?.data?.message || 'Error al actualizar y verificar el token', 'error');
+            addToast(err.response?.data?.message || 'Error al actualizar configuración', 'error');
         } finally {
             setSavingToken(false);
         }
@@ -2348,11 +2398,11 @@ export default function TelegramUsers() {
                 )}
             </Modal>
 
-            {/* Modal para Configuración de Token de Telegram */}
+            {/* Modal para Configuración de Token de Telegram & Gemini AI */}
             <Modal
                 open={showTokenModal}
                 onClose={() => !savingToken && setShowTokenModal(false)}
-                title="Configuración de Token del Bot de Telegram"
+                title="Configuración de Telegram Bot & Gemini AI"
                 size="md"
                 footer={
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', width: '100%' }}>
@@ -2369,7 +2419,7 @@ export default function TelegramUsers() {
                             type="button"
                             className="btn-primary"
                             onClick={handleSaveToken}
-                            disabled={savingToken || !newTokenInput.trim()}
+                            disabled={savingToken || (!newTokenInput.trim() && !newGeminiKeyInput.trim())}
                             style={{ height: '36px', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
                         >
                             {savingToken ? (
@@ -2379,150 +2429,279 @@ export default function TelegramUsers() {
                                 </>
                             ) : (
                                 <>
-                                    <Key size={14} />
-                                    Guardar y Reconectar
+                                    <Check size={14} />
+                                    Guardar Configuración
                                 </>
                             )}
                         </button>
                     </div>
                 }
             >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div style={{
-                        padding: '0.75rem 0.9rem',
-                        background: 'rgba(239, 68, 68, 0.08)',
-                        borderLeft: '4px solid #EF4444',
-                        borderRadius: '0 6px 6px 0',
-                        fontSize: '0.8rem',
-                        color: 'var(--text-main)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.4rem'
-                    }}>
-                        <div style={{ fontWeight: 700, color: '#DC2626', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <AlertTriangle size={15} />
-                            Rotación de Seguridad y Revocación de Spam
-                        </div>
-                        <div>
-                            Si el bot responde con enlaces a canales de spam ajenos (ej. <i>TucosProfit</i> o <i>A_TOOLSx2</i>), significa que el token anterior fue filtrado y un bot externo no autorizado está leyendo los mensajes mediante polling.
-                        </div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            <b>Instrucciones para rotar y cortar el spam:</b><br />
-                            1. Abre <b>@BotFather</b> en Telegram y envía <code>/mybots</code>.<br />
-                            2. Elige tu bot oficial &rarr; <i>API Token</i> &rarr; <b>Revoke current token</b>.<br />
-                            3. Copia el nuevo token generado e ingrésalo en el campo a continuación.
-                        </div>
-                    </div>
-
-                    {/* Estado del token actual (Tarjeta informativa no editable) */}
-                    <div style={{
-                        padding: '0.65rem 0.85rem',
-                        background: 'rgba(255, 255, 255, 0.03)',
-                        borderRadius: '6px',
-                        border: '1px solid var(--border)',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '0.5rem'
-                    }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                            <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
-                                Token actualmente en uso
-                            </span>
-                            <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary, #0088cc)' }}>
-                                {tokenConfig?.masked_token || (tokenConfig?.has_token ? '••••••••••••••••' : 'Ningún token registrado')}
-                            </span>
-                        </div>
-                        <span style={{
-                            fontSize: '0.72rem',
-                            padding: '0.2rem 0.55rem',
-                            borderRadius: '4px',
-                            fontWeight: 600,
-                            background: tokenConfig?.has_token ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                            color: tokenConfig?.has_token ? '#10B981' : '#EF4444'
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    {/* SECCIÓN 1: TOKEN DE TELEGRAM */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <div style={{
+                            fontSize: '0.82rem',
+                            fontWeight: 700,
+                            color: 'var(--text-main)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            borderBottom: '1px solid var(--border)',
+                            paddingBottom: '0.35rem'
                         }}>
-                            {tokenConfig?.has_token ? 'Configurado' : 'Sin Token'}
-                        </span>
-                    </div>
-
-                    {/* Campo de edición directa del nuevo Token */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <label htmlFor="new_bot_token_input" style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)', textTransform: 'uppercase' }}>
-                                Ingresa el Nuevo Token de @BotFather
-                            </label>
-                            <button
-                                type="button"
-                                onClick={handlePasteClipboard}
-                                style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    color: 'var(--primary, #0088cc)',
-                                    fontSize: '0.75rem',
-                                    fontWeight: 600,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.3rem',
-                                    padding: '0.2rem 0.4rem'
-                                }}
-                            >
-                                <ClipboardPaste size={14} />
-                                Pegar del portapapeles
-                            </button>
+                            <Bot size={15} color="#0088cc" />
+                            1. Token del Bot de Telegram (@BotFather)
                         </div>
 
-                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                            <input
-                                id="new_bot_token_input"
-                                name="new_bot_token_input"
-                                type="text"
-                                value={newTokenInput}
-                                onChange={(e) => setNewTokenInput(e.target.value)}
-                                placeholder="Ej: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ..."
-                                autoFocus
-                                autoComplete="off"
-                                autoCorrect="off"
-                                autoCapitalize="off"
-                                spellCheck="false"
-                                data-lpignore="true"
-                                data-form-type="other"
-                                className="form-input"
-                                style={{
-                                    width: '100%',
-                                    fontFamily: 'monospace',
-                                    paddingRight: newTokenInput ? '4.5rem' : '1rem',
-                                    height: '42px',
-                                    fontSize: '0.85rem'
-                                }}
-                                disabled={savingToken}
-                            />
-                            {newTokenInput && (
+                        {/* Estado del token actual */}
+                        <div style={{
+                            padding: '0.55rem 0.8rem',
+                            background: 'rgba(255, 255, 255, 0.03)',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '0.5rem'
+                        }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                                <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                    Token en uso
+                                </span>
+                                <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 600, color: 'var(--primary, #0088cc)' }}>
+                                    {tokenConfig?.masked_token || (tokenConfig?.has_token ? '••••••••••••••••' : 'Ningún token registrado')}
+                                </span>
+                            </div>
+                            <span style={{
+                                fontSize: '0.7rem',
+                                padding: '0.15rem 0.5rem',
+                                borderRadius: '4px',
+                                fontWeight: 600,
+                                background: tokenConfig?.has_token ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                                color: tokenConfig?.has_token ? '#10B981' : '#EF4444'
+                            }}>
+                                {tokenConfig?.has_token ? 'Configurado' : 'Sin Token'}
+                            </span>
+                        </div>
+
+                        {/* Input nuevo token */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <label htmlFor="new_bot_token_input" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                                    Actualizar Token (opcional si ya está configurado)
+                                </label>
                                 <button
                                     type="button"
-                                    onClick={() => setNewTokenInput('')}
+                                    onClick={handlePasteClipboard}
                                     style={{
-                                        position: 'absolute',
-                                        right: '8px',
-                                        background: 'rgba(239, 68, 68, 0.1)',
-                                        color: '#EF4444',
+                                        background: 'none',
                                         border: 'none',
-                                        borderRadius: '4px',
                                         cursor: 'pointer',
-                                        padding: '4px 8px',
+                                        color: 'var(--primary, #0088cc)',
                                         fontSize: '0.72rem',
-                                        fontWeight: 600
+                                        fontWeight: 600,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        padding: '0.15rem 0.35rem'
                                     }}
-                                    title="Limpiar campo"
                                 >
-                                    Borrar
+                                    <ClipboardPaste size={13} />
+                                    Pegar
                                 </button>
-                            )}
+                            </div>
+
+                            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                <input
+                                    id="new_bot_token_input"
+                                    name="new_bot_token_input"
+                                    type="text"
+                                    value={newTokenInput}
+                                    onChange={(e) => setNewTokenInput(e.target.value)}
+                                    placeholder="Ej: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ..."
+                                    autoComplete="off"
+                                    spellCheck="false"
+                                    className="form-input"
+                                    style={{
+                                        width: '100%',
+                                        fontFamily: 'monospace',
+                                        paddingRight: newTokenInput ? '4rem' : '0.85rem',
+                                        height: '38px',
+                                        fontSize: '0.8rem'
+                                    }}
+                                    disabled={savingToken}
+                                />
+                                {newTokenInput && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setNewTokenInput('')}
+                                        style={{
+                                            position: 'absolute',
+                                            right: '8px',
+                                            background: 'rgba(239, 68, 68, 0.1)',
+                                            color: '#EF4444',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            cursor: 'pointer',
+                                            padding: '3px 6px',
+                                            fontSize: '0.7rem',
+                                            fontWeight: 600
+                                        }}
+                                    >
+                                        Borrar
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* SECCIÓN 2: CLAVE DE GEMINI API */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <div style={{
+                            fontSize: '0.82rem',
+                            fontWeight: 700,
+                            color: 'var(--text-main)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            borderBottom: '1px solid var(--border)',
+                            paddingBottom: '0.35rem'
+                        }}>
+                            <Cpu size={15} color="#8B5CF6" />
+                            2. Clave de Gemini AI (Transcripción de Voz & Asistente)
                         </div>
 
-                        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                            Al hacer clic en <b>Guardar y Reconectar</b>, el sistema validará el token directamente con la API oficial de Telegram antes de activarlo.
-                        </span>
+                        {/* Estado actual de Gemini */}
+                        <div style={{
+                            padding: '0.55rem 0.8rem',
+                            background: 'rgba(255, 255, 255, 0.03)',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '0.5rem'
+                        }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                                <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                    Clave Gemini en uso
+                                </span>
+                                <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 600, color: '#8B5CF6' }}>
+                                    {tokenConfig?.masked_gemini_key || (tokenConfig?.has_gemini_key ? '••••••••••••••••' : 'Sin clave registrada')}
+                                </span>
+                            </div>
+                            <span style={{
+                                fontSize: '0.7rem',
+                                padding: '0.15rem 0.5rem',
+                                borderRadius: '4px',
+                                fontWeight: 600,
+                                background: tokenConfig?.has_gemini_key ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                color: tokenConfig?.has_gemini_key ? '#10B981' : '#F59E0B'
+                            }}>
+                                {tokenConfig?.has_gemini_key ? 'Configurada' : 'Sin Clave'}
+                            </span>
+                        </div>
+
+                        {/* Input nueva clave Gemini */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <label htmlFor="new_gemini_key_input" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                                    Nueva Clave Gemini API (AIzaSy...)
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={handlePasteGeminiClipboard}
+                                    style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        color: '#8B5CF6',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 600,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        padding: '0.15rem 0.35rem'
+                                    }}
+                                >
+                                    <ClipboardPaste size={13} />
+                                    Pegar
+                                </button>
+                            </div>
+
+                            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                <input
+                                    id="new_gemini_key_input"
+                                    name="new_gemini_key_input"
+                                    type="text"
+                                    value={newGeminiKeyInput}
+                                    onChange={(e) => setNewGeminiKeyInput(e.target.value)}
+                                    placeholder="Ej: AIzaSyB1234567890abcdef..."
+                                    autoComplete="off"
+                                    spellCheck="false"
+                                    className="form-input"
+                                    style={{
+                                        width: '100%',
+                                        fontFamily: 'monospace',
+                                        paddingRight: newGeminiKeyInput ? '4rem' : '0.85rem',
+                                        height: '38px',
+                                        fontSize: '0.8rem'
+                                    }}
+                                    disabled={savingToken}
+                                />
+                                {newGeminiKeyInput && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setNewGeminiKeyInput('')}
+                                        style={{
+                                            position: 'absolute',
+                                            right: '8px',
+                                            background: 'rgba(239, 68, 68, 0.1)',
+                                            color: '#EF4444',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            cursor: 'pointer',
+                                            padding: '3px 6px',
+                                            fontSize: '0.7rem',
+                                            fontWeight: 600
+                                        }}
+                                    >
+                                        Borrar
+                                    </button>
+                                )}
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={handleTestGemini}
+                                    disabled={testingGemini}
+                                    style={{
+                                        height: '30px',
+                                        fontSize: '0.74rem',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.35rem',
+                                        padding: '0 0.65rem'
+                                    }}
+                                >
+                                    <RefreshCw size={12} className={testingGemini ? 'spin' : ''} />
+                                    {testingGemini ? 'Probando...' : '⚡ Probar Conexión con Gemini AI'}
+                                </button>
+
+                                {geminiTestResult && (
+                                    <span style={{
+                                        fontSize: '0.72rem',
+                                        fontWeight: 600,
+                                        color: geminiTestResult.ok ? '#10B981' : '#EF4444'
+                                    }}>
+                                        {geminiTestResult.ok ? `🟢 OK (${geminiTestResult.latencyMs}ms)` : '🔴 Error'}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </Modal>
