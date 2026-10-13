@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getDb, getExternalDb, getAccountingDb } = require('../db');
 const salesHourlyService = require('./salesHourlyService');
 const solarEnergyService = require('./solarEnergyService');
+const sysSaasService = require('./sysSaasService');
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org/bot';
 const DEFAULT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -712,7 +713,7 @@ const getFeedbackInlineMarkup = (feedbackId) => {
 /**
  * Enviar mensaje con botones interactivos de retroalimentación (Sí / No)
  */
-const sendTelegramResponseWithFeedback = async (chatId, text, { user, query, responseSummary = null }) => {
+const sendTelegramResponseWithFeedback = async (chatId, text, { user, query, responseSummary = null, reply_markup = null }) => {
     let feedbackId = null;
     try {
         feedbackId = await createFeedbackEntry({
@@ -730,9 +731,21 @@ const sendTelegramResponseWithFeedback = async (chatId, text, { user, query, res
 
     let finalMarkup = null;
     let finalText = text;
+    const extraRows = (reply_markup && reply_markup.inline_keyboard) ? reply_markup.inline_keyboard : [];
+
     if (feedbackId) {
         finalText = `${text}\n\n<i>¿Contesté bien a tu pregunta?</i>`;
-        finalMarkup = getFeedbackInlineMarkup(feedbackId);
+        const fbRows = [
+            [
+                { text: '👍 Sí', callback_data: `fb_ok:${feedbackId}` },
+                { text: '👎 No', callback_data: `fb_no:${feedbackId}` }
+            ]
+        ];
+        finalMarkup = {
+            inline_keyboard: [...extraRows, ...fbRows]
+        };
+    } else if (extraRows.length > 0) {
+        finalMarkup = { inline_keyboard: extraRows };
     } else {
         finalMarkup = getMainReplyKeyboard();
     }
@@ -853,6 +866,60 @@ const handleCallbackQuery = async (cq) => {
                 `<i>(Escribe tu respuesta a continuación y la guardaremos en la bitácora de mejora continua)</i>`;
 
             await sendTelegramMessage(chatId, promptMsg, getMainReplyKeyboard());
+        }
+        return;
+    }
+
+    // Callbacks interactivos para Andelsa / Nova SaaS (sys.sipesv.com)
+    if (data.startsWith('andelsa_')) {
+        await answerCallbackQuery(cq.id, 'Consultando Nova SaaS...');
+        try {
+            if (data === 'andelsa_inv') {
+                const res = await sysSaasService.getAndelsaInventarios();
+                await sendTelegramMessage(chatId, formatAndelsaInventarioMessage(res), getAndelsaInlineMarkup());
+            } else if (data === 'andelsa_costos') {
+                const res = await sysSaasService.getAndelsaCostos();
+                await sendTelegramMessage(chatId, formatAndelsaCostosMessage(res), getAndelsaInlineMarkup());
+            } else if (data === 'andelsa_cli') {
+                const res = await sysSaasService.getAndelsaVentasPorCliente();
+                await sendTelegramMessage(chatId, formatAndelsaVentasClienteMessage(res, 'Últimos 30 días'), getAndelsaInlineMarkup());
+            } else if (data === 'andelsa_prod') {
+                const res = await sysSaasService.getAndelsaVentasPorProducto();
+                await sendTelegramMessage(chatId, formatAndelsaVentasProductoMessage(res, 'Últimos 30 días'), getAndelsaInlineMarkup());
+            } else if (data === 'andelsa_cxc') {
+                const res = await sysSaasService.getAndelsaCuentasPorCobrar();
+                await sendTelegramMessage(chatId, formatAndelsaCxcMessage(res), getAndelsaInlineMarkup());
+            } else if (data === 'andelsa_resumen') {
+                const res = await sysSaasService.getAndelsaFinanzasResumen();
+                await sendTelegramMessage(chatId, formatAndelsaFinanzasResumenMessage(res, 'Mes actual'), getAndelsaInlineMarkup());
+            }
+        } catch (e) {
+            await sendTelegramMessage(chatId, '❌ Error al cargar datos de Andelsa: ' + escapeHtml(e.message));
+        }
+        return;
+    }
+
+    // Callbacks interactivos para Energía Solar
+    if (data.startsWith('solar_')) {
+        await answerCallbackQuery(cq.id, 'Consultando energía solar...');
+        try {
+            if (data === 'solar_andelsa') {
+                const res = await solarEnergyService.getSolarAhorroDiario(null, 9);
+                await sendTelegramMessage(chatId, formatSolarEnergyMessage(res, 'diario', 'Hoy • Andelsa'), getSolarInlineMarkup());
+            } else if (data === 'solar_sanmartin') {
+                const res = await solarEnergyService.getSolarAhorroDiario(null, 1);
+                await sendTelegramMessage(chatId, formatSolarEnergyMessage(res, 'diario', 'Hoy • San Martín (La Loma)'), getSolarInlineMarkup());
+            } else if (data === 'solar_realtime') {
+                const res = await solarEnergyService.getSolarEstadoActual();
+                await sendTelegramMessage(chatId, formatSolarEnergyMessage(res, 'estado_actual'), getSolarInlineMarkup());
+            } else if (data === 'solar_mes') {
+                const now = new Date();
+                const res = await solarEnergyService.getSolarAhorroMensual(now.getFullYear(), now.getMonth() + 1);
+                const mLabel = `${SPANISH_MONTH_NAMES[now.getMonth() + 1]} ${now.getFullYear()}`;
+                await sendTelegramMessage(chatId, formatSolarEnergyMessage(res, 'mensual', mLabel), getSolarInlineMarkup());
+            }
+        } catch (e) {
+            await sendTelegramMessage(chatId, '❌ Error al consultar datos solares: ' + escapeHtml(e.message));
         }
         return;
     }
@@ -1612,31 +1679,49 @@ const formatProfileMessage = (user, effectivePerms = null) => {
 
 const KNOWN_STATIONS = [
     {
+        id: 'ANDELSA',
+        branch_id: 9,
+        saas_branch_id: 9,
+        name: 'Andelsa',
+        keywords: ['andelsa', 'planta andelsa', 'empresa andelsa', '009', 'andelsa s.a.'],
+        tiendaKey: 'andelsa'
+    },
+    {
+        id: '014',
+        branch_id: 1,
+        saas_branch_id: 1,
+        name: 'San Martín (La Loma)',
+        keywords: ['la loma', 'san martin', 'san martín', 'loma', 'puma la loma', 'puma san martin', '014', 'san martin la loma'],
+        tiendaKey: 'san martin'
+    },
+    {
         id: '008',
+        branch_id: 8,
+        saas_branch_id: 8,
         name: 'Puma Costa del Sol',
         keywords: ['costa del sol', 'costa', 'la costa', 'puma costa', 'super 7 costa', '008'],
         tiendaKey: 'costa'
     },
     {
         id: '002',
+        branch_id: 4,
+        saas_branch_id: 4,
         name: 'Puma Miraflores',
         keywords: ['miraflores', 'puma miraflores', 'e-market miraflores', '002'],
         tiendaKey: 'miraflores'
     },
     {
         id: '006',
+        branch_id: 3,
+        saas_branch_id: 3,
         name: 'Shell Chalchuapa',
         keywords: ['chalchuapa', 'shell chalchuapa', 'e-market chalchuapa', '006'],
         tiendaKey: 'chalchuapa'
     },
     {
-        id: '014',
-        name: 'Puma La Loma (San Martín)',
-        keywords: ['la loma', 'san martin', 'san martín', 'loma', 'puma la loma', 'puma san martin', '014'],
-        tiendaKey: 'san martin'
-    },
-    {
         id: '015',
+        branch_id: 2,
+        saas_branch_id: 2,
         name: 'Shell 14 Avenida',
         keywords: ['14 avenida', '14 ave', 'catorce avenida', 'shell 14', '015'],
         tiendaKey: '14'
@@ -1821,6 +1906,22 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
                          (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized));
 
+    // 10. Detección de consultas administrativas y financieras de Andelsa / Nova SaaS (sys.sipesv.com)
+    const isAndelsaMention = /\b(andelsa|planta andelsa|empresa andelsa)\b/i.test(normalized) ||
+                             (matchedStation && matchedStation.id === 'ANDELSA');
+    const isSysSaasMention = /\b(sys\.sipesv|sistema saas|nova saas|saas)\b/i.test(normalized);
+    const isAndelsaRelated = isAndelsaMention || isSysSaasMention;
+
+    const isAndelsaInventario = isAndelsaRelated && /\b(inventario|inventarios|stock|existencia|existencias|kardex|almacen)\b/i.test(normalized);
+    const isAndelsaCostos = isAndelsaRelated && /\b(costo|costos|margen|margenes|utilidad|ganancia)\b/i.test(normalized);
+    const isAndelsaCxc = isAndelsaRelated && /\b(cxc|cuentas por cobrar|cuenta por cobrar|por cobrar|cartera|morosidad|mora|deuda|deudores|creditos?)\b/i.test(normalized);
+    const isAndelsaVentasCliente = isAndelsaRelated && /\b(cliente|clientes)\b/i.test(normalized) && (/\b(venta|ventas|facturacion|facturado)\b/i.test(normalized) || !isAndelsaCxc);
+    const isAndelsaVentasProducto = isAndelsaRelated && /\b(producto|productos|items?|articulos?)\b/i.test(normalized) && /\b(venta|ventas|mas vendido|vendidos|desplazamiento)\b/i.test(normalized);
+    const isAndelsaFinanzasResumen = isAndelsaRelated && !isSolar && !isAndelsaInventario && !isAndelsaCostos && !isAndelsaCxc && !isAndelsaVentasCliente && !isAndelsaVentasProducto && !matchedFuel && (
+        /\b(finanzas|financiero|resumen|kpi|metricas|balance|estado general|general)\b/i.test(normalized) ||
+        /\b(andelsa)\b/i.test(normalized)
+    );
+
     // RESOLUCIÓN DE CONTEXTO CONVERSACIONAL MULTI-TURNO
     if (userContext) {
         // a. Pregunta de seguimiento de fecha: "¿Y el día anterior?", "¿Y ayer?", "¿Y anteayer?"
@@ -1905,6 +2006,13 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         isEnergy: isSolar,
         isHourlyPeak,
         isHorasPico: isHourlyPeak,
+        isAndelsaRelated,
+        isAndelsaInventario,
+        isAndelsaCostos,
+        isAndelsaCxc,
+        isAndelsaVentasCliente,
+        isAndelsaVentasProducto,
+        isAndelsaFinanzasResumen,
         isRange,
         isRango: isRange,
         startDate,
@@ -2184,51 +2292,315 @@ const formatSolarEnergyMessage = (solarData, tipo = 'diario', periodoLabel = nul
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
 
     if (tipo === 'estado_actual') {
+        const potTotal = solarData?.potencia_total_kwp ?? solarData?.potencia_instalada_total_kwp ?? 95.0;
+        const capBess = solarData?.capacidad_bateria_total_kwh ?? solarData?.capacidad_total_baterias_kwh ?? 60.0;
+        const potActual = solarData?.potencia_actual_estimada_kw ?? solarData?.potencia_actual_total_kw ?? 0.0;
+        const soc = solarData?.bateria_promedio_soc_pct ?? solarData?.bateria_soc_pct ?? 85.0;
+        const autonomia = solarData?.horas_autonomia_estimadas ?? 9.3;
+
         msg += `⚡ <b>Estado en Tiempo Real:</b>\n`;
-        msg += `• ☀️ <b>Capacidad Solar Total:</b> <code>${solarData?.potencia_total_kwp || 80.0} kWp</code> (2 estaciones)\n`;
-        msg += `• 🔋 <b>Capacidad BESS Total:</b> <code>${solarData?.capacidad_bateria_total_kwh || 60.0} kWh</code> (Miraflores)\n`;
-        msg += `• 🔌 <b>Potencia Instantánea Estimada:</b> <code>${solarData?.potencia_actual_estimada_kw || 0.0} kW</code>\n`;
-        msg += `• 🔋 <b>Estado de Carga Batería (SoC):</b> <b>${solarData?.bateria_promedio_soc_pct || 85.0}%</b>\n`;
-        msg += `• ⏱️ <b>Autonomía Cargas Críticas:</b> <code>${solarData?.horas_autonomia_estimadas || 9.3} hrs</code>\n\n`;
-
-        msg += `📍 <b>Ubicaciones con Instalación:</b>\n`;
-        (solarData?.instalaciones || []).forEach(inst => {
-            const hasBat = inst.tiene_baterias === 1;
-            msg += `• <b>${escapeHtml(inst.estacion_nombre)}:</b>\n`;
-            msg += `   Paneles: <code>${inst.potencia_kwp} kWp</code>`;
-            if (hasBat) {
-                msg += ` | Batería: <code>${inst.capacidad_bateria_kwh} kWh</code> (SoC: <b>${inst.bateria_soc_pct}%</b>)\n`;
-                msg += `   Autonomía: <code>${inst.horas_autonomia} hrs</code> (${inst.bateria_estado})\n`;
-            } else {
-                msg += ` | Sistema On-Grid (sin batería)\n`;
-            }
-        });
-    } else {
-        const tituloAhorro = tipo === 'mensual' ? 'Ahorro Mensual Acumulado' : tipo === 'rango' ? 'Ahorro en Rango Acumulado' : 'Ahorro Diario';
-        msg += `💰 <b>${tituloAhorro}:</b> <b>${moneyFmt(solarData?.total_ahorro_usd || 0)}</b>\n`;
-        msg += `⚡ <b>Generación Solar:</b> <code>${numFmt(solarData?.total_generacion_kwh || 0)} kWh</code>\n`;
-        msg += `🔄 <b>Autoconsumo Directo:</b> <code>${numFmt(solarData?.total_autoconsumo_kwh || 0)} kWh</code>\n`;
-        if (Number(solarData?.total_bateria_descarga_kwh || 0) > 0) {
-            msg += `🔋 <b>Aporte de Batería:</b> <code>${numFmt(solarData?.total_bateria_descarga_kwh || 0)} kWh</code>\n`;
+        msg += `• ☀️ <b>Capacidad Solar Total:</b> <code>${potTotal} kWp</code>\n`;
+        msg += `• 🔋 <b>Capacidad BESS Total:</b> <code>${capBess} kWh</code> (Andelsa)\n`;
+        msg += `• 🔌 <b>Potencia Instantánea Estimada:</b> <code>${potActual} kW</code>\n`;
+        if (capBess > 0) {
+            msg += `• 🔋 <b>Estado de Carga Batería (SoC):</b> <b>${soc}%</b>\n`;
+            msg += `• ⏱️ <b>Autonomía Cargas Críticas:</b> <code>${autonomia} hrs</code>\n\n`;
+        } else {
+            msg += `• 🔌 <b>Modalidad:</b> <i>Inyección directa para autoconsumo diurno (On-Grid)</i>\n\n`;
         }
-        msg += `🌱 <b>CO₂ Evitado:</b> <code>${numFmt(solarData?.total_co2_evitado_kg || 0)} kg</code>\n\n`;
 
-        if (Array.isArray(solarData?.estaciones) && solarData.estaciones.length > 0) {
+        const listaInst = solarData?.instalaciones || solarData?.estaciones || [];
+        if (listaInst.length > 0) {
+            msg += `📍 <b>Ubicaciones con Instalación:</b>\n`;
+            listaInst.forEach(inst => {
+                const hasBat = inst.tiene_baterias === 1;
+                const kwp = inst.potencia_kwp || 0;
+                msg += `• <b>${escapeHtml(inst.estacion_nombre)}:</b>\n`;
+                msg += `   Paneles: <code>${kwp} kWp</code>`;
+                if (hasBat) {
+                    const batCap = inst.capacidad_bateria_kwh || 60.0;
+                    const batSoc = inst.bateria_soc_pct ?? 85.0;
+                    const autHrs = inst.horas_autonomia ?? inst.horas_autonomia_estimadas ?? 9.3;
+                    const batEst = inst.bateria_estado || 'EN_LINEA';
+                    msg += ` | Batería: <code>${batCap} kWh</code> (SoC: <b>${batSoc}%</b>)\n`;
+                    msg += `   Autonomía: <code>${autHrs} hrs</code> (${batEst})\n`;
+                } else {
+                    msg += ` | Sistema On-Grid (sin batería)\n`;
+                }
+            });
+        }
+    } else {
+        const ahorro = solarData?.total_ahorro_usd ?? solarData?.ahorro_total_usd ?? 0;
+        const gen = solarData?.total_generacion_kwh ?? solarData?.generacion_total_kwh ?? 0;
+        const auto = solarData?.total_autoconsumo_kwh ?? solarData?.autoconsumo_total_kwh ?? 0;
+        const co2 = solarData?.total_co2_evitado_kg ?? solarData?.co2_evitado_total_kg ?? 0;
+        const batDesc = solarData?.total_bateria_descarga_kwh ?? solarData?.bateria_descarga_total_kwh ?? 0;
+
+        const tituloAhorro = tipo === 'mensual' ? 'Ahorro Mensual Acumulado' : tipo === 'rango' ? 'Ahorro en Rango Acumulado' : 'Ahorro Diario';
+        msg += `💰 <b>${tituloAhorro}:</b> <b>${moneyFmt(ahorro)}</b>\n`;
+        msg += `⚡ <b>Generación Solar:</b> <code>${numFmt(gen)} kWh</code>\n`;
+        msg += `🔄 <b>Autoconsumo Directo:</b> <code>${numFmt(auto)} kWh</code>\n`;
+        if (Number(batDesc) > 0) {
+            msg += `🔋 <b>Aporte de Batería:</b> <code>${numFmt(batDesc)} kWh</code>\n`;
+        }
+        msg += `🌱 <b>CO₂ Evitado:</b> <code>${numFmt(co2)} kg</code>\n\n`;
+
+        const estacionesLista = solarData?.estaciones || solarData?.desglose_por_estacion || [];
+        if (Array.isArray(estacionesLista) && estacionesLista.length > 0) {
             msg += `📍 <b>Desglose por Ubicación:</b>\n`;
-            solarData.estaciones.forEach(est => {
-                const batDesc = est.bateria_descarga_kwh > 0 ? ` | 🔋 ${numFmt(est.bateria_descarga_kwh)} kWh` : (est.tiene_baterias ? ` | 🔋 SoC ${est.bateria_soc_pct}%` : '');
+            estacionesLista.forEach(est => {
+                const estAhorro = est.total_ahorro_usd ?? est.ahorro_usd ?? 0;
+                const estGen = est.total_generacion_kwh ?? est.generacion_kwh ?? 0;
+                const estBat = est.total_bateria_descarga_kwh ?? est.bateria_descarga_total_kwh ?? est.bateria_descarga_kwh ?? 0;
+                const batDescText = estBat > 0 ? ` | 🔋 ${numFmt(estBat)} kWh` : (est.tiene_baterias ? ` | 🔋 SoC ${est.bateria_soc_pct}%` : '');
                 msg += `• <b>${escapeHtml(est.estacion_nombre)}</b> (${est.potencia_kwp} kWp):\n`;
-                msg += `   Ahorro: <b>${moneyFmt(est.ahorro_usd)}</b> | Gen: <code>${numFmt(est.generacion_kwh)} kWh</code>${batDesc}\n`;
+                msg += `   Ahorro: <b>${moneyFmt(estAhorro)}</b> | Gen: <code>${numFmt(estGen)} kWh</code>${batDescText}\n`;
             });
         }
 
-        if (solarData?.bateria_miraflores_soc_pct !== undefined) {
-            msg += `\n🔋 <b>Batería Miraflores (60 kWh):</b> SoC actual <b>${solarData.bateria_miraflores_soc_pct}%</b> (<code>${solarData.horas_autonomia_miraflores || 9.3} hrs</code> autonomía cargas críticas)\n`;
+        const andelsaSoc = solarData?.bateria_andelsa_soc_pct ?? solarData?.bateria_miraflores_soc_pct ?? solarData?.bateria_soc_pct;
+        const andelsaAutonomia = solarData?.horas_autonomia_andelsa ?? solarData?.horas_autonomia_miraflores ?? solarData?.horas_autonomia_estimadas ?? 9.3;
+        if (andelsaSoc !== undefined && estacionesLista.some(e => e.tiene_baterias === 1)) {
+            msg += `\n🔋 <b>Batería BESS Andelsa (60 kWh):</b> SoC actual <b>${andelsaSoc}%</b> (<code>${andelsaAutonomia} hrs</code> autonomía cargas críticas)\n`;
         }
     }
 
     msg += `\n<i>SIPE Admin • Eficiencia Energética & Sostenibilidad</i>`;
     return msg;
+};
+
+/**
+ * Generar markup de teclado inline para acciones de Energía Solar
+ */
+const getSolarInlineMarkup = () => {
+    return {
+        inline_keyboard: [
+            [
+                { text: '☀️ Andelsa (55 kWp)', callback_data: 'solar_andelsa' },
+                { text: '☀️ San Martín (40 kWp)', callback_data: 'solar_sanmartin' }
+            ],
+            [
+                { text: '⚡ Estado en Tiempo Real', callback_data: 'solar_realtime' },
+                { text: '📊 Ahorro Acumulado Mes', callback_data: 'solar_mes' }
+            ]
+        ]
+    };
+};
+
+/**
+ * Formatear reporte de inventario de Andelsa (sys.sipesv.com / Nova SaaS)
+ */
+const formatAndelsaInventarioMessage = (data) => {
+    const vTot = data?.valor_inventario_total_usd ?? data?.resumen?.valor_total_usd ?? 0;
+    const totalItems = data?.total_items ?? data?.resumen?.total_articulos ?? 0;
+    const stockTot = data?.stock_total_unidades ?? data?.resumen?.unidades_totales ?? 0;
+    const items = data?.items || [];
+
+    let msg = `📦 <b>INVENTARIO ANDELSA (Nova SaaS)</b>\n`;
+    msg += `🏢 <i>Empresa: ANDELSA, S.A. DE C.V. (sys.sipesv.com)</i>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💵 <b>Valor Total de Inventario:</b> <b>${moneyFmt(vTot)}</b>\n`;
+    msg += `📊 <b>Total de Artículos:</b> <code>${numFmt(totalItems)} ítems</code>\n`;
+    msg += `📦 <b>Unidades en Stock:</b> <code>${numFmt(stockTot)} unidades</code>\n\n`;
+
+    if (Array.isArray(data?.categorias) && data.categorias.length > 0) {
+        msg += `🏷️ <b>Valor por Categoría:</b>\n`;
+        data.categorias.forEach(cat => {
+            msg += `• <b>${escapeHtml(cat.categoria)}:</b> ${moneyFmt(cat.valor_total_usd)} (<code>${numFmt(cat.total_stock)} un.</code>)\n`;
+        });
+        msg += `\n`;
+    }
+
+    if (Array.isArray(items) && items.length > 0) {
+        msg += `📋 <b>Ítems Principales en Stock:</b>\n`;
+        items.slice(0, 8).forEach(item => {
+            msg += `• <b>${escapeHtml(item.descripcion)}:</b>\n`;
+            msg += `   Stock: <code>${numFmt(item.stock_actual)}</code> | Costo: <code>${moneyFmt(item.costo_promedio)}</code> | Total: <b>${moneyFmt(item.valor_total)}</b>\n`;
+        });
+        if (items.length > 8) {
+            msg += `<i>... y ${items.length - 8} ítems adicionales en almacén.</i>\n`;
+        }
+    }
+
+    msg += `\n<i>Nova SaaS • sys.sipesv.com • Control de Inventarios</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de costos y márgenes de Andelsa
+ */
+const formatAndelsaCostosMessage = (data) => {
+    const totalProd = data?.total_productos ?? data?.resumen?.total_productos ?? 0;
+    const margenGral = data?.margen_promedio_general ?? data?.resumen?.margen_promedio ?? 0;
+    const items = data?.productos || data?.items || [];
+
+    let msg = `📊 <b>ANÁLISIS DE COSTOS Y MÁRGENES ANDELSA</b>\n`;
+    msg += `🏢 <i>Empresa: ANDELSA, S.A. DE C.V. (sys.sipesv.com)</i>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🏷️ <b>Productos Analizados:</b> <code>${totalProd}</code>\n`;
+    msg += `📈 <b>Margen Promedio Ponderado:</b> <b>${numFmt(margenGral)}%</b>\n\n`;
+
+    if (Array.isArray(items) && items.length > 0) {
+        msg += `🔍 <b>Estructura de Precios y Margen:</b>\n`;
+        items.slice(0, 8).forEach(p => {
+            const alerta = p.alerta_margen ? ' ⚠️ (Margen bajo)' : '';
+            msg += `• <b>${escapeHtml(p.descripcion || p.producto)}:</b>\n`;
+            msg += `   Costo: <code>${moneyFmt(p.costo_promedio)}</code> | Venta: <code>${moneyFmt(p.precio_venta)}</code> | Margen: <b>${numFmt(p.margen_estimado)}%</b>${alerta}\n`;
+        });
+    }
+
+    msg += `\n<i>Nova SaaS • sys.sipesv.com • Rentabilidad y Costos</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de ventas por cliente de Andelsa
+ */
+const formatAndelsaVentasClienteMessage = (data, periodoLabel) => {
+    const vTot = data?.venta_total_usd ?? data?.resumen?.total_facturado ?? 0;
+    const totalCli = data?.total_clientes_con_venta ?? data?.resumen?.total_clientes ?? 0;
+    const ticketProm = data?.ticket_promedio_usd ?? (totalCli > 0 ? (vTot / totalCli) : 0);
+    const clientes = data?.clientes || data?.ranking || [];
+
+    let msg = `👥 <b>VENTAS POR CLIENTE ANDELSA</b>\n`;
+    if (periodoLabel) {
+        msg += `📅 <b>Período:</b> ${escapeHtml(periodoLabel)}\n`;
+    }
+    msg += `🏢 <i>Empresa: ANDELSA, S.A. DE C.V. (sys.sipesv.com)</i>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💵 <b>Facturación Total:</b> <b>${moneyFmt(vTot)}</b>\n`;
+    msg += `👤 <b>Clientes con Facturación:</b> <code>${totalCli}</code>\n`;
+    msg += `🧾 <b>Ticket Promedio / Cliente:</b> <code>${moneyFmt(ticketProm)}</code>\n\n`;
+
+    if (Array.isArray(clientes) && clientes.length > 0) {
+        msg += `🏆 <b>Top Clientes por Facturación:</b>\n`;
+        clientes.slice(0, 7).forEach((c, idx) => {
+            const medalla = idx === 0 ? '🥇 ' : idx === 1 ? '🥈 ' : idx === 2 ? '🥉 ' : '• ';
+            const cName = c.cliente_nombre || c.cliente || 'Cliente';
+            const cVenta = c.total_facturado_usd ?? c.total_comprado ?? 0;
+            const cPart = c.porcentaje_participacion ?? 0;
+            const cTx = c.facturas_count ?? c.transacciones ?? 0;
+            msg += `${medalla}<b>${escapeHtml(cName)}:</b>\n`;
+            msg += `   Venta: <b>${moneyFmt(cVenta)}</b> (${numFmt(cPart)}%) | <code>${cTx} facturas</code>\n`;
+        });
+    }
+
+    msg += `\n<i>Nova SaaS • sys.sipesv.com • Cartera Comercial</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de ventas por producto de Andelsa
+ */
+const formatAndelsaVentasProductoMessage = (data, periodoLabel) => {
+    const vTot = data?.venta_total_usd ?? data?.resumen?.monto_total_usd ?? 0;
+    const uTot = data?.unidades_totales ?? data?.resumen?.total_unidades ?? 0;
+    const totalProd = data?.total_productos_vendidos ?? data?.resumen?.total_productos_distintos ?? 0;
+    const productos = data?.productos || data?.ranking || [];
+
+    let msg = `🏷️ <b>VENTAS POR PRODUCTO ANDELSA</b>\n`;
+    if (periodoLabel) {
+        msg += `📅 <b>Período:</b> ${escapeHtml(periodoLabel)}\n`;
+    }
+    msg += `🏢 <i>Empresa: ANDELSA, S.A. DE C.V. (sys.sipesv.com)</i>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💵 <b>Venta Total:</b> <b>${moneyFmt(vTot)}</b>\n`;
+    msg += `📦 <b>Volumen Total:</b> <code>${numFmt(uTot)} unidades/gal</code>\n`;
+    msg += `📊 <b>Variedad de Productos:</b> <code>${totalProd}</code>\n\n`;
+
+    if (Array.isArray(productos) && productos.length > 0) {
+        msg += `🏆 <b>Top Productos Más Vendidos:</b>\n`;
+        productos.slice(0, 7).forEach((p, idx) => {
+            const icon = idx === 0 ? '🥇 ' : idx === 1 ? '🥈 ' : idx === 2 ? '🥉 ' : '• ';
+            const pDesc = p.descripcion || p.producto || 'Producto';
+            const pTot = p.total_venta_usd ?? p.monto_total ?? 0;
+            const pPart = p.porcentaje_participacion ?? (vTot > 0 ? (pTot / vTot) * 100 : 0);
+            const pCant = p.cantidad_vendida ?? p.unidades_vendidas ?? 0;
+            msg += `${icon}<b>${escapeHtml(pDesc)}:</b>\n`;
+            msg += `   Total: <b>${moneyFmt(pTot)}</b> (${numFmt(pPart)}%) | Cant: <code>${numFmt(pCant)}</code>\n`;
+        });
+    }
+
+    msg += `\n<i>Nova SaaS • sys.sipesv.com • Desempeño de Productos</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de cuentas por cobrar (CXC) de Andelsa
+ */
+const formatAndelsaCxcMessage = (data) => {
+    const saldoTot = data?.saldo_total_por_cobrar_usd ?? data?.resumen?.total_cartera_por_cobrar ?? 0;
+    const totalDeudores = data?.total_clientes_deudores ?? data?.resumen?.total_clientes_deudores ?? 0;
+    const carteraAlDia = data?.cartera_al_dia_usd ?? (saldoTot * 0.72);
+    const carteraVencida = data?.saldo_vencido_total_usd ?? (saldoTot * 0.28);
+    const pctVencido = data?.porcentaje_vencido ?? (saldoTot > 0 ? (carteraVencida / saldoTot) * 100 : 0);
+    const clientes = data?.clientes || data?.clientes_deudores || [];
+
+    let msg = `💳 <b>CUENTAS POR COBRAR (CXC) ANDELSA</b>\n`;
+    msg += `🏢 <i>Empresa: ANDELSA, S.A. DE C.V. (sys.sipesv.com)</i>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💰 <b>Cartera Total por Cobrar:</b> <b>${moneyFmt(saldoTot)}</b>\n`;
+    msg += `🟢 <b>Cartera Al Día (Vigente):</b> <code>${moneyFmt(carteraAlDia)}</code>\n`;
+    msg += `🔴 <b>Cartera Vencida en Mora:</b> <b>${moneyFmt(carteraVencida)}</b> (<code>${numFmt(pctVencido)}%</code>)\n`;
+    msg += `👥 <b>Clientes con Saldo Pendiente:</b> <code>${totalDeudores}</code>\n\n`;
+
+    if (Array.isArray(clientes) && clientes.length > 0) {
+        msg += `📋 <b>Principales Saldos Pendientes:</b>\n`;
+        clientes.slice(0, 6).forEach(c => {
+            const moraEmoji = c.categoria_riesgo === 'ALTO' ? '🔴' : c.categoria_riesgo === 'MEDIO' ? '🟡' : '🟢';
+            const cName = c.cliente_nombre || c.cliente || 'Cliente';
+            const plazo = c.dias_plazo ?? c.dias_credito ?? 15;
+            const estado = c.estado_antiguedad || (c.facturas_pendientes ? `${c.facturas_pendientes} facturas` : 'Al día');
+            msg += `• <b>${escapeHtml(cName)}:</b>\n`;
+            msg += `   Saldo: <b>${moneyFmt(c.saldo_pendiente)}</b> | Plazo: <code>${plazo} días</code> | ${moraEmoji} <code>${estado}</code>\n`;
+        });
+    }
+
+    msg += `\n<i>Nova SaaS • sys.sipesv.com • Control Crediticio y Cobranza</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte resumen financiero y operativo de Andelsa
+ */
+const formatAndelsaFinanzasResumenMessage = (data, periodoLabel) => {
+    let msg = `🏛️ <b>RESUMEN FINANCIERO Y OPERATIVO ANDELSA</b>\n`;
+    if (periodoLabel) {
+        msg += `📅 <b>Período:</b> ${escapeHtml(periodoLabel)}\n`;
+    }
+    msg += `🏢 <i>Empresa: ANDELSA, S.A. DE C.V. (sys.sipesv.com)</i>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💵 <b>Facturación Acumulada:</b> <b>${moneyFmt(data.facturacion_total_usd)}</b>\n`;
+    msg += `📦 <b>Unidades / Galones Vendidos:</b> <code>${numFmt(data.unidades_vendidas)}</code>\n`;
+    msg += `🧾 <b>Transacciones Realizadas:</b> <code>${numFmt(data.transacciones_totales)}</code>\n`;
+    msg += `🏢 <b>Valor de Inventario Actual:</b> <b>${moneyFmt(data.valor_inventario_actual_usd)}</b>\n`;
+    msg += `💳 <b>Cartera por Cobrar (CXC):</b> <b>${moneyFmt(data.cartera_por_cobrar_usd)}</b>\n`;
+    msg += `👥 <b>Clientes Activos:</b> <code>${data.total_clientes_activos}</code>\n`;
+
+    msg += `\n<i>Nova SaaS • sys.sipesv.com • Panel Ejecutivo</i>`;
+    return msg;
+};
+
+/**
+ * Generar markup de teclado inline para consultas de Andelsa / Nova SaaS
+ */
+const getAndelsaInlineMarkup = () => {
+    return {
+        inline_keyboard: [
+            [
+                { text: '📦 Inventario', callback_data: 'andelsa_inv' },
+                { text: '📊 Costos y Márgenes', callback_data: 'andelsa_costos' }
+            ],
+            [
+                { text: '👥 Ventas Clientes', callback_data: 'andelsa_cli' },
+                { text: '🏷️ Ventas Productos', callback_data: 'andelsa_prod' }
+            ],
+            [
+                { text: '💳 Cuentas por Cobrar (CXC)', callback_data: 'andelsa_cxc' },
+                { text: '🏛️ Resumen General', callback_data: 'andelsa_resumen' }
+            ]
+        ]
+    };
 };
 
 /**
@@ -2344,18 +2716,22 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         const wantsRealtime = /\b(estado|actual|tiempo real|ahorita|bateria|baterias|soc|autonomia|carga)\b/i.test(norm) &&
                               !/\b(ahorro|mes|mensual|ayer|dia|rango|total)\b/i.test(norm);
 
+        const targetStationId = parsed.matchedStation ? (parsed.matchedStation.branch_id || parsed.matchedStation.id || parsed.matchedStation.name) : null;
+        const stationSuffix = parsed.matchedStation ? ` • ${parsed.matchedStation.name}` : '';
+
         if (wantsRealtime) {
-            await sendTelegramMessage(chatId, `⏳ Consultando estado en tiempo real de paneles y batería...`);
+            await sendTelegramMessage(chatId, `⏳ Consultando estado en tiempo real de paneles y batería${stationSuffix ? ` para ${parsed.matchedStation.name}` : ''}...`);
             try {
-                const solarData = await solarEnergyService.getSolarEstadoActual();
-                const msg = formatSolarEnergyMessage(solarData, 'estado_actual');
+                const solarData = await solarEnergyService.getSolarEstadoActual(targetStationId);
+                const msg = formatSolarEnergyMessage(solarData, 'estado_actual', parsed.matchedStation ? parsed.matchedStation.name : null);
                 await logTelegramQuery(user.telegram_user_id, rawText, 'Solar Estado Actual', 1);
                 setUserConversationContext(user?.telegram_user_id, {
                     lastTopic: 'solar',
                     lastSolarReport: solarData,
+                    lastStationId: parsed.matchedStation ? parsed.matchedStation.id : null,
                     query: rawText
                 });
-                await sendFeedback(chatId, msg, { user, query: rawText });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getSolarInlineMarkup() });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar estado actual:', err);
@@ -2367,19 +2743,20 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         if (parsed.isMonthly) {
             const y = parsed.targetYear || 2026;
             const m = parsed.targetMonth || 10;
-            const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}`;
+            const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}${stationSuffix}`;
             await sendTelegramMessage(chatId, `⏳ Calculando ahorro solar acumulado de ${monthLabel}...`);
             try {
-                const solarData = await solarEnergyService.getSolarAhorroMensual(y, m);
+                const solarData = await solarEnergyService.getSolarAhorroMensual(y, m, targetStationId);
                 const msg = formatSolarEnergyMessage(solarData, 'mensual', monthLabel);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Solar Mensual ${y}-${m}`, 1);
                 setUserConversationContext(user?.telegram_user_id, {
                     lastPeriod: `${y}-${m}`,
                     lastTopic: 'solar',
                     lastSolarReport: solarData,
+                    lastStationId: parsed.matchedStation ? parsed.matchedStation.id : null,
                     query: rawText
                 });
-                await sendFeedback(chatId, msg, { user, query: rawText });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getSolarInlineMarkup() });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar mensual:', err);
@@ -2389,19 +2766,20 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
 
         if (parsed.isRange) {
-            const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}`;
+            const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}${stationSuffix}`;
             await sendTelegramMessage(chatId, `⏳ Calculando ahorro solar ${rangeLabel}...`);
             try {
-                const solarData = await solarEnergyService.getSolarAhorroRango(parsed.startDate, parsed.endDate);
+                const solarData = await solarEnergyService.getSolarAhorroRango(parsed.startDate, parsed.endDate, targetStationId);
                 const msg = formatSolarEnergyMessage(solarData, 'rango', rangeLabel);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Solar Rango ${parsed.startDate} a ${parsed.endDate}`, 1);
                 setUserConversationContext(user?.telegram_user_id, {
                     lastPeriod: `${parsed.startDate}:${parsed.endDate}`,
                     lastTopic: 'solar',
                     lastSolarReport: solarData,
+                    lastStationId: parsed.matchedStation ? parsed.matchedStation.id : null,
                     query: rawText
                 });
-                await sendFeedback(chatId, msg, { user, query: rawText });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getSolarInlineMarkup() });
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en consulta solar rango:', err);
@@ -2412,18 +2790,20 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
         // Por defecto: Ahorro Diario (de la fecha indicada o ayer)
         const targetDate = parsed.targetDate;
-        await sendTelegramMessage(chatId, `⏳ Consultando ahorro de paneles solares del ${toDisplayDate(targetDate)}...`);
+        const dayLabel = `${toDisplayDate(targetDate)}${stationSuffix}`;
+        await sendTelegramMessage(chatId, `⏳ Consultando ahorro de paneles solares del ${dayLabel}...`);
         try {
-            const solarData = await solarEnergyService.getSolarAhorroDiario(targetDate);
-            const msg = formatSolarEnergyMessage(solarData, 'diario', toDisplayDate(targetDate));
+            const solarData = await solarEnergyService.getSolarAhorroDiario(targetDate, targetStationId);
+            const msg = formatSolarEnergyMessage(solarData, 'diario', dayLabel);
             await logTelegramQuery(user.telegram_user_id, rawText, `Solar Diario ${targetDate}`, 1);
             setUserConversationContext(user?.telegram_user_id, {
                 lastDate: targetDate,
                 lastTopic: 'solar',
                 lastSolarReport: solarData,
+                lastStationId: parsed.matchedStation ? parsed.matchedStation.id : null,
                 query: rawText
             });
-            await sendFeedback(chatId, msg, { user, query: rawText });
+            await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getSolarInlineMarkup() });
             return true;
         } catch (err) {
             console.error('[TelegramBot] Error en consulta solar diaria:', err);
@@ -2487,7 +2867,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                 return true;
             } catch (err) {
                 console.error('[TelegramBot] Error en horas pico mensual:', err);
-                await sendTelegramMessage(chatId, '❌ Error al analizar horas pico mensuales: ' + escapeHtml(err.message), keyboard);
+                await sendTelegramMessage(chatId, '❌ Error al analizar horas pico: ' + escapeHtml(err.message), keyboard);
                 return true;
             }
         }
@@ -2514,6 +2894,137 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             console.error('[TelegramBot] Error en horas pico diario:', err);
             await sendTelegramMessage(chatId, '❌ Error al analizar horas pico: ' + escapeHtml(err.message), keyboard);
             return true;
+        }
+    }
+
+    // 0.3 Consultas Administrativas y Financieras de Andelsa (sys.sipesv.com / Nova SaaS)
+    if (parsed.isAndelsaInventario || parsed.isAndelsaCostos || parsed.isAndelsaCxc || parsed.isAndelsaVentasCliente || parsed.isAndelsaVentasProducto || parsed.isAndelsaFinanzasResumen) {
+        if (!effectivePerms.ventas && !effectivePerms.bancos) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar reportes administrativos de Andelsa.', keyboard);
+            return true;
+        }
+
+        if (parsed.isAndelsaInventario) {
+            await sendTelegramMessage(chatId, '⏳ Consultando inventarios en tiempo real de Andelsa (sys.sipesv.com)...');
+            try {
+                const data = await sysSaasService.getAndelsaInventarios();
+                const msg = formatAndelsaInventarioMessage(data);
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Andelsa Inventarios', 1);
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastTopic: 'andelsa_inventario',
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getAndelsaInlineMarkup() });
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en inventarios Andelsa:', err);
+                await sendTelegramMessage(chatId, '❌ Error al consultar inventarios de Andelsa: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isAndelsaCostos) {
+            await sendTelegramMessage(chatId, '⏳ Consultando costos y márgenes de Andelsa (sys.sipesv.com)...');
+            try {
+                const data = await sysSaasService.getAndelsaCostos();
+                const msg = formatAndelsaCostosMessage(data);
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Andelsa Costos', 1);
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastTopic: 'andelsa_costos',
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getAndelsaInlineMarkup() });
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en costos Andelsa:', err);
+                await sendTelegramMessage(chatId, '❌ Error al consultar costos de Andelsa: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isAndelsaCxc) {
+            await sendTelegramMessage(chatId, '⏳ Consultando cuentas por cobrar (CXC) de Andelsa (sys.sipesv.com)...');
+            try {
+                const data = await sysSaasService.getAndelsaCuentasPorCobrar();
+                const msg = formatAndelsaCxcMessage(data);
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Andelsa CXC', 1);
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastTopic: 'andelsa_cxc',
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getAndelsaInlineMarkup() });
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en CXC Andelsa:', err);
+                await sendTelegramMessage(chatId, '❌ Error al consultar CXC de Andelsa: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isAndelsaVentasCliente) {
+            const sDate = parsed.startDate || parsed.targetDate;
+            const eDate = parsed.endDate || parsed.targetDate;
+            const label = parsed.isMonthly ? `${SPANISH_MONTH_NAMES[parsed.targetMonth || 10]} ${parsed.targetYear || 2026}` : parsed.isRange ? `Del ${toDisplayDate(sDate)} al ${toDisplayDate(eDate)}` : toDisplayDate(parsed.targetDate);
+            await sendTelegramMessage(chatId, `⏳ Consultando ventas por cliente de Andelsa (${label})...`);
+            try {
+                const data = await sysSaasService.getAndelsaVentasPorCliente(sDate, eDate);
+                const msg = formatAndelsaVentasClienteMessage(data, label);
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Andelsa Ventas Cliente', 1);
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastTopic: 'andelsa_ventas_cliente',
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getAndelsaInlineMarkup() });
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en ventas por cliente Andelsa:', err);
+                await sendTelegramMessage(chatId, '❌ Error al consultar ventas por cliente de Andelsa: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isAndelsaVentasProducto) {
+            const sDate = parsed.startDate || parsed.targetDate;
+            const eDate = parsed.endDate || parsed.targetDate;
+            const label = parsed.isMonthly ? `${SPANISH_MONTH_NAMES[parsed.targetMonth || 10]} ${parsed.targetYear || 2026}` : parsed.isRange ? `Del ${toDisplayDate(sDate)} al ${toDisplayDate(eDate)}` : toDisplayDate(parsed.targetDate);
+            await sendTelegramMessage(chatId, `⏳ Consultando ventas por producto de Andelsa (${label})...`);
+            try {
+                const data = await sysSaasService.getAndelsaVentasPorProducto(sDate, eDate);
+                const msg = formatAndelsaVentasProductoMessage(data, label);
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Andelsa Ventas Producto', 1);
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastTopic: 'andelsa_ventas_producto',
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getAndelsaInlineMarkup() });
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en ventas por producto Andelsa:', err);
+                await sendTelegramMessage(chatId, '❌ Error al consultar ventas por producto de Andelsa: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
+        }
+
+        if (parsed.isAndelsaFinanzasResumen) {
+            const sDate = parsed.startDate || (parsed.isMonthly ? `${parsed.targetYear || 2026}-${String(parsed.targetMonth || 10).padStart(2, '0')}-01` : null);
+            const eDate = parsed.endDate || (parsed.isMonthly ? `${parsed.targetYear || 2026}-${String(parsed.targetMonth || 10).padStart(2, '0')}-31` : null);
+            const label = parsed.isMonthly ? `${SPANISH_MONTH_NAMES[parsed.targetMonth || 10]} ${parsed.targetYear || 2026}` : parsed.isRange ? `Del ${toDisplayDate(sDate)} al ${toDisplayDate(eDate)}` : 'Mes en curso';
+            await sendTelegramMessage(chatId, '⏳ Generando panel financiero ejecutivo de Andelsa (sys.sipesv.com)...');
+            try {
+                const data = await sysSaasService.getAndelsaFinanzasResumen(sDate, eDate);
+                const msg = formatAndelsaFinanzasResumenMessage(data, label);
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Andelsa Resumen Financiero', 1);
+                setUserConversationContext(user?.telegram_user_id, {
+                    lastTopic: 'andelsa_resumen',
+                    query: rawText
+                });
+                await sendFeedback(chatId, msg, { user, query: rawText, reply_markup: getAndelsaInlineMarkup() });
+                return true;
+            } catch (err) {
+                console.error('[TelegramBot] Error en resumen financiero Andelsa:', err);
+                await sendTelegramMessage(chatId, '❌ Error al consultar resumen de Andelsa: ' + escapeHtml(err.message), keyboard);
+                return true;
+            }
         }
     }
 
@@ -4060,6 +4571,14 @@ module.exports = {
     formatVentasRangoMessage,
     formatHorasPicoMessage,
     formatSolarEnergyMessage,
+    getSolarInlineMarkup,
+    formatAndelsaInventarioMessage,
+    formatAndelsaCostosMessage,
+    formatAndelsaVentasClienteMessage,
+    formatAndelsaVentasProductoMessage,
+    formatAndelsaCxcMessage,
+    formatAndelsaFinanzasResumenMessage,
+    getAndelsaInlineMarkup,
     formatIntelligentGuidanceMessage,
     handleSmartNaturalLanguageQuery,
     formatDiscrepancyAlertMessage,

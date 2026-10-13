@@ -8,36 +8,36 @@ const salesHourlyService = require('../services/salesHourlyService');
 describe('Solar Energy & Battery Service Tests', () => {
 
     describe('getInstalacionesSolares', () => {
-        it('debe listar exactamente las 2 ubicaciones con paneles y 1 con baterías', async () => {
+        it('debe listar exactamente las 2 ubicaciones con paneles (Andelsa 55 kWp, San Martín 40 kWp) y 1 con baterías (Andelsa 60 kWh)', async () => {
             const result = await solarEnergyService.getInstalacionesSolares();
             assert.ok(result);
             assert.ok(Array.isArray(result.instalaciones_con_paneles));
             assert.strictEqual(result.instalaciones_con_paneles.length, 2);
 
-            // Ubicación 1: Puma Miraflores (45.0 kWp, con batería 60 kWh)
-            const miraflores = result.instalaciones_con_paneles.find(i => i.estacion_nombre.includes('Miraflores'));
-            assert.ok(miraflores, 'Puma Miraflores debe estar en la lista con paneles');
-            assert.strictEqual(miraflores.branch_id, 4);
-            assert.strictEqual(miraflores.potencia_kwp, 45.0);
-            assert.strictEqual(miraflores.tiene_baterias, 1);
-            assert.strictEqual(miraflores.capacidad_bateria_kwh, 60.0);
-            assert.strictEqual(miraflores.tarifa_kwh, 0.18);
+            // Ubicación 1: Andelsa (55.0 kWp, con batería 60 kWh BESS)
+            const andelsa = result.instalaciones_con_paneles.find(i => i.estacion_nombre.includes('Andelsa'));
+            assert.ok(andelsa, 'Andelsa debe estar en la lista con paneles');
+            assert.strictEqual(andelsa.branch_id, 9);
+            assert.strictEqual(andelsa.potencia_kwp, 55.0);
+            assert.strictEqual(andelsa.tiene_baterias, 1);
+            assert.strictEqual(andelsa.capacidad_bateria_kwh, 60.0);
+            assert.strictEqual(andelsa.tarifa_kwh, 0.18);
 
-            // Ubicación 2: Puma Costa del Sol (35.0 kWp, sin batería)
-            const costaDelSol = result.instalaciones_con_paneles.find(i => i.estacion_nombre.includes('Costa del Sol'));
-            assert.ok(costaDelSol, 'Puma Costa del Sol debe estar en la lista con paneles');
-            assert.strictEqual(costaDelSol.branch_id, 8);
-            assert.strictEqual(costaDelSol.potencia_kwp, 35.0);
-            assert.strictEqual(costaDelSol.tiene_baterias, 0);
-            assert.strictEqual(costaDelSol.capacidad_bateria_kwh, 0.0);
-            assert.strictEqual(costaDelSol.tarifa_kwh, 0.18);
+            // Ubicación 2: San Martín (La Loma) (40.0 kWp, sin batería)
+            const sanMartin = result.instalaciones_con_paneles.find(i => i.estacion_nombre.includes('San Martín'));
+            assert.ok(sanMartin, 'San Martín (La Loma) debe estar en la lista con paneles');
+            assert.strictEqual(sanMartin.branch_id, 1);
+            assert.strictEqual(sanMartin.potencia_kwp, 40.0);
+            assert.strictEqual(sanMartin.tiene_baterias, 0);
+            assert.strictEqual(sanMartin.capacidad_bateria_kwh, 0.0);
+            assert.strictEqual(sanMartin.tarifa_kwh, 0.18);
 
-            // Resumen de baterías: Solo 1 estación con baterías
+            // Resumen de baterías: Solo 1 estación con baterías (Andelsa)
             assert.strictEqual(result.instalaciones_con_baterias.length, 1);
-            assert.strictEqual(result.instalaciones_con_baterias[0].estacion_nombre, 'Puma Miraflores');
+            assert.strictEqual(result.instalaciones_con_baterias[0].estacion_nombre, 'Andelsa');
 
             // Métricas de capacidad acumulada
-            assert.strictEqual(result.resumen.potencia_total_kwp, 80.0);
+            assert.strictEqual(result.resumen.potencia_total_kwp, 95.0);
             assert.strictEqual(result.resumen.capacidad_total_bateria_kwh, 60.0);
             assert.strictEqual(result.resumen.total_ubicaciones_solares, 2);
             assert.strictEqual(result.resumen.total_ubicaciones_baterias, 1);
@@ -55,36 +55,39 @@ describe('Solar Energy & Battery Service Tests', () => {
     });
 
     describe('getSolarAhorroDiario', () => {
-        it('debe calcular métricas completas de ahorro diario para una fecha específica', async () => {
+        it('debe calcular métricas completas de ahorro diario con dual naming y nunca dar $0.00', async () => {
             const targetDate = '2026-10-12';
             const data = await solarEnergyService.getSolarAhorroDiario(targetDate);
 
             assert.strictEqual(data.fecha, targetDate);
-            assert.ok(data.generacion_total_kwh > 300, 'Generación total de 80 kWp debe superar 300 kWh/día');
+            assert.ok(data.generacion_total_kwh > 300, 'Generación total de 95 kWp debe superar 300 kWh/día');
             assert.ok(data.autoconsumo_total_kwh > 250, 'Autoconsumo debe ser mayor a 250 kWh/día');
-            assert.ok(data.bateria_descarga_total_kwh > 30, 'Descarga de batería debe aportar energía');
+            assert.ok(data.bateria_descarga_total_kwh > 30, 'Descarga de batería de Andelsa debe aportar energía');
             assert.ok(data.ahorro_total_usd > 50, 'Ahorro diario en USD debe superar los $50');
+            assert.ok(data.total_ahorro_usd > 50, 'total_ahorro_usd debe ser idéntico y positivo');
+            assert.strictEqual(data.ahorro_total_usd, data.total_ahorro_usd);
             assert.ok(data.co2_evitado_total_kg > 100, 'CO2 evitado diario debe superar los 100 kg');
             assert.strictEqual(data.desglose_por_estacion.length, 2);
 
             // Desglose por estación
-            const mira = data.desglose_por_estacion.find(e => e.estacion_nombre.includes('Miraflores'));
-            const costa = data.desglose_por_estacion.find(e => e.estacion_nombre.includes('Costa del Sol'));
+            const andelsa = data.desglose_por_estacion.find(e => e.estacion_nombre.includes('Andelsa'));
+            const sanMartin = data.desglose_por_estacion.find(e => e.estacion_nombre.includes('San Martín'));
 
-            assert.ok(mira);
-            assert.ok(costa);
-            assert.ok(mira.bateria_carga_kwh > 0, 'Miraflores debe cargar baterías');
-            assert.ok(mira.bateria_descarga_kwh > 0, 'Miraflores debe descargar baterías');
-            assert.ok(mira.bateria_soc_pct >= 80, 'Estado de carga SoC de Miraflores debe rondar el 85%');
-            assert.strictEqual(costa.bateria_carga_kwh, 0, 'Costa del Sol no tiene batería');
-            assert.strictEqual(costa.bateria_descarga_kwh, 0);
+            assert.ok(andelsa, 'Andelsa debe existir');
+            assert.ok(sanMartin, 'San Martín debe existir');
+            assert.ok(andelsa.bateria_carga_kwh > 0, 'Andelsa debe cargar baterías');
+            assert.ok(andelsa.bateria_descarga_kwh > 0, 'Andelsa debe descargar baterías');
+            assert.ok(andelsa.bateria_soc_pct >= 80, 'Estado de carga SoC de Andelsa debe rondar el 85%');
+            assert.strictEqual(sanMartin.bateria_carga_kwh, 0, 'San Martín no tiene batería');
+            assert.strictEqual(sanMartin.bateria_descarga_kwh, 0);
         });
 
-        it('debe permitir filtrar por estación específica (Puma Miraflores branch_id 4)', async () => {
-            const data = await solarEnergyService.getSolarAhorroDiario('2026-10-12', 4);
+        it('debe permitir filtrar por estación específica (Andelsa branch_id 9)', async () => {
+            const data = await solarEnergyService.getSolarAhorroDiario('2026-10-12', 9);
             assert.strictEqual(data.desglose_por_estacion.length, 1);
-            assert.strictEqual(data.desglose_por_estacion[0].branch_id, 4);
-            assert.strictEqual(data.desglose_por_estacion[0].estacion_nombre, 'Puma Miraflores');
+            assert.strictEqual(data.desglose_por_estacion[0].branch_id, 9);
+            assert.strictEqual(data.desglose_por_estacion[0].estacion_nombre, 'Andelsa');
+            assert.ok(data.total_ahorro_usd > 0);
         });
     });
 
@@ -97,6 +100,7 @@ describe('Solar Energy & Battery Service Tests', () => {
             assert.strictEqual(res.periodo, '2026-10');
             assert.ok(res.dias_transcurridos >= 12, 'Octubre 2026 debe contabilizar los días transcurridos');
             assert.ok(res.ahorro_total_usd > 500, 'Ahorro acumulado de octubre debe ser superior a $500');
+            assert.strictEqual(res.ahorro_total_usd, res.total_ahorro_usd);
             assert.ok(res.promedio_diario_ahorro_usd > 40, 'Promedio diario debe calcularse');
             assert.ok(res.generacion_total_kwh > 3000, 'Generación total del mes');
             assert.ok(res.co2_evitado_total_kg > 1000, 'CO2 total evitado del mes');
@@ -113,6 +117,7 @@ describe('Solar Energy & Battery Service Tests', () => {
             assert.strictEqual(res.fecha_fin, '2026-10-10');
             assert.strictEqual(res.dias_analizados, 10);
             assert.ok(res.ahorro_total_usd > 500);
+            assert.strictEqual(res.ahorro_total_usd, res.total_ahorro_usd);
             assert.ok(res.promedio_diario_ahorro_usd > 50);
             assert.strictEqual(res.historico_diario.length, 10);
             assert.strictEqual(res.desglose_por_estacion.length, 2);
@@ -120,28 +125,29 @@ describe('Solar Energy & Battery Service Tests', () => {
     });
 
     describe('getSolarEstadoActual', () => {
-        it('debe retornar estado en tiempo real del sistema solar y la batería', async () => {
+        it('debe retornar estado en tiempo real del sistema solar y la batería BESS Andelsa', async () => {
             const estado = await solarEnergyService.getSolarEstadoActual();
 
             assert.ok(estado.timestamp);
             assert.ok(typeof estado.potencia_actual_total_kw === 'number');
-            assert.strictEqual(estado.potencia_instalada_total_kwp, 80.0);
+            assert.strictEqual(estado.potencia_instalada_total_kwp, 95.0);
+            assert.strictEqual(estado.potencia_total_kwp, 95.0);
             assert.ok(estado.bateria_soc_pct >= 0 && estado.bateria_soc_pct <= 100);
-            assert.ok(estado.horas_autonomia_estimadas > 0, 'Miraflores debe contar con horas de autonomía calculadas');
+            assert.ok(estado.horas_autonomia_estimadas > 0, 'Andelsa debe contar con horas de autonomía calculadas');
             assert.strictEqual(estado.capacidad_total_baterias_kwh, 60.0);
 
             // Verificación específica por estación
             assert.strictEqual(estado.estaciones.length, 2);
-            const mira = estado.estaciones.find(e => e.estacion_nombre === 'Puma Miraflores');
-            const costa = estado.estaciones.find(e => e.estacion_nombre === 'Puma Costa del Sol');
+            const andelsa = estado.estaciones.find(e => e.estacion_nombre === 'Andelsa');
+            const sanMartin = estado.estaciones.find(e => e.estacion_nombre.includes('San Martín'));
 
-            assert.ok(mira);
-            assert.strictEqual(mira.tiene_baterias, 1);
-            assert.ok(mira.horas_autonomia > 5, 'Miraflores con 60 kWh debe proveer más de 5 hrs de autonomía para cargas críticas');
+            assert.ok(andelsa);
+            assert.strictEqual(andelsa.tiene_baterias, 1);
+            assert.ok(andelsa.horas_autonomia > 5, 'Andelsa con 60 kWh debe proveer más de 5 hrs de autonomía para cargas críticas');
 
-            assert.ok(costa);
-            assert.strictEqual(costa.tiene_baterias, 0);
-            assert.strictEqual(costa.horas_autonomia, 0);
+            assert.ok(sanMartin);
+            assert.strictEqual(sanMartin.tiene_baterias, 0);
+            assert.strictEqual(sanMartin.horas_autonomia, 0);
         });
     });
 
@@ -152,7 +158,13 @@ describe('Solar Energy & Battery Service Tests', () => {
                     if (sql.includes('COUNT(*)')) {
                         return [[{ count: 0 }]];
                     }
-                    return [[{ affectedRows: 1 }]];
+                    if (sql.includes('SHOW COLUMNS')) {
+                        return [[{ Field: 'company_id' }]];
+                    }
+                    if (sql.includes('SELECT id FROM energia_instalaciones')) {
+                        return [[]];
+                    }
+                    return [[{ affectedRows: 1, insertId: 1 }]];
                 }
             };
             const result = await solarEnergyService.seedSolarEnergyData(mockDb);

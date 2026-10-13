@@ -126,9 +126,9 @@
     "semantic_hash": "6a29c4719b1366a4420a1b4e8908d7a1"
   },
   "backend/routes/consultas.js": {
-    "mtime": 1791830685.4610453,
-    "seen": 1791830913.5930574,
-    "ast_hash": "bf830d3306c64bbed356a084ba570b10",
+    "mtime": 1791846645.650981,
+    "seen": 1791846878.4962602,
+    "ast_hash": "95bb7500ab5214be37cf3ee43450f1e1",
     "semantic_hash": ""
   },
   "backend/routes/finanzas.js": {
@@ -162,9 +162,9 @@
     "semantic_hash": "96ee2b6fd4ff1e69439260af844420aa"
   },
   "backend/routes/operaciones.js": {
-    "mtime": 1791830693.0005176,
-    "seen": 1791830913.5930574,
-    "ast_hash": "a655038375f8374daa97f3815f6a0d6e",
+    "mtime": 1791846261.3639948,
+    "seen": 1791846527.0245516,
+    "ast_hash": "ee6cc54cb18078e122363f272c05ed89",
     "semantic_hash": ""
   },
   "backend/routes/rrhh.js": {
@@ -246,10 +246,10 @@
     "semantic_hash": "22a8df0d2e74fbd2fff600b7265d4f33"
   },
   "backend/services/energyLatamService.js": {
-    "mtime": 1791038617.210533,
-    "seen": 1791822880.7085679,
-    "ast_hash": "ba7dd5206f4a553a0b355f5b5f82e081",
-    "semantic_hash": "ba7dd5206f4a553a0b355f5b5f82e081"
+    "mtime": 1791845130.8491096,
+    "seen": 1791845837.400197,
+    "ast_hash": "101610b9521a274a1431c678636aae4e",
+    "semantic_hash": ""
   },
   "backend/services/executiveFlashService.js": {
     "mtime": 1789949211.0491507,
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791834827.219328,
-    "seen": 1791835046.8077536,
-    "ast_hash": "337cf6a0c64a35354badfd6aec7aeb55",
+    "mtime": 1791899074.214917,
+    "seen": 1791899168.9237237,
+    "ast_hash": "5cb6273b530acd4561f1aa00a5e437db",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -360,9 +360,9 @@
     "semantic_hash": "dfb39fd9e8c657a413eff933a1801c93"
   },
   "backend/test/telegramBot.test.js": {
-    "mtime": 1791830755.3977408,
-    "seen": 1791830913.5930574,
-    "ast_hash": "f20d4b057e6348d19c7b0d984da4d4b5",
+    "mtime": 1791897913.4470956,
+    "seen": 1791897943.2022674,
+    "ast_hash": "8b69a5f6138249bda152c1cc7c13a538",
     "semantic_hash": ""
   },
   "backend/test/ventasMensual.test.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791835027.7686834,
-    "seen": 1791835046.8077536,
-    "ast_hash": "4a3366581e19906467874d97e99f59b0",
+    "mtime": 1791846668.4814572,
+    "seen": 1791846878.4962602,
+    "ast_hash": "6a99830060aa76bfc27272958481915d",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -732,9 +732,9 @@
     "semantic_hash": "b0485b98129ce8019a17ebd2a7e379d5"
   },
   "frontend/src/pages/ConsultasPreciosCompetencia.jsx": {
-    "mtime": 1791830738.545741,
-    "seen": 1791830913.5930574,
-    "ast_hash": "126ff8e717c2271a52e2a8053787d7ba",
+    "mtime": 1791846628.2222402,
+    "seen": 1791846878.4962602,
+    "ast_hash": "22facfa10f4eb29d2c326e150915bce6",
     "semantic_hash": ""
   },
   "frontend/src/pages/ControlRecordatorios.jsx": {
@@ -864,9 +864,9 @@
     "semantic_hash": "0b0fc0568330299ad81a88e29ee1db23"
   },
   "frontend/src/pages/PedidosCombustible.jsx": {
-    "mtime": 1791830762.3889155,
-    "seen": 1791830913.5930574,
-    "ast_hash": "ffec1311be002375a94f4e9934c27e1b",
+    "mtime": 1791845709.3094585,
+    "seen": 1791845837.400197,
+    "ast_hash": "05e36f57b46fd4c3e76ce22fcbe6cb61",
     "semantic_hash": ""
   },
   "frontend/src/pages/PedidosProgramadosConsulta.jsx": {
@@ -924,9 +924,9 @@
     "semantic_hash": "4f19518f5045ed51d3fdfa818e2f1a92"
   },
   "frontend/src/pages/TelegramUsers.jsx": {
-    "mtime": 1791834951.7484004,
-    "seen": 1791835046.8077536,
-    "ast_hash": "b39cb20685be0652fb87213e25702fa3",
+    "mtime": 1791835305.8223512,
+    "seen": 1791845837.400197,
+    "ast_hash": "65ac558ee0fa15c6bd5058c01c374ee0",
     "semantic_hash": ""
   },
   "frontend/src/pages/Users.jsx": {
@@ -1080,9 +1080,9 @@
     "semantic_hash": ""
   },
   "AGENTS.md": {
-    "mtime": 1791822960.081609,
-    "seen": 1791824268.1699405,
-    "ast_hash": "886a8a914075759e179babeacd796122",
+    "mtime": 1791846465.688283,
+    "seen": 1791846527.0250647,
+    "ast_hash": "a91a61291229565d2911de4b107befd6",
     "semantic_hash": ""
   },
   "PLAN_ESTRATEGICO_INTEGRACION_IA.md": {
@@ -1194,9 +1194,9 @@
     "semantic_hash": ""
   },
   "backend/services/solarEnergyService.js": {
-    "mtime": 1791828882.5129724,
-    "seen": 1791829945.761573,
-    "ast_hash": "08d0d1934dab5e35a9fb02102925f51c",
+    "mtime": 1791898778.598708,
+    "seen": 1791899168.9237237,
+    "ast_hash": "f74b72af07d8564b83b4850e3135926c",
     "semantic_hash": ""
   },
   "backend/test/salesHourly.test.js": {
@@ -1206,27 +1206,27 @@
     "semantic_hash": ""
   },
   "backend/test/solarAndSalesHourly.test.js": {
-    "mtime": 1791828985.577846,
-    "seen": 1791829945.7626367,
-    "ast_hash": "ce57e06503cd09bd14342445b0fa0d56",
+    "mtime": 1791898995.65767,
+    "seen": 1791899168.9237237,
+    "ast_hash": "c718cd3bdc583ec5ce284ac8d2524b67",
     "semantic_hash": ""
   },
   "backend/test/solarEnergy.test.js": {
-    "mtime": 1791829231.3184013,
-    "seen": 1791829945.7626367,
-    "ast_hash": "fa0c1e7800ec7b658e95d41df9b3b337",
+    "mtime": 1791898969.021315,
+    "seen": 1791899168.9237237,
+    "ast_hash": "3df01532f2b99b48158363457f9e9c76",
     "semantic_hash": ""
   },
   "backend/services/autoSyncScheduler.js": {
-    "mtime": 1791830830.4616306,
-    "seen": 1791830913.5930574,
-    "ast_hash": "c3a55902187319fecb80b3d66a9300d6",
+    "mtime": 1791846272.689306,
+    "seen": 1791846527.0245516,
+    "ast_hash": "ab88a508c8d1d3ad57ca4379c4e44c8b",
     "semantic_hash": ""
   },
   "backend/test/autoSyncScheduler.test.js": {
-    "mtime": 1791830836.4213376,
-    "seen": 1791830913.5930574,
-    "ast_hash": "dc92555ec1130daac381e561158c98bd",
+    "mtime": 1791845741.7750125,
+    "seen": 1791845837.400197,
+    "ast_hash": "593c43c0cc1601e9b180a6cc9988bfab",
     "semantic_hash": ""
   },
   "backend/services/telegramAuditorService.js": {
@@ -1245,6 +1245,36 @@
     "mtime": 1791833810.9848833,
     "seen": 1791833854.7149916,
     "ast_hash": "3d326fa79bc302eeb3743bb9eaee11ff",
+    "semantic_hash": ""
+  },
+  "scripts/sync_portal_pedidos.sh": {
+    "mtime": 1791846342.7015378,
+    "seen": 1791846527.0250647,
+    "ast_hash": "37a3247203fe6a4b841d68fd327beeac",
+    "semantic_hash": ""
+  },
+  "scripts/sync_dgehm_precios.sh": {
+    "mtime": 1791846697.8591373,
+    "seen": 1791846878.4962602,
+    "ast_hash": "bd9d048f0d26b2131c25d26925446846",
+    "semantic_hash": ""
+  },
+  "backend/services/sysSaasService.js": {
+    "mtime": 1791898683.9836006,
+    "seen": 1791899168.9237237,
+    "ast_hash": "1b191ce29c67de19bd5cafd84f08ddd3",
+    "semantic_hash": ""
+  },
+  "backend/test/andelsaTelegramBot.test.js": {
+    "mtime": 1791899013.25101,
+    "seen": 1791899168.9237237,
+    "ast_hash": "51ad076ac1e978019f78b60d5abe6802",
+    "semantic_hash": ""
+  },
+  "backend/test/sysSaasService.test.js": {
+    "mtime": 1791898738.5556417,
+    "seen": 1791899168.9237237,
+    "ast_hash": "741ca5ff96efdf708805b35f7b014992",
     "semantic_hash": ""
   }
 }
