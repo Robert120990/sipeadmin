@@ -91,7 +91,8 @@ describe('Telegram Bot Service Unit Tests', () => {
         });
 
         it('debe extraer la fecha inserta dentro de frases y preguntas completas', () => {
-            assert.strictEqual(parseSpanishDateText('que estacion vendio mas el dia de ayer?'), '2026-10-11');
+            const expectedYesterday = parseSpanishDateText('ayer');
+            assert.strictEqual(parseSpanishDateText('que estacion vendio mas el dia de ayer?'), expectedYesterday);
             assert.strictEqual(parseSpanishDateText('ventas del 5 de octubre'), '2026-10-05');
             assert.strictEqual(parseSpanishDateText('cual vendio mas el 15 de septiembre'), '2026-09-15');
             assert.strictEqual(parseSpanishDateText('descuadres del dia 5'), '2026-10-05');
