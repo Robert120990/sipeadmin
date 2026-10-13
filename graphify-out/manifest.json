@@ -18,9 +18,9 @@
     "semantic_hash": "7beccc830c416d1a5d5a99d5fa6988b0"
   },
   "backend/db.js": {
-    "mtime": 1791834831.4184704,
-    "seen": 1791835046.8077536,
-    "ast_hash": "9d6ed00dedebbc777fe8a2121585896c",
+    "mtime": 1791934344.1563227,
+    "seen": 1791934915.935032,
+    "ast_hash": "ce0ad64a41cd484d38fed448e7e22f5c",
     "semantic_hash": ""
   },
   "backend/middleware/auth.js": {
@@ -72,10 +72,10 @@
     "semantic_hash": "9ba83791924f71474fd6d96d52685d0b"
   },
   "backend/routes/ai.js": {
-    "mtime": 1791031736.9600072,
-    "seen": 1791822880.7085679,
-    "ast_hash": "c0faa467be9972ab6e28edb65db3a6af",
-    "semantic_hash": "c0faa467be9972ab6e28edb65db3a6af"
+    "mtime": 1791934566.7220733,
+    "seen": 1791934915.935032,
+    "ast_hash": "6e1c093299972fd1fc40725a00166c73",
+    "semantic_hash": ""
   },
   "backend/routes/auth.js": {
     "mtime": 1791408358.5448925,
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791932456.461821,
-    "seen": 1791932510.9971354,
-    "ast_hash": "78d3a2db698721f92cc00f578489e54e",
+    "mtime": 1791934685.3889453,
+    "seen": 1791934915.935032,
+    "ast_hash": "ea9d66dfff0db0e824392f4ccfad7c54",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791932490.0329874,
-    "seen": 1791932510.9971354,
-    "ast_hash": "675da6e85486fe6351d7fca5d0892a76",
+    "mtime": 1791934881.0551457,
+    "seen": 1791934915.935032,
+    "ast_hash": "ed79ad71a9cbe2718b0e1cdc8bcac8f6",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -432,10 +432,10 @@
     "semantic_hash": "d64eb1ed56f6aa76812960769c981127"
   },
   "frontend/src/App.jsx": {
-    "mtime": 1791818201.9915824,
-    "seen": 1791822880.7085679,
-    "ast_hash": "dd327699c16e46e0b25de3901aded8eb",
-    "semantic_hash": "dd327699c16e46e0b25de3901aded8eb"
+    "mtime": 1791934421.6916003,
+    "seen": 1791934915.935032,
+    "ast_hash": "977034312627198bf9a42ca1f70faf6d",
+    "semantic_hash": ""
   },
   "frontend/src/components/CalendarGrid.jsx": {
     "mtime": 1788265759.6053617,
@@ -534,10 +534,10 @@
     "semantic_hash": "0247c08dcb575d8cf94859c79a8a3e3e"
   },
   "frontend/src/config/navigation.js": {
-    "mtime": 1791818152.4632118,
-    "seen": 1791822880.7085679,
-    "ast_hash": "3bd565c10c222ea891e749a1398537ef",
-    "semantic_hash": "3bd565c10c222ea891e749a1398537ef"
+    "mtime": 1791934369.266931,
+    "seen": 1791934915.935032,
+    "ast_hash": "75dc52f99780883e70bb717adf804eb7",
+    "semantic_hash": ""
   },
   "frontend/src/context/NotificationContext.jsx": {
     "mtime": 1789949211.056549,
@@ -756,10 +756,10 @@
     "semantic_hash": "aa01878571f43d6fe2903747fc0609d7"
   },
   "frontend/src/pages/DashboardLayout.jsx": {
-    "mtime": 1791818187.3910816,
-    "seen": 1791822880.7085679,
-    "ast_hash": "152e98a09aff6ce3317a728076cf7036",
-    "semantic_hash": "152e98a09aff6ce3317a728076cf7036"
+    "mtime": 1791934430.9790945,
+    "seen": 1791934915.935032,
+    "ast_hash": "039254aea984d05c9937478d07e49c79",
+    "semantic_hash": ""
   },
   "frontend/src/pages/DiferenciasCombustible.jsx": {
     "mtime": 1790453072.4271,
@@ -942,10 +942,10 @@
     "semantic_hash": "7ffe792df5d729c5c5388e4fd58472cc"
   },
   "frontend/src/pages/lazyPages.js": {
-    "mtime": 1791818163.8359225,
-    "seen": 1791822880.7085679,
-    "ast_hash": "56ba249002be1816683bd22b6162557d",
-    "semantic_hash": "56ba249002be1816683bd22b6162557d"
+    "mtime": 1791934365.4939601,
+    "seen": 1791934915.935032,
+    "ast_hash": "96b957b9b3b59d7bf3ef3540dbfc51dd",
+    "semantic_hash": ""
   },
   "frontend/src/services/api.js": {
     "mtime": 1791033722.0576205,
@@ -1170,9 +1170,9 @@
     "semantic_hash": ""
   },
   "backend/services/conversationalAiService.js": {
-    "mtime": 1791833173.0767515,
-    "seen": 1791833582.6796896,
-    "ast_hash": "4a1778472ee7a0423aa5a8ed070990a9",
+    "mtime": 1791934440.2202108,
+    "seen": 1791934915.935032,
+    "ast_hash": "cef97faca231f5d6082e1d61890eec3d",
     "semantic_hash": ""
   },
   "backend/test/conversationalAi.test.js": {
@@ -1287,6 +1287,30 @@
     "mtime": 1791932291.388658,
     "seen": 1791932510.9971354,
     "ast_hash": "31b76540436f14ef0f0bfd7b1cfdcc52",
+    "semantic_hash": ""
+  },
+  "backend/test/aiGateway.test.js": {
+    "mtime": 1791934608.5306025,
+    "seen": 1791934915.935032,
+    "ast_hash": "677afbbc63431de1713fda10d17c32e5",
+    "semantic_hash": ""
+  },
+  "backend/test/telegramVisionAndPdf.test.js": {
+    "mtime": 1791934728.3636491,
+    "seen": 1791934915.935032,
+    "ast_hash": "344ed967ad60d66d7539fb62511d36ed",
+    "semantic_hash": ""
+  },
+  "frontend/src/pages/AsistenteIA.jsx": {
+    "mtime": 1791934629.1846461,
+    "seen": 1791934915.935032,
+    "ast_hash": "181b00d0542684ff510180c9258509ce",
+    "semantic_hash": ""
+  },
+  "frontend/src/pages/EnergiaSolarAndelsa.jsx": {
+    "mtime": 1791934824.8426855,
+    "seen": 1791934915.935032,
+    "ast_hash": "597e2af7ff3cf46e263d303cea32e560",
     "semantic_hash": ""
   }
 }

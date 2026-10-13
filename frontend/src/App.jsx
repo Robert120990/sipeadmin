@@ -56,7 +56,9 @@ import {
     PlanillasRRHH,
     ConfiguracionTema,
     PedidosProgramadosConsulta,
-    TelegramUsers
+    TelegramUsers,
+    AsistenteIA,
+    EnergiaSolarAndelsa
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -113,6 +115,7 @@ function App() {
                                     <Route path="operaciones/pedidos-programados" element={<PermissionRoute pathKey="/dashboard/operaciones/pedidos-programados"><PedidosProgramadosConsulta /></PermissionRoute>} />
                                     <Route path="operaciones/recordatorios" element={<PermissionRoute pathKey="/dashboard/operaciones/recordatorios"><ControlRecordatorios /></PermissionRoute>} />
                                     <Route path="operaciones/tareas" element={<PermissionRoute pathKey="/dashboard/operaciones/tareas"><Tareas /></PermissionRoute>} />
+                                    <Route path="operaciones/energia-solar" element={<PermissionRoute pathKey="/dashboard/operaciones/energia-solar"><EnergiaSolarAndelsa /></PermissionRoute>} />
                                     <Route path="bancos/reportes/saldos-bancos" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-bancos"><Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." /></PermissionRoute>} />
                                     <Route path="bancos/reportes/saldos-chequera" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/saldos-chequera"><Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." /></PermissionRoute>} />
                                     <Route path="bancos/reportes/impresion-cheques" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/impresion-cheques"><ImpresionCheques /></PermissionRoute>} />
@@ -120,6 +123,7 @@ function App() {
                                     <Route path="bancos/reportes/movimientos-fecha" element={<PermissionRoute pathKey="/dashboard/bancos/reportes/movimientos-fecha"><ReporteMovimientosFecha /></PermissionRoute>} />
                                     <Route path="consultas/saldos-bancos" element={<Navigate to="/dashboard/bancos/reportes/saldos-bancos" replace />} />
                                     <Route path="consultas/saldos-chequera" element={<Navigate to="/dashboard/bancos/reportes/saldos-chequera" replace />} />
+                                    <Route path="consultas/ia-asistente" element={<PermissionRoute pathKey="/dashboard/consultas/ia-asistente"><AsistenteIA /></PermissionRoute>} />
                                     <Route path="consultas/otras/cumpleanos" element={<PermissionRoute pathKey="/dashboard/consultas/otras/cumpleanos"><ConsultasCumpleanos /></PermissionRoute>} />
                                     <Route path="consultas/otras/backup-db-check" element={<PermissionRoute pathKey="/dashboard/consultas/otras/backup-db-check"><BackupDBCheck /></PermissionRoute>} />
                                     <Route path="bancos/cuentas" element={<PermissionRoute pathKey="/dashboard/bancos/cuentas"><CuentasBancarias /></PermissionRoute>} />

@@ -49,6 +49,11 @@ export const operacionesMenu = [
         name: 'Gestión de Tareas',
         path: '/dashboard/operaciones/tareas',
         icon: createColorIcon('flat-color-icons:todo-list')
+    },
+    {
+        name: 'Energía Solar & Andelsa',
+        path: '/dashboard/operaciones/energia-solar',
+        icon: createColorIcon('fluent-emoji-flat:sun')
     }
 ];
 
@@ -70,6 +75,7 @@ export const bancosReportes = [
 ];
 
 export const consultasOtras = [
+    { name: 'Asistente IA', path: '/dashboard/consultas/ia-asistente', icon: createColorIcon('fluent-emoji-flat:robot') },
     { name: 'Cumpleañeros', path: '/dashboard/consultas/otras/cumpleanos', icon: createColorIcon('flat-color-icons:advertising') },
     { name: 'Backup DB Check', path: '/dashboard/consultas/otras/backup-db-check', icon: createColorIcon('flat-color-icons:database') },
 ];

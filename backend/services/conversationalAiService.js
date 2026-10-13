@@ -1,4 +1,3 @@
-const { GoogleGenAI } = require('@google/genai');
 const { getDb } = require('../db');
 const { getConsolidadoVentasData } = require('../routes/consultas');
 const { getTanquesAutonomia } = require('./fuelIntelligence');
@@ -29,7 +28,7 @@ const normalizeStr = (str) => {
 const getGeminiApiKey = async () => {
     try {
         const db = getDb();
-        if (db) {
+        if (db && typeof db.query === 'function') {
             const [rows] = await db.query('SELECT gemini_api_key FROM telegram_config WHERE id = 1 LIMIT 1');
             if (rows && rows.length > 0 && rows[0].gemini_api_key && rows[0].gemini_api_key.trim().length > 10) {
                 return rows[0].gemini_api_key.trim();
@@ -38,7 +37,7 @@ const getGeminiApiKey = async () => {
     } catch (e) {
         // Base de datos puede estar ocupada o iniciando
     }
-    return process.env.GEMINI_API_KEY || null;
+    return (process.env.GEMINI_API_KEY || '').trim() || null;
 };
 
 /**
@@ -298,6 +297,7 @@ const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms }) 
     }
 
     try {
+        const { GoogleGenAI } = require('@google/genai');
         const ai = new GoogleGenAI({ apiKey });
         const liveContext = await buildLiveProjectContext();
 

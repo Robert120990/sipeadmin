@@ -56,7 +56,9 @@ import {
     ConsultaCambiosGithub,
     PlanillasRRHH,
     PedidosProgramadosConsulta,
-    TelegramUsers
+    TelegramUsers,
+    AsistenteIA,
+    EnergiaSolarAndelsa
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -181,6 +183,8 @@ export default function DashboardLayout() {
         '/dashboard/estrategia/creditos': <EstrategiaCreditos />,
         '/dashboard/seguridad/cambios': <ConsultaCambiosGithub />,
         '/dashboard/seguridad/telegram': <TelegramUsers />,
+        '/dashboard/consultas/ia-asistente': <AsistenteIA />,
+        '/dashboard/operaciones/energia-solar': <EnergiaSolarAndelsa />,
     };
 
     // Sync with URL location

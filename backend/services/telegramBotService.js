@@ -560,6 +560,44 @@ const sendChatAction = async (chatId, action = 'typing') => {
 };
 
 /**
+ * Enviar un documento (ej. reporte PDF tamaño Carta) a un chat de Telegram
+ */
+const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE.pdf', caption = '') => {
+    if (!fileBuffer || !Buffer.isBuffer(fileBuffer) || fileBuffer.length === 0) {
+        throw new Error('Buffer de documento inválido o vacío');
+    }
+
+    const { token } = await getBotToken();
+    if (!token) return null;
+
+    const formData = new FormData();
+    formData.append('chat_id', String(chatId));
+    if (caption) {
+        formData.append('caption', String(caption));
+        formData.append('parse_mode', 'HTML');
+    }
+    const blob = new Blob([fileBuffer], { type: 'application/pdf' });
+    formData.append('document', blob, filename);
+
+    // Propiedades descriptivas adjuntas para inspección y pruebas
+    formData.chat_id = chatId;
+    formData.caption = caption;
+    formData.parse_mode = 'HTML';
+    formData.filename = filename;
+    formData.fileBuffer = fileBuffer;
+
+    try {
+        const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendDocument`, formData, {
+            timeout: 30000
+        });
+        return res.data?.result || res.data || null;
+    } catch (err) {
+        console.error('[TelegramBot] Error enviando documento a chat:', chatId, err.message);
+        return null;
+    }
+};
+
+/**
  * Caché en memoria RAM de alta velocidad con TTL y auto-limpieza
  */
 const queryMemoryCache = new Map();
@@ -1024,6 +1062,21 @@ const handleCallbackQuery = async (cq) => {
             }
         } catch (e) {
             await sendTelegramMessage(chatId, '❌ Error al consultar datos solares: ' + escapeHtml(e.message));
+        }
+        return;
+    }
+
+    // Callbacks para generación y envío de Reportes Ejecutivos en PDF Tamaño Carta
+    if (data.startsWith('pdf_rep:')) {
+        const topic = data.replace('pdf_rep:', '').trim() || 'ventas';
+        await answerCallbackQuery(cq.id, '📄 Generando reporte PDF tamaño Carta...');
+        try {
+            const ctx = fromId ? getUserConversationContext(fromId) : null;
+            const targetDate = ctx?.lastDate || getDateStr(-1);
+            await buildAndSendTopicPdf(chatId, topic, { targetDate });
+        } catch (pdfErr) {
+            console.error('[TelegramBot] Error generando PDF en callback:', pdfErr);
+            await sendTelegramMessage(chatId, '❌ Error al generar el reporte PDF: ' + escapeHtml(pdfErr.message));
         }
         return;
     }
@@ -2880,6 +2933,515 @@ const transcribeTelegramVoice = async (audioBuffer, mimeType = 'audio/ogg') => {
 };
 
 /**
+ * Analizar imagen de comprobante bancario, remesa, cheque o factura mediante Gemini Vision OCR
+ */
+const analyzeTelegramImageReceipt = async (imageBuffer, mimeType = 'image/jpeg', caption = '') => {
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+        throw new Error('Buffer de imagen inválido o vacío');
+    }
+
+    const apiKey = await getGeminiApiKey();
+    if (!apiKey) {
+        throw new Error('GEMINI_API_KEY no configurado en el servidor ni en telegram_config');
+    }
+
+    const { GoogleGenAI } = require('@google/genai');
+    const ai = new GoogleGenAI({ apiKey });
+    const cleanImageMime = ((mimeType || 'image/jpeg').split(';')[0].trim().toLowerCase()) || 'image/jpeg';
+    const base64Image = imageBuffer.toString('base64');
+
+    const prompt = `Analiza la siguiente imagen de un comprobante bancario, transferencia, remesa, cheque o factura comercial de El Salvador.${caption ? ` Nota del usuario: "${caption}".` : ''}
+Extrae los datos y responde ÚNICAMENTE con un objeto JSON válido con la siguiente estructura exacta:
+{
+  "tipo_documento": "Comprobante de Transferencia | Remesa Bancaria | Cheque | Factura Comercial | Comprobante Fiscal | Recibo",
+  "banco": "Nombre del banco o institución emisora",
+  "monto_usd": 0.00,
+  "fecha": "YYYY-MM-DD",
+  "referencia": "Número de referencia, autorización o documento",
+  "cuenta_destino": "Número de cuenta destino o referencia de cuenta",
+  "beneficiario": "Nombre del beneficiario, proveedor o empresa",
+  "concepto": "Concepto o descripción de la transacción",
+  "observaciones": "Observación ejecutiva breve sobre la validez y legibilidad del documento"
+}`;
+
+    const payload = {
+        model: 'gemini-2.0-flash',
+        contents: [
+            {
+                role: 'user',
+                parts: [
+                    { text: prompt },
+                    {
+                        inlineData: {
+                            mimeType: cleanImageMime,
+                            data: base64Image
+                        }
+                    }
+                ]
+            }
+        ]
+    };
+
+    let response;
+    try {
+        response = await ai.models.generateContent(payload);
+    } catch (primaryErr) {
+        console.warn('[TelegramBot] Fallo análisis de imagen con gemini-2.0-flash, reintentando con gemini-1.5-flash:', primaryErr.message);
+        payload.model = 'gemini-1.5-flash';
+        response = await ai.models.generateContent(payload);
+    }
+
+    const rawReply = (response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+    const cleanedJsonStr = rawReply
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+
+    let parsedObj = null;
+    try {
+        parsedObj = JSON.parse(cleanedJsonStr);
+    } catch (_) {
+        const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            try {
+                parsedObj = JSON.parse(jsonMatch[0]);
+            } catch (_e) {
+                parsedObj = null;
+            }
+        }
+    }
+
+    if (!parsedObj || typeof parsedObj !== 'object') {
+        return {
+            tipo_documento: 'Comprobante / Documento',
+            banco: 'No especificado',
+            monto_usd: 0,
+            fecha: getDateStr(0),
+            referencia: 'S/N',
+            cuenta_destino: '',
+            beneficiario: '',
+            concepto: caption || 'Documento procesado por IA',
+            observaciones: rawReply || 'Imagen analizada sin estructura JSON estándar'
+        };
+    }
+
+    const rawMonto = parsedObj.monto_usd ?? parsedObj.monto ?? 0;
+    const cleanMonto = typeof rawMonto === 'number'
+        ? rawMonto
+        : Number(String(rawMonto).replace(/[^0-9.-]+/g, '')) || 0;
+
+    return {
+        tipo_documento: parsedObj.tipo_documento || 'Comprobante Bancario',
+        banco: parsedObj.banco || 'No especificado',
+        monto_usd: cleanMonto,
+        fecha: parsedObj.fecha || getDateStr(0),
+        referencia: parsedObj.referencia ? String(parsedObj.referencia).trim() : '',
+        cuenta_destino: parsedObj.cuenta_destino || '',
+        beneficiario: parsedObj.beneficiario || '',
+        concepto: parsedObj.concepto || caption || '',
+        observaciones: parsedObj.observaciones || ''
+    };
+};
+
+/**
+ * Verificar si un comprobante extraído por OCR ya existe registrado en movimientos_bancarios de SIPE Admin
+ */
+const verifyReceiptInBankMovements = async ({ monto_usd, referencia, fecha } = {}) => {
+    try {
+        const db = getDb();
+        if (!db || typeof db.query !== 'function') {
+            return { checked: false, found: false, movement: null };
+        }
+
+        const cleanRef = referencia && referencia !== 'S/N' ? String(referencia).trim() : '';
+        const numMonto = Number(monto_usd || 0);
+
+        if (!cleanRef && numMonto <= 0) {
+            return { checked: true, found: false, movement: null };
+        }
+
+        let rows = [];
+        try {
+            const [resRows] = await db.query(
+                `SELECT m.*, c.nombre as cuenta_nombre, c.numero as cuenta_numero, b.descripcion as banco_nombre
+                 FROM movimientos_bancarios m
+                 LEFT JOIN cuentas_bancarias c ON m.cuenta_bancaria_id = c.id
+                 LEFT JOIN bancos b ON c.banco_id = b.id
+                 WHERE (
+                     (? != '' AND (m.referencia = ? OR m.concepto LIKE ?))
+                     OR (? > 0 AND (ABS(COALESCE(m.abono, 0) - ?) < 0.05 OR ABS(COALESCE(m.cargo, 0) - ?) < 0.05))
+                 )
+                 ORDER BY m.fecha DESC, m.id DESC
+                 LIMIT 1`,
+                [cleanRef, cleanRef, `%${cleanRef}%`, numMonto, numMonto, numMonto]
+            );
+            rows = resRows || [];
+        } catch (_) {
+            const [fallbackRows] = await db.query(
+                'SELECT * FROM movimientos_bancarios WHERE referencia = ? LIMIT 1',
+                [cleanRef || '___NONE___']
+            );
+            rows = fallbackRows || [];
+        }
+
+        if (rows && rows.length > 0) {
+            return {
+                checked: true,
+                found: true,
+                movement: rows[0],
+                fecha_consulta: fecha || null
+            };
+        }
+
+        return { checked: true, found: false, movement: null };
+    } catch (err) {
+        console.warn('[TelegramBot] Error verificando comprobante en movimientos_bancarios:', err.message);
+        return { checked: false, found: false, movement: null };
+    }
+};
+
+/**
+ * Formatear en HTML ejecutivo el resultado del análisis OCR del comprobante y su conciliación en SIPE
+ */
+const formatReceiptAnalysisMessage = (analysis = {}, verification = null) => {
+    const tipoDoc = escapeHtml(analysis.tipo_documento || 'Comprobante Bancario / Factura');
+    const banco = escapeHtml(analysis.banco || 'No especificado');
+    const monto = Number(analysis.monto_usd || 0);
+    const fechaStr = analysis.fecha ? toDisplayDate(analysis.fecha) : 'No especificada';
+    const refStr = escapeHtml(analysis.referencia || 'S/N');
+
+    let msg = `📸 <b>ANÁLISIS DE COMPROBANTE / DOCUMENTO (IA VISION)</b>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    msg += `🧾 <b>Tipo de Documento:</b> <b>${tipoDoc}</b>\n`;
+    msg += `🏦 <b>Banco / Emisor:</b> ${banco}\n`;
+    msg += `💵 <b>Monto Detectado:</b> <b>${moneyFmt(monto)}</b>\n`;
+    msg += `📅 <b>Fecha Operación:</b> <code>${escapeHtml(fechaStr)}</code>\n`;
+    msg += `🧾 <b>Referencia / Doc:</b> <code>${refStr}</code>\n`;
+
+    if (analysis.cuenta_destino) {
+        msg += `🏦 <b>Cuenta Destino:</b> <code>${escapeHtml(analysis.cuenta_destino)}</code>\n`;
+    }
+    if (analysis.beneficiario) {
+        msg += `👤 <b>Beneficiario / Proveedor:</b> ${escapeHtml(analysis.beneficiario)}\n`;
+    }
+    if (analysis.concepto) {
+        msg += `📝 <b>Concepto:</b> ${escapeHtml(analysis.concepto)}\n`;
+    }
+    if (analysis.observaciones) {
+        msg += `💡 <b>Observaciones IA:</b> <i>${escapeHtml(analysis.observaciones)}</i>\n`;
+    }
+
+    msg += `\n━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🔎 <b>VERIFICACIÓN EN TESORERÍA (SIPE ADMIN):</b>\n`;
+
+    if (verification && verification.found && verification.movement) {
+        const mov = verification.movement;
+        const movMonto = Number(mov.abono || mov.cargo || mov.monto || monto);
+        const movCuenta = escapeHtml(mov.cuenta_nombre || mov.cuenta_numero || mov.banco_nombre || 'Cuenta Bancaria SIPE');
+        const movRef = escapeHtml(mov.referencia || mov.documento || analysis.referencia || 'S/N');
+        msg += `✅ <b>Estado:</b> <b>CONCILIADO / REGISTRADO EN MOVIMIENTOS BANCARIOS</b>\n`;
+        msg += `   • <b>Cuenta:</b> ${movCuenta}\n`;
+        msg += `   • <b>Referencia en Libros:</b> <code>${movRef}</code>\n`;
+        msg += `   • <b>Importe Registrado:</b> <code>${moneyFmt(movMonto)}</code>\n`;
+    } else {
+        msg += `⚠️ <b>Estado:</b> <b>PENDIENTE DE REGISTRO / NO ENCONTRADO EN LIBROS</b>\n`;
+        msg += `   • No se localizó coincidencia en <code>movimientos_bancarios</code> para la referencia <code>${refStr}</code>.\n`;
+        msg += `   • <i>Acción sugerida:</i> Verificar aplicación en el módulo de <b>Bancos &gt; Movimientos Bancarios</b> de SIPE Admin.\n`;
+    }
+
+    msg += `\n<i>SIPE Admin • Auditoría Inteligente por Visión Artificial</i>`;
+    return msg;
+};
+
+/**
+ * Generar un Reporte Ejecutivo en formato PDF Tamaño Carta (LETTER) completo
+ */
+const generateExecutiveReportPdf = ({
+    title = 'REPORTE EJECUTIVO SIPE ADMIN',
+    subtitle = 'Dirección Estratégica • Operaciones y Finanzas',
+    dateStr = null,
+    kpis = [],
+    rows = [],
+    columns = [],
+    summaryText = ''
+} = {}) => {
+    return new Promise((resolve, reject) => {
+        try {
+            const PDFDocument = require('pdfkit');
+            const doc = new PDFDocument({ size: 'LETTER', margin: 40 });
+            const chunks = [];
+
+            doc.on('data', (chunk) => chunks.push(chunk));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', (err) => reject(err));
+
+            const effectiveDateStr = dateStr || toDisplayDate(getDateStr(0));
+
+            // 1. Encabezado Corporativo Tamaño Carta (612 x 792 pt, ancho útil 532 pt)
+            doc.rect(40, 35, 532, 68).fill('#0f172a');
+            doc.fillColor('#38bdf8').font('Helvetica-Bold').fontSize(9)
+                .text('SIPE ADMIN • SUITE EJECUTIVA GERENCIAL', 54, 46);
+            doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(14)
+                .text(String(title || 'REPORTE EJECUTIVO SIPE ADMIN').toUpperCase(), 54, 60, { width: 365 });
+            doc.fillColor('#cbd5e1').font('Helvetica').fontSize(9)
+                .text(String(subtitle || 'Dirección Estratégica • Operaciones y Finanzas'), 54, 80, { width: 365 });
+
+            doc.fillColor('#f8fafc').font('Helvetica-Bold').fontSize(9)
+                .text(`Fecha: ${effectiveDateStr}`, 415, 52, { width: 145, align: 'right' });
+            doc.fillColor('#94a3b8').font('Helvetica').fontSize(8)
+                .text('Formato: Carta (Letter)', 415, 68, { width: 145, align: 'right' });
+
+            let cursorY = 118;
+
+            // 2. Bloque de KPIs Ejecutivos
+            if (Array.isArray(kpis) && kpis.length > 0) {
+                const colsCount = Math.min(kpis.length, 4);
+                const gap = 10;
+                const cardWidth = Math.floor((532 - gap * (colsCount - 1)) / colsCount);
+
+                kpis.forEach((kpi, idx) => {
+                    if (idx > 0 && idx % 4 === 0) {
+                        cursorY += 54;
+                    }
+                    const colIdx = idx % 4;
+                    const cardX = 40 + colIdx * (cardWidth + gap);
+                    doc.rect(cardX, cursorY, cardWidth, 46).fillAndStroke('#f8fafc', '#e2e8f0');
+
+                    const kpiLabel = (kpi && typeof kpi === 'object') ? (kpi.label || kpi.title || `KPI ${idx + 1}`) : `Indicador ${idx + 1}`;
+                    const kpiValue = (kpi && typeof kpi === 'object') ? (kpi.value ?? kpi.val ?? '') : String(kpi ?? '');
+
+                    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(7.5)
+                        .text(String(kpiLabel).toUpperCase(), cardX + 8, cursorY + 8, { width: cardWidth - 16 });
+                    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(11)
+                        .text(String(kpiValue), cardX + 8, cursorY + 23, { width: cardWidth - 16 });
+                });
+
+                cursorY += 58;
+            }
+
+            // 3. Resumen Ejecutivo
+            if (summaryText) {
+                doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10)
+                    .text('RESUMEN EJECUTIVO', 40, cursorY);
+                cursorY += 14;
+                doc.fillColor('#334155').font('Helvetica').fontSize(9.5)
+                    .text(String(summaryText), 40, cursorY, { width: 532 });
+                cursorY = doc.y + 14;
+            }
+
+            // 4. Tabla de Datos
+            if (Array.isArray(rows) && rows.length > 0) {
+                let normalizedCols = [];
+                if (Array.isArray(columns) && columns.length > 0) {
+                    normalizedCols = columns.map(c => (typeof c === 'object' && c !== null)
+                        ? { header: c.header || c.label || c.key || '', key: c.key || null }
+                        : { header: String(c), key: null });
+                } else if (typeof rows[0] === 'object' && !Array.isArray(rows[0]) && rows[0] !== null) {
+                    normalizedCols = Object.keys(rows[0]).map(k => ({ header: k.toUpperCase(), key: k }));
+                } else if (Array.isArray(rows[0])) {
+                    normalizedCols = rows[0].map((_, idx) => ({ header: `COL ${idx + 1}`, key: null }));
+                } else {
+                    normalizedCols = [{ header: 'DETALLE', key: null }];
+                }
+
+                const colCount = Math.max(normalizedCols.length, 1);
+                const colWidth = Math.floor(532 / colCount);
+
+                // Encabezado de tabla
+                doc.rect(40, cursorY, 532, 22).fill('#1e293b');
+                normalizedCols.forEach((col, cIdx) => {
+                    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8)
+                        .text(String(col.header), 45 + cIdx * colWidth, cursorY + 6, { width: colWidth - 10 });
+                });
+                cursorY += 22;
+
+                // Filas de tabla
+                rows.forEach((row, rIdx) => {
+                    if (cursorY > 685) {
+                        doc.addPage({ size: 'LETTER', margin: 40 });
+                        cursorY = 45;
+                    }
+                    const rowBg = rIdx % 2 === 0 ? '#ffffff' : '#f1f5f9';
+                    doc.rect(40, cursorY, 532, 20).fill(rowBg);
+
+                    normalizedCols.forEach((col, cIdx) => {
+                        let cellVal = '';
+                        if (Array.isArray(row)) {
+                            cellVal = row[cIdx] ?? '';
+                        } else if (typeof row === 'object' && row !== null) {
+                            cellVal = col.key ? (row[col.key] ?? '') : (Object.values(row)[cIdx] ?? '');
+                        } else {
+                            cellVal = String(row ?? '');
+                        }
+                        doc.fillColor('#1e293b').font('Helvetica').fontSize(8)
+                            .text(String(cellVal), 45 + cIdx * colWidth, cursorY + 5, { width: colWidth - 10 });
+                    });
+
+                    cursorY += 20;
+                });
+            }
+
+            // 5. Pie de Página Tamaño Carta
+            const footerY = 725;
+            doc.moveTo(40, footerY).lineTo(572, footerY).strokeColor('#cbd5e1').stroke();
+            doc.fillColor('#64748b').font('Helvetica-Oblique').fontSize(8)
+                .text('SIPE Admin • Reporte Ejecutivo Generado Automáticamente • Formato Tamaño Carta (Letter)', 40, footerY + 7, {
+                    width: 532,
+                    align: 'center'
+                });
+
+            doc.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+};
+
+/**
+ * Construir y enviar por Telegram el reporte PDF Tamaño Carta según el tema solicitado
+ */
+const buildAndSendTopicPdf = async (chatId, topicKey = 'ventas', options = {}) => {
+    const cleanTopic = String(topicKey || 'ventas').toLowerCase().trim();
+    const targetDate = options.targetDate || getDateStr(-1);
+
+    sendChatAction(chatId, 'upload_document').catch(() => {});
+
+    if (cleanTopic.includes('banco')) {
+        const data = await getSaldosBancosData();
+        const cuentas = data?.cuentas || [];
+        const pdfBuffer = await generateExecutiveReportPdf({
+            title: 'REPORTE CONSOLIDADO DE SALDOS BANCARIOS',
+            subtitle: 'Disponibilidad en Cuentas Bancarias Corporativas • SIPE Admin',
+            dateStr: toDisplayDate(data?.fecha || getDateStr(0)),
+            kpis: [
+                { label: 'Saldo Total Bancos', value: moneyFmt(data?.total || 0) },
+                { label: 'Cuentas Activas', value: String(cuentas.length) },
+                { label: 'Fuente', value: data?.fuente === 'sp_saldo_en_bancos' ? 'Conciliación' : 'Catálogo Local' }
+            ],
+            columns: ['Banco', 'Cuenta Bancaria', 'Saldo Disponible'],
+            rows: cuentas.map(c => [c.banco || 'Banco', c.cuenta || 'Cuenta', moneyFmt(c.saldo || 0)]),
+            summaryText: `Reporte oficial en tamaño Carta con el desglose de saldos disponibles en cuentas bancarias al ${toDisplayDate(data?.fecha || getDateStr(0))}.`
+        });
+        const filename = `Reporte_Saldos_Bancos_${data?.fecha || getDateStr(0)}.pdf`;
+        const caption = `📄 <b>Reporte Ejecutivo de Saldos en Bancos (Tamaño Carta)</b>\n💰 Total Consolidado: <b>${moneyFmt(data?.total || 0)}</b>`;
+        return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
+    }
+
+    if (cleanTopic.includes('chequera') || cleanTopic.includes('cheque')) {
+        const data = await getSaldosChequeraData();
+        const cuentas = data?.cuentas || [];
+        const pdfBuffer = await generateExecutiveReportPdf({
+            title: 'REPORTE DE SALDOS EN CHEQUERA',
+            subtitle: 'Control de Tesorería y Disponibilidad en Libros • SIPE Admin',
+            dateStr: toDisplayDate(data?.fecha || getDateStr(0)),
+            kpis: [
+                { label: 'Total en Chequeras', value: moneyFmt(data?.total || 0) },
+                { label: 'Cuentas de Cheques', value: String(cuentas.length) }
+            ],
+            columns: ['Banco', 'Cuenta', 'Saldo en Chequera'],
+            rows: cuentas.map(c => [c.banco || 'Banco', c.cuenta || 'Cuenta', moneyFmt(c.saldo || 0)]),
+            summaryText: `Estado ejecutivo de saldos disponibles en chequeras corporativas al ${toDisplayDate(data?.fecha || getDateStr(0))}.`
+        });
+        const filename = `Reporte_Saldos_Chequera_${data?.fecha || getDateStr(0)}.pdf`;
+        const caption = `📄 <b>Reporte Ejecutivo de Saldos en Chequera (Tamaño Carta)</b>\n💰 Total Chequeras: <b>${moneyFmt(data?.total || 0)}</b>`;
+        return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
+    }
+
+    if (cleanTopic.includes('solar') || cleanTopic.includes('panel')) {
+        const solarData = await solarEnergyService.getSolarAhorroDiario(targetDate);
+        const estaciones = solarData?.desglose_por_estacion || solarData?.estaciones || [];
+        const ahorro = solarData?.total_ahorro_usd ?? solarData?.ahorro_total_usd ?? 0;
+        const gen = solarData?.total_generacion_kwh ?? solarData?.generacion_total_kwh ?? 0;
+        const co2 = solarData?.total_co2_evitado_kg ?? solarData?.co2_evitado_total_kg ?? 0;
+
+        const pdfBuffer = await generateExecutiveReportPdf({
+            title: 'REPORTE DE ENERGÍA SOLAR Y BATERÍAS BESS',
+            subtitle: 'Generación Fotovoltaica, Almacenamiento y Ahorro Económico',
+            dateStr: toDisplayDate(targetDate),
+            kpis: [
+                { label: 'Ahorro del Día', value: moneyFmt(ahorro) },
+                { label: 'Generación Solar', value: `${numFmt(gen)} kWh` },
+                { label: 'CO2 Evitado', value: `${numFmt(co2)} kg` },
+                { label: 'Capacidad Red', value: '95.0 kWp / 60 kWh' }
+            ],
+            columns: ['Ubicación', 'Capacidad (kWp)', 'Generación (kWh)', 'Ahorro USD'],
+            rows: estaciones.map(e => [
+                e.estacion_nombre || 'Estación',
+                `${e.potencia_kwp || 0} kWp`,
+                `${numFmt(e.total_generacion_kwh ?? e.generacion_kwh ?? 0)} kWh`,
+                moneyFmt(e.total_ahorro_usd ?? e.ahorro_usd ?? 0)
+            ]),
+            summaryText: `Desempeño solar fotovoltaico y sistema de almacenamiento BESS correspondiente a la fecha ${toDisplayDate(targetDate)}.`
+        });
+        const filename = `Reporte_Energia_Solar_${targetDate}.pdf`;
+        const caption = `📄 <b>Reporte Ejecutivo de Energía Solar (Tamaño Carta)</b>\n☀️ Ahorro: <b>${moneyFmt(ahorro)}</b> | Generación: <code>${numFmt(gen)} kWh</code>`;
+        return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
+    }
+
+    if (cleanTopic.includes('andelsa') || cleanTopic.includes('saas')) {
+        const fin = await sysSaasService.getAndelsaFinanzasResumen();
+        const inv = await sysSaasService.getAndelsaInventarios();
+        const items = inv?.items || [];
+        const pdfBuffer = await generateExecutiveReportPdf({
+            title: 'REPORTE EJECUTIVO ANDELSA (NOVA SAAS)',
+            subtitle: 'Resumen Financiero, Inventarios y Cartera • sys.sipesv.com',
+            dateStr: toDisplayDate(getDateStr(0)),
+            kpis: [
+                { label: 'Facturación Total', value: moneyFmt(fin?.facturacion_total_usd || 0) },
+                { label: 'Valor Inventario', value: moneyFmt(fin?.valor_inventario_actual_usd || inv?.valor_inventario_total_usd || 0) },
+                { label: 'Cartera CXC', value: moneyFmt(fin?.cartera_por_cobrar_usd || 0) },
+                { label: 'Clientes Activos', value: String(fin?.total_clientes_activos || 0) }
+            ],
+            columns: ['Producto / Ítem', 'Stock Actual', 'Costo Promedio', 'Valor Total'],
+            rows: items.slice(0, 15).map(i => [
+                i.descripcion || 'Producto',
+                numFmt(i.stock_actual || 0),
+                moneyFmt(i.costo_promedio || 0),
+                moneyFmt(i.valor_total || 0)
+            ]),
+            summaryText: 'Consolidado financiero y de inventarios en tiempo real de ANDELSA, S.A. DE C.V. (Nova SaaS).'
+        });
+        const filename = `Reporte_Ejecutivo_Andelsa_${getDateStr(0)}.pdf`;
+        const caption = `📄 <b>Reporte Ejecutivo Andelsa • Nova SaaS (Tamaño Carta)</b>\n💵 Facturación: <b>${moneyFmt(fin?.facturacion_total_usd || 0)}</b>`;
+        return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
+    }
+
+    // Por defecto: Reporte Consolidado de Ventas de Estaciones y Tiendas
+    const data = await getConsolidadoVentas(targetDate);
+    const estaciones = data?.estaciones || [];
+    const tiendas = data?.tiendas || [];
+    const totalGalones = estaciones.reduce((acc, e) => acc + Number(e.galonaje || e.galones || 0), 0);
+    const totalCombustible = estaciones.reduce((acc, e) => acc + Number(e.venta || e.total_venta || 0), 0);
+    const totalTiendas = tiendas.reduce((acc, t) => acc + Number(t.venta || 0), 0);
+    const totalGlobal = totalCombustible + totalTiendas;
+
+    const pdfBuffer = await generateExecutiveReportPdf({
+        title: 'REPORTE CONSOLIDADO DE VENTAS',
+        subtitle: 'Estaciones de Servicio y Tiendas de Conveniencia • SIPE Admin',
+        dateStr: toDisplayDate(targetDate),
+        kpis: [
+            { label: 'Galonaje Total', value: `${numFmt(totalGalones)} gal` },
+            { label: 'Venta Combustible', value: moneyFmt(totalCombustible) },
+            { label: 'Venta Tiendas', value: moneyFmt(totalTiendas) },
+            { label: 'Venta Total Global', value: moneyFmt(totalGlobal) }
+        ],
+        columns: ['Estación', 'Diesel (gal)', 'Regular (gal)', 'Súper (gal)', 'Total Gal', 'Venta ($)'],
+        rows: estaciones.map(e => [
+            e.empresa || e.titulo || 'Estación',
+            numFmt(e.diesel || 0),
+            numFmt(e.regular || 0),
+            numFmt(e.super || 0),
+            numFmt(e.galonaje || e.galones || 0),
+            moneyFmt(e.venta || e.total_venta || 0)
+        ]),
+        summaryText: `Consolidado operativo de ventas de combustibles y tiendas de conveniencia para la fecha ${toDisplayDate(targetDate)}.`
+    });
+    const filename = `Reporte_Ventas_${targetDate}.pdf`;
+    const caption = `📄 <b>Reporte Ejecutivo de Ventas (Tamaño Carta)</b>\n📅 Fecha: <b>${toDisplayDate(targetDate)}</b> | 💰 Total: <b>${moneyFmt(totalGlobal)}</b>`;
+    return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
+};
+
+/**
  * Despachador inteligente de lenguaje natural
  */
 const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectivePerms, keyboard, contextOptions = {}) => {
@@ -3632,6 +4194,75 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         }, { voicePrefix: newVoicePrefix });
     }
 
+    // Detección de fotografías / comprobantes bancarios / facturas (OCR con Gemini Vision)
+    if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
+        sendChatAction(chatId, 'typing').catch(() => {});
+
+        const apiKey = await getGeminiApiKey();
+        if (!apiKey) {
+            await sendTelegramMessage(
+                chatId,
+                '📸 <b>Servicio de visión IA no disponible</b>\n\n' +
+                'La clave de API de Gemini no se encuentra configurada en el servidor ni en la base de datos.\n' +
+                'Un administrador puede ingresarla desde <b>Seguridad &gt; Usuarios de Telegram &gt; Configuración</b> en SIPE Admin.',
+                getMainReplyKeyboard()
+            );
+            return;
+        }
+
+        await sendTelegramMessage(chatId, '📸 Analizando imagen / comprobante con IA...');
+
+        try {
+            const bestPhoto = msg.photo[msg.photo.length - 1];
+            const fileId = bestPhoto.file_id;
+            const { token } = await getBotToken();
+            const fileRes = await axios.get(`${TELEGRAM_API_BASE}${token}/getFile?file_id=${fileId}`, { timeout: 15000 });
+            const filePath = fileRes.data?.result?.file_path;
+            if (!filePath) throw new Error('No se pudo resolver la ruta de la imagen en Telegram');
+
+            sendChatAction(chatId, 'typing').catch(() => {});
+            const imgRes = await axios.get(`https://api.telegram.org/file/bot${token}/${filePath}`, {
+                responseType: 'arraybuffer',
+                timeout: 30000
+            });
+            const imageBuffer = Buffer.from(imgRes.data);
+
+            const analysis = await analyzeTelegramImageReceipt(imageBuffer, 'image/jpeg', msg.caption || '');
+            const verification = await verifyReceiptInBankMovements(analysis);
+            const reportMsg = formatReceiptAnalysisMessage(analysis, verification);
+
+            const photoUser = (await resolveTelegramUser(msg.from).catch(() => null)) || {
+                telegram_user_id: String(msg.from.id),
+                telegram_username: msg.from.username ? `@${msg.from.username}` : null,
+                first_name: msg.from.first_name || 'Usuario'
+            };
+
+            await logTelegramQuery(
+                photoUser.telegram_user_id,
+                'OCR_COMPROBANTE_FOTO',
+                `${analysis.tipo_documento || 'Comprobante'} - ${analysis.banco || ''} - $${analysis.monto_usd || 0}`,
+                1
+            );
+
+            await sendTelegramResponseWithFeedback(chatId, reportMsg, {
+                user: photoUser,
+                query: msg.caption || 'Análisis de comprobante por imagen',
+                responseSummary: `OCR: ${analysis.banco || 'Doc'} $${analysis.monto_usd || 0} (Ref: ${analysis.referencia || 'S/N'})`
+            });
+            return;
+        } catch (imgErr) {
+            console.error('[TelegramBot] Error en análisis de imagen/comprobante:', imgErr.message);
+            await sendTelegramMessage(
+                chatId,
+                '📸 <b>No se pudo procesar la imagen del comprobante</b>\n\n' +
+                'Ocurrió un inconveniente al analizar la fotografía (' + escapeHtml(imgErr.message || 'error de visión IA') + ').\n' +
+                'Por favor, asegúrate de que la imagen sea legible e intenta nuevamente.',
+                getMainReplyKeyboard()
+            );
+            return;
+        }
+    }
+
     if (!rawText) return;
 
     // 1. Resolver usuario en la base de datos
@@ -3913,6 +4544,51 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         } catch (diagErr) {
             console.error('[TelegramBot] Error al generar diagnóstico:', diagErr);
             await sendTelegramMessage(chatId, voicePrefix + '❌ Error al generar diagnóstico: ' + escapeHtml(diagErr.message), keyboard);
+        }
+        return;
+    }
+
+    // 0. Comandos o solicitudes de exportación de Reporte Ejecutivo en PDF Tamaño Carta
+    const normForPdf = normalizeText(rawText);
+    const isPdfCommand = cleanLower === 'pdf' || cleanLower.startsWith('pdf ') ||
+        /\b(pdf|documento pdf|reporte en pdf|exportar pdf|mandame el pdf|enviame el pdf)\b/i.test(normForPdf);
+    if (isPdfCommand) {
+        const userCtx = getUserConversationContext(user.telegram_user_id);
+        let pdfTopic = 'ventas';
+        if (/\b(banco|bancos|saldos bancarios|cuentas bancarias)\b/i.test(normForPdf)) {
+            pdfTopic = 'bancos';
+        } else if (/\b(chequera|chequeras|cheques)\b/i.test(normForPdf)) {
+            pdfTopic = 'chequeras';
+        } else if (/\b(solar|solares|paneles|bateria|baterias|fotovoltaic)\b/i.test(normForPdf)) {
+            pdfTopic = 'solar';
+        } else if (/\b(andelsa|saas|nova)\b/i.test(normForPdf)) {
+            pdfTopic = 'andelsa';
+        } else if (/\b(venta|ventas|combustible|galon|estacion)\b/i.test(normForPdf)) {
+            pdfTopic = 'ventas';
+        } else if (userCtx?.lastTopic) {
+            pdfTopic = userCtx.lastTopic;
+        }
+
+        if (pdfTopic.includes('banco') && !effectivePerms.saldos_banco) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de bancos.', keyboard);
+            return;
+        }
+        if (pdfTopic.includes('chequera') && !effectivePerms.saldos_chequera) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de chequera.', keyboard);
+            return;
+        }
+        if (pdfTopic.includes('venta') && !effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de ventas.', keyboard);
+            return;
+        }
+
+        const targetDate = parseSpanishDateText(rawText) || userCtx?.lastDate || getDateStr(-1);
+        try {
+            await logTelegramQuery(user.telegram_user_id, '/pdf', `Exportar PDF (${pdfTopic})`, 1);
+            await buildAndSendTopicPdf(chatId, pdfTopic, { targetDate });
+        } catch (pdfErr) {
+            console.error('[TelegramBot] Error generando reporte PDF:', pdfErr);
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error al generar el reporte PDF: ' + escapeHtml(pdfErr.message), keyboard);
         }
         return;
     }
@@ -4828,5 +5504,11 @@ module.exports = {
     clearQueryCache,
     setTelegramWebhook,
     deleteTelegramWebhook,
-    getTelegramWebhookInfo
+    getTelegramWebhookInfo,
+    analyzeTelegramImageReceipt,
+    verifyReceiptInBankMovements,
+    formatReceiptAnalysisMessage,
+    generateExecutiveReportPdf,
+    sendTelegramDocument,
+    buildAndSendTopicPdf
 };
