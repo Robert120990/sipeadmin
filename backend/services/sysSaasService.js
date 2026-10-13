@@ -9,11 +9,47 @@ const ANDELSA_COMPANY_ID = 9;
 let injectedDb = null;
 
 /**
+ * Caché en memoria RAM para consultas Nova SaaS / Andelsa (TTL 45s)
+ */
+const saasMemoryCache = new Map();
+
+function getCachedSaas(key) {
+    if (!key) return null;
+    const entry = saasMemoryCache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+        saasMemoryCache.delete(key);
+        return null;
+    }
+    return entry.data;
+}
+
+function setCachedSaas(key, data, ttlMs = 45000) {
+    if (!key) return;
+    const now = Date.now();
+    if (saasMemoryCache.size >= 200) {
+        for (const [k, item] of saasMemoryCache.entries()) {
+            if (now > item.expiresAt) saasMemoryCache.delete(k);
+        }
+        if (saasMemoryCache.size >= 200) {
+            const keysToDelete = [...saasMemoryCache.keys()].slice(0, 50);
+            for (const k of keysToDelete) saasMemoryCache.delete(k);
+        }
+    }
+    saasMemoryCache.set(key, { data, expiresAt: now + (ttlMs || 45000) });
+}
+
+function clearSaasCache() {
+    saasMemoryCache.clear();
+}
+
+/**
  * Permite inyectar un pool mockeado para pruebas unitarias sin conexión activa
  * @param {object|null} mockDb 
  */
 function _setMockDb(mockDb) {
     injectedDb = mockDb;
+    clearSaasCache();
 }
 
 /**
@@ -153,6 +189,9 @@ const MOCK_DEUDORES_RAW = [
  */
 async function getAndelsaInventarios({ categoria = null, search = null, limit = 15 } = {}) {
     const lim = Math.max(1, parseInt(limit, 10) || 15);
+    const cacheKey = `andelsa:inventarios:${JSON.stringify({ categoria, search, lim })}`;
+    const cached = getCachedSaas(cacheKey);
+    if (cached) return cached;
 
     try {
         const db = await getSaasDb();
@@ -220,7 +259,7 @@ async function getAndelsaInventarios({ categoria = null, search = null, limit = 
             valor_total: parseFloat(Number(r.valor_total || 0).toFixed(2))
         }));
 
-        return {
+        const result = {
             items,
             resumen: {
                 total_articulos: totalArticulos,
@@ -230,6 +269,8 @@ async function getAndelsaInventarios({ categoria = null, search = null, limit = 
             },
             isFallback: false
         };
+        setCachedSaas(cacheKey, result, 45000);
+        return result;
     } catch (err) {
         console.warn(`[SysSaasService] getAndelsaInventarios - Fallback analítico activado: ${err.message}`);
 
@@ -262,7 +303,7 @@ async function getAndelsaInventarios({ categoria = null, search = null, limit = 
             valor_total: item.valor_total
         }));
 
-        return {
+        const fallbackResult = {
             items: itemsPaginados,
             resumen: {
                 total_articulos: totalArticulos,
@@ -272,6 +313,8 @@ async function getAndelsaInventarios({ categoria = null, search = null, limit = 
             },
             isFallback: true
         };
+        setCachedSaas(cacheKey, fallbackResult, 45000);
+        return fallbackResult;
     }
 }
 
@@ -282,6 +325,9 @@ async function getAndelsaInventarios({ categoria = null, search = null, limit = 
  */
 async function getAndelsaCostos({ search = null, limit = 15 } = {}) {
     const lim = Math.max(1, parseInt(limit, 10) || 15);
+    const cacheKey = `andelsa:costos:${JSON.stringify({ search, lim })}`;
+    const cached = getCachedSaas(cacheKey);
+    if (cached) return cached;
 
     try {
         const db = await getSaasDb();
@@ -368,7 +414,7 @@ async function getAndelsaCostos({ search = null, limit = 15 } = {}) {
         const costoPromedioGeneral = totalProductos > 0 ? parseFloat((sumaCostos / totalProductos).toFixed(2)) : 0.0;
         const margenPromedio = totalProductos > 0 ? parseFloat((sumaMargenes / totalProductos).toFixed(2)) : 0.0;
 
-        return {
+        const result = {
             items,
             resumen: {
                 total_productos: totalProductos,
@@ -377,6 +423,8 @@ async function getAndelsaCostos({ search = null, limit = 15 } = {}) {
             },
             isFallback: false
         };
+        setCachedSaas(cacheKey, result, 45000);
+        return result;
     } catch (err) {
         console.warn(`[SysSaasService] getAndelsaCostos - Fallback analítico activado: ${err.message}`);
 
@@ -397,7 +445,7 @@ async function getAndelsaCostos({ search = null, limit = 15 } = {}) {
         const costoPromedioGeneral = totalProductos > 0 ? parseFloat((sumaCostos / totalProductos).toFixed(2)) : 0.0;
         const margenPromedio = totalProductos > 0 ? parseFloat((sumaMargenes / totalProductos).toFixed(2)) : 0.0;
 
-        return {
+        const fallbackResult = {
             items: itemsPaginados,
             resumen: {
                 total_productos: totalProductos,
@@ -406,6 +454,8 @@ async function getAndelsaCostos({ search = null, limit = 15 } = {}) {
             },
             isFallback: true
         };
+        setCachedSaas(cacheKey, fallbackResult, 45000);
+        return fallbackResult;
     }
 }
 
@@ -417,6 +467,9 @@ async function getAndelsaCostos({ search = null, limit = 15 } = {}) {
 async function getAndelsaVentasPorCliente({ startDate = null, endDate = null, limit = 10, clienteSearch = null } = {}) {
     const lim = Math.max(1, parseInt(limit, 10) || 10);
     const { startDate: sDate, endDate: eDate } = resolveDateRange(startDate, endDate);
+    const cacheKey = `andelsa:ventas_cliente:${JSON.stringify({ sDate, eDate, lim, clienteSearch })}`;
+    const cached = getCachedSaas(cacheKey);
+    if (cached) return cached;
 
     try {
         const db = await getSaasDb();
@@ -484,7 +537,7 @@ async function getAndelsaVentasPorCliente({ startDate = null, endDate = null, li
             };
         });
 
-        return {
+        const result = {
             ranking,
             resumen: {
                 total_facturado: totalFacturadoPeriodo,
@@ -494,6 +547,8 @@ async function getAndelsaVentasPorCliente({ startDate = null, endDate = null, li
             },
             isFallback: false
         };
+        setCachedSaas(cacheKey, result, 45000);
+        return result;
     } catch (err) {
         console.warn(`[SysSaasService] getAndelsaVentasPorCliente - Fallback analítico activado: ${err.message}`);
 
@@ -521,7 +576,7 @@ async function getAndelsaVentasPorCliente({ startDate = null, endDate = null, li
             };
         });
 
-        return {
+        const fallbackResult = {
             ranking,
             resumen: {
                 total_facturado: totalFacturadoPeriodo,
@@ -531,6 +586,8 @@ async function getAndelsaVentasPorCliente({ startDate = null, endDate = null, li
             },
             isFallback: true
         };
+        setCachedSaas(cacheKey, fallbackResult, 45000);
+        return fallbackResult;
     }
 }
 
@@ -542,6 +599,9 @@ async function getAndelsaVentasPorCliente({ startDate = null, endDate = null, li
 async function getAndelsaVentasPorProducto({ startDate = null, endDate = null, limit = 10, productoSearch = null } = {}) {
     const lim = Math.max(1, parseInt(limit, 10) || 10);
     const { startDate: sDate, endDate: eDate } = resolveDateRange(startDate, endDate);
+    const cacheKey = `andelsa:ventas_producto:${JSON.stringify({ sDate, eDate, lim, productoSearch })}`;
+    const cached = getCachedSaas(cacheKey);
+    if (cached) return cached;
 
     try {
         const db = await getSaasDb();
@@ -604,7 +664,7 @@ async function getAndelsaVentasPorProducto({ startDate = null, endDate = null, l
             monto_total: parseFloat(Number(r.monto_total || 0).toFixed(2))
         }));
 
-        return {
+        const result = {
             ranking,
             resumen: {
                 total_unidades: totalUnidades,
@@ -614,6 +674,8 @@ async function getAndelsaVentasPorProducto({ startDate = null, endDate = null, l
             },
             isFallback: false
         };
+        setCachedSaas(cacheKey, result, 45000);
+        return result;
     } catch (err) {
         console.warn(`[SysSaasService] getAndelsaVentasPorProducto - Fallback analítico activado: ${err.message}`);
 
@@ -638,7 +700,7 @@ async function getAndelsaVentasPorProducto({ startDate = null, endDate = null, l
             monto_total: p.monto_total
         }));
 
-        return {
+        const fallbackResult = {
             ranking,
             resumen: {
                 total_unidades: totalUnidades,
@@ -648,6 +710,8 @@ async function getAndelsaVentasPorProducto({ startDate = null, endDate = null, l
             },
             isFallback: true
         };
+        setCachedSaas(cacheKey, fallbackResult, 45000);
+        return fallbackResult;
     }
 }
 
@@ -658,6 +722,9 @@ async function getAndelsaVentasPorProducto({ startDate = null, endDate = null, l
  */
 async function getAndelsaCuentasPorCobrar({ limit = 10 } = {}) {
     const lim = Math.max(1, parseInt(limit, 10) || 10);
+    const cacheKey = `andelsa:cxc:${JSON.stringify({ lim })}`;
+    const cached = getCachedSaas(cacheKey);
+    if (cached) return cached;
 
     try {
         const db = await getSaasDb();
@@ -724,7 +791,7 @@ async function getAndelsaCuentasPorCobrar({ limit = 10 } = {}) {
             facturas_pendientes: parseInt(r.facturas_pendientes, 10) || 1
         }));
 
-        return {
+        const result = {
             clientes_deudores: clientesDeudores,
             resumen: {
                 total_cartera_por_cobrar: totalCartera,
@@ -732,6 +799,8 @@ async function getAndelsaCuentasPorCobrar({ limit = 10 } = {}) {
             },
             isFallback: false
         };
+        setCachedSaas(cacheKey, result, 45000);
+        return result;
     } catch (err) {
         console.warn(`[SysSaasService] getAndelsaCuentasPorCobrar - Fallback analítico activado: ${err.message}`);
 
@@ -745,7 +814,7 @@ async function getAndelsaCuentasPorCobrar({ limit = 10 } = {}) {
 
         const totalCartera = parseFloat(MOCK_DEUDORES_RAW.reduce((acc, curr) => acc + curr.saldo_pendiente, 0).toFixed(2));
 
-        return {
+        const fallbackResult = {
             clientes_deudores: clientesPaginados,
             resumen: {
                 total_cartera_por_cobrar: totalCartera,
@@ -753,6 +822,8 @@ async function getAndelsaCuentasPorCobrar({ limit = 10 } = {}) {
             },
             isFallback: true
         };
+        setCachedSaas(cacheKey, fallbackResult, 45000);
+        return fallbackResult;
     }
 }
 
@@ -764,6 +835,9 @@ async function getAndelsaCuentasPorCobrar({ limit = 10 } = {}) {
  */
 async function getAndelsaFinanzasResumen({ startDate = null, endDate = null } = {}) {
     const { startDate: sDate, endDate: eDate } = resolveDateRange(startDate, endDate);
+    const cacheKey = `andelsa:finanzas_resumen:${JSON.stringify({ sDate, eDate })}`;
+    const cached = getCachedSaas(cacheKey);
+    if (cached) return cached;
 
     try {
         const db = await getSaasDb();
@@ -838,7 +912,7 @@ async function getAndelsaFinanzasResumen({ startDate = null, endDate = null } = 
         const [custRows] = await withRetry(() => db.query(custSql, [ANDELSA_COMPANY_ID]));
         const totalClientesActivos = parseInt(custRows[0]?.total_clientes, 10) || 0;
 
-        return {
+        const result = {
             facturacion_total_usd: facturacionTotal,
             unidades_vendidas: unidadesVendidas,
             valor_inventario_actual_usd: valorInventario,
@@ -851,10 +925,12 @@ async function getAndelsaFinanzasResumen({ startDate = null, endDate = null } = 
             },
             isFallback: false
         };
+        setCachedSaas(cacheKey, result, 45000);
+        return result;
     } catch (err) {
         console.warn(`[SysSaasService] getAndelsaFinanzasResumen - Fallback analítico activado: ${err.message}`);
 
-        return {
+        const fallbackResult = {
             facturacion_total_usd: 182449.00,
             unidades_vendidas: 47990.00,
             valor_inventario_actual_usd: 81488.95,
@@ -867,6 +943,8 @@ async function getAndelsaFinanzasResumen({ startDate = null, endDate = null } = 
             },
             isFallback: true
         };
+        setCachedSaas(cacheKey, fallbackResult, 45000);
+        return fallbackResult;
     }
 }
 
@@ -879,5 +957,9 @@ module.exports = {
     getAndelsaVentasPorCliente,
     getAndelsaVentasPorProducto,
     getAndelsaCuentasPorCobrar,
-    getAndelsaFinanzasResumen
+    getAndelsaFinanzasResumen,
+    saasMemoryCache,
+    clearSaasCache,
+    getCachedSaas,
+    setCachedSaas
 };

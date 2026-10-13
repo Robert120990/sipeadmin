@@ -1,6 +1,41 @@
 const { getDb, withRetry } = require('../db');
 
 /**
+ * Caché en memoria RAM para reportes y telemetría solar (TTL 60s)
+ */
+const solarMemoryCache = new Map();
+
+const getCachedSolar = (key) => {
+    if (!key) return null;
+    const entry = solarMemoryCache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+        solarMemoryCache.delete(key);
+        return null;
+    }
+    return entry.data;
+};
+
+const setCachedSolar = (key, data, ttlMs = 60000) => {
+    if (!key) return;
+    const now = Date.now();
+    if (solarMemoryCache.size >= 200) {
+        for (const [k, item] of solarMemoryCache.entries()) {
+            if (now > item.expiresAt) solarMemoryCache.delete(k);
+        }
+        if (solarMemoryCache.size >= 200) {
+            const keysToDelete = [...solarMemoryCache.keys()].slice(0, 50);
+            for (const k of keysToDelete) solarMemoryCache.delete(k);
+        }
+    }
+    solarMemoryCache.set(key, { data, expiresAt: now + (ttlMs || 60000) });
+};
+
+const clearSolarCache = () => {
+    solarMemoryCache.clear();
+};
+
+/**
  * Constantes de referencia para energía solar y medioambiente (El Salvador)
  */
 const CO2_FACTOR_KG_PER_KWH = 0.385; // Factor de emisión medio de red eléctrica en El Salvador
@@ -461,6 +496,10 @@ const getSolarAhorroDiario = async (targetDate, estacionId = null) => {
         dateStr = dateStr.toISOString().split('T')[0];
     }
 
+    const cacheKey = `solar:diario:${dateStr}:${estacionId || 'all'}`;
+    const cached = getCachedSolar(cacheKey);
+    if (cached) return cached;
+
     let records = [];
     let dataSource = 'database';
 
@@ -562,7 +601,7 @@ const getSolarAhorroDiario = async (targetDate, estacionId = null) => {
 
     const andelsaItem = records.find(r => r.tiene_baterias === 1);
 
-    return {
+    const result = {
         fecha: dateStr,
         origen_datos: dataSource,
         // Dual naming:
@@ -586,6 +625,8 @@ const getSolarAhorroDiario = async (targetDate, estacionId = null) => {
         horas_autonomia_andelsa: 9.3,
         horas_autonomia_miraflores: 9.3
     };
+    setCachedSolar(cacheKey, result, 60000);
+    return result;
 };
 
 /**
@@ -595,6 +636,10 @@ const getSolarAhorroDiario = async (targetDate, estacionId = null) => {
 const getSolarAhorroMensual = async (year, month, estacionId = null) => {
     const y = parseInt(year, 10) || new Date().getFullYear();
     const m = parseInt(month, 10) || (new Date().getMonth() + 1);
+    const cacheKey = `solar:mensual:${y}:${m}:${estacionId || 'all'}`;
+    const cached = getCachedSolar(cacheKey);
+    if (cached) return cached;
+
     const monthPadded = String(m).padStart(2, '0');
     const startMonthStr = `${y}-${monthPadded}-01`;
 
@@ -606,7 +651,7 @@ const getSolarAhorroMensual = async (year, month, estacionId = null) => {
 
     const rangoResult = await getSolarAhorroRango(startMonthStr, endMonthStr, estacionId);
 
-    return {
+    const result = {
         anio: y,
         mes: m,
         periodo: `${y}-${monthPadded}`,
@@ -632,6 +677,8 @@ const getSolarAhorroMensual = async (year, month, estacionId = null) => {
         estaciones: rangoResult.desglose_por_estacion,
         historico_diario: rangoResult.historico_diario
     };
+    setCachedSolar(cacheKey, result, 60000);
+    return result;
 };
 
 /**
@@ -649,6 +696,10 @@ const getSolarAhorroRango = async (startDate, endDate, estacionId = null) => {
         prev30.setDate(prev30.getDate() - 30);
         dStart = prev30.toISOString().split('T')[0];
     }
+
+    const cacheKey = `solar:rango:${dStart}:${dEnd}:${estacionId || 'all'}`;
+    const cached = getCachedSolar(cacheKey);
+    if (cached) return cached;
 
     let dailyRows = [];
     let dataSource = 'database';
@@ -839,7 +890,7 @@ const getSolarAhorroRango = async (startDate, endDate, estacionId = null) => {
         promedio_diario_ahorro_usd: e.dias_registrados > 0 ? Number((e.ahorro_total_usd / e.dias_registrados).toFixed(2)) : 0
     }));
 
-    return {
+    const result = {
         fecha_inicio: dStart,
         fecha_fin: dEnd,
         origen_datos: dataSource,
@@ -862,6 +913,8 @@ const getSolarAhorroRango = async (startDate, endDate, estacionId = null) => {
         estaciones: desglose_por_estacion,
         historico_diario
     };
+    setCachedSolar(cacheKey, result, 60000);
+    return result;
 };
 
 /**
@@ -870,6 +923,10 @@ const getSolarAhorroRango = async (startDate, endDate, estacionId = null) => {
  * (SoC %, potencia actual estimada, horas de autonomía).
  */
 const getSolarEstadoActual = async (estacionId = null) => {
+    const cacheKey = `solar:estado:${estacionId || 'all'}`;
+    const cached = getCachedSolar(cacheKey);
+    if (cached) return cached;
+
     // Hora local El Salvador (UTC-6)
     const now = new Date();
     const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
@@ -965,7 +1022,7 @@ const getSolarEstadoActual = async (estacionId = null) => {
     const energiaAlmacenadaTotal = Number(estaciones.reduce((acc, e) => acc + e.energia_almacenada_kwh, 0).toFixed(2));
     const tieneBateriasEnSeleccion = estaciones.some(e => e.tiene_baterias === 1);
 
-    return {
+    const result = {
         timestamp: now.toISOString(),
         hora_local_sv: svDate.toTimeString().split(' ')[0],
         es_horario_solar: solarFactor > 0,
@@ -989,6 +1046,8 @@ const getSolarEstadoActual = async (estacionId = null) => {
         estaciones,
         instalaciones: estaciones
     };
+    setCachedSolar(cacheKey, result, 60000);
+    return result;
 };
 
 module.exports = {
@@ -1004,5 +1063,9 @@ module.exports = {
     getSolarAhorroDiario,
     getSolarAhorroMensual,
     getSolarAhorroRango,
-    getSolarEstadoActual
+    getSolarEstadoActual,
+    solarMemoryCache,
+    getCachedSolar,
+    setCachedSolar,
+    clearSolarCache
 };

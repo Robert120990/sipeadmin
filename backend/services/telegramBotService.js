@@ -11,6 +11,7 @@ let isPollingActive = false;
 let lastPollAt = null;
 let currentOffset = 0;
 let botInfo = null;
+let lastDbPollUpdate = 0;
 
 /**
  * Mapeo oficial de nombres amigables de bancos
@@ -538,6 +539,108 @@ const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
             return null;
         }
     }
+};
+
+/**
+ * Enviar acción de chat a Telegram (ej. 'typing', 'upload_document') de forma no bloqueante
+ */
+const sendChatAction = async (chatId, action = 'typing') => {
+    try {
+        const { token } = await getBotToken();
+        if (!token) return { ok: false, error: 'Token de Telegram no configurado' };
+        await axios.post(`${TELEGRAM_API_BASE}${token}/sendChatAction`, {
+            chat_id: chatId,
+            action
+        }, { timeout: 3000 });
+        return { ok: true, result: true };
+    } catch (err) {
+        return { ok: false, error: err.message };
+    }
+};
+
+/**
+ * Caché en memoria RAM de alta velocidad con TTL y auto-limpieza
+ */
+const queryMemoryCache = new Map();
+
+const getCachedQuery = (key) => {
+    if (!key) return null;
+    const entry = queryMemoryCache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+        queryMemoryCache.delete(key);
+        return null;
+    }
+    return entry.data;
+};
+
+const setCachedQuery = (key, data, ttlMs = 30000) => {
+    if (!key) return;
+    const now = Date.now();
+    // 1. Limpieza de elementos expirados
+    for (const [k, item] of queryMemoryCache.entries()) {
+        if (now > item.expiresAt) {
+            queryMemoryCache.delete(k);
+        }
+    }
+    // 2. Auto-prune FIFO si alcanza o supera el límite de 300 elementos
+    while (queryMemoryCache.size >= 300) {
+        const oldestKey = queryMemoryCache.keys().next().value;
+        if (!oldestKey) break;
+        queryMemoryCache.delete(oldestKey);
+    }
+    queryMemoryCache.set(key, {
+        data,
+        expiresAt: now + (ttlMs || 30000),
+        createdAt: now
+    });
+};
+
+const clearQueryCache = () => {
+    queryMemoryCache.clear();
+};
+
+/**
+ * Configurar webhook HTTPS para Telegram Bot API
+ */
+const setTelegramWebhook = async (options) => {
+    const { token } = await getBotToken();
+    if (!token) throw new Error('Token de Telegram no configurado');
+    const url = typeof options === 'string' ? options : options?.url;
+    const payload = {
+        url,
+        drop_pending_updates: options?.drop_pending_updates !== undefined ? Boolean(options.drop_pending_updates) : false,
+        allowed_updates: ['message', 'callback_query']
+    };
+    if (options && typeof options === 'object') {
+        if (options.secret_token) payload.secret_token = options.secret_token;
+        if (options.max_connections) payload.max_connections = options.max_connections;
+    }
+    const res = await axios.post(`${TELEGRAM_API_BASE}${token}/setWebhook`, payload, { timeout: 10000 });
+    return res.data;
+};
+
+/**
+ * Eliminar webhook configurado en Telegram Bot API
+ */
+const deleteTelegramWebhook = async (options = {}) => {
+    const { token } = await getBotToken();
+    if (!token) throw new Error('Token de Telegram no configurado');
+    const payload = {
+        drop_pending_updates: Boolean(options?.drop_pending_updates)
+    };
+    const res = await axios.post(`${TELEGRAM_API_BASE}${token}/deleteWebhook`, payload, { timeout: 10000 });
+    return res.data;
+};
+
+/**
+ * Consultar información del webhook en Telegram Bot API
+ */
+const getTelegramWebhookInfo = async () => {
+    const { token } = await getBotToken();
+    if (!token) throw new Error('Token de Telegram no configurado');
+    const res = await axios.get(`${TELEGRAM_API_BASE}${token}/getWebhookInfo`, { timeout: 10000 });
+    return res.data;
 };
 
 /**
@@ -1290,6 +1393,10 @@ const logTelegramQuery = async (telegramUserId, comando, consulta, autorizado = 
  * Consulta de Saldos en Bancos (sp_saldo_en_bancos con fallback)
  */
 const getSaldosBancosData = async () => {
+    const cacheKey = 'saldos:bancos';
+    const cached = getCachedQuery(cacheKey);
+    if (cached) return cached;
+
     const today = getDateStr(0);
     let bancosDetalle = [];
     let totalBancos = 0;
@@ -1319,7 +1426,9 @@ const getSaldosBancosData = async () => {
 
             if (bancosDetalle.length > 0) {
                 totalBancos = bancosDetalle.reduce((sum, b) => sum + b.saldo, 0);
-                return { total: totalBancos, cuentas: bancosDetalle, fecha: today, fuente: 'sp_saldo_en_bancos' };
+                const result = { total: totalBancos, cuentas: bancosDetalle, fecha: today, fuente: 'sp_saldo_en_bancos' };
+                setCachedQuery(cacheKey, result, 30000);
+                return result;
             }
         }
     } catch (err) {
@@ -1352,13 +1461,19 @@ const getSaldosBancosData = async () => {
         console.warn('[TelegramBot] Error en fallback local de bancos:', localErr.message);
     }
 
-    return { total: totalBancos, cuentas: bancosDetalle, fecha: today, fuente: 'local' };
+    const result = { total: totalBancos, cuentas: bancosDetalle, fecha: today, fuente: 'local' };
+    setCachedQuery(cacheKey, result, 30000);
+    return result;
 };
 
 /**
  * Consulta de Saldos en Chequera (sp_saldo_en_chequera con fallback)
  */
 const getSaldosChequeraData = async () => {
+    const cacheKey = 'saldos:chequeras';
+    const cached = getCachedQuery(cacheKey);
+    if (cached) return cached;
+
     const today = getDateStr(0);
     let chequerasDetalle = [];
     let totalChequera = 0;
@@ -1389,7 +1504,9 @@ const getSaldosChequeraData = async () => {
 
             if (chequerasDetalle.length > 0) {
                 totalChequera = chequerasDetalle.reduce((sum, c) => sum + c.saldo, 0);
-                return { total: totalChequera, cuentas: chequerasDetalle, fecha: today, fuente: 'sp_saldo_en_chequera' };
+                const result = { total: totalChequera, cuentas: chequerasDetalle, fecha: today, fuente: 'sp_saldo_en_chequera' };
+                setCachedQuery(cacheKey, result, 30000);
+                return result;
             }
         }
     } catch (err) {
@@ -1425,18 +1542,28 @@ const getSaldosChequeraData = async () => {
         console.warn('[TelegramBot] Error en fallback de chequeras:', e.message);
     }
 
-    return { total: totalChequera, cuentas: chequerasDetalle, fecha: today, fuente: 'local' };
+    const result = { total: totalChequera, cuentas: chequerasDetalle, fecha: today, fuente: 'local' };
+    setCachedQuery(cacheKey, result, 30000);
+    return result;
 };
 
 /**
  * Consulta de Ventas Consolidadas y Alertas
  */
 const getConsolidadoVentas = async (date) => {
+    const key = `consolidado:${date}`;
+    const cached = getCachedQuery(key);
+    if (cached) return cached;
+
     const { getConsolidadoVentasData } = require('../routes/consultas');
     if (!getConsolidadoVentasData) {
         throw new Error('Módulo de consolidado de ventas no disponible');
     }
-    return await getConsolidadoVentasData(date);
+    const data = await getConsolidadoVentasData(date);
+    const today = getDateStr(0);
+    const ttlMs = (date === today) ? 30000 : 120000;
+    setCachedQuery(key, data, ttlMs);
+    return data;
 };
 
 /**
@@ -2720,7 +2847,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         const stationSuffix = parsed.matchedStation ? ` • ${parsed.matchedStation.name}` : '';
 
         if (wantsRealtime) {
-            await sendTelegramMessage(chatId, `⏳ Consultando estado en tiempo real de paneles y batería${stationSuffix ? ` para ${parsed.matchedStation.name}` : ''}...`);
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const solarData = await solarEnergyService.getSolarEstadoActual(targetStationId);
                 const msg = formatSolarEnergyMessage(solarData, 'estado_actual', parsed.matchedStation ? parsed.matchedStation.name : null);
@@ -2744,7 +2871,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const y = parsed.targetYear || 2026;
             const m = parsed.targetMonth || 10;
             const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}${stationSuffix}`;
-            await sendTelegramMessage(chatId, `⏳ Calculando ahorro solar acumulado de ${monthLabel}...`);
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const solarData = await solarEnergyService.getSolarAhorroMensual(y, m, targetStationId);
                 const msg = formatSolarEnergyMessage(solarData, 'mensual', monthLabel);
@@ -2767,7 +2894,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
         if (parsed.isRange) {
             const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}${stationSuffix}`;
-            await sendTelegramMessage(chatId, `⏳ Calculando ahorro solar ${rangeLabel}...`);
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const solarData = await solarEnergyService.getSolarAhorroRango(parsed.startDate, parsed.endDate, targetStationId);
                 const msg = formatSolarEnergyMessage(solarData, 'rango', rangeLabel);
@@ -2791,7 +2918,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         // Por defecto: Ahorro Diario (de la fecha indicada o ayer)
         const targetDate = parsed.targetDate;
         const dayLabel = `${toDisplayDate(targetDate)}${stationSuffix}`;
-        await sendTelegramMessage(chatId, `⏳ Consultando ahorro de paneles solares del ${dayLabel}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const solarData = await solarEnergyService.getSolarAhorroDiario(targetDate, targetStationId);
             const msg = formatSolarEnergyMessage(solarData, 'diario', dayLabel);
@@ -2824,7 +2951,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
         if (parsed.isRange) {
             const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}${stationSuffix}`;
-            await sendTelegramMessage(chatId, `⏳ Analizando horas pico ${rangeLabel}...`);
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
                 const msg = formatHorasPicoMessage(peakData, rangeLabel, true);
@@ -2850,7 +2977,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const y = parsed.targetYear || 2026;
             const m = parsed.targetMonth || 10;
             const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}${stationSuffix}`;
-            await sendTelegramMessage(chatId, `⏳ Analizando horas pico del mes de ${monthLabel}...`);
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const peakData = await salesHourlyService.getHorasPicoRango(parsed.startDate, parsed.endDate, branchId);
                 const msg = formatHorasPicoMessage(peakData, monthLabel, true);
@@ -2875,7 +3002,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         // Por defecto: Horas pico del día objetivo (ayer o fecha específica)
         const targetDate = parsed.targetDate;
         const dateLabel = `${toDisplayDate(targetDate)}${stationSuffix}`;
-        await sendTelegramMessage(chatId, `⏳ Analizando momentos de mayor venta del ${dateLabel}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const peakData = await salesHourlyService.getHorasPicoVentas(targetDate, branchId);
             const msg = formatHorasPicoMessage(peakData, dateLabel, false);
@@ -2905,7 +3032,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
 
         if (parsed.isAndelsaInventario) {
-            await sendTelegramMessage(chatId, '⏳ Consultando inventarios en tiempo real de Andelsa (sys.sipesv.com)...');
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const data = await sysSaasService.getAndelsaInventarios();
                 const msg = formatAndelsaInventarioMessage(data);
@@ -2924,7 +3051,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
 
         if (parsed.isAndelsaCostos) {
-            await sendTelegramMessage(chatId, '⏳ Consultando costos y márgenes de Andelsa (sys.sipesv.com)...');
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const data = await sysSaasService.getAndelsaCostos();
                 const msg = formatAndelsaCostosMessage(data);
@@ -2943,7 +3070,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
 
         if (parsed.isAndelsaCxc) {
-            await sendTelegramMessage(chatId, '⏳ Consultando cuentas por cobrar (CXC) de Andelsa (sys.sipesv.com)...');
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const data = await sysSaasService.getAndelsaCuentasPorCobrar();
                 const msg = formatAndelsaCxcMessage(data);
@@ -2965,7 +3092,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const sDate = parsed.startDate || parsed.targetDate;
             const eDate = parsed.endDate || parsed.targetDate;
             const label = parsed.isMonthly ? `${SPANISH_MONTH_NAMES[parsed.targetMonth || 10]} ${parsed.targetYear || 2026}` : parsed.isRange ? `Del ${toDisplayDate(sDate)} al ${toDisplayDate(eDate)}` : toDisplayDate(parsed.targetDate);
-            await sendTelegramMessage(chatId, `⏳ Consultando ventas por cliente de Andelsa (${label})...`);
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const data = await sysSaasService.getAndelsaVentasPorCliente(sDate, eDate);
                 const msg = formatAndelsaVentasClienteMessage(data, label);
@@ -2987,7 +3114,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const sDate = parsed.startDate || parsed.targetDate;
             const eDate = parsed.endDate || parsed.targetDate;
             const label = parsed.isMonthly ? `${SPANISH_MONTH_NAMES[parsed.targetMonth || 10]} ${parsed.targetYear || 2026}` : parsed.isRange ? `Del ${toDisplayDate(sDate)} al ${toDisplayDate(eDate)}` : toDisplayDate(parsed.targetDate);
-            await sendTelegramMessage(chatId, `⏳ Consultando ventas por producto de Andelsa (${label})...`);
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const data = await sysSaasService.getAndelsaVentasPorProducto(sDate, eDate);
                 const msg = formatAndelsaVentasProductoMessage(data, label);
@@ -3009,7 +3136,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             const sDate = parsed.startDate || (parsed.isMonthly ? `${parsed.targetYear || 2026}-${String(parsed.targetMonth || 10).padStart(2, '0')}-01` : null);
             const eDate = parsed.endDate || (parsed.isMonthly ? `${parsed.targetYear || 2026}-${String(parsed.targetMonth || 10).padStart(2, '0')}-31` : null);
             const label = parsed.isMonthly ? `${SPANISH_MONTH_NAMES[parsed.targetMonth || 10]} ${parsed.targetYear || 2026}` : parsed.isRange ? `Del ${toDisplayDate(sDate)} al ${toDisplayDate(eDate)}` : 'Mes en curso';
-            await sendTelegramMessage(chatId, '⏳ Generando panel financiero ejecutivo de Andelsa (sys.sipesv.com)...');
+            sendChatAction(chatId, 'typing').catch(() => {});
             try {
                 const data = await sysSaasService.getAndelsaFinanzasResumen(sDate, eDate);
                 const msg = formatAndelsaFinanzasResumenMessage(data, label);
@@ -3037,8 +3164,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
         const y = parsed.targetYear || 2026;
         const m = parsed.targetMonth || 10;
-        const monthLabel = `${SPANISH_MONTH_NAMES[m]} ${y}`;
-        await sendTelegramMessage(chatId, `⏳ Generando resumen mensual consolidado de ${monthLabel}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const externalDb = await getExternalDb().catch(() => null);
             const accountingDb = await getAccountingDb().catch(() => null);
@@ -3070,7 +3196,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
 
         const rangeLabel = `Del ${toDisplayDate(parsed.startDate)} al ${toDisplayDate(parsed.endDate)}`;
-        await sendTelegramMessage(chatId, `⏳ Consultando ventas en rango ${rangeLabel}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const externalDb = await getExternalDb().catch(() => null);
             const accountingDb = await getAccountingDb().catch(() => null);
@@ -3099,7 +3225,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         }
 
-        await sendTelegramMessage(chatId, `⏳ Calculando ranking de estaciones...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getConsolidadoVentas(parsed.targetDate);
             const metric = parsed.normalized.includes('galon') || parsed.normalized.includes('galones') ? 'galonaje' : 'venta';
@@ -3127,7 +3253,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         }
 
-        await sendTelegramMessage(chatId, `⏳ Consultando datos de ${parsed.matchedStation.name}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getConsolidadoVentas(parsed.targetDate);
             const estaciones = data?.estaciones || [];
@@ -3177,7 +3303,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         }
 
-        await sendTelegramMessage(chatId, `⏳ Calculando total de ${parsed.matchedFuel.label}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatProductTotalMessage(data, parsed.matchedFuel, parsed.targetDate);
@@ -3206,7 +3332,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         }
 
-        await sendTelegramMessage(chatId, `⏳ Consultando cuentas de ${parsed.matchedBank.label}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getSaldosBancosData();
             const msg = formatSpecificBankMessage(data, parsed.matchedBank);
@@ -3241,7 +3367,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         }
 
-        await sendTelegramMessage(chatId, `⏳ Consultando cortes de tiendas...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatTiendasMessage(data, parsed.targetDate);
@@ -3269,7 +3395,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         }
 
-        await sendTelegramMessage(chatId, `⏳ Analizando auditoría y descuadres del ${toDisplayDate(parsed.targetDate)}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getConsolidadoVentas(parsed.targetDate);
             const msg = formatAlertasMessage(data, parsed.targetDate);
@@ -3744,7 +3870,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             return;
         }
 
-        await sendTelegramMessage(chatId, '⏳ Consultando saldos consolidados en bancos...');
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getSaldosBancosData();
             await logTelegramQuery(user.telegram_user_id, 'bancos', `Total: ${data.total}`, 1);
@@ -3772,7 +3898,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             return;
         }
 
-        await sendTelegramMessage(chatId, '⏳ Consultando saldos en chequeras...');
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getSaldosChequeraData();
             await logTelegramQuery(user.telegram_user_id, 'chequera', `Total: ${data.total}`, 1);
@@ -3803,7 +3929,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         // Determinar fecha (por defecto ayer, o la indicada)
         const targetDate = parseSpanishDateText(rawText) || getDateStr(-1);
 
-        await sendTelegramMessage(chatId, `⏳ Analizando auditoría y descuadres del ${toDisplayDate(targetDate)}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getConsolidadoVentas(targetDate);
             await logTelegramQuery(user.telegram_user_id, 'alertas', `Fecha: ${targetDate}`, 1);
@@ -3833,7 +3959,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
 
         const targetDate = parseSpanishDateText(rawText) || getDateStr(-1); // Ventas cerradas de ayer por defecto
 
-        await sendTelegramMessage(chatId, `⏳ Consultando consolidado de ventas del ${toDisplayDate(targetDate)}...`);
+        sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getConsolidadoVentas(targetDate);
             await logTelegramQuery(user.telegram_user_id, 'ventas', `Fecha: ${targetDate}`, 1);
@@ -3877,14 +4003,18 @@ const runPollingLoop = async () => {
 
             lastPollAt = new Date();
 
-            // Actualizar timestamp en base de datos cada cierto tiempo
-            try {
-                const db = getDb();
-                if (db) {
-                    await db.query('UPDATE telegram_config SET last_poll_at = NOW() WHERE id = 1');
+            // Throttlear actualización de timestamp en base de datos cada 2 minutos (120,000 ms)
+            const nowTime = Date.now();
+            if (nowTime - lastDbPollUpdate >= 120000) {
+                try {
+                    const db = getDb();
+                    if (db) {
+                        await db.query('UPDATE telegram_config SET last_poll_at = NOW() WHERE id = 1');
+                        lastDbPollUpdate = nowTime;
+                    }
+                } catch (_) {
+                    // Silenciosamente ignorar fallo de actualización de timestamp en polling
                 }
-            } catch (_) {
-                // Silenciosamente ignorar fallo de actualización de timestamp en polling
             }
 
             const res = await axios.get(`${TELEGRAM_API_BASE}${token}/getUpdates`, {
@@ -4610,5 +4740,13 @@ module.exports = {
     transcribeTelegramVoice,
     KNOWN_STATIONS,
     KNOWN_FUELS,
-    KNOWN_BANKS
+    KNOWN_BANKS,
+    sendChatAction,
+    queryMemoryCache,
+    getCachedQuery,
+    setCachedQuery,
+    clearQueryCache,
+    setTelegramWebhook,
+    deleteTelegramWebhook,
+    getTelegramWebhookInfo
 };

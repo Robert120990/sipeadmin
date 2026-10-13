@@ -13,7 +13,12 @@ const {
     broadcastDiscrepancyAlerts,
     broadcastCustomAlert,
     getFeedbackStats,
-    getFeedbackList
+    getFeedbackList,
+    handleIncomingMessage,
+    handleCallbackQuery,
+    setTelegramWebhook,
+    deleteTelegramWebhook,
+    getTelegramWebhookInfo
 } = require('../services/telegramBotService');
 const {
     getHealthDiagnostics,
@@ -25,6 +30,107 @@ const telegramPerms = [
     '/dashboard/seguridad/telegram',
     'manage_telegram'
 ];
+
+/**
+ * POST /api/telegram/webhook
+ * Endpoint público de alta velocidad para recepción de updates de Telegram vía Webhook HTTPS (<40ms).
+ * Responde inmediatamente con HTTP 200 y despacha el procesamiento de forma asíncrona.
+ */
+router.post('/webhook', (req, res) => {
+    // Verificación opcional de secret token si está configurado en variables de entorno
+    const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
+    const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (expectedSecret && secretHeader !== expectedSecret) {
+        return res.status(403).json({ error: 'Secret token inválido' });
+    }
+
+    // 1. Inmediata respuesta HTTP 200 OK (< 5ms) para cumplir el SLA de Telegram (<40ms)
+    res.sendStatus(200);
+
+    // 2. Despacho asíncrono no bloqueante
+    const update = req.body;
+    if (!update || typeof update !== 'object') {
+        return;
+    }
+
+    setImmediate(async () => {
+        try {
+            if (update.message) {
+                await handleIncomingMessage(update.message);
+            } else if (update.callback_query) {
+                await handleCallbackQuery(update.callback_query);
+            }
+        } catch (err) {
+            console.error('[Telegram Webhook] Error procesando update asíncrono:', err.message);
+        }
+    });
+});
+
+/**
+ * POST /api/telegram/webhook/set
+ * Configurar Webhook HTTPS en Telegram API
+ */
+router.post('/webhook/set', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const { webhook_url, url, secret_token, max_connections, drop_pending_updates } = req.body || {};
+        const targetUrl = webhook_url || url;
+        if (!targetUrl || typeof targetUrl !== 'string' || !targetUrl.startsWith('https://')) {
+            return res.status(400).json({
+                ok: false,
+                message: 'La URL del webhook debe ser una URL HTTPS válida (ej. https://dominio.com/api/telegram/webhook).'
+            });
+        }
+
+        const result = await setTelegramWebhook({
+            url: targetUrl,
+            secret_token,
+            max_connections,
+            drop_pending_updates
+        });
+
+        res.json({
+            ok: true,
+            message: 'Webhook configurado correctamente en Telegram API',
+            result
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al configurar Telegram Webhook');
+    }
+});
+
+/**
+ * POST /api/telegram/webhook/delete
+ * Eliminar Webhook de Telegram y volver a modo sondeo/polling
+ */
+router.post('/webhook/delete', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const { drop_pending_updates } = req.body || {};
+        const result = await deleteTelegramWebhook({ drop_pending_updates: Boolean(drop_pending_updates) });
+        res.json({
+            ok: true,
+            message: 'Webhook eliminado correctamente de Telegram API',
+            result
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al eliminar Telegram Webhook');
+    }
+});
+
+/**
+ * GET /api/telegram/webhook/info
+ * Consultar estado actual del Webhook en Telegram API
+ */
+router.get('/webhook/info', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const info = await getTelegramWebhookInfo();
+        res.json({
+            ok: true,
+            info
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al obtener información del Telegram Webhook');
+    }
+});
 
 /**
  * GET /api/telegram/status
