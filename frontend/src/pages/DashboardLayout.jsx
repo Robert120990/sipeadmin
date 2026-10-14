@@ -125,6 +125,7 @@ export default function DashboardLayout() {
         if (path === '/dashboard/settings/theme') return true;
         if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
         if (user.permissions?.includes(path)) return true;
+        if (path?.startsWith('/dashboard/estrategia') && (user.permissions?.includes('view_direccion_estrategica') || user.permissions?.includes('/dashboard/estrategia'))) return true;
         if (path === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return true;
         if (path === '/dashboard/bancos/reportes/saldos-chequera' && user.permissions?.includes('/dashboard/consultas/saldos-chequera')) return true;
         return false;
@@ -175,6 +176,7 @@ export default function DashboardLayout() {
         '/dashboard/finanzas/asesor': <FinanzasAsesor />,
         '/dashboard/finanzas/resumen': <FinanzasResumen />,
         '/dashboard/rrhh/planillas': <PlanillasRRHH />,
+        '/dashboard/estrategia': <EstrategiaTorreControl />,
         '/dashboard/estrategia/torre-control': <EstrategiaTorreControl />,
         '/dashboard/estrategia/combustible': <EstrategiaCombustible />,
         '/dashboard/estrategia/flujo-caja': <EstrategiaFlujoCaja />,
@@ -205,7 +207,9 @@ export default function DashboardLayout() {
             ...configuracionMenu
         ];
         
-        let item = allNavItems.find(i => i.path === location.pathname);
+        let item = (location.pathname === '/dashboard/estrategia' || location.pathname === '/dashboard/estrategia/')
+            ? allNavItems.find(i => i.path === '/dashboard/estrategia/torre-control')
+            : allNavItems.find(i => i.path === location.pathname);
         // Rutas hijas (ej. check-designer/edit/1): abrir el tab del módulo padre
         if (!item) {
             item = allNavItems

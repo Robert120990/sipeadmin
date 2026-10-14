@@ -6,6 +6,7 @@ import {
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { formatDateDMY } from '../utils/date';
+import EstrategiaNav from '../components/EstrategiaNav';
 
 export default function EstrategiaMermas() {
     const { addToast } = useToast();
@@ -53,7 +54,8 @@ export default function EstrategiaMermas() {
     });
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', animation: 'fadeIn 0.3s ease-out' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', animation: 'fadeIn 0.3s ease-out' }}>
+            <EstrategiaNav />
             {/* Header */}
             <div className="page-header" style={{ marginBottom: '0.75rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>

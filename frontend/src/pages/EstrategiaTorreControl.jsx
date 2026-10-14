@@ -9,6 +9,7 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
 import { formatDateDMY } from '../utils/date';
+import EstrategiaNav from '../components/EstrategiaNav';
 
 export default function EstrategiaTorreControl() {
     const { addToast } = useToast();
@@ -64,9 +65,30 @@ export default function EstrategiaTorreControl() {
 
     if (loading) {
         return (
-            <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <RefreshCw size={28} className="spin" style={{ marginBottom: '0.75rem', color: 'var(--primary)' }} />
-                <p style={{ margin: 0, fontSize: '0.9rem' }}>Cargando Torre de Control y Flash Ejecutivo...</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <EstrategiaNav />
+                <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    <RefreshCw size={28} className="spin" style={{ marginBottom: '0.75rem', color: 'var(--primary)' }} />
+                    <p style={{ margin: 0, fontSize: '0.9rem' }}>Cargando Torre de Control y Flash Ejecutivo...</p>
+                </div>
+            </div>
+        );
+    }
+
+    if (!flashData) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <EstrategiaNav />
+                <div className="card glass" style={{ padding: '2.5rem 1.5rem', textAlign: 'center' }}>
+                    <AlertTriangle size={32} color="#ef4444" style={{ marginBottom: '0.5rem' }} />
+                    <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem' }}>No se pudo cargar la Torre de Control</h3>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', marginBottom: '1rem' }}>
+                        No se obtuvieron datos del Flash Ejecutivo. Por favor verifique la conexión o intente nuevamente.
+                    </p>
+                    <button onClick={fetchFlash} className="btn btn-primary" style={{ height: '36px', fontSize: '0.825rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', margin: '0 auto' }}>
+                        <RefreshCw size={15} /> Reintentar
+                    </button>
+                </div>
             </div>
         );
     }
@@ -79,7 +101,8 @@ export default function EstrategiaTorreControl() {
     const compromisos = flashData?.compromisos_48h || [];
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', animation: 'fadeIn 0.3s ease-out' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', animation: 'fadeIn 0.3s ease-out' }}>
+            <EstrategiaNav />
             {/* Page Header */}
             <div className="page-header" style={{ marginBottom: '0.75rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>

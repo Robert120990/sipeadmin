@@ -75,6 +75,7 @@ const PermissionRoute = ({ pathKey, children }) => {
     if (pathKey === '/dashboard/settings/theme') return children;
     if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return children;
     if (user.permissions?.includes(pathKey)) return children;
+    if (pathKey?.startsWith('/dashboard/estrategia') && (user.permissions?.includes('view_direccion_estrategica') || user.permissions?.includes('/dashboard/estrategia'))) return children;
     if (pathKey === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return children;
     if (pathKey === '/dashboard/bancos/reportes/saldos-chequera' && user.permissions?.includes('/dashboard/consultas/saldos-chequera')) return children;
     return <Navigate to="/dashboard" replace />;
@@ -140,6 +141,7 @@ function App() {
                                     <Route path="finanzas/asesor" element={<PermissionRoute pathKey="/dashboard/finanzas/asesor"><FinanzasAsesor /></PermissionRoute>} />
                                     <Route path="finanzas/resumen" element={<PermissionRoute pathKey="/dashboard/finanzas/resumen"><FinanzasResumen /></PermissionRoute>} />
                                     <Route path="rrhh/planillas" element={<PermissionRoute pathKey="/dashboard/rrhh/planillas"><PlanillasRRHH /></PermissionRoute>} />
+                                    <Route path="estrategia" element={<Navigate to="/dashboard/estrategia/torre-control" replace />} />
                                     <Route path="estrategia/torre-control" element={<PermissionRoute pathKey="/dashboard/estrategia/torre-control"><EstrategiaTorreControl /></PermissionRoute>} />
                                     <Route path="estrategia/combustible" element={<PermissionRoute pathKey="/dashboard/estrategia/combustible"><EstrategiaCombustible /></PermissionRoute>} />
                                     <Route path="estrategia/flujo-caja" element={<PermissionRoute pathKey="/dashboard/estrategia/flujo-caja"><EstrategiaFlujoCaja /></PermissionRoute>} />

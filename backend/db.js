@@ -772,6 +772,7 @@ const initDB = async () => {
             // Permisos de Dirección Estratégica
             const estrategiaPerms = [
                 ['view_direccion_estrategica', 'Acceso al módulo de Dirección Estratégica'],
+                ['/dashboard/estrategia', 'Acceso directo a Dirección Estratégica'],
                 ['/dashboard/estrategia/torre-control', 'Torre de Control Ejecutiva y Flash Diario'],
                 ['/dashboard/estrategia/combustible', 'Inteligencia de Combustible y Compras DGEHM'],
                 ['/dashboard/estrategia/flujo-caja', 'Flujo de Caja Predictivo a 30/60 días'],

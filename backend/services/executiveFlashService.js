@@ -197,7 +197,7 @@ const getFlashEjecutivo = async () => {
     let tanquesCriticos = [];
     try {
         const autonomia = await getTanquesAutonomia();
-        tanquesCriticos = autonomia.tanques.filter(t => t.estado === 'critico' || t.horas_restantes < 24);
+        tanquesCriticos = (autonomia?.tanques || []).filter(t => t.estado === 'critico' || t.horas_restantes < 24);
     } catch (err) {
         console.warn('Error al verificar tanques críticos:', err.message);
     }
