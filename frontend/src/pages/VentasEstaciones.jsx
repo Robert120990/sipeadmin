@@ -339,7 +339,7 @@ export default function VentasEstaciones() {
                 { id: '008', nombre: 'Puma Costa del Sol', flete: 0.05370, d: 3.8281, r: 3.7120, s: 3.9800, i: 0 },
                 { id: '014', nombre: 'Puma San Martín (La Loma)', flete: 0.04690, d: 3.8504, r: 3.7343, s: 4.0023, i: 4.0274 },
                 { id: '015', nombre: 'Shell 14 Avenida (Zurita)', flete: 0.02820, d: 3.8542, r: 3.7381, s: 4.0061, i: 0 },
-                { id: '004', nombre: 'Puma El Desvío', flete: 0.04000, d: 3.8300, r: 3.7200, s: 3.9900, i: 0 }
+                { id: '016', nombre: 'Shell Poliedro', flete: 0.02820, d: 3.8542, r: 3.7381, s: 4.0061, i: 4.0274 }
             ];
 
             const estacionesMapped = estacionesConfig.map(ec => {
@@ -404,7 +404,7 @@ export default function VentasEstaciones() {
                 precio_diesel: prev.precio_diesel,
                 precio_regular: prev.precio_regular,
                 precio_super: prev.precio_super,
-                precio_ion: st.id_estacion === '014' ? prev.precio_ion : st.precio_ion
+                precio_ion: (st.id_estacion === '014' || st.id_estacion === '016') ? prev.precio_ion : st.precio_ion
             }))
         }));
         addToast('Precios base generales aplicados a todas las sucursales', 'info');

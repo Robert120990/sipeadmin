@@ -134,7 +134,10 @@ function normalizeEstacion(rawName, meta = null) {
     if (s.includes('MIRAFLORES') || accNum === '3409084' || accNum === '3409101' || accNum === '3409388') {
         return { id: '002', nombre: 'PUMA MIRAFLORES' };
     }
-    if (s.includes('DESVIO') || s.includes('DESVÍO') || accNum === '3409100' || accNum === '3409102' || accNum === '3409387') {
+    if (s.includes('POLIEDRO') || s.includes('OPICO')) {
+        return { id: '016', nombre: 'SHELL POLIEDRO' };
+    }
+    if ((s.includes('DESVIO') || s.includes('DESVÍO') || accNum === '3409100' || accNum === '3409102' || accNum === '3409387') && !s.includes('POLIEDRO')) {
         return { id: '004', nombre: 'PUMA EL DESVIO' };
     }
     if (s.includes('LOMA') || s.includes('LIL') || s.includes('SAN MARTIN') || s.includes('SAN MARTÍN') || accNum === '3409795' || accNum === '3409796' || accNum === '3409797') {

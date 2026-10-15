@@ -76,6 +76,8 @@ const getCleanStationName = (id, defaultTitulo) => {
     if (id === '008' && (upper.includes('COSTA') || upper === '008')) return 'Puma Costa del Sol';
     if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA') || upper === '014')) return 'Puma La Loma (San Martín)';
     if (id === '015' && (upper.includes('14') || upper === '015')) return 'Shell 14 Avenida';
+    if ((id === '016' || id === '7') && (upper.includes('POLIEDRO') || upper === '016' || upper === '7')) return 'Shell Poliedro';
+    if (upper.includes('POLIEDRO')) return 'Shell Poliedro';
     return defaultTitulo;
 };
 
@@ -97,7 +99,9 @@ const saasBranchMap = {
     '002': 4, // Miraflores -> Puma Miraflores
     '008': 8, // Costa del Sol -> Puma Costa del Sol
     'E-1': 8, // Costa del Sol alias
-    '015': 2  // Shell 14 Avenida
+    '015': 2, // Shell 14 Avenida
+    '016': 7, // Shell Poliedro
+    '7': 7    // Shell Poliedro alias
 };
 
 const branchToEmpId = {
@@ -106,7 +110,8 @@ const branchToEmpId = {
     3: '006',
     4: '002',
     8: '008',
-    6: '009'
+    6: '009',
+    7: '016'
 };
 
 const OFFICIAL_ESTACIONES = [
@@ -114,7 +119,8 @@ const OFFICIAL_ESTACIONES = [
     { id_empresa: '006', branch_id: 3, saas_branch_id: 3, titulo: 'Shell Chalchuapa', orden: 2 },
     { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
     { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
-    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 }
+    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 },
+    { id_empresa: '016', branch_id: 7, saas_branch_id: 7, titulo: 'Shell Poliedro', orden: 6 }
 ];
 
 // Tokens y conceptos genéricos para auditoría de movimientos sin descripción suficiente
@@ -1353,7 +1359,8 @@ const getConsolidadoVentasData = async (date) => {
             const mapStationCode = (id, name) => {
                 if (id) {
                     const clean = String(id).padStart(3, '0');
-                    if (['002', '004', '006', '008', '014', '015'].includes(clean)) return clean;
+                    if (['002', '004', '006', '008', '014', '015', '016'].includes(clean)) return clean;
+                    if (String(id).trim() === '7') return '016';
                 }
                 const n = (name || '').toUpperCase();
                 if (n.includes('MIRAFLORES')) return '002';
@@ -1362,6 +1369,7 @@ const getConsolidadoVentasData = async (date) => {
                 if (n.includes('COSTA')) return '008';
                 if (n.includes('LOMA') || n.includes('SAN MARTIN')) return '014';
                 if (n.includes('14 AVENIDA')) return '015';
+                if (n.includes('POLIEDRO')) return '016';
                 return null;
             };
 
@@ -1425,6 +1433,7 @@ const getConsolidadoVentasData = async (date) => {
             '008': 0.05370, // Puma Costa del Sol
             '014': 0.04690, // Puma San Martín (La Loma)
             '015': 0.02820, // Shell Zurita (14 Avenida)
+            '016': 0.02820, // Shell Poliedro
             '004': 0.04000  // Puma El Desvío
         };
 
@@ -1683,7 +1692,7 @@ router.get('/ventas/combustibles/fletes', authenticateToken, requirePermission(f
         { id_estacion: '008', estacion_nombre: 'Puma Costa del Sol', flete_galon: 0.05370 },
         { id_estacion: '014', estacion_nombre: 'Puma San Martin (La Loma)', flete_galon: 0.04690 },
         { id_estacion: '015', estacion_nombre: 'Shell 14 Avenida (Zurita)', flete_galon: 0.02820 },
-        { id_estacion: '004', estacion_nombre: 'Puma El Desvio', flete_galon: 0.04000 }
+        { id_estacion: '016', estacion_nombre: 'Shell Poliedro', flete_galon: 0.02820 }
     ]);
 });
 
@@ -2383,6 +2392,18 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
                     id_empresa: String(s.id_empresa),
                     nombre: getCleanStationName(String(s.id_empresa), s.titulo)
                 }));
+                if (accountingDb) {
+                    const existingIds = new Set(estaciones.map(e => e.id_empresa));
+                    OFFICIAL_ESTACIONES.forEach(st => {
+                        if (!existingIds.has(st.id_empresa)) {
+                            estaciones.push({
+                                id_empresa: String(st.id_empresa),
+                                nombre: st.titulo
+                            });
+                            existingIds.add(st.id_empresa);
+                        }
+                    });
+                }
             }
         } catch {
             /* ignore */
@@ -4306,7 +4327,7 @@ router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateT
 router.get('/consultas/estaciones/precios-competencia/catalogo', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
     try {
         const localDb = await getDb();
-        const [estacionesSistema] = await withRetry(() => localDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden, titulo"));
+        const [estacionesSistema] = await withRetry(() => localDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' AND id_empresa != '004' ORDER BY orden, titulo"));
         const [estacionesMonitoreadas] = await withRetry(() => localDb.query(`
             SELECT a.ID as id, a.id_estacion, b.titulo as estacion_sistema, a.competencia, IFNULL(a.es_propia, 0) as es_propia 
             FROM web_estaciones_competencia a 

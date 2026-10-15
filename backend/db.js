@@ -1232,6 +1232,7 @@ const initDB = async () => {
                 ('008', 'Puma Costa del Sol', '2026-09-15', '2026-09-28', 3.82810, 3.71200, 3.98004, 0.00000),
                 ('014', 'Puma San Martin (La Loma)', '2026-09-15', '2026-09-28', 3.85040, 3.73430, 4.00234, 4.02739),
                 ('015', 'Shell 14 Avenida (Zurita)', '2026-09-15', '2026-09-28', 3.85420, 3.73810, 4.00614, 0.00000),
+                ('016', 'Shell Poliedro', '2026-09-15', '2026-09-28', 3.85420, 3.73810, 4.00614, 4.02739),
                 ('004', 'Puma El Desvio', '2026-09-15', '2026-09-28', 3.83000, 3.72000, 3.99000, 0.00000),
 
                 ('002', 'Puma Miraflores', '2026-09-29', '2026-10-12', 3.82810, 3.71200, 3.98000, 0.00000),
@@ -1239,6 +1240,7 @@ const initDB = async () => {
                 ('008', 'Puma Costa del Sol', '2026-09-29', '2026-10-12', 3.82810, 3.71200, 3.98004, 0.00000),
                 ('014', 'Puma San Martin (La Loma)', '2026-09-29', '2026-10-12', 3.85040, 3.73430, 4.00234, 4.02739),
                 ('015', 'Shell 14 Avenida (Zurita)', '2026-09-29', '2026-10-12', 3.85420, 3.73810, 4.00614, 0.00000),
+                ('016', 'Shell Poliedro', '2026-09-29', '2026-10-12', 3.85420, 3.73810, 4.00614, 4.02739),
                 ('004', 'Puma El Desvio', '2026-09-29', '2026-10-12', 3.83000, 3.72000, 3.99000, 0.00000)
                 ON DUPLICATE KEY UPDATE
                 precio_diesel = VALUES(precio_diesel),
@@ -1255,6 +1257,7 @@ const initDB = async () => {
                 ('008', 'Puma Costa del Sol', 0.05370),
                 ('014', 'Puma San Martin (La Loma)', 0.04690),
                 ('015', 'Shell 14 Avenida (Zurita)', 0.02820),
+                ('016', 'Shell Poliedro', 0.02820),
                 ('004', 'Puma El Desvio', 0.04000)
                 ON DUPLICATE KEY UPDATE
                 flete_galon = VALUES(flete_galon),
@@ -1266,6 +1269,17 @@ const initDB = async () => {
             if (orderCount[0].c < 50) {
                 const { seedInitialPortalOrders } = require('./services/energyLatamService');
                 await seedInitialPortalOrders(true);
+            }
+
+            // Seed / Ensure Shell Poliedro in web_consolidado
+            try {
+                await pool.query(`
+                    INSERT INTO web_consolidado (orden, id_empresa, titulo, grupo, letra, cod_destino, zona, descarga_c)
+                    SELECT 7, '016', 'SHELL POLIEDRO', 'ESTACION', 'P', '18', 'CEN', 'N'
+                    WHERE NOT EXISTS (SELECT 1 FROM web_consolidado WHERE id_empresa = '016' AND grupo = 'ESTACION')
+                `);
+            } catch (e) {
+                // Table might not exist in standalone tests
             }
         } catch (e) {
             console.error('Migration portal_pedidos & combustible_precios:', e.message);

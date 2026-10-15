@@ -95,6 +95,15 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
             assert.strictEqual(norm.id, '004');
         });
 
+        it('debe resolver SHELL POLIEDRO y código 016', () => {
+            const clause = buildEstacionFilterClause('016');
+            assert.ok(clause.sql.includes("'016'"));
+            const norm = normalizeEstacion('SHELL POLIEDRO');
+            assert.strictEqual(norm.id, '016');
+            const normOpico = normalizeEstacion('DESVIO POLIEDRO');
+            assert.strictEqual(normOpico.id, '016');
+        });
+
         it('debe resolver PUMA LA LOMA / SAN MARTIN y código 014', () => {
             const clause = buildEstacionFilterClause('PUMA LA LOMA (SAN MARTÍN)');
             assert.ok(clause.sql.includes("'014'"));

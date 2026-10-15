@@ -103,15 +103,23 @@ function buildEstacionFilterClause(estacionInput) {
         };
     }
 
-    // 3. Puma El Desvío
-    if (s === '004' || s.includes('DESVIO') || s.includes('DESVÍO')) {
+    // 3. Shell Poliedro (prioridad sobre Desvío de Opico)
+    if (s === '016' || s === '7' || s.includes('POLIEDRO') || s.includes('OPICO')) {
+        return {
+            sql: "(p.id_estacion = '016' OR p.estacion_nombre LIKE '%POLIEDRO%' OR p.estacion_nombre LIKE '%OPICO%')",
+            params: []
+        };
+    }
+
+    // 4. Puma El Desvío (inactiva)
+    if ((s === '004' || s.includes('DESVIO') || s.includes('DESVÍO')) && !s.includes('POLIEDRO')) {
         return {
             sql: "(p.id_estacion = '004' OR p.estacion_nombre LIKE '%DESVIO%' OR p.estacion_nombre LIKE '%DESVÍO%')",
             params: []
         };
     }
 
-    // 4. Shell Chalchuapa
+    // 5. Shell Chalchuapa
     if (s === '006' || s.includes('CHALCHUAPA')) {
         return {
             sql: "(p.id_estacion = '006' OR p.estacion_nombre LIKE '%CHALCHUAPA%')",
@@ -119,7 +127,7 @@ function buildEstacionFilterClause(estacionInput) {
         };
     }
 
-    // 5. Puma La Loma / San Martín / Inversiones LIL
+    // 6. Puma La Loma / San Martín / Inversiones LIL
     if (s === '014' || s.includes('LOMA') || s.includes('SAN MARTIN') || s.includes('SAN MARTÍN') || s.includes('LIL')) {
         return {
             sql: "(p.id_estacion = '014' OR p.estacion_nombre LIKE '%LOMA%' OR p.estacion_nombre LIKE '%SAN MARTIN%')",
@@ -127,7 +135,7 @@ function buildEstacionFilterClause(estacionInput) {
         };
     }
 
-    // 6. Shell 14 Avenida
+    // 7. Shell 14 Avenida
     if (s === '015' || s.includes('14 AVENIDA') || s.includes('14TA') || s.includes('14A') || s.includes('14 AV')) {
         return {
             sql: "(p.id_estacion = '015' OR p.estacion_nombre LIKE '%14 AVENIDA%' OR p.estacion_nombre LIKE '%14TA%')",
@@ -166,10 +174,50 @@ router.get('/dashboard/vencimientos', authenticateToken, requirePermission(venci
 });
 
 // --- Pedidos de Combustible ---
+const OFFICIAL_ESTACIONES = [
+    { id_empresa: '002', branch_id: 4, saas_branch_id: 4, titulo: 'Puma Miraflores', orden: 1 },
+    { id_empresa: '006', branch_id: 3, saas_branch_id: 3, titulo: 'Shell Chalchuapa', orden: 2 },
+    { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
+    { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
+    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 },
+    { id_empresa: '016', branch_id: 7, saas_branch_id: 7, titulo: 'Shell Poliedro', orden: 6 }
+];
+
+const getCleanStationName = (id, defaultTitulo) => {
+    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === String(id) || String(s.branch_id) === String(id));
+    if (matched) return matched.titulo;
+    const upper = String(defaultTitulo || '').toUpperCase();
+    if (upper.includes('POLIEDRO')) return 'Shell Poliedro';
+    if (upper.includes('14 AVENIDA') || upper.includes('ZURITA')) return 'Shell 14 Avenida';
+    if (upper.includes('SAN MARTIN') || upper.includes('LA LOMA')) return 'Puma La Loma (San Martín)';
+    if (upper.includes('COSTA')) return 'Puma Costa del Sol';
+    if (upper.includes('CHALCHUAPA')) return 'Shell Chalchuapa';
+    if (upper.includes('MIRAFLORES')) return 'Puma Miraflores';
+    return defaultTitulo;
+};
+
 router.get('/operaciones/estaciones', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
-        const [rows] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY orden");
+        let rows = [];
+        if (externalDb) {
+            // Omitir Puma El Desvío (004, inactiva)
+            const [dbRows] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' AND id_empresa != '004' ORDER BY orden");
+            rows = (dbRows || []).map(r => ({
+                id_empresa: r.id_empresa,
+                titulo: getCleanStationName(r.id_empresa, r.titulo).toUpperCase()
+            }));
+        }
+        const existingIds = new Set(rows.map(r => String(r.id_empresa)));
+        OFFICIAL_ESTACIONES.forEach(st => {
+            if (!existingIds.has(st.id_empresa)) {
+                rows.push({
+                    id_empresa: st.id_empresa,
+                    titulo: st.titulo.toUpperCase()
+                });
+                existingIds.add(st.id_empresa);
+            }
+        });
         res.json(rows);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar estaciones'); 
@@ -199,14 +247,6 @@ router.get('/operaciones/fecha-servidor-global', authenticateToken, requirePermi
         sendSafeError(res, error, 'Error al consultar fecha global del servidor'); 
     }
 });
-
-const OFFICIAL_ESTACIONES = [
-    { id_empresa: '002', branch_id: 4, saas_branch_id: 4, titulo: 'Puma Miraflores', orden: 1 },
-    { id_empresa: '006', branch_id: 3, saas_branch_id: 3, titulo: 'Shell Chalchuapa', orden: 2 },
-    { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
-    { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
-    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 }
-];
 
 async function resolveStationBranchId(accountingDb, id_empresa) {
     if (!id_empresa) return null;
@@ -494,7 +534,11 @@ router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateT
             WHERE t.id_estacion = ? AND t.fecha > ? ORDER BY t.fecha
         `;
         const [rows] = await externalDb.query(query, [id_estacion, fecha]);
-        res.json(rows);
+        const enriched = (rows || []).map(r => ({
+            ...r,
+            nombre_estacion_compartida: getCleanStationName(r.id_estacion_compartida, r.nombre_estacion_compartida)
+        }));
+        res.json(enriched);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar pedidos programados'); 
     }
@@ -525,8 +569,22 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
         if (fechaActual instanceof Date) fechaActual = fechaActual.toISOString().split('T')[0];
         if (fechaAyer instanceof Date) fechaAyer = fechaAyer.toISOString().split('T')[0];
 
-        // Stations
-        const [estaciones] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' ORDER BY id_empresa");
+        // Stations: excluir Puma El Desvío (004, inactiva) y garantizar Shell Poliedro (016)
+        const [dbEstaciones] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' AND id_empresa != '004' ORDER BY orden");
+        let estaciones = (dbEstaciones || []).map(r => ({
+            id_empresa: r.id_empresa,
+            titulo: getCleanStationName(r.id_empresa, r.titulo)
+        }));
+        const existingIds = new Set(estaciones.map(r => String(r.id_empresa)));
+        OFFICIAL_ESTACIONES.forEach(st => {
+            if (!existingIds.has(st.id_empresa)) {
+                estaciones.push({
+                    id_empresa: st.id_empresa,
+                    titulo: st.titulo
+                });
+                existingIds.add(st.id_empresa);
+            }
+        });
 
         const accountingDb = await getAccountingDb().catch(() => null);
 
@@ -567,7 +625,7 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
                     total_galones: d + r + s + i,
                     transportista_nombre: carrierMap[o.id_transportista] || 'Sin asignar',
                     pipa_placa: tankerMap[o.id_calibracion_diesel] || 'Sin asignar',
-                    nombre_estacion_compartida: o.nombre_estacion_compartida || null
+                    nombre_estacion_compartida: getCleanStationName(o.id_estacion_compartida, o.nombre_estacion_compartida) || null
                 };
             });
 
@@ -1128,9 +1186,15 @@ async function ensurePortalTablesAndSeed(db) {
               AND (estacion_nombre LIKE '%MIRAFLORES%' OR raw_data_json LIKE '%MIRAFLORES%')
         `);
         await db.query(`
+            UPDATE portal_pedidos SET id_estacion = '016', estacion_nombre = 'SHELL POLIEDRO'
+            WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '016') 
+              AND (estacion_nombre LIKE '%POLIEDRO%' OR raw_data_json LIKE '%POLIEDRO%')
+        `);
+        await db.query(`
             UPDATE portal_pedidos SET id_estacion = '004', estacion_nombre = 'PUMA EL DESVIO'
             WHERE (id_estacion IS NULL OR id_estacion = '' OR id_estacion != '004') 
               AND (estacion_nombre LIKE '%DESVIO%' OR estacion_nombre LIKE '%DESVÍO%' OR raw_data_json LIKE '%DESVIO%')
+              AND estacion_nombre NOT LIKE '%POLIEDRO%' AND raw_data_json NOT LIKE '%POLIEDRO%'
         `);
         await db.query(`
             UPDATE portal_pedidos SET id_estacion = '006', estacion_nombre = 'SHELL CHALCHUAPA'
