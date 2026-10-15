@@ -1,4 +1,4 @@
-const { describe, it, beforeEach, afterEach } = require('node:test');
+const { describe, it, beforeEach, afterEach, after } = require('node:test');
 const assert = require('node:assert');
 const {
     ANDELSA_COMPANY_ID,
@@ -19,6 +19,10 @@ describe('SysSaasService (Nova SaaS - Andelsa Integration)', () => {
 
     afterEach(() => {
         _setMockDb(null);
+    });
+
+    after(() => {
+        _setMockDb(undefined);
     });
 
     describe('Configuración y Constantes', () => {

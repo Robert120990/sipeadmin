@@ -6,7 +6,7 @@ const { getAccountingDb, getExternalDb, withRetry } = require('../db');
 const ANDELSA_COMPANY_ID = 9;
 
 // Variable de pool inyectado para pruebas automatizadas
-let injectedDb = null;
+let injectedDb = undefined;
 
 /**
  * Caché en memoria RAM para consultas Nova SaaS / Andelsa (TTL 45s)
@@ -45,7 +45,7 @@ function clearSaasCache() {
 
 /**
  * Permite inyectar un pool mockeado para pruebas unitarias sin conexión activa
- * @param {object|null} mockDb 
+ * @param {object|null|undefined} mockDb 
  */
 function _setMockDb(mockDb) {
     injectedDb = mockDb;
@@ -57,7 +57,7 @@ function _setMockDb(mockDb) {
  * Intenta primero getAccountingDb (que apunta a db_sistema_saas) y luego getExternalDb.
  */
 async function getSaasDb() {
-    if (injectedDb) return injectedDb;
+    if (injectedDb !== undefined) return injectedDb;
 
     try {
         if (typeof getAccountingDb === 'function') {
