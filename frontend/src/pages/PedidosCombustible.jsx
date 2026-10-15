@@ -1000,15 +1000,15 @@ export default function PedidosCombustible() {
     // Helpers de semáforo y estilización visual para la tabla operacional
     const getDuracionBadge = (dias, cap) => {
         if (!cap || dias <= 0) {
-            return { bg: 'var(--bg-active)', color: 'var(--text-muted)', border: '1px solid var(--border)' };
+            return { bg: 'var(--bg-active, rgba(0,0,0,0.05))', color: 'var(--text-muted)', border: '1px solid var(--border)' };
         }
         if (dias < 2.0) {
-            return { bg: 'rgba(239, 68, 68, 0.18)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.5)' }; // Crítico (< 2d)
+            return { bg: 'rgba(239, 68, 68, 0.16)', color: '#b91c1c', border: '1px solid rgba(239, 68, 68, 0.5)' }; // Crítico (< 2d)
         }
         if (dias < 4.0) {
-            return { bg: 'rgba(245, 158, 11, 0.18)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.5)' }; // Alerta (2-4d)
+            return { bg: 'rgba(245, 158, 11, 0.18)', color: '#b45309', border: '1px solid rgba(245, 158, 11, 0.5)' }; // Alerta (2-4d)
         }
-        return { bg: 'rgba(16, 185, 129, 0.18)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.5)' }; // Óptimo (> 4d)
+        return { bg: 'rgba(16, 185, 129, 0.16)', color: '#047857', border: '1px solid rgba(16, 185, 129, 0.5)' }; // Óptimo (> 4d)
     };
 
     const getNivelBadge = (nivel, cap) => {
@@ -1016,24 +1016,24 @@ export default function PedidosCombustible() {
             return { bg: 'transparent', color: 'var(--text-muted)', border: 'none', label: null };
         }
         if (nivel > 1.0) {
-            return { bg: 'rgba(239, 68, 68, 0.22)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.6)', label: '¡Exceso!' }; // Sobrellenado
+            return { bg: 'rgba(239, 68, 68, 0.2)', color: '#b91c1c', border: '1px solid rgba(239, 68, 68, 0.6)', label: '¡Exceso!' }; // Sobrellenado
         }
         if (nivel >= 0.70) {
-            return { bg: 'rgba(16, 185, 129, 0.18)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.4)', label: null }; // Óptimo
+            return { bg: 'rgba(16, 185, 129, 0.16)', color: '#047857', border: '1px solid rgba(16, 185, 129, 0.4)', label: null }; // Óptimo
         }
         if (nivel >= 0.35) {
-            return { bg: 'rgba(14, 165, 233, 0.18)', color: '#38bdf8', border: '1px solid rgba(14, 165, 233, 0.4)', label: null }; // Normal
+            return { bg: 'rgba(14, 165, 233, 0.16)', color: '#0284c7', border: '1px solid rgba(14, 165, 233, 0.4)', label: null }; // Normal
         }
         if (nivel >= 0.15) {
-            return { bg: 'rgba(245, 158, 11, 0.18)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.4)', label: 'Bajo' }; // Bajo
+            return { bg: 'rgba(245, 158, 11, 0.18)', color: '#b45309', border: '1px solid rgba(245, 158, 11, 0.5)', label: 'Bajo' }; // Bajo
         }
-        return { bg: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.6)', label: 'Crítico' }; // Crítico
+        return { bg: 'rgba(239, 68, 68, 0.18)', color: '#b91c1c', border: '1px solid rgba(239, 68, 68, 0.6)', label: 'Crítico' }; // Crítico
     };
 
     const renderOperationalTable = (stationTitle, matrixData, isSecondary = false, loading = false, showLegend = true) => {
         if (!matrixData && !loading) return null;
-        const themeColor = isSecondary ? '#0ea5e9' : 'var(--primary)';
-        const headerBg = isSecondary ? 'rgba(14, 165, 233, 0.12)' : 'rgba(37,99,235,0.1)';
+        const themeColor = isSecondary ? '#0284c7' : 'var(--primary)';
+        const headerBg = isSecondary ? 'rgba(14, 165, 233, 0.12)' : 'rgba(37,99,235,0.08)';
         const borderTheme = isSecondary ? 'rgba(14, 165, 233, 0.4)' : 'var(--border)';
 
         return (
@@ -1042,9 +1042,9 @@ export default function PedidosCombustible() {
                     <h3 style={{ margin: 0, fontSize: '0.85rem', color: themeColor, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                         <span>{isSecondary ? '🤝' : '🏢'}</span>
                         <span>RESUMEN DE DATOS OPERACIONALES:</span>
-                        <span style={{ color: 'var(--text-color)' }}>{stationTitle}</span>
+                        <span style={{ color: 'var(--text-color, var(--text))' }}>{stationTitle}</span>
                         {isSecondary && (
-                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', fontWeight: 'bold' }}>
+                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(14, 165, 233, 0.2)', color: '#0284c7', fontWeight: 'bold' }}>
                                 ESTACIÓN 2 (COMPAÑERA)
                             </span>
                         )}
@@ -1065,28 +1065,28 @@ export default function PedidosCombustible() {
                     <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
                         <thead>
                             <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
-                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontWeight: 'bold' }}>MÉTRICA</th>
-                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(245,158,11,0.5)', color: '#f59e0b', fontWeight: 'bold' }}>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontWeight: 'bold', color: 'var(--text-color, var(--text))' }}>MÉTRICA</th>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(245,158,11,0.5)', color: '#d97706', fontWeight: 'bold' }}>
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#d97706' }}></span>
                                         DIESEL
                                     </span>
                                 </th>
-                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(16,185,129,0.5)', color: '#10b981', fontWeight: 'bold' }}>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(16,185,129,0.5)', color: '#059669', fontWeight: 'bold' }}>
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#059669' }}></span>
                                         REGULAR
                                     </span>
                                 </th>
-                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(239,68,68,0.5)', color: '#ef4444', fontWeight: 'bold' }}>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(239,68,68,0.5)', color: '#dc2626', fontWeight: 'bold' }}>
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444' }}></span>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#dc2626' }}></span>
                                         SUPER
                                     </span>
                                 </th>
-                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(139,92,246,0.5)', color: '#a78bfa', fontWeight: 'bold' }}>
+                                <th style={{ padding: '0.5rem 0.65rem', textAlign: 'right', borderLeft: '2px solid rgba(139,92,246,0.5)', color: '#7c3aed', fontWeight: 'bold' }}>
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6' }}></span>
+                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#7c3aed' }}></span>
                                         ION
                                     </span>
                                 </th>
@@ -1098,40 +1098,40 @@ export default function PedidosCombustible() {
                                 <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
                                     CAPACIDAD
                                 </td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', fontWeight: '600' }}>{numFmt(matrixData.D.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', fontWeight: '600' }}>{numFmt(matrixData.R.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', fontWeight: '600' }}>{numFmt(matrixData.S.capacidad)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', fontWeight: '600' }}>{numFmt(matrixData.I.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', fontWeight: '600', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.D.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', fontWeight: '600', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.R.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', fontWeight: '600', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.S.capacidad)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', fontWeight: '600', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.I.capacidad)}</td>
                             </tr>
                             {/* INVENTARIO */}
-                            <tr style={{ background: 'rgba(56,189,248,0.05)' }}>
-                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#38bdf8' }}>
+                            <tr style={{ background: 'rgba(56,189,248,0.08)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#0284c7' }}>
                                     INVENTARIO
                                 </td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.D.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.R.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.S.inventario)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', fontWeight: 'bold', color: '#e0f2fe' }}>{numFmt(matrixData.I.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', fontWeight: 'bold', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.D.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', fontWeight: 'bold', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.R.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', fontWeight: 'bold', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.S.inventario)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', fontWeight: 'bold', color: 'var(--text-color, var(--text))' }}>{numFmt(matrixData.I.inventario)}</td>
                             </tr>
                             {/* FUERA DE VENTA (RESERVA) */}
                             <tr style={{ background: 'rgba(239,68,68,0.06)' }}>
-                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#f87171' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#dc2626' }}>
                                     FUERA DE VENTA
                                 </td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.D.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.R.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.S.reserva)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: '#fca5a5', fontWeight: '600' }}>{numFmt(matrixData.I.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.D.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.R.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.S.reserva)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.I.reserva)}</td>
                             </tr>
                             {/* VENTA PROMEDIO */}
-                            <tr style={{ background: 'rgba(168,85,247,0.05)' }}>
-                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#c084fc' }}>
+                            <tr style={{ background: 'rgba(168,85,247,0.06)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#7c3aed' }}>
                                     VENTA PROMEDIO
                                 </td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.D.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.R.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.S.promedio)}</td>
-                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: '#e9d5ff', fontWeight: '600' }}>{numFmt(matrixData.I.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.D.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.R.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(239,68,68,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.S.promedio)}</td>
+                                <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.I.promedio)}</td>
                             </tr>
                             {/* PROGRAMADOS */}
                             <tr style={{ background: isSecondary ? 'rgba(14,165,233,0.09)' : 'rgba(37,99,235,0.09)' }}>
@@ -1144,8 +1144,8 @@ export default function PedidosCombustible() {
                                 <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(139,92,246,0.3)', color: themeColor }}>{numFmt(matrixData.I.programado)}</td>
                             </tr>
                             {/* DURACION EN DIAS CON SEMAFORO */}
-                            <tr style={{ background: 'rgba(0,0,0,0.06)' }}>
-                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>
+                            <tr style={{ background: 'var(--hover-bg, rgba(0,0,0,0.03))' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--text-color, var(--text))' }}>
                                     DURACION EN DIAS
                                 </td>
                                 {['D', 'R', 'S', 'I'].map(t => {
@@ -1176,7 +1176,7 @@ export default function PedidosCombustible() {
                             </tr>
                             {/* DURACION EN FECHA */}
                             <tr>
-                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--text-color, var(--text))' }}>
                                     DURACION EN FECHA
                                 </td>
                                 {['D', 'R', 'S', 'I'].map(t => {
@@ -1191,12 +1191,12 @@ export default function PedidosCombustible() {
                                                     minWidth: '85px',
                                                     minHeight: '24px',
                                                     padding: '0.2rem 0.35rem',
-                                                    background: 'var(--bg-active)',
+                                                    background: 'var(--bg-active, rgba(0,0,0,0.04))',
                                                     borderRadius: '4px',
                                                     border: '1px solid var(--border)',
                                                     fontSize: '0.75rem',
                                                     fontWeight: 'bold',
-                                                    color: hasVal ? 'var(--text-color)' : 'transparent',
+                                                    color: hasVal ? 'var(--text-color, var(--text))' : 'transparent',
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     justifyContent: 'center'
@@ -1207,7 +1207,7 @@ export default function PedidosCombustible() {
                                                     minWidth: '85px',
                                                     minHeight: '22px',
                                                     padding: '0.15rem 0.35rem',
-                                                    background: hasVal ? badge.bg : 'var(--bg-active)',
+                                                    background: hasVal ? badge.bg : 'var(--bg-active, rgba(0,0,0,0.04))',
                                                     borderRadius: '4px',
                                                     border: hasVal ? badge.border : '1px solid var(--border)',
                                                     fontSize: '0.7rem',
@@ -1227,7 +1227,7 @@ export default function PedidosCombustible() {
                             </tr>
                             {/* NIVEL TANQUE */}
                             <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)' }}>
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: 'var(--text-color, var(--text))' }}>
                                     NIVEL TANQUE
                                 </td>
                                 {['D', 'R', 'S', 'I'].map(t => {
@@ -1252,7 +1252,14 @@ export default function PedidosCombustible() {
                                             }}>
                                                 <span>{pctFmt(m.nivelTanque)}</span>
                                                 {nBadge.label && (
-                                                    <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.3rem', borderRadius: '3px', background: '#ef4444', color: '#fff', fontWeight: 'bold' }}>
+                                                    <span style={{
+                                                        fontSize: '0.62rem',
+                                                        padding: '0.05rem 0.35rem',
+                                                        borderRadius: '3px',
+                                                        background: nBadge.label === 'Bajo' ? '#d97706' : '#dc2626',
+                                                        color: '#fff',
+                                                        fontWeight: 'bold'
+                                                    }}>
                                                         {nBadge.label}
                                                     </span>
                                                 )}
@@ -1278,25 +1285,25 @@ export default function PedidosCombustible() {
                         padding: '0.35rem 0.75rem',
                         fontSize: '0.7rem',
                         borderTop: '1px solid var(--border)',
-                        background: 'rgba(0,0,0,0.12)',
+                        background: 'var(--hover-bg, rgba(0,0,0,0.04))',
                         flexWrap: 'wrap'
                     }}>
                         <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>SEMÁFORO DÍAS:</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#f87171' }}>
-                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#ef4444' }}></span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#b91c1c', fontWeight: '600' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#dc2626' }}></span>
                                 &lt; 2 días (Crítico)
                             </span>
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#fbbf24' }}>
-                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#b45309', fontWeight: '600' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#d97706' }}></span>
                                 2 - 4 días (Alerta)
                             </span>
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#34d399' }}>
-                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981' }}></span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#047857', fontWeight: '600' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#059669' }}></span>
                                 &gt; 4 días (Óptimo)
                             </span>
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#f87171' }}>
-                                <span style={{ width: '7px', height: '7px', borderRadius: '2px', background: '#ef4444' }}></span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#b91c1c', fontWeight: '600' }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '2px', background: '#dc2626' }}></span>
                                 &gt; 100% Nivel (Sobrellenado)
                             </span>
                         </div>
@@ -2132,41 +2139,41 @@ export default function PedidosCombustible() {
                             {!esCompartido ? (
                                 <>
                                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#f59e0b' }}>DIESEL</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#d97706' }}>DIESEL</span>
                                         <input type="number" min="0" step="1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                                     </div>
                                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#10b981' }}>REGULAR</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#059669' }}>REGULAR</span>
                                         <input type="number" min="0" step="1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                                     </div>
                                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#ef4444' }}>SUPER</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#dc2626' }}>SUPER</span>
                                         <input type="number" min="0" step="1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                                     </div>
                                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem', flexWrap: 'wrap' }}>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#8b5cf6' }}>IONDIESEL</span>
+                                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', width: '80px', color: '#7c3aed' }}>IONDIESEL</span>
                                         <input type="number" min="0" step="1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ flex: '1 1 120px', minWidth: '100px', textAlign: 'right', padding: '0.35rem', fontSize: '0.85rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '36px' }} />
                                     </div>
                                 </>
                             ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.12)', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'var(--bg-active)', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
                                     <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '0.35rem', fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>
                                         <span>PRODUCTO</span>
                                         <span style={{ textAlign: 'center', color: 'var(--primary)' }} title={estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Estación 1'}>
                                             E1: {estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo ? (estaciones.find(e => e.id_empresa === selectedEstacion).titulo.length > 9 ? estaciones.find(e => e.id_empresa === selectedEstacion).titulo.slice(0, 9) + '..' : estaciones.find(e => e.id_empresa === selectedEstacion).titulo) : 'Actual'}
                                         </span>
-                                        <span style={{ textAlign: 'center', color: '#38bdf8' }} title={estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo || 'Estación 2'}>
+                                        <span style={{ textAlign: 'center', color: '#0284c7' }} title={estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo || 'Estación 2'}>
                                             E2: {estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo ? (estaciones.find(e => e.id_empresa === selectedEstacion2).titulo.length > 9 ? estaciones.find(e => e.id_empresa === selectedEstacion2).titulo.slice(0, 9) + '..' : estaciones.find(e => e.id_empresa === selectedEstacion2).titulo) : 'Compañera'}
                                         </span>
                                     </div>
 
                                     {/* DIESEL */}
                                     <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
-                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#f59e0b' }}>DIESEL</span>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#d97706' }}>DIESEL</span>
                                         <input type="number" min="0" step="1" placeholder="E1" value={comp.D.val || ''} onChange={e => setComp({...comp, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
                                         <input type="number" min="0" step="1" placeholder="E2" value={comp2.D.val || ''} onChange={e => setComp2({...comp2, D: {val: e.target.value}})} onWheel={e => e.target.blur()}
@@ -2175,7 +2182,7 @@ export default function PedidosCombustible() {
 
                                     {/* REGULAR */}
                                     <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
-                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#10b981' }}>REGULAR</span>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#059669' }}>REGULAR</span>
                                         <input type="number" min="0" step="1" placeholder="E1" value={comp.R.val || ''} onChange={e => setComp({...comp, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
                                         <input type="number" min="0" step="1" placeholder="E2" value={comp2.R.val || ''} onChange={e => setComp2({...comp2, R: {val: e.target.value}})} onWheel={e => e.target.blur()}
@@ -2184,7 +2191,7 @@ export default function PedidosCombustible() {
 
                                     {/* SUPER */}
                                     <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
-                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#ef4444' }}>SUPER</span>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#dc2626' }}>SUPER</span>
                                         <input type="number" min="0" step="1" placeholder="E1" value={comp.S.val || ''} onChange={e => setComp({...comp, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
                                         <input type="number" min="0" step="1" placeholder="E2" value={comp2.S.val || ''} onChange={e => setComp2({...comp2, S: {val: e.target.value}})} onWheel={e => e.target.blur()}
@@ -2193,7 +2200,7 @@ export default function PedidosCombustible() {
 
                                     {/* IONDIESEL */}
                                     <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: '0.4rem', alignItems: 'center' }}>
-                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#8b5cf6' }}>IONDIESEL</span>
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#7c3aed' }}>IONDIESEL</span>
                                         <input type="number" min="0" step="1" placeholder="E1" value={comp.I.val || ''} onChange={e => setComp({...comp, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
                                             style={{ textAlign: 'right', padding: '0.3rem', fontSize: '0.8rem', background: 'var(--bg-color)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-color)', height: '34px' }} />
                                         <input type="number" min="0" step="1" placeholder="E2" value={comp2.I.val || ''} onChange={e => setComp2({...comp2, I: {val: e.target.value}})} onWheel={e => e.target.blur()}
@@ -2203,7 +2210,7 @@ export default function PedidosCombustible() {
                                     {/* Resumen de Subtotales por Estación */}
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', borderTop: '1px solid var(--border)', paddingTop: '0.35rem', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '0.3rem' }}>
                                         <span>Subtotal E1: <b style={{ color: 'var(--text-color)' }}>{numFmt(totalEstacion1)} Gal</b></span>
-                                        <span>Subtotal E2: <b style={{ color: '#38bdf8' }}>{numFmt(totalEstacion2)} Gal</b></span>
+                                        <span>Subtotal E2: <b style={{ color: '#0284c7' }}>{numFmt(totalEstacion2)} Gal</b></span>
                                     </div>
                                 </div>
                             )}
@@ -2215,7 +2222,7 @@ export default function PedidosCombustible() {
                                     <div>
                                         <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>TOTAL PIPA</div>
                                         {esCompartido && (
-                                            <div style={{ fontSize: '0.68rem', color: '#38bdf8' }}>
+                                            <div style={{ fontSize: '0.68rem', color: '#0284c7' }}>
                                                 (E1: {numFmt(totalEstacion1)} + E2: {numFmt(totalEstacion2)})
                                             </div>
                                         )}
@@ -2248,7 +2255,7 @@ export default function PedidosCombustible() {
                                     border: '1px solid rgba(59, 130, 246, 0.25)',
                                     flexWrap: 'wrap'
                                 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 'bold', color: '#38bdf8' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 'bold', color: '#0284c7' }}>
                                         <span>🤝 VISTA MULTIPARADA:</span>
                                         <span style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>
                                             Monitoreo simultáneo de datos operacionales
@@ -2334,7 +2341,7 @@ export default function PedidosCombustible() {
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-active)', padding: '0.45rem 0.85rem', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', gap: '0.4rem' }}>
                                     <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text)', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                                         <span>PEDIDOS PROGRAMADOS:</span>
-                                        <span style={{ color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#38bdf8' : 'var(--primary)' }}>
+                                        <span style={{ color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#0284c7' : 'var(--primary)' }}>
                                             {(esCompartido && selectedEstacion2 && programadosTab === 'estacion2') 
                                                 ? (estaciones.find(e => e.id_empresa === selectedEstacion2)?.titulo || 'Estación 2') 
                                                 : (estaciones.find(e => e.id_empresa === selectedEstacion)?.titulo || 'Estación 1')}
@@ -2404,7 +2411,7 @@ export default function PedidosCombustible() {
                                                 <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>
                                                     <div>{p.numero || p.id_pedido}</div>
                                                     {p.nombre_estacion_compartida && (
-                                                        <span style={{ fontSize: '0.66rem', padding: '0.1rem 0.35rem', background: 'rgba(59, 130, 246, 0.15)', color: '#38bdf8', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }} title={`Viaje compartido con ${p.nombre_estacion_compartida}`}>
+                                                        <span style={{ fontSize: '0.66rem', padding: '0.1rem 0.35rem', background: 'rgba(59, 130, 246, 0.15)', color: '#0284c7', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }} title={`Viaje compartido con ${p.nombre_estacion_compartida}`}>
                                                             🤝 {p.nombre_estacion_compartida}
                                                         </span>
                                                     )}
@@ -2428,7 +2435,7 @@ export default function PedidosCombustible() {
                                     {((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).length > 0 && (
                                         <tfoot>
                                             <tr style={{ background: 'rgba(37,99,235,0.05)', borderTop: '2px solid var(--border)', fontWeight: 'bold' }}>
-                                                <td colSpan="2" style={{ padding: '0.45rem 0.5rem', color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#38bdf8' : 'var(--primary)' }}>TOTAL PROGRAMADO</td>
+                                                <td colSpan="2" style={{ padding: '0.45rem 0.5rem', color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#0284c7' : 'var(--primary)' }}>TOTAL PROGRAMADO</td>
                                                 <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).D.programado)}</td>
                                                 <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).R.programado)}</td>
                                                 <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).S.programado)}</td>

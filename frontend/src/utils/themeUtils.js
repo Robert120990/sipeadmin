@@ -166,7 +166,10 @@ const CUSTOM_CSS_PROPS = [
     '--bg-color',
     '--border-color',
     '--bg-card',
-    '--bg-secondary'
+    '--bg-secondary',
+    '--text-color',
+    '--text-main',
+    '--text-secondary'
 ];
 
 export function applyCustomThemeCSS(customConfig) {
@@ -200,6 +203,9 @@ export function applyCustomThemeCSS(customConfig) {
     rootStyle.setProperty('--border-color', baseDef.border);
     rootStyle.setProperty('--bg-card', baseDef.cardBg);
     rootStyle.setProperty('--bg-secondary', baseDef.bg);
+    rootStyle.setProperty('--text-color', baseDef.text);
+    rootStyle.setProperty('--text-main', baseDef.text);
+    rootStyle.setProperty('--text-secondary', baseDef.textMuted);
     rootStyle.setProperty('color-scheme', baseDef.isDark ? 'dark' : 'light');
 }
 

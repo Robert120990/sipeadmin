@@ -98,7 +98,7 @@ export default function PedidosProgramadosConsulta() {
         if (val < 4.0) {
             return {
                 bg: 'rgba(245, 158, 11, 0.2)',
-                color: '#f59e0b',
+                color: '#b45309',
                 border: '1px solid rgba(245, 158, 11, 0.45)',
                 fontWeight: 'bold'
             };
@@ -448,16 +448,16 @@ export default function PedidosProgramadosConsulta() {
                             </th>
                             
                             {/* Columnas de Combustibles (Fondo suave crema/amarillo) */}
-                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(245, 158, 11, 0.08)', borderLeft: '2px solid rgba(245, 158, 11, 0.35)', color: '#f59e0b', fontWeight: 'bold' }}>
+                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(245, 158, 11, 0.08)', borderLeft: '2px solid rgba(245, 158, 11, 0.35)', color: '#d97706', fontWeight: 'bold' }}>
                                 DIESEL
                             </th>
-                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(139, 92, 246, 0.08)', borderLeft: '1px solid var(--border)', color: '#a78bfa', fontWeight: 'bold' }}>
+                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(139, 92, 246, 0.08)', borderLeft: '1px solid var(--border)', color: '#7c3aed', fontWeight: 'bold' }}>
                                 DIESEL ION
                             </th>
-                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(16, 185, 129, 0.08)', borderLeft: '1px solid var(--border)', color: '#10b981', fontWeight: 'bold' }}>
+                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(16, 185, 129, 0.08)', borderLeft: '1px solid var(--border)', color: '#059669', fontWeight: 'bold' }}>
                                 REGULAR
                             </th>
-                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(239, 68, 68, 0.08)', borderLeft: '1px solid var(--border)', color: '#ef4444', fontWeight: 'bold' }}>
+                            <th style={{ padding: '0.55rem 0.65rem', textAlign: 'right', background: 'rgba(239, 68, 68, 0.08)', borderLeft: '1px solid var(--border)', color: '#dc2626', fontWeight: 'bold' }}>
                                 SUPER
                             </th>
 
@@ -726,16 +726,16 @@ export default function PedidosProgramadosConsulta() {
                                 <td style={{ padding: '0.55rem 0.65rem', color: 'var(--primary)' }}>
                                     TOTALES CONSOLIDADOS
                                 </td>
-                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#f59e0b', borderLeft: '2px solid rgba(245, 158, 11, 0.35)', background: 'rgba(245, 158, 11, 0.05)' }}>
+                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#d97706', borderLeft: '2px solid rgba(245, 158, 11, 0.35)', background: 'rgba(245, 158, 11, 0.05)' }}>
                                     {numFmt(data.totales.pedido_diesel)}
                                 </td>
-                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#a78bfa', borderLeft: '1px solid var(--border)', background: 'rgba(139, 92, 246, 0.05)' }}>
+                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#7c3aed', borderLeft: '1px solid var(--border)', background: 'rgba(139, 92, 246, 0.05)' }}>
                                     {numFmt(data.totales.pedido_diesel_ion)}
                                 </td>
-                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#10b981', borderLeft: '1px solid var(--border)', background: 'rgba(16, 185, 129, 0.05)' }}>
+                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#059669', borderLeft: '1px solid var(--border)', background: 'rgba(16, 185, 129, 0.05)' }}>
                                     {numFmt(data.totales.pedido_regular)}
                                 </td>
-                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#ef4444', borderLeft: '1px solid var(--border)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                                <td style={{ padding: '0.55rem 0.65rem', textAlign: 'right', color: '#dc2626', borderLeft: '1px solid var(--border)', background: 'rgba(239, 68, 68, 0.05)' }}>
                                     {numFmt(data.totales.pedido_super)}
                                 </td>
                                 <td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-muted)', borderLeft: '2px solid var(--border)', fontSize: '0.74rem' }}>
@@ -843,15 +843,15 @@ export default function PedidosProgramadosConsulta() {
                                                     <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', color: 'var(--primary)' }}>
                                                         <div>{p.numero || `TEMP-${p.id_pedido}`}</div>
                                                         {p.nombre_estacion_compartida && (
-                                                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', background: 'rgba(59, 130, 246, 0.15)', color: '#38bdf8', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.1rem' }}>
+                                                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', background: 'rgba(59, 130, 246, 0.15)', color: '#0284c7', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.1rem' }}>
                                                                 🤝 Compartido con {p.nombre_estacion_compartida}
                                                             </span>
                                                         )}
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#f59e0b', fontWeight: 'bold' }}>{numFmt(p.diesel)}</td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#10b981', fontWeight: 'bold' }}>{numFmt(p.regular)}</td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#ef4444', fontWeight: 'bold' }}>{numFmt(p.super)}</td>
-                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#8b5cf6', fontWeight: 'bold' }}>{numFmt(p.iondiesel)}</td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#d97706', fontWeight: 'bold' }}>{numFmt(p.diesel)}</td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#059669', fontWeight: 'bold' }}>{numFmt(p.regular)}</td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#dc2626', fontWeight: 'bold' }}>{numFmt(p.super)}</td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#7c3aed', fontWeight: 'bold' }}>{numFmt(p.iondiesel)}</td>
                                                     <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 'bold', color: 'var(--text-color)' }}>{numFmt(p.total_galones)} Gal</td>
                                                     <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-muted)' }}>{p.transportista_nombre}</td>
                                                     <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-muted)' }}>{p.pipa_placa}</td>
@@ -889,10 +889,10 @@ export default function PedidosProgramadosConsulta() {
                                     </thead>
                                     <tbody>
                                         {[
-                                            { code: 'D', name: 'DIESEL', color: '#f59e0b' },
-                                            { code: 'I', name: 'DIESEL ION', color: '#8b5cf6' },
-                                            { code: 'R', name: 'REGULAR', color: '#10b981' },
-                                            { code: 'S', name: 'SUPER', color: '#ef4444' }
+                                            { code: 'D', name: 'DIESEL', color: '#d97706' },
+                                            { code: 'I', name: 'DIESEL ION', color: '#7c3aed' },
+                                            { code: 'R', name: 'REGULAR', color: '#059669' },
+                                            { code: 'S', name: 'SUPER', color: '#dc2626' }
                                         ].map(prod => {
                                             const tData = selectedStation.tanques_detalle?.[prod.code] || {};
                                             const dStyle = getDuracionStyle(tData.durDias);
@@ -905,10 +905,10 @@ export default function PedidosProgramadosConsulta() {
                                                             {prod.name}
                                                         </span>
                                                     </td>
-                                                    <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', fontWeight: 'bold' }}>{numFmt(tData.inventario)}</td>
-                                                    <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', color: '#f87171' }}>{numFmt(tData.reserva)}</td>
+                                                    <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', fontWeight: 'bold', color: 'var(--text-color)' }}>{numFmt(tData.inventario)}</td>
+                                                    <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', color: '#dc2626', fontWeight: 'bold' }}>{numFmt(tData.reserva)}</td>
                                                     <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', color: 'var(--text-muted)' }}>{numFmt(tData.capacidad)}</td>
-                                                    <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', color: '#c084fc' }}>{numFmt(tData.promedio)}</td>
+                                                    <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', color: '#7c3aed', fontWeight: 'bold' }}>{numFmt(tData.promedio)}</td>
                                                     <td style={{ padding: '0.45rem 0.55rem', textAlign: 'right', fontWeight: 'bold', color: prod.color }}>{numFmt(tData.programado)}</td>
                                                     <td style={{ padding: '0.45rem 0.55rem', textAlign: 'center', fontWeight: 'bold' }}>
                                                         {tData.capacidad > 0 ? `${tData.nivel}%` : '-'}
