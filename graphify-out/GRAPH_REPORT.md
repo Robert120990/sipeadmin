@@ -1,17 +1,17 @@
-# Graph Report - SIPEOFI  (2026-10-13)
+# Graph Report - SIPEOFI  (2026-10-15)
 
 ## Corpus Check
-- 208 files · ~486,813 words
+- 209 files · ~489,549 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 9 file(s) not represented in the graph (top: .example 2, (none) 2, .bat 2)
+- Unclassified: 10 file(s) not represented in the graph (top: (none) 3, .example 2, .bat 2)
 
 ## Summary
-- 1525 nodes · 4216 edges · 83 communities (76 shown, 7 thin omitted)
+- 1553 nodes · 4290 edges · 75 communities (68 shown, 7 thin omitted)
 - Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 245 edges (avg confidence: 0.86)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `ae093d72`
+- Built from commit: `292e35cc`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -23,25 +23,25 @@
 - server.js
 - operaciones.js
 - consultas.js
-- routes/auth.js
-- react
+- auth.test.js
+- handleIncomingMessage
 - ref_node_assert
-- date.js
-- middleware/auth.js
-- withRetry
-- DesignCanvas.jsx
-- @google/genai
+- Dashboard.jsx
+- express
+- inteligencia.js
+- DesignerView.jsx
+- errorHandler.js
 - dependencies
 - githubChanges.js
 - themeUtils.js
-- rhPlanillaService.js
+- withRetry
 - backend/package.json
-- paymentNotifier.js
+- config.js
 - 5. Resumen de Módulos y Tablas Principales
 - finanzas.js
 - onedrive.js
 - backup-db.js
-- ref_path
+- ref_fs
 - generate-icons.cjs
 - AGENTS.md
 - rrhh.test.js
@@ -49,19 +49,18 @@
 - conciliacion.js
 - bancos.js
 - cheques.js
-- mysql2
+- ref_path
 - sync-dgehm-direct.js
 - scripts
-- ReportPreviewModal
-- tasks.js
+- @google/genai
+- aiGateway.test.js
 - dgehmService.js
-- telegramBotService.js
-- deploy.js
+- broadcastDiscrepancyAlerts
 - scripts
 - telegramAuditorService.js
-- handleIncomingMessage
+- telegramAdvancedCapabilities.test.js
 - dependencies
-- sysSaasService.js
+- telegramPerformance.test.js
 - PLAN ESTRATÉGICO DE INTEGRACIÓN: INTELIGENCIA ARTIFICIAL, CONTABILIDAD AUTOMÁTICA Y CONTROL FINANCIERO
 - vercel.json
 - deploy.sh
@@ -69,41 +68,34 @@
 - sw.js
 - ai.js
 - Estándares del Backend - SIPE Admin
-- getDb
+- telegramBotService.js
 - Reglas de Git, Commits y Sincronización Remota
 - devDependencies
-- db.js
+- getDb
 - scripts
-- errorHandler.js
-- errorDiagnostics.js
-- Cheques.jsx
-- config.js
-- getPuppeteer
-- solarEnergyService.js
-- FinanzasPrestamos.jsx
-- devDependencies
+- middleware/auth.js
+- useDesigner.js
+- routes/auth.js
 - 20260814_create_check_format_tables.js
+- deploy.js
 - salesHourlyService.js
-- middleware/bitacora.js
 - sync_portal_pedidos.sh
 - autoSyncScheduler.js
-- VentasEstaciones.jsx
 - webhook-server.js
-- telegramPerformance.test.js
-- telegramAlerts.test.js
 - sync_dgehm_precios.sh
 - FinanzasInversiones.jsx
 - operacionesPedidos.test.js
-- AsistenteIA.jsx
+- getPuppeteer
+- devDependencies
 
 ## God Nodes (most connected - your core abstractions)
 1. `useToast()` - 107 edges
 2. `getDb()` - 84 edges
-3. `react` - 82 edges
-4. `lucide-react` - 68 edges
+3. `react` - 83 edges
+4. `lucide-react` - 69 edges
 5. `App()` - 62 edges
 6. `Modal()` - 62 edges
-7. `DashboardLayout()` - 58 edges
+7. `DashboardLayout()` - 59 edges
 8. `withRetry()` - 54 edges
 9. `handleIncomingMessage()` - 52 edges
 10. `api` - 52 edges
@@ -111,14 +103,14 @@
 ## Surprising Connections (you probably didn't know these)
 - `🚀 Arquitectura y Entorno de Producción` --references--> `withTransaction()`  [INFERRED]
   README.md → backend/db.js
+- `4. Nuevas Funciones y Endpoints en Backend (API Gateway para Agentes IA)` --references--> `getUserEffectivePermissions()`  [INFERRED]
+  AGENTS.md → backend/services/telegramBotService.js
 - `Vista Previa de Reportes e Impresiones (`ReportPreviewModal`)` --references--> `ReportPreviewModal()`  [INFERRED]
   AGENTS.md → frontend/src/components/ReportPreviewModal.jsx
 - `🔒 Seguridad y Control de Acceso` --references--> `withTransaction()`  [INFERRED]
   README.md → backend/db.js
 - `Bitácora (Audit Log)` --references--> `authenticateToken()`  [INFERRED]
   AGENTS.md → backend/middleware/auth.js
-- `🔒 Seguridad y Control de Acceso` --references--> `requirePermission()`  [INFERRED]
-  README.md → backend/middleware/auth.js
 
 ## Import Cycles
 - 2-file cycle: `backend/services/conversationalAiService.js -> backend/services/telegramBotService.js -> backend/services/conversationalAiService.js`
@@ -127,19 +119,19 @@
 - 2-file cycle: `backend/db.js -> backend/services/energyLatamService.js -> backend/db.js`
 - 3-file cycle: `backend/services/conversationalAiService.js -> backend/services/telegramAuditorService.js -> backend/services/telegramBotService.js -> backend/services/conversationalAiService.js`
 
-## Communities (83 total, 7 thin omitted)
+## Communities (75 total, 7 thin omitted)
 
 ### Community 0 - "useToast"
-Cohesion: 0.13
-Nodes (37): Regla obligatoria para NUEVAS pantallas (no opcional), 4. Modales de Creación y Edición de Registros, Reglas para Formularios:, useConfirm(), Modal(), useToast(), BackupDBCheck(), Bitacora() (+29 more)
+Cohesion: 0.05
+Nodes (127): Regla obligatoria para NUEVAS pantallas (no opcional), 4. Modales de Creación y Edición de Registros, Reglas para Formularios:, ConfirmContext, useConfirm(), ESTRATEGIA_TABS, EstrategiaNav(), Modal() (+119 more)
 
 ### Community 1 - "lazyPages.js"
-Cohesion: 0.06
-Nodes (95): Frontend Conventions, Responsive / Mobile, 1. Definir el Módulo en `navigation.js`, 2. ¡CRÍTICO! Registrar en `allNavCategories`, 3. Registrar las Rutas en `App.jsx`, App(), DashboardLayout, Login (+87 more)
+Cohesion: 0.05
+Nodes (100): Frontend Conventions, Responsive / Mobile, 1. Definir el Módulo en `navigation.js`, 2. ¡CRÍTICO! Registrar en `allNavCategories`, 3. Registrar las Rutas en `App.jsx`, App(), DashboardLayout, Login (+92 more)
 
 ### Community 2 - "handleSmartNaturalLanguageQuery"
-Cohesion: 0.24
-Nodes (30): handleAiQuery(), escapeHtml(), formatAlertasMessage(), formatAndelsaCostosMessage(), formatAndelsaCxcMessage(), formatAndelsaFinanzasResumenMessage(), formatAndelsaInventarioMessage(), formatAndelsaVentasClienteMessage() (+22 more)
+Cohesion: 0.18
+Nodes (37): handleAiQuery(), escapeHtml(), formatAlertasMessage(), formatAndelsaCostosMessage(), formatAndelsaCxcMessage(), formatAndelsaFinanzasResumenMessage(), formatAndelsaInventarioMessage(), formatAndelsaVentasClienteMessage() (+29 more)
 
 ### Community 3 - "frontend/package.json"
 Cohesion: 0.12
@@ -147,51 +139,47 @@ Nodes (16): axios, eslint, name, private, type, version, eslint-plugin-react, es
 
 ### Community 4 - "server.js"
 Cohesion: 0.04
-Nodes (45): aiLimiter, aiRoutes, allowedOrigins, apiLimiter, app, { authenticateToken, requireRole }, authRoutes, { autoLogMiddleware } (+37 more)
+Nodes (46): aiLimiter, aiRoutes, allowedOrigins, apiLimiter, app, { authenticateToken, requireRole, JWT_SECRET, isUserRevoked }, authRoutes, { autoLogMiddleware } (+38 more)
 
 ### Community 5 - "operaciones.js"
-Cohesion: 0.11
-Nodes (16): { authenticateToken, requirePermission }, energyLatamService, express, fetchPromedios(), fetchTankReadings(), { getDb, getExternalDb, getAccountingDb, withRetry }, OFFICIAL_ESTACIONES, pedidosViewPerms (+8 more)
+Cohesion: 0.09
+Nodes (21): authenticateSyncOrAdmin(), { authenticateToken, requirePermission }, crypto, energiaSolarViewPerms, energyLatamService, express, fetchPromedios(), fetchTankReadings() (+13 more)
 
 ### Community 6 - "consultas.js"
 Cohesion: 0.07
-Nodes (39): { authenticateToken, requirePermission }, branchToEmpId, cierreViewPerms, cumpleanosViewPerms, diferenciasViewPerms, express, fletesViewPerms, formatYMD() (+31 more)
+Nodes (42): authenticateSyncOrAdmin(), { authenticateToken, requirePermission }, branchToEmpId, cierreViewPerms, crypto, cumpleanosViewPerms, diferenciasViewPerms, express (+34 more)
 
-### Community 7 - "routes/auth.js"
-Cohesion: 0.07
-Nodes (25): isAdminUser(), requireRole(), restoreUser(), revokeUser(), { authenticateToken, requirePermission, requireRole, JWT_SECRET, revokeUser, restoreUser }, bcrypt, express, { getDb } (+17 more)
+### Community 7 - "auth.test.js"
+Cohesion: 0.15
+Nodes (12): Bitácora (Audit Log), restoreUser(), autoLogMiddleware(), { getDb }, logAction(), sanitizeData(), assert, { authenticateToken, requirePermission, requireRole, isAdminUser, JWT_SECRET, revokeUser, restoreUser } (+4 more)
 
-### Community 8 - "react"
-Cohesion: 0.17
-Nodes (14): ConfirmContext, ToastContext, CorteTiendaModal(), moneyFmt(), EstrategiaCombustible(), EstrategiaFlujoCaja(), EstrategiaMermas(), EstrategiaRentabilidad() (+6 more)
+### Community 8 - "handleIncomingMessage"
+Cohesion: 0.21
+Nodes (15): broadcastCustomAlert(), createFeedbackEntry(), formatBancosMessage(), formatChequeraMessage(), formatFeedbackListMessage(), formatHelpMessage(), formatReceiptAnalysisMessage(), getMainReplyKeyboard() (+7 more)
 
 ### Community 9 - "ref_node_assert"
 Cohesion: 0.07
-Nodes (15): assert, crypto, { describe, it }, { requirePermission }, { sendSafeError }, assert, { describe, it }, assert (+7 more)
+Nodes (18): verifyReceiptInBankMovements(), assert, { describe, it }, assert, { describe, it }, assert, axios, { describe, it, beforeEach, afterEach } (+10 more)
 
-### Community 10 - "date.js"
-Cohesion: 0.31
-Nodes (15): CalendarGrid(), DAYS, getStatusColor(), MONTHS, ConsultasCumpleanos(), Dashboard(), addMonthsPreservingDay(), dateFromParts() (+7 more)
+### Community 10 - "Dashboard.jsx"
+Cohesion: 0.16
+Nodes (20): CalendarGrid(), DAYS, getStatusColor(), MONTHS, ColorIcon(), createColorIcon(), ICON_ALIASES, bundledCollections (+12 more)
 
-### Community 11 - "middleware/auth.js"
-Cohesion: 0.11
-Nodes (21): authenticateToken(), isUserRevoked(), jwt, requirePermission(), revokedUsers, syncRevokedUsersFromDb(), authenticateAiRequest(), { authenticateToken, requirePermission } (+13 more)
+### Community 11 - "express"
+Cohesion: 0.14
+Nodes (12): { authenticateToken, requirePermission }, checkDesignerPerms, express, { getDb }, router, { sendSafeError }, { authenticateToken }, express (+4 more)
 
-### Community 12 - "withRetry"
-Cohesion: 0.12
-Nodes (30): getAccountingDb(), withRetry(), { authenticateToken, requirePermission }, express, { getFlashEjecutivo, enviarFlashPorEmail }, { getFlujoCajaProyectado }, { getRentabilidadPorEstacion }, { getRiesgoCreditoFlotas, getDetalleDtesCliente } (+22 more)
+### Community 12 - "inteligencia.js"
+Cohesion: 0.10
+Nodes (26): { authenticateToken, requirePermission }, express, { getFlashEjecutivo, enviarFlashPorEmail }, { getFlujoCajaProyectado }, { getRentabilidadPorEstacion }, { getRiesgoCreditoFlotas, getDetalleDtesCliente }, { getTanquesAutonomia, calcularSimuladorDGEHM, getAuditoriaMermas }, router (+18 more)
 
-### Community 13 - "DesignCanvas.jsx"
-Cohesion: 0.67
-Nodes (3): applySnap(), DesignCanvas(), react-konva
+### Community 13 - "DesignerView.jsx"
+Cohesion: 0.25
+Nodes (10): applySnap(), DesignCanvas(), PropertyPanel(), DesignerView(), ZOOM_LEVELS, Toolbox(), CalibrationDialog(), Preview() (+2 more)
 
-### Community 14 - "@google/genai"
-Cohesion: 0.31
-Nodes (8): askGeminiAssistant(), getGeminiApiKey(), sanitizeAudioMimeType(), transcribeTelegramVoice(), assert, { describe, it }, {
-    sanitizeAudioMimeType,
-    getGeminiApiKey,
-    transcribeTelegramVoice
-}, @google/genai
+### Community 14 - "errorHandler.js"
+Cohesion: 0.17
+Nodes (6): assert, crypto, { describe, it }, { requirePermission }, { sendSafeError }, crypto
 
 ### Community 15 - "dependencies"
 Cohesion: 0.10
@@ -205,17 +193,17 @@ Nodes (17): { authenticateToken, requirePermission }, commitCache, computeCommit
 Cohesion: 0.26
 Nodes (16): ThemeModal(), ThemeContext, ThemeProvider(), useTheme(), ConfiguracionTema(), ACCENT_PRESETS, adjustBrightness(), applyCustomThemeCSS() (+8 more)
 
-### Community 18 - "rhPlanillaService.js"
-Cohesion: 0.20
-Nodes (18): drawReciboSection(), exportBancario(), formatCurrency(), formatFechaHora(), generatePlanillaReportePDF(), generateReciboIndividualPDF(), generateRecibosMasivosPDF(), { getAccountingDb, withRetry } (+10 more)
+### Community 18 - "withRetry"
+Cohesion: 0.17
+Nodes (27): getAccountingDb(), withRetry(), { getDb, getAccountingDb, withRetry }, getFlujoCajaProyectado(), { getAccountingDb, withRetry }, getRentabilidadPorEstacion(), drawReciboSection(), exportBancario() (+19 more)
 
 ### Community 19 - "backend/package.json"
 Cohesion: 0.11
 Nodes (18): author, description, axios, eslint, keywords, license, main, name (+10 more)
 
-### Community 20 - "paymentNotifier.js"
-Cohesion: 0.11
-Nodes (26): buildBirthdayEmailHtml(), cron, formatSpanishDate(), { getDb, getAccountingDb }, getTodaysBirthdays(), initBirthdayScheduler(), nodemailer, sendBirthdayNotification() (+18 more)
+### Community 20 - "config.js"
+Cohesion: 0.07
+Nodes (35): invalidateConfigCache(), { authenticateToken, requireRole }, express, { getDb, invalidateConfigCache }, nodemailer, router, { sendBirthdayNotification }, { sendPaymentReminderNotification } (+27 more)
 
 ### Community 21 - "5. Resumen de Módulos y Tablas Principales"
 Cohesion: 0.06
@@ -230,20 +218,20 @@ Cohesion: 0.22
 Nodes (12): { authenticateToken, requirePermission }, express, findLatestFile(), navigateIntoFolder(), parseDateFromFileName(), parseRelativeDate(), router, scrapeItems() (+4 more)
 
 ### Community 24 - "backup-db.js"
-Cohesion: 0.19
+Cohesion: 0.17
 Nodes (13): BACKUP_DIR, dotenv, executeBackup(), fallbackNodeDump(), fs, getTimestamp(), mysql, path (+5 more)
 
-### Community 25 - "ref_path"
+### Community 25 - "ref_fs"
 Cohesion: 0.12
 Nodes (11): fs, path, puppeteer, __dirname, parts, pkg, pkgPath, __dirname (+3 more)
 
 ### Community 26 - "generate-icons.cjs"
-Cohesion: 0.16
+Cohesion: 0.18
 Nodes (11): BG, chunk(), crc32(), CRC_TABLE, fs, OUT_DIR, path, S_ROWS (+3 more)
 
 ### Community 27 - "AGENTS.md"
 Cohesion: 0.07
-Nodes (26): 1. Arquitectura de Dos Servidores y Cero Afectación a Producción, 2. Integración con Graphify (`Graphify-Labs/graphify`), 3. Grupo de Subagentes Especializados, 4. Nuevas Funciones y Endpoints en Backend (API Gateway para Agentes IA), 5. Nuevas Pantallas Proyectadas en Frontend (SIPE Admin), 6. Catálogo de Actividades Automatizadas en n8n y Servidor de Automatizaciones, Commands, Deployment & Architecture (VPS Host) (+18 more)
+Nodes (25): 1. Arquitectura de Dos Servidores y Cero Afectación a Producción, 2. Integración con Graphify (`Graphify-Labs/graphify`), 3. Grupo de Subagentes Especializados, 4. Nuevas Funciones y Endpoints en Backend (API Gateway para Agentes IA), 5. Nuevas Pantallas Proyectadas en Frontend (SIPE Admin), 6. Catálogo de Actividades Automatizadas en n8n y Servidor de Automatizaciones, Commands, Deployment & Architecture (VPS Host) (+17 more)
 
 ### Community 28 - "rrhh.test.js"
 Cohesion: 0.20
@@ -265,37 +253,37 @@ Nodes (7): { authenticateToken, requirePermission }, bancosViewPerms, express, {
 Cohesion: 0.20
 Nodes (7): { authenticateToken, requirePermission }, chequeViewPerms, contadoPerms, express, { getDb, getExternalDb, withTransaction }, router, { sendSafeError }
 
-### Community 33 - "mysql2"
-Cohesion: 0.20
-Nodes (4): mysql, mysql, mysql, mysql2
+### Community 33 - "ref_path"
+Cohesion: 0.17
+Nodes (6): mysql, path, mysql, path, mysql, mysql2
 
 ### Community 34 - "sync-dgehm-direct.js"
-Cohesion: 0.18
+Cohesion: 0.20
 Nodes (10): axios, dotenv, ensureLogDir(), fs, { getDb }, https, logFile, path (+2 more)
 
 ### Community 35 - "scripts"
 Cohesion: 0.20
 Nodes (9): name, private, scripts, build, build:all, deploy, lint, test (+1 more)
 
-### Community 36 - "ReportPreviewModal"
-Cohesion: 0.15
-Nodes (26): ReportPreviewModal(), ConsultaCambiosGithub(), formatDateTime(), formatRelativeTime(), TYPE_CONFIG, Consultas(), ControlRecordatorios(), DiferenciasCombustible() (+18 more)
+### Community 36 - "@google/genai"
+Cohesion: 0.29
+Nodes (9): analyzeTelegramImageReceipt(), askGeminiAssistant(), getGeminiApiKey(), sanitizeAudioMimeType(), transcribeTelegramVoice(), assert, { describe, it }, {
+    sanitizeAudioMimeType,
+    getGeminiApiKey,
+    transcribeTelegramVoice
+} (+1 more)
 
-### Community 37 - "tasks.js"
-Cohesion: 0.22
-Nodes (7): { authenticateToken, requirePermission, isAdminUser }, createAndEmitNotification(), express, { getDb }, router, { sendSafeError }, taskPerms
+### Community 37 - "aiGateway.test.js"
+Cohesion: 0.20
+Nodes (7): aiRouter, assert, axios, { describe, it, beforeEach, afterEach }, jwt, { JWT_SECRET }, jsonwebtoken
 
 ### Community 38 - "dgehmService.js"
 Cohesion: 0.31
 Nodes (6): cleanNum(), fetchDgehmPrices(), fs, normalizeName(), path, syncDgehmWithDatabase()
 
-### Community 39 - "telegramBotService.js"
-Cohesion: 0.09
-Nodes (40): axios, BANK_NAME_MAP, broadcastDiscrepancyAlerts(), clearUserConversationContext(), escapeRegex(), findFuelByKey(), findStationById(), formatDiscrepancyAlertMessage() (+32 more)
-
-### Community 40 - "deploy.js"
-Cohesion: 0.25
-Nodes (6): { execSync }, path, parts, pkg, pkgPath, { readFileSync }
+### Community 40 - "broadcastDiscrepancyAlerts"
+Cohesion: 0.27
+Nodes (14): broadcastDiscrepancyAlerts(), buildAndSendTopicPdf(), formatDiscrepancyAlertMessage(), generateExecutiveReportPdf(), getCachedQuery(), getConsolidadoVentas(), getDateStr(), getDiscrepancyInlineMarkup() (+6 more)
 
 ### Community 41 - "scripts"
 Cohesion: 0.29
@@ -303,19 +291,19 @@ Nodes (7): scripts, backup:db, dev, lint, start, sync:dgehm, test
 
 ### Community 42 - "telegramAuditorService.js"
 Cohesion: 0.08
-Nodes (43): maskToken(), appendToHistory(), askConversationalAgent(), cleanExpiredSessions(), clearConversation(), conversationHistory, getActiveConversationsCount(), { getConsolidadoVentasData } (+35 more)
+Nodes (43): appendToHistory(), askConversationalAgent(), cleanExpiredSessions(), clearConversation(), conversationHistory, getActiveConversationsCount(), { getConsolidadoVentasData }, { getDb } (+35 more)
 
-### Community 43 - "handleIncomingMessage"
+### Community 43 - "telegramAdvancedCapabilities.test.js"
 Cohesion: 0.15
-Nodes (24): analyzeTelegramImageReceipt(), buildAndSendTopicPdf(), formatBancosMessage(), formatChequeraMessage(), formatFeedbackListMessage(), formatReceiptAnalysisMessage(), generateExecutiveReportPdf(), getCachedQuery() (+16 more)
+Nodes (19): clearUserConversationContext(), escapeRegex(), findFuelByKey(), findStationById(), formatYMD(), normalizeText(), parseNaturalLanguageQuery(), parseSpanishDateText() (+11 more)
 
 ### Community 44 - "dependencies"
 Cohesion: 0.14
 Nodes (14): dependencies, axios, @iconify/react, jspdf, jspdf-autotable, konva, lucide-react, react (+6 more)
 
-### Community 45 - "sysSaasService.js"
-Cohesion: 0.18
-Nodes (22): clearSaasCache(), { getAccountingDb, getExternalDb, withRetry }, getAndelsaCostos(), getAndelsaCuentasPorCobrar(), getAndelsaFinanzasResumen(), getAndelsaInventarios(), getAndelsaVentasPorCliente(), getAndelsaVentasPorProducto() (+14 more)
+### Community 45 - "telegramPerformance.test.js"
+Cohesion: 0.07
+Nodes (50): buildLiveProjectContext(), calcularRegistroDiarioAnalitico(), clearSolarCache(), getCachedSolar(), { getDb, withRetry }, getDeterministicVariation(), getInstalacionesSolares(), getSolarAhorroDiario() (+42 more)
 
 ### Community 46 - "PLAN ESTRATÉGICO DE INTEGRACIÓN: INTELIGENCIA ARTIFICIAL, CONTABILIDAD AUTOMÁTICA Y CONTROL FINANCIERO"
 Cohesion: 0.17
@@ -334,49 +322,16 @@ Cohesion: 0.20
 Nodes (9): 1. Formato Compacto y Ergonómico (Estándar Impresión de Cheques), 2. Vista Previa de Reportes e Impresiones (`ReportPreviewModal`), 3. Exportación a Excel y PDF Rápido, A. Jerarquía y Espaciados, B. Controles de Formulario e Inputs, C. Selectores de Cuentas Bancarias, D. Tablas de Datos Compactas y Densas, Ejemplo de Integración (+1 more)
 
 ### Community 54 - "ai.js"
-Cohesion: 0.09
-Nodes (25): { authenticateToken, requirePermission }, buildFallbackConsolidadoVentas(), conversationalAiService, DEFAULT_AI_SUGGESTIONS, express, getConsolidadoVentasSafe(), {
-    getGeminiApiKey,
-    parseNaturalLanguageQuery,
-    getConsolidadoVentas,
-    getSaldosBancosData,
-    getSaldosChequeraData,
-    formatVentasMessage,
-    formatBancosMessage,
-    formatChequeraMessage,
-    formatSolarEnergyMessage,
-    formatHorasPicoMessage,
-    formatAndelsaFinanzasResumenMessage,
-    formatAndelsaInventarioMessage,
-    formatAndelsaCostosMessage,
-    formatAndelsaVentasClienteMessage,
-    formatAndelsaVentasProductoMessage,
-    formatAndelsaCxcMessage,
-    formatRankingMessage,
-    formatTiendasMessage,
-    formatSpecificStationMessage,
-    formatProductTotalMessage,
-    formatSpecificBankMessage,
-    formatAlertasMessage,
-    broadcastDiscrepancyAlerts,
-    broadcastCustomAlert,
-    moneyFmt,
-    numFmt,
-    normalizeText,
-    findStationById,
-    SPANISH_MONTH_NAMES,
-    KNOWN_STATIONS,
-    KNOWN_FUELS,
-    KNOWN_BANKS
-}, getIsoDate() (+17 more)
+Cohesion: 0.07
+Nodes (33): authenticateAiRequest(), { authenticateToken, requirePermission, isAdminUser }, buildFallbackConsolidadoVentas(), conversationalAiService, crypto, DEFAULT_AI_SUGGESTIONS, express, getConsolidadoVentasSafe() (+25 more)
 
 ### Community 55 - "Estándares del Backend - SIPE Admin"
 Cohesion: 0.29
 Nodes (6): 1. Estructura de Archivos, 2. Creación de Nuevos Módulos, 3. Manejo de Errores, 4. WebSockets, 5. Base de Datos Externa, Estándares del Backend - SIPE Admin
 
-### Community 56 - "getDb"
+### Community 56 - "telegramBotService.js"
 Cohesion: 0.10
-Nodes (32): getDb(), { authenticateToken, requirePermission }, express, {
+Nodes (33): { authenticateToken, requirePermission }, crypto, express, {
     getBotStatus,
     testTelegramConnection,
     restartTelegramBot,
@@ -396,7 +351,7 @@ Nodes (32): getDb(), { authenticateToken, requirePermission }, express, {
     getHealthDiagnostics,
     getErrors,
     clearErrors
-}, router, { sendSafeError } (+24 more)
+}, maskToken(), router (+25 more)
 
 ### Community 57 - "Reglas de Git, Commits y Sincronización Remota"
 Cohesion: 0.40
@@ -406,81 +361,45 @@ Nodes (4): 1. Verificación y Sincronización Previa a cualquier Push, 2. Commit
 Cohesion: 0.17
 Nodes (12): devDependencies, eslint, eslint-plugin-react, eslint-plugin-react-hooks, eslint-plugin-react-refresh, @iconify-json/flat-color-icons, @iconify-json/fluent-color, @iconify-json/fluent-emoji-flat (+4 more)
 
-### Community 60 - "db.js"
-Cohesion: 0.10
-Nodes (23): configCache, dbConfig, dotenv, externalPools, fetchCachedExternalConfig(), getExternalDb(), initDB(), mysql (+15 more)
+### Community 60 - "getDb"
+Cohesion: 0.13
+Nodes (21): configCache, dbConfig, dotenv, externalPools, fetchCachedExternalConfig(), getDb(), getExternalDb(), initDB() (+13 more)
 
 ### Community 61 - "scripts"
 Cohesion: 0.33
 Nodes (6): scripts, build, bump, dev, lint, preview
 
-### Community 62 - "errorHandler.js"
+### Community 62 - "middleware/auth.js"
+Cohesion: 0.08
+Nodes (27): authenticateToken(), isUserRevoked(), jwt, requirePermission(), revokedUsers, revokeUser(), syncRevokedUsersFromDb(), { authenticateToken, requirePermission } (+19 more)
+
+### Community 64 - "useDesigner.js"
+Cohesion: 0.27
+Nodes (7): ICON_MAP, snapToGridValue(), useDesigner(), TIPOS_CAMPO, VARIABLES_DISPONIBLES, CheckDesigner(), uuid
+
+### Community 65 - "routes/auth.js"
 Cohesion: 0.09
-Nodes (20): { authenticateToken, requirePermission }, catalogosViewPerms, express, { getDb }, router, { sendSafeError }, { authenticateToken, requirePermission }, checkDesignerPerms (+12 more)
+Nodes (19): isAdminUser(), requireRole(), { authenticateToken, requirePermission, requireRole, isAdminUser, JWT_SECRET, revokeUser, restoreUser }, bcrypt, express, { getDb }, jwt, router (+11 more)
 
-### Community 63 - "errorDiagnostics.js"
-Cohesion: 0.14
-Nodes (9): ErrorBoundary, copyDiagnosticToClipboard(), errorLogBuffer, generateDiagnosticReport(), getRecentErrorLogs(), recordApiError(), recordDiagnosticLog(), recordGlobalError() (+1 more)
-
-### Community 64 - "Cheques.jsx"
-Cohesion: 0.10
-Nodes (30): PropertyPanel(), DesignerView(), ZOOM_LEVELS, FormatManager(), ICON_MAP, Toolbox(), CalibrationDialog(), Preview() (+22 more)
-
-### Community 65 - "config.js"
-Cohesion: 0.20
-Nodes (9): invalidateConfigCache(), { authenticateToken, requireRole }, express, { getDb, invalidateConfigCache }, nodemailer, router, { sendBirthdayNotification }, { sendPaymentReminderNotification } (+1 more)
-
-### Community 66 - "getPuppeteer"
-Cohesion: 0.60
-Nodes (5): getPuppeteer(), getPuppeteer(), puppeteer, puppeteer-core, @sparticuz/chromium
-
-### Community 67 - "solarEnergyService.js"
-Cohesion: 0.25
-Nodes (17): buildLiveProjectContext(), calcularRegistroDiarioAnalitico(), getCachedSolar(), { getDb, withRetry }, getDeterministicVariation(), getInstalacionesSolares(), getSolarAhorroDiario(), getSolarAhorroMensual() (+9 more)
-
-### Community 68 - "FinanzasPrestamos.jsx"
-Cohesion: 0.30
-Nodes (16): FinanzasAsesor(), FinanzasCalculadora(), FinanzasPrestamos(), addPeriodToDate(), calculateDisbursementCommission(), calculatePeriodInsurance(), calculatePeriodSavings(), calculatePMT() (+8 more)
-
-### Community 69 - "devDependencies"
-Cohesion: 0.67
-Nodes (3): devDependencies, eslint, nodemon
-
-### Community 70 - "20260814_create_check_format_tables.js"
+### Community 68 - "20260814_create_check_format_tables.js"
 Cohesion: 0.25
 Nodes (5): dbConfig, dotenv, mysql, path, dotenv
 
-### Community 71 - "salesHourlyService.js"
-Cohesion: 0.34
-Nodes (12): compilarAnalisisHoras(), generarFallbackAnaliticoHoras(), { getAccountingDb, withRetry }, getFranjaCategoria(), getFranjaLabel(), getHorasPicoRango(), getHorasPicoVentas(), getVolumenDiarioEstimado() (+4 more)
+### Community 69 - "deploy.js"
+Cohesion: 0.25
+Nodes (6): { execSync }, path, parts, pkg, pkgPath, { readFileSync }
 
-### Community 72 - "middleware/bitacora.js"
-Cohesion: 0.47
-Nodes (5): Bitácora (Audit Log), autoLogMiddleware(), { getDb }, logAction(), sanitizeData()
+### Community 71 - "salesHourlyService.js"
+Cohesion: 0.21
+Nodes (16): compilarAnalisisHoras(), generarFallbackAnaliticoHoras(), { getAccountingDb, withRetry }, getFranjaCategoria(), getFranjaLabel(), getHorasPicoRango(), getHorasPicoVentas(), getVolumenDiarioEstimado() (+8 more)
 
 ### Community 74 - "autoSyncScheduler.js"
 Cohesion: 0.17
 Nodes (12): AUTO_SYNC_FORMATTED_HOURS, AUTO_SYNC_HOURS, cron, energyLatamService, executeAutoSyncCycle(), getAutoSyncStatus(), initAutoSyncScheduler(), lastSyncMetadata (+4 more)
 
-### Community 75 - "VentasEstaciones.jsx"
-Cohesion: 0.26
-Nodes (10): ConciliacionEfectivoCard(), DiferenciaDescuadreModal(), moneyFmt(), DrillDownPistaModal(), moneyFmt(), numFmt(), ResumenPista(), VentasEstaciones() (+2 more)
-
 ### Community 76 - "webhook-server.js"
-Cohesion: 0.20
+Cohesion: 0.22
 Nodes (7): crypto, { exec }, http, path, PORT, PROJECT_DIR, server
-
-### Community 77 - "telegramPerformance.test.js"
-Cohesion: 0.13
-Nodes (11): clearSolarCache(), solarMemoryCache, clearQueryCache(), queryMemoryCache, assert, axios, { describe, it, beforeEach, afterEach }, router (+3 more)
-
-### Community 78 - "telegramAlerts.test.js"
-Cohesion: 0.20
-Nodes (7): assert, axios, { describe, it, beforeEach, afterEach }, {
-    formatDiscrepancyAlertMessage,
-    broadcastDiscrepancyAlerts,
-    broadcastCustomAlert
-}, jwt, { JWT_SECRET }, telegramRouter
 
 ### Community 80 - "FinanzasInversiones.jsx"
 Cohesion: 0.64
@@ -490,29 +409,33 @@ Nodes (8): FinanzasInversiones(), calculateBCRatio(), calculateDiscountedPayback
 Cohesion: 0.25
 Nodes (7): buildEstacionFilterClause(), calculateHasMore(), parsePedidosPagination(), assert, { describe, it }, { normalizeEstacion, getPortalCredentials, savePortalCredentials }, { parsePedidosPagination, calculateHasMore, buildEstacionFilterClause }
 
-### Community 82 - "AsistenteIA.jsx"
-Cohesion: 0.52
-Nodes (6): AsistenteIA(), buildStructuredFallbackByIntent(), detectClientIntent(), normalizeAiQueryResponse(), QUICK_CHIPS, renderSafeRichText()
+### Community 82 - "getPuppeteer"
+Cohesion: 0.60
+Nodes (5): getPuppeteer(), getPuppeteer(), puppeteer, puppeteer-core, @sparticuz/chromium
+
+### Community 83 - "devDependencies"
+Cohesion: 0.67
+Nodes (3): devDependencies, eslint, nodemon
 
 ## Knowledge Gaps
 - **18 isolated node(s):** `axios`, `axios-cookiejar-support`, `tough-cookie`, `eslint`, `nodemon` (+13 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 698 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 715 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
 - **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `getDb()` connect `getDb` to `handleSmartNaturalLanguageQuery`, `server.js`, `operaciones.js`, `consultas.js`, `routes/auth.js`, `middleware/auth.js`, `withRetry`, `@google/genai`, `paymentNotifier.js`, `finanzas.js`, `rrhh.test.js`, `energyLatamService.js`, `conciliacion.js`, `bancos.js`, `cheques.js`, `sync-dgehm-direct.js`, `tasks.js`, `dgehmService.js`, `telegramBotService.js`, `telegramAuditorService.js`, `handleIncomingMessage`, `db.js`, `errorHandler.js`, `config.js`, `solarEnergyService.js`, `middleware/bitacora.js`, `autoSyncScheduler.js`?**
-  _High betweenness centrality (0.081) - this node is a cross-community bridge._
+- **Why does `getDb()` connect `getDb` to `handleSmartNaturalLanguageQuery`, `server.js`, `operaciones.js`, `consultas.js`, `auth.test.js`, `handleIncomingMessage`, `ref_node_assert`, `express`, `inteligencia.js`, `withRetry`, `config.js`, `finanzas.js`, `rrhh.test.js`, `energyLatamService.js`, `conciliacion.js`, `bancos.js`, `cheques.js`, `sync-dgehm-direct.js`, `@google/genai`, `dgehmService.js`, `broadcastDiscrepancyAlerts`, `telegramAuditorService.js`, `telegramPerformance.test.js`, `telegramBotService.js`, `middleware/auth.js`, `routes/auth.js`, `autoSyncScheduler.js`?**
+  _High betweenness centrality (0.065) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `useToast()` (e.g. with `Frontend Conventions` and `Regla obligatoria para NUEVAS pantallas (no opcional)`) actually correct?**
   _`useToast()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `axios`, `axios-cookiejar-support`, `tough-cookie` to the rest of the system?**
   _18 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `useToast` be split into smaller, more focused modules?**
-  _Cohesion score 0.12579281183932348 - nodes in this community are weakly interconnected._
-- **Why does `authenticateToken()` connect `middleware/auth.js` to `cheques.js`, `config.js`, `server.js`, `operaciones.js`, `consultas.js`, `routes/auth.js`, `middleware/bitacora.js`, `tasks.js`, `withRetry`, `githubChanges.js`, `onedrive.js`, `ai.js`, `conciliacion.js`, `finanzas.js`, `getDb`, `errorHandler.js`, `bancos.js`?**
-  _High betweenness centrality (0.048) - this node is a cross-community bridge._
+  _Cohesion score 0.050243830353184575 - nodes in this community are weakly interconnected._
+- **Why does `authenticateToken()` connect `middleware/auth.js` to `cheques.js`, `routes/auth.js`, `server.js`, `operaciones.js`, `consultas.js`, `auth.test.js`, `express`, `inteligencia.js`, `githubChanges.js`, `config.js`, `onedrive.js`, `ai.js`, `finanzas.js`, `telegramBotService.js`, `conciliacion.js`, `bancos.js`?**
+  _High betweenness centrality (0.036) - this node is a cross-community bridge._
 - **Should `lazyPages.js` be split into smaller, more focused modules?**
-  _Cohesion score 0.05978705978705979 - nodes in this community are weakly interconnected._
-- **Why does `Bitácora (Audit Log)` connect `middleware/bitacora.js` to `middleware/auth.js`, `AGENTS.md`?**
-  _High betweenness centrality (0.039) - this node is a cross-community bridge._
+  _Cohesion score 0.05028571428571429 - nodes in this community are weakly interconnected._
+- **Why does `express` connect `express` to `cheques.js`, `routes/auth.js`, `server.js`, `operaciones.js`, `consultas.js`, `inteligencia.js`, `githubChanges.js`, `backend/package.json`, `config.js`, `onedrive.js`, `ai.js`, `conciliacion.js`, `finanzas.js`, `telegramBotService.js`, `middleware/auth.js`, `bancos.js`?**
+  _High betweenness centrality (0.030) - this node is a cross-community bridge._

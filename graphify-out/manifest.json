@@ -18,9 +18,9 @@
     "semantic_hash": "7beccc830c416d1a5d5a99d5fa6988b0"
   },
   "backend/db.js": {
-    "mtime": 1791934344.1563227,
-    "seen": 1791934915.935032,
-    "ast_hash": "ce0ad64a41cd484d38fed448e7e22f5c",
+    "mtime": 1792115738.6118753,
+    "seen": 1792116550.1589253,
+    "ast_hash": "5395ea94c407d0078331c5d7f36bbe64",
     "semantic_hash": ""
   },
   "backend/middleware/auth.js": {
@@ -72,16 +72,16 @@
     "semantic_hash": "9ba83791924f71474fd6d96d52685d0b"
   },
   "backend/routes/ai.js": {
-    "mtime": 1791934566.7220733,
-    "seen": 1791934915.935032,
-    "ast_hash": "6e1c093299972fd1fc40725a00166c73",
+    "mtime": 1792115922.7544818,
+    "seen": 1792116550.1589253,
+    "ast_hash": "2cde37c5be0a4ca213f7c5ad7c2d1cb0",
     "semantic_hash": ""
   },
   "backend/routes/auth.js": {
-    "mtime": 1791408358.5448925,
-    "seen": 1791822880.7085679,
-    "ast_hash": "1ffeb9a8ca9fc9605dfcebc7a00c73ca",
-    "semantic_hash": "1ffeb9a8ca9fc9605dfcebc7a00c73ca"
+    "mtime": 1792115740.136358,
+    "seen": 1792116550.1589253,
+    "ast_hash": "2d67971180e4dbf51a681268b5378cc2",
+    "semantic_hash": ""
   },
   "backend/routes/bancos.js": {
     "mtime": 1791032934.6793668,
@@ -120,15 +120,15 @@
     "semantic_hash": "b24becc22b060ab28fe91af611291964"
   },
   "backend/routes/config.js": {
-    "mtime": 1791004218.932361,
-    "seen": 1791822880.7085679,
-    "ast_hash": "6a29c4719b1366a4420a1b4e8908d7a1",
-    "semantic_hash": "6a29c4719b1366a4420a1b4e8908d7a1"
+    "mtime": 1792116151.802867,
+    "seen": 1792116550.1589253,
+    "ast_hash": "4ba1ba56ae6bb564fd688c1a6fed03c4",
+    "semantic_hash": ""
   },
   "backend/routes/consultas.js": {
-    "mtime": 1791846645.650981,
-    "seen": 1791846878.4962602,
-    "ast_hash": "95bb7500ab5214be37cf3ee43450f1e1",
+    "mtime": 1792116145.7065148,
+    "seen": 1792116550.1589253,
+    "ast_hash": "40db7870c398ca45c50313ffb91acb20",
     "semantic_hash": ""
   },
   "backend/routes/finanzas.js": {
@@ -138,10 +138,10 @@
     "semantic_hash": "85033fef7218ca190beb22c5e33ace70"
   },
   "backend/routes/githubChanges.js": {
-    "mtime": 1791408358.546986,
-    "seen": 1791822880.7085679,
-    "ast_hash": "3e83d40b14d69304448505990dc59f3f",
-    "semantic_hash": "3e83d40b14d69304448505990dc59f3f"
+    "mtime": 1792116615.9634547,
+    "seen": 1792116672.0190368,
+    "ast_hash": "66076f78036484e0c6492568867ce5df",
+    "semantic_hash": ""
   },
   "backend/routes/inteligencia.js": {
     "mtime": 1790448499.182408,
@@ -162,46 +162,46 @@
     "semantic_hash": "96ee2b6fd4ff1e69439260af844420aa"
   },
   "backend/routes/operaciones.js": {
-    "mtime": 1791846261.3639948,
-    "seen": 1791846527.0245516,
-    "ast_hash": "ee6cc54cb18078e122363f272c05ed89",
+    "mtime": 1792116142.4568183,
+    "seen": 1792116550.1589253,
+    "ast_hash": "1bd1d6ac2801d55e348f467916bea54c",
     "semantic_hash": ""
   },
   "backend/routes/rrhh.js": {
-    "mtime": 1790867300.905999,
-    "seen": 1791822880.7085679,
-    "ast_hash": "7ba63067fba8212ff39eb4857c8873a7",
-    "semantic_hash": "7ba63067fba8212ff39eb4857c8873a7"
+    "mtime": 1792116613.3315773,
+    "seen": 1792116672.0190368,
+    "ast_hash": "0f1151d617863fa322f07bfea3fe668a",
+    "semantic_hash": ""
   },
   "backend/routes/tasks.js": {
-    "mtime": 1791408358.5486045,
-    "seen": 1791822880.7085679,
-    "ast_hash": "ed18a2399dbfc0ef94ecbb1b3d58ea07",
-    "semantic_hash": "ed18a2399dbfc0ef94ecbb1b3d58ea07"
+    "mtime": 1792116150.2222943,
+    "seen": 1792116550.1589253,
+    "ast_hash": "098e5735112e4fa85a7987ac51a6fb91",
+    "semantic_hash": ""
   },
   "backend/routes/telegram.js": {
-    "mtime": 1791932284.303462,
-    "seen": 1791932510.9971354,
-    "ast_hash": "52c3d8ea8ae6162dd4ed6c507170af0a",
+    "mtime": 1792116148.4657612,
+    "seen": 1792116550.1589253,
+    "ast_hash": "f227a4edaa492cd3c9de24880c2eaa39",
     "semantic_hash": ""
   },
   "backend/scripts/backup-db.js": {
-    "mtime": 1791031862.6628635,
-    "seen": 1791822880.7085679,
-    "ast_hash": "853cb6ca6ee9ea8273f1360f1c18dceb",
-    "semantic_hash": "853cb6ca6ee9ea8273f1360f1c18dceb"
+    "mtime": 1792116317.3267107,
+    "seen": 1792116550.1589253,
+    "ast_hash": "cd59a982e7a88b8327b3072c67026993",
+    "semantic_hash": ""
   },
   "backend/scripts/sync_rh_to_local.js": {
-    "mtime": 1790867300.906513,
-    "seen": 1791822880.7085679,
-    "ast_hash": "170af492b42f3fd591a914ee49e63db2",
-    "semantic_hash": "170af492b42f3fd591a914ee49e63db2"
+    "mtime": 1792115733.9185317,
+    "seen": 1792116550.1589253,
+    "ast_hash": "00792bc7b7346cb9245b058ba5edcf95",
+    "semantic_hash": ""
   },
   "backend/scripts/sync_rrs_to_local.js": {
-    "mtime": 1790867300.906513,
-    "seen": 1791822880.7085679,
-    "ast_hash": "2094935d406edb2bc8f652f6c2117cf7",
-    "semantic_hash": "2094935d406edb2bc8f652f6c2117cf7"
+    "mtime": 1792115735.2958066,
+    "seen": 1792116550.1589253,
+    "ast_hash": "61ef131d015802bccd5f199cb398226d",
+    "semantic_hash": ""
   },
   "backend/seed_cuentas_bancarias.js": {
     "mtime": 1788265759.5887764,
@@ -216,9 +216,9 @@
     "semantic_hash": "95bc5f979ecea73b9feb01f8bf87ee87"
   },
   "backend/server.js": {
-    "mtime": 1791830698.0939054,
-    "seen": 1791830913.5930574,
-    "ast_hash": "3ec79552a982bc36afd0cc4eb82da5c9",
+    "mtime": 1792116309.3591576,
+    "seen": 1792116550.1589253,
+    "ast_hash": "4527f53770581e006cbf7be75b2dc80b",
     "semantic_hash": ""
   },
   "backend/services/birthdayNotifier.js": {
@@ -246,16 +246,16 @@
     "semantic_hash": "22a8df0d2e74fbd2fff600b7265d4f33"
   },
   "backend/services/energyLatamService.js": {
-    "mtime": 1791845130.8491096,
-    "seen": 1791845837.400197,
-    "ast_hash": "101610b9521a274a1431c678636aae4e",
+    "mtime": 1792116315.0783434,
+    "seen": 1792116550.1589253,
+    "ast_hash": "95b37602401c64f86ef6e9ad28a50d34",
     "semantic_hash": ""
   },
   "backend/services/executiveFlashService.js": {
-    "mtime": 1789949211.0491507,
-    "seen": 1791822880.7085679,
-    "ast_hash": "0e11c71277bc258c1855d79392e971f9",
-    "semantic_hash": "0e11c71277bc258c1855d79392e971f9"
+    "mtime": 1791937406.046952,
+    "seen": 1791937600.4203062,
+    "ast_hash": "a4bce6066c7af6fe134c14f472c3cbda",
+    "semantic_hash": ""
   },
   "backend/services/fuelIntelligence.js": {
     "mtime": 1789949211.0496633,
@@ -282,15 +282,15 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1791934685.3889453,
-    "seen": 1791934915.935032,
-    "ast_hash": "ea9d66dfff0db0e824392f4ccfad7c54",
+    "mtime": 1792116308.3190694,
+    "seen": 1792116550.1589253,
+    "ast_hash": "cf30d4d25875307f3dd2d35fe354c7ab",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
-    "mtime": 1791830663.452781,
-    "seen": 1791830913.5930574,
-    "ast_hash": "ba383d0f1fc451bd4267c25ac23762a9",
+    "mtime": 1792115736.1484027,
+    "seen": 1792116550.1589253,
+    "ast_hash": "93ea6db100c15d8c29eb7f9f9fba11b0",
     "semantic_hash": ""
   },
   "backend/test/analisisDescuadre.test.js": {
@@ -336,10 +336,10 @@
     "semantic_hash": "51fcb487c9ce5ad40c7c6e8c9260c11c"
   },
   "backend/test/operacionesPedidos.test.js": {
-    "mtime": 1791038794.972864,
-    "seen": 1791822880.7085679,
-    "ast_hash": "66e91e7990a087e5956ec35da442a5cb",
-    "semantic_hash": "66e91e7990a087e5956ec35da442a5cb"
+    "mtime": 1792114915.9258723,
+    "seen": 1792114933.143967,
+    "ast_hash": "f7787dad2355e06cde5155d3598000a1",
+    "semantic_hash": ""
   },
   "backend/test/paymentNotifier.test.js": {
     "mtime": 1789924527.2270324,
@@ -390,9 +390,9 @@
     "semantic_hash": "25bfd760ff5331823578d7070aaf98f7"
   },
   "deploy.sh": {
-    "mtime": 1791826252.296578,
-    "seen": 1791826455.8454368,
-    "ast_hash": "b0d34c9a9a9cf096e728cd1dbd440b1e",
+    "mtime": 1792116464.5869894,
+    "seen": 1792116550.1589253,
+    "ast_hash": "6c8ec4305b9a6ec719c7dc80f3602eeb",
     "semantic_hash": ""
   },
   "ecosystem.config.cjs": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1791934881.0551457,
-    "seen": 1791934915.935032,
-    "ast_hash": "ed79ad71a9cbe2718b0e1cdc8bcac8f6",
+    "mtime": 1792114915.9274595,
+    "seen": 1792114933.143967,
+    "ast_hash": "1c884a08858d65fdaec28596614d5e27",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -432,9 +432,9 @@
     "semantic_hash": "d64eb1ed56f6aa76812960769c981127"
   },
   "frontend/src/App.jsx": {
-    "mtime": 1791934421.6916003,
-    "seen": 1791934915.935032,
-    "ast_hash": "977034312627198bf9a42ca1f70faf6d",
+    "mtime": 1791937360.0002577,
+    "seen": 1791937600.4203062,
+    "ast_hash": "1b0c1146f2d19c1cd51c7f2fd528e3f3",
     "semantic_hash": ""
   },
   "frontend/src/components/CalendarGrid.jsx": {
@@ -636,10 +636,10 @@
     "semantic_hash": "85336955b206fac33ef48d804167d906"
   },
   "frontend/src/modules/check-designer/services/PrintEngine.js": {
-    "mtime": 1789924527.2361271,
-    "seen": 1791822880.7085679,
-    "ast_hash": "217177aa5cea4dbb8b7e595b25bdb55d",
-    "semantic_hash": "217177aa5cea4dbb8b7e595b25bdb55d"
+    "mtime": 1792116456.1014872,
+    "seen": 1792116550.1589253,
+    "ast_hash": "8039c7796047113a76f6f687fe80276a",
+    "semantic_hash": ""
   },
   "frontend/src/modules/check-designer/types/index.js": {
     "mtime": 1788265759.6141992,
@@ -690,22 +690,22 @@
     "semantic_hash": "662728e7ced70f6f811ac977d2ea4980"
   },
   "frontend/src/pages/ConfiguracionContabilidad.jsx": {
-    "mtime": 1790453295.8214223,
-    "seen": 1791822880.7085679,
-    "ast_hash": "5439affef890abfd4f109cf5bc790a05",
-    "semantic_hash": "5439affef890abfd4f109cf5bc790a05"
+    "mtime": 1792116459.888002,
+    "seen": 1792116550.1589253,
+    "ast_hash": "5b91c395b830b104d435a1e8485a455e",
+    "semantic_hash": ""
   },
   "frontend/src/pages/ConfiguracionDb.jsx": {
-    "mtime": 1790453284.1081069,
-    "seen": 1791822880.7085679,
-    "ast_hash": "ba9ca4bbed7f05b00f2898eb6395780f",
-    "semantic_hash": "ba9ca4bbed7f05b00f2898eb6395780f"
+    "mtime": 1792116458.2966552,
+    "seen": 1792116550.1589253,
+    "ast_hash": "77a5521d82b2b78049dec76832ce12f2",
+    "semantic_hash": ""
   },
   "frontend/src/pages/ConfiguracionEmail.jsx": {
-    "mtime": 1789924527.2401464,
-    "seen": 1791822880.7085679,
-    "ast_hash": "8d12650e78b77be812568caa16cad5ff",
-    "semantic_hash": "8d12650e78b77be812568caa16cad5ff"
+    "mtime": 1792116462.4259095,
+    "seen": 1792116550.1589253,
+    "ast_hash": "6224900f85f53d19668e6d66ca5cf5ff",
+    "semantic_hash": ""
   },
   "frontend/src/pages/ConfiguracionTema.jsx": {
     "mtime": 1790867300.914013,
@@ -756,9 +756,9 @@
     "semantic_hash": "aa01878571f43d6fe2903747fc0609d7"
   },
   "frontend/src/pages/DashboardLayout.jsx": {
-    "mtime": 1791934430.9790945,
-    "seen": 1791934915.935032,
-    "ast_hash": "039254aea984d05c9937478d07e49c79",
+    "mtime": 1792116454.2267907,
+    "seen": 1792116550.1589253,
+    "ast_hash": "ccd36e412b0c8b3718c8490752fb8ebf",
     "semantic_hash": ""
   },
   "frontend/src/pages/DiferenciasCombustible.jsx": {
@@ -768,40 +768,40 @@
     "semantic_hash": "0aa82681a09d65dc1648596c8aad394e"
   },
   "frontend/src/pages/EstrategiaCombustible.jsx": {
-    "mtime": 1789949211.0590954,
-    "seen": 1791822880.7085679,
-    "ast_hash": "ec7fe257b0a524446c021505ff67c1a6",
-    "semantic_hash": "ec7fe257b0a524446c021505ff67c1a6"
+    "mtime": 1791937492.8427148,
+    "seen": 1791937600.421335,
+    "ast_hash": "e87d6aacebcbaa85e1649f0dfe18a8f6",
+    "semantic_hash": ""
   },
   "frontend/src/pages/EstrategiaCreditos.jsx": {
-    "mtime": 1789950130.0106163,
-    "seen": 1791822880.7085679,
-    "ast_hash": "64ddf0113b9dcab3b09e47227137cc1a",
-    "semantic_hash": "64ddf0113b9dcab3b09e47227137cc1a"
+    "mtime": 1791937558.4939148,
+    "seen": 1791937600.421335,
+    "ast_hash": "0cc9c8497fed94d44d339497d48b21ca",
+    "semantic_hash": ""
   },
   "frontend/src/pages/EstrategiaFlujoCaja.jsx": {
-    "mtime": 1789949211.060099,
-    "seen": 1791822880.7085679,
-    "ast_hash": "756a909c9dca8f0fb1ce6baa0a96d259",
-    "semantic_hash": "756a909c9dca8f0fb1ce6baa0a96d259"
+    "mtime": 1791937507.6365838,
+    "seen": 1791937600.421335,
+    "ast_hash": "9cb01ebbc52af21576385496faba3e30",
+    "semantic_hash": ""
   },
   "frontend/src/pages/EstrategiaMermas.jsx": {
-    "mtime": 1789949211.060099,
-    "seen": 1791822880.7085679,
-    "ast_hash": "014d469cfbf7a564604ce08e1e5f914e",
-    "semantic_hash": "014d469cfbf7a564604ce08e1e5f914e"
+    "mtime": 1791937519.1204739,
+    "seen": 1791937600.421335,
+    "ast_hash": "966e24938ba1ed6379928fa304ce38b8",
+    "semantic_hash": ""
   },
   "frontend/src/pages/EstrategiaRentabilidad.jsx": {
-    "mtime": 1789949211.0615048,
-    "seen": 1791822880.7085679,
-    "ast_hash": "be5ceb7c87ccfe7aa75e6f1d9588a050",
-    "semantic_hash": "be5ceb7c87ccfe7aa75e6f1d9588a050"
+    "mtime": 1791937543.562176,
+    "seen": 1791937600.421335,
+    "ast_hash": "ace04d3adf5a6302b2e31dbe72dceb71",
+    "semantic_hash": ""
   },
   "frontend/src/pages/EstrategiaTorreControl.jsx": {
-    "mtime": 1790919422.6418717,
-    "seen": 1791822880.7085679,
-    "ast_hash": "1d55eca039c69ece75a53551de57c35f",
-    "semantic_hash": "1d55eca039c69ece75a53551de57c35f"
+    "mtime": 1791937458.5024433,
+    "seen": 1791937600.421335,
+    "ast_hash": "62030d45d50fb6d1b04a93cc2e34c099",
+    "semantic_hash": ""
   },
   "frontend/src/pages/FinanzasAsesor.jsx": {
     "mtime": 1790919453.904566,
@@ -864,16 +864,16 @@
     "semantic_hash": "0b0fc0568330299ad81a88e29ee1db23"
   },
   "frontend/src/pages/PedidosCombustible.jsx": {
-    "mtime": 1791845709.3094585,
-    "seen": 1791845837.400197,
-    "ast_hash": "05e36f57b46fd4c3e76ce22fcbe6cb61",
+    "mtime": 1792114915.9313865,
+    "seen": 1792114933.143967,
+    "ast_hash": "588e6d65d5e57cff80ca96a1300b4bee",
     "semantic_hash": ""
   },
   "frontend/src/pages/PedidosProgramadosConsulta.jsx": {
-    "mtime": 1791408358.5607417,
-    "seen": 1791822880.7085679,
-    "ast_hash": "0ff7d0c077515dda182f277fbd93a5fe",
-    "semantic_hash": "0ff7d0c077515dda182f277fbd93a5fe"
+    "mtime": 1792114915.9313865,
+    "seen": 1792114933.143967,
+    "ast_hash": "5953b7b16baf9f14fdcf6ec0142e522c",
+    "semantic_hash": ""
   },
   "frontend/src/pages/Permissions.jsx": {
     "mtime": 1789949211.0629208,
@@ -936,10 +936,10 @@
     "semantic_hash": "0fd99ce2e69da735d9aad9048f91bf5c"
   },
   "frontend/src/pages/VentasEstaciones.jsx": {
-    "mtime": 1791408358.5637429,
-    "seen": 1791822880.7085679,
-    "ast_hash": "7ffe792df5d729c5c5388e4fd58472cc",
-    "semantic_hash": "7ffe792df5d729c5c5388e4fd58472cc"
+    "mtime": 1792114915.9313865,
+    "seen": 1792114933.143967,
+    "ast_hash": "d78d35c7893da5dfcdc2a2426dbbe7a2",
+    "semantic_hash": ""
   },
   "frontend/src/pages/lazyPages.js": {
     "mtime": 1791934365.4939601,
@@ -954,10 +954,10 @@
     "semantic_hash": "e1bca94520d5a16b47b1b9c24e24e56f"
   },
   "frontend/src/services/socket.js": {
-    "mtime": 1788265759.6235275,
-    "seen": 1791822880.7085679,
-    "ast_hash": "3900c5956b36d58989b12f6ddbef44e4",
-    "semantic_hash": "3900c5956b36d58989b12f6ddbef44e4"
+    "mtime": 1792116311.9234085,
+    "seen": 1792116550.1589253,
+    "ast_hash": "9c3f68a20007ffb558c096ac8a150491",
+    "semantic_hash": ""
   },
   "frontend/src/utils/auth.js": {
     "mtime": 1789924529.4945323,
@@ -978,10 +978,10 @@
     "semantic_hash": "3300e42d8556191a67b70d44f09acaf6"
   },
   "frontend/src/utils/errorDiagnostics.js": {
-    "mtime": 1791033740.2935092,
-    "seen": 1791822880.7085679,
-    "ast_hash": "11b43dd54d92057ddcf9cd52a223b66d",
-    "semantic_hash": "11b43dd54d92057ddcf9cd52a223b66d"
+    "mtime": 1792116451.624407,
+    "seen": 1792116550.1589253,
+    "ast_hash": "a367de04d2a31597d654a29b1b658438",
+    "semantic_hash": ""
   },
   "frontend/src/utils/format.js": {
     "mtime": 1791031879.8419158,
@@ -1014,10 +1014,10 @@
     "semantic_hash": "ec65eb978a40848c3da65b022d84f7e4"
   },
   "frontend/src/utils/themeUtils.js": {
-    "mtime": 1790867300.9188478,
-    "seen": 1791822880.7085679,
-    "ast_hash": "88c4c1c84587b253c1ce51a2a8548950",
-    "semantic_hash": "88c4c1c84587b253c1ce51a2a8548950"
+    "mtime": 1792114915.9313865,
+    "seen": 1792114933.143967,
+    "ast_hash": "9550f60fd5b08995b167d3ff26694c18",
+    "semantic_hash": ""
   },
   "frontend/vite.config.js": {
     "mtime": 1789949211.0664985,
@@ -1032,15 +1032,15 @@
     "semantic_hash": "3d3b1fb634efac8444dc30f010a48524"
   },
   "vercel.json": {
-    "mtime": 1788265759.6235275,
-    "seen": 1791822880.7085679,
-    "ast_hash": "65aa1bbe220125f99b207398fefdbfcc",
-    "semantic_hash": "65aa1bbe220125f99b207398fefdbfcc"
+    "mtime": 1792116631.4640648,
+    "seen": 1792116672.0190368,
+    "ast_hash": "40de487e2544e3e288b571f54efc4e1f",
+    "semantic_hash": ""
   },
   "webhook-server.js": {
-    "mtime": 1791824208.2297013,
-    "seen": 1791824268.1699405,
-    "ast_hash": "7596fd707b5f329aedb2721f7a6160b0",
+    "mtime": 1792116611.183133,
+    "seen": 1792116672.0190368,
+    "ast_hash": "c3e64be99e44b3d0cdefa37aa8b7b093",
     "semantic_hash": ""
   },
   ".agents/rules/git_workflow.md": {
@@ -1206,15 +1206,15 @@
     "semantic_hash": ""
   },
   "backend/test/solarAndSalesHourly.test.js": {
-    "mtime": 1791898995.65767,
-    "seen": 1791899168.9237237,
-    "ast_hash": "c718cd3bdc583ec5ce284ac8d2524b67",
+    "mtime": 1792114915.9274595,
+    "seen": 1792114933.143967,
+    "ast_hash": "d19abbeb6ff4be1fbd9b987b390b89fc",
     "semantic_hash": ""
   },
   "backend/test/solarEnergy.test.js": {
-    "mtime": 1791898969.021315,
-    "seen": 1791899168.9237237,
-    "ast_hash": "3df01532f2b99b48158363457f9e9c76",
+    "mtime": 1792114915.9274595,
+    "seen": 1792114933.143967,
+    "ast_hash": "6ab74d3fb6edc6c3f5158d2dff40f84a",
     "semantic_hash": ""
   },
   "backend/services/autoSyncScheduler.js": {
@@ -1248,21 +1248,21 @@
     "semantic_hash": ""
   },
   "scripts/sync_portal_pedidos.sh": {
-    "mtime": 1791846342.7015378,
-    "seen": 1791846527.0250647,
-    "ast_hash": "37a3247203fe6a4b841d68fd327beeac",
+    "mtime": 1792116467.8645263,
+    "seen": 1792116550.1589253,
+    "ast_hash": "b373e8574c18aa1a778e7af78e3355b6",
     "semantic_hash": ""
   },
   "scripts/sync_dgehm_precios.sh": {
-    "mtime": 1791846697.8591373,
-    "seen": 1791846878.4962602,
-    "ast_hash": "bd9d048f0d26b2131c25d26925446846",
+    "mtime": 1792116466.1260567,
+    "seen": 1792116550.1589253,
+    "ast_hash": "24499d7e6c7220c5e69d7b715668c3f0",
     "semantic_hash": ""
   },
   "backend/services/sysSaasService.js": {
-    "mtime": 1791903942.5489483,
-    "seen": 1791904200.294297,
-    "ast_hash": "8764b91963aa56c2407250a9f6b04a0c",
+    "mtime": 1792114915.9258723,
+    "seen": 1792114933.143967,
+    "ast_hash": "ead1af2bc94e0206a027a5b87eddbde6",
     "semantic_hash": ""
   },
   "backend/test/andelsaTelegramBot.test.js": {
@@ -1272,9 +1272,9 @@
     "semantic_hash": ""
   },
   "backend/test/sysSaasService.test.js": {
-    "mtime": 1791898738.5556417,
-    "seen": 1791899168.9237237,
-    "ast_hash": "741ca5ff96efdf708805b35f7b014992",
+    "mtime": 1792114915.9274595,
+    "seen": 1792114933.143967,
+    "ast_hash": "5280ba28fcd21a3166046b682aa536a5",
     "semantic_hash": ""
   },
   "backend/test/telegramPerformance.test.js": {
@@ -1311,6 +1311,12 @@
     "mtime": 1791934824.8426855,
     "seen": 1791934915.935032,
     "ast_hash": "597e2af7ff3cf46e263d303cea32e560",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/EstrategiaNav.jsx": {
+    "mtime": 1791937310.383305,
+    "seen": 1791937600.421335,
+    "ast_hash": "9873ef2660fc6a1fa7fc193881b27336",
     "semantic_hash": ""
   }
 }
