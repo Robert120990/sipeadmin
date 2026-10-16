@@ -93,10 +93,10 @@ export default function ConfiguracionContabilidad() {
                             <input 
                                 type="password" 
                                 className="form-control" 
-                                value={config.password} 
+                                value={config.password || ''} 
                                 onChange={(e) => setConfig({ ...config, password: e.target.value })} 
-                                placeholder="••••••••" 
-                                required 
+                                placeholder={config.has_password ? '•••••••• (guardada, deje en blanco para conservar)' : '••••••••'} 
+                                required={!config.has_password} 
                             />
                         </div>
                         <div className="span-2">

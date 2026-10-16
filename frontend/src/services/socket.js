@@ -6,7 +6,10 @@ export const socket = io({
     path: '/socket.io',
     transports: ['polling', 'websocket'],
     autoConnect: true,
-    reconnection: true
+    reconnection: true,
+    auth: (cb) => {
+        cb({ token: typeof window !== 'undefined' ? localStorage.getItem('token') : null });
+    }
 });
 
 socket.on('connect', () => {

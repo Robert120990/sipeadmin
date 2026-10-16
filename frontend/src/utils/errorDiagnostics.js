@@ -25,12 +25,18 @@ export const recordDiagnosticLog = (entry) => {
         if (errorLogBuffer.length > MAX_LOGS) {
             errorLogBuffer.pop();
         }
-        // Exponer en window para inspección rápida en DevTools si es necesario
-        if (typeof window !== 'undefined') {
+        if (typeof window !== 'undefined' && import.meta.env?.DEV) {
             window.__SIPEOFI_ERROR_LOGS__ = errorLogBuffer;
         }
     } catch (_) {
         /* ignore */
+    }
+};
+
+export const clearErrorLogs = () => {
+    errorLogBuffer.length = 0;
+    if (typeof window !== 'undefined' && window.__SIPEOFI_ERROR_LOGS__) {
+        delete window.__SIPEOFI_ERROR_LOGS__;
     }
 };
 

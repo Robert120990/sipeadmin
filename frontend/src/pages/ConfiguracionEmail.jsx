@@ -169,10 +169,10 @@ export default function ConfiguracionEmail() {
                             <input 
                                 type="password" 
                                 className="form-control" 
-                                value={emailConfig.password} 
+                                value={emailConfig.password || ''} 
                                 onChange={(e) => setEmailConfig({ ...emailConfig, password: e.target.value })} 
-                                placeholder="••••••••" 
-                                required 
+                                placeholder={emailConfig.has_password ? '•••••••• (guardada, deje en blanco para conservar)' : '••••••••'} 
+                                required={!emailConfig.has_password} 
                                 style={{ height: '36px', fontSize: '0.825rem' }}
                             />
                         </div>

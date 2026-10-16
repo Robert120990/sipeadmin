@@ -62,6 +62,7 @@ import {
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
+import { clearErrorLogs } from '../utils/errorDiagnostics';
 import ErrorBoundary from '../components/ErrorBoundary';
 
 export default function DashboardLayout() {
@@ -217,6 +218,11 @@ export default function DashboardLayout() {
                 .sort((a, b) => b.path.length - a.path.length)[0];
         }
         if (item) {
+            if (!hasPermission(item.path) && item.path !== '/dashboard') {
+                setActiveTabPath('/dashboard');
+                navigate('/dashboard', { replace: true });
+                return;
+            }
             // Abrir el tab SIN navegar (preserva la URL actual, p. ej. /edit/:formatId)
             setTabs(prev => prev.find(t => t.path === item.path) ? prev : [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }]);
             setActiveTabPath(item.path);
@@ -237,12 +243,14 @@ export default function DashboardLayout() {
     }, []);
 
     const handleLogout = () => {
+        clearErrorLogs();
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         navigate('/login');
     };
 
     const openTab = (item) => {
+        if (!hasPermission(item.path) && item.path !== '/dashboard') return;
         setTabs(prev => {
             if (prev.find(t => t.path === item.path)) return prev;
             return [...prev, { name: item.name, path: item.path, icon: item.icon || FileText }];
