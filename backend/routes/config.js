@@ -5,12 +5,22 @@ const { getDb, invalidateConfigCache } = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 
+const maskConfigPassword = (row) => {
+    if (!row || typeof row !== 'object') return {};
+    const { password, ...rest } = row;
+    return {
+        ...rest,
+        password: '',
+        has_password: Boolean(password)
+    };
+};
+
 // --- External Database Configuration ---
 router.get('/config', authenticateToken, requireRole('Administrator'), async (req, res) => {
     try {
         const db = getDb();
         const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
-        res.json(rows[0] || {});
+        res.json(maskConfigPassword(rows[0]));
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar configuración');
     }
@@ -20,20 +30,24 @@ router.post('/config', authenticateToken, requireRole('Administrator'), async (r
     const { host, user, password, database_name, port } = req.body;
     try {
         const db = getDb();
+        const [existing] = await db.query("SELECT id, password FROM external_configs WHERE type = 'main' ORDER BY created_at DESC LIMIT 1");
+        const effectivePassword = (password !== undefined && password !== null && String(password) !== '')
+            ? password
+            : (existing[0]?.password || '');
+
         const mysql = require('mysql2/promise');
-        const testConn = await mysql.createConnection({ host, user, password, database: database_name, port: port || 3306 });
+        const testConn = await mysql.createConnection({ host, user, password: effectivePassword, database: database_name, port: port || 3306 });
         await testConn.end();
 
-        const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'main' LIMIT 1");
         if (existing.length > 0) {
             await db.query(
                 "UPDATE external_configs SET host = ?, user = ?, password = ?, database_name = ?, port = ? WHERE id = ?",
-                [host, user, password, database_name, port || 3306, existing[0].id]
+                [host, user, effectivePassword, database_name, port || 3306, existing[0].id]
             );
         } else {
             await db.query(
                 "INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, ?, ?, 'main')",
-                [host, user, password, database_name, port || 3306]
+                [host, user, effectivePassword, database_name, port || 3306]
             );
         }
         invalidateConfigCache('main');
@@ -48,7 +62,7 @@ router.get('/accounting-config', authenticateToken, requireRole('Administrator')
     try {
         const db = getDb();
         const [rows] = await db.query("SELECT * FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
-        res.json(rows[0] || {});
+        res.json(maskConfigPassword(rows[0]));
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar configuración de contabilidad');
     }
@@ -58,15 +72,19 @@ router.post('/accounting-config', authenticateToken, requireRole('Administrator'
     const { host, user, password, database_name, port } = req.body;
     try {
         const db = getDb();
+        const [existing] = await db.query("SELECT id, password FROM external_configs WHERE type = 'accounting' ORDER BY created_at DESC LIMIT 1");
+        const effectivePassword = (password !== undefined && password !== null && String(password) !== '')
+            ? password
+            : (existing[0]?.password || '');
+
         const mysql = require('mysql2/promise');
-        const testConn = await mysql.createConnection({ host, user, password, database: database_name, port: port || 3306 });
+        const testConn = await mysql.createConnection({ host, user, password: effectivePassword, database: database_name, port: port || 3306 });
         await testConn.end();
 
-        const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'accounting' LIMIT 1");
         if (existing.length > 0) {
-            await db.query("UPDATE external_configs SET host = ?, user = ?, password = ?, database_name = ?, port = ? WHERE id = ?", [host, user, password, database_name, port || 3306, existing[0].id]);
+            await db.query("UPDATE external_configs SET host = ?, user = ?, password = ?, database_name = ?, port = ? WHERE id = ?", [host, user, effectivePassword, database_name, port || 3306, existing[0].id]);
         } else {
-            await db.query("INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, ?, ?, 'accounting')", [host, user, password, database_name, port || 3306]);
+            await db.query("INSERT INTO external_configs (host, user, password, database_name, port, type) VALUES (?, ?, ?, ?, ?, 'accounting')", [host, user, effectivePassword, database_name, port || 3306]);
         }
         invalidateConfigCache('accounting');
         res.json({ message: 'Configuración de contabilidad guardada y probada exitosamente' });
@@ -80,7 +98,7 @@ router.get('/config/email', authenticateToken, requireRole('Administrator'), asy
     try {
         const db = getDb();
         const [rows] = await db.query("SELECT * FROM email_configs ORDER BY created_at DESC LIMIT 1");
-        res.json(rows[0] || {});
+        res.json(maskConfigPassword(rows[0]));
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar configuración de email');
     }
@@ -90,16 +108,20 @@ router.post('/config/email', authenticateToken, requireRole('Administrator'), as
     const { host, port, secure, user, password, from_address, office_email } = req.body;
     try {
         const db = getDb();
-        const [existing] = await db.query("SELECT id FROM email_configs LIMIT 1");
+        const [existing] = await db.query("SELECT id, password FROM email_configs ORDER BY created_at DESC LIMIT 1");
+        const effectivePassword = (password !== undefined && password !== null && String(password) !== '')
+            ? password
+            : (existing[0]?.password || '');
+
         if (existing.length > 0) {
             await db.query(
                 "UPDATE email_configs SET host = ?, port = ?, secure = ?, user = ?, password = ?, from_address = ?, office_email = ? WHERE id = ?",
-                [host, port, secure, user, password, from_address, office_email || null, existing[0].id]
+                [host, port, secure, user, effectivePassword, from_address, office_email || null, existing[0].id]
             );
         } else {
             await db.query(
                 "INSERT INTO email_configs (host, port, secure, user, password, from_address, office_email) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [host, port, secure, user, password, from_address, office_email || null]
+                [host, port, secure, user, effectivePassword, from_address, office_email || null]
             );
         }
         res.json({ message: 'Configuración de email guardada exitosamente' });
@@ -115,11 +137,18 @@ router.post('/config/email/test', authenticateToken, requireRole('Administrator'
         return res.status(400).json({ message: 'Debe proporcionar un correo destinatario o configurar el correo de oficina.' });
     }
     try {
+        const db = getDb();
+        let effectivePassword = password;
+        if (effectivePassword === undefined || effectivePassword === null || String(effectivePassword) === '') {
+            const [existing] = await db.query("SELECT password FROM email_configs ORDER BY created_at DESC LIMIT 1");
+            effectivePassword = existing[0]?.password || '';
+        }
+
         const transporter = nodemailer.createTransport({
             host,
             port: port || 587,
             secure: Boolean(secure),
-            auth: { user, pass: password },
+            auth: { user, pass: effectivePassword },
             tls: { rejectUnauthorized: process.env.SMTP_ALLOW_SELF_SIGNED === 'true' ? false : true }
         });
 

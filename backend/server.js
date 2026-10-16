@@ -92,21 +92,43 @@ app.use((req, res, next) => {
 const { autoLogMiddleware } = require('./middleware/bitacora');
 app.use(autoLogMiddleware());
 
+const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
+const { authenticateToken, requireRole, JWT_SECRET, isUserRevoked } = require('./middleware/auth');
+
+io.use((socket, next) => {
+    const rawToken = socket.handshake.auth?.token ||
+        (socket.handshake.headers?.authorization ? socket.handshake.headers.authorization.replace(/^Bearer\s+/i, '') : null);
+    if (rawToken) {
+        try {
+            const decoded = jwt.verify(rawToken, JWT_SECRET);
+            if (decoded && decoded.status !== 'inactive' && !isUserRevoked(decoded.id)) {
+                socket.user = decoded;
+            }
+        } catch (_) {
+            // Token inválido o expirado; no se asigna socket.user
+        }
+    }
+    next();
+});
+
 io.on("connection", (socket) => {
     console.log(`Usuario conectado a Socket.io: ${socket.id}`);
+    if (socket.user?.id) {
+        socket.join(`user_${socket.user.id}`);
+    }
     socket.on("join", (userId) => {
-        if (userId) {
-            socket.join(`user_${userId}`);
-            console.log(`Socket ${socket.id} unido al canal user_${userId}`);
+        if (!socket.user?.id) return;
+        const targetId = Number(socket.user.id);
+        if (Number(userId) === targetId) {
+            socket.join(`user_${targetId}`);
+            console.log(`Socket ${socket.id} unido al canal user_${targetId}`);
         }
     });
     socket.on("disconnect", () => {
         console.log(`Usuario desconectado: ${socket.id}`);
     });
 });
-
-const rateLimit = require('express-rate-limit');
-const { authenticateToken, requireRole } = require('./middleware/auth');
 
 // Rate limiting general para la API (300 req / min por IP)
 const apiLimiter = rateLimit({

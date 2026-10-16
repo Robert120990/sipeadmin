@@ -287,7 +287,11 @@ async function fetchCommitDetail(sha) {
                     additions: f.additions,
                     deletions: f.deletions,
                     changes: f.changes,
-                    patch: f.patch || null
+                    patch: f.patch
+                        ? f.patch
+                            .replace(/\b\d{8,12}:[A-Za-z0-9_-]{30,50}\b/g, '[REDACTED_TELEGRAM_TOKEN]')
+                            .replace(/(password\s*[:=]\s*['"])([^'"]+)(['"])/gi, '$1[REDACTED]$3')
+                        : null
                 }))
             };
         }

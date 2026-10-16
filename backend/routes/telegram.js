@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const { getDb } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
@@ -31,16 +32,24 @@ const telegramPerms = [
     'manage_telegram'
 ];
 
+const safeCompareSecret = (a, b) => {
+    if (!a || !b || typeof a !== 'string' || typeof b !== 'string') return false;
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+};
+
 /**
  * POST /api/telegram/webhook
  * Endpoint público de alta velocidad para recepción de updates de Telegram vía Webhook HTTPS (<40ms).
  * Responde inmediatamente con HTTP 200 y despacha el procesamiento de forma asíncrona.
  */
 router.post('/webhook', (req, res) => {
-    // Verificación opcional de secret token si está configurado en variables de entorno
+    // Verificación de secret token con comparación constante en tiempo
     const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
     const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    if (expectedSecret && secretHeader !== expectedSecret) {
+    if (expectedSecret && !safeCompareSecret(String(secretHeader || ''), String(expectedSecret))) {
         return res.status(403).json({ error: 'Secret token inválido' });
     }
 
@@ -804,9 +813,14 @@ router.post('/send-test-message', authenticateToken, requirePermission(telegramP
  */
 const authenticateN8nOrAdmin = (req, res, next) => {
     const apiKey = req.headers['x-api-key'] || req.headers['x-n8n-key'] || req.headers['x-n8n-token'];
-    const validKey = process.env.N8N_API_KEY || process.env.INTERNAL_API_KEY || process.env.TELEGRAM_API_KEY || process.env.TELEGRAM_BROADCAST_KEY;
+    const validKeys = [
+        process.env.N8N_API_KEY,
+        process.env.INTERNAL_API_KEY,
+        process.env.TELEGRAM_API_KEY,
+        process.env.TELEGRAM_BROADCAST_KEY
+    ].filter(Boolean);
 
-    if (apiKey && validKey && apiKey === validKey) {
+    if (apiKey && validKeys.some(k => safeCompareSecret(String(apiKey), String(k)))) {
         req.user = {
             id: 0,
             username: 'n8n-orchestrator',

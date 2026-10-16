@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
@@ -1379,19 +1380,29 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
 });
 
 // Middleware para permitir acceso tanto a administradores autenticados (JWT) como al orquestador remoto (169.58.207.115 / n8n) vía API key
-const VALID_SYNC_KEYS = [
+const safeCompareSyncKey = (a, b) => {
+    if (!a || !b || typeof a !== 'string' || typeof b !== 'string') return false;
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+};
+
+const getValidSyncKeys = () => [
     process.env.INTERNAL_API_KEY,
     process.env.N8N_API_KEY,
     process.env.SYNC_API_KEY,
+    process.env.PORTAL_SYNC_API_KEY,
     process.env.TELEGRAM_API_KEY,
     process.env.TELEGRAM_BROADCAST_KEY,
-    'sipe_orchestrator_2026_secure_token'
+    process.env.NODE_ENV !== 'production' ? 'sipe_orchestrator_2026_secure_token' : null
 ].filter(Boolean);
 
 const authenticateSyncOrAdmin = (req, res, next) => {
     const apiKey = req.headers['x-api-key'] || req.headers['x-n8n-key'] || req.headers['x-n8n-token'] || req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+    const validKeys = getValidSyncKeys();
 
-    if (apiKey && VALID_SYNC_KEYS.includes(apiKey)) {
+    if (apiKey && validKeys.some(k => safeCompareSyncKey(String(apiKey), String(k)))) {
         req.user = {
             id: 0,
             username: 'remote-orchestrator-169',
@@ -1838,8 +1849,23 @@ router.post('/operaciones/portal/ajustar-costos-pedido', authenticateToken, requ
 // =========================================================================
 // SERVICIOS DE ENERGÍA SOLAR Y ALMACENAMIENTO (BATERÍAS)
 // =========================================================================
+const energiaSolarViewPerms = [
+    '/dashboard/operaciones/energia-solar',
+    '/dashboard/consultas/ia-asistente',
+    '/dashboard/estrategia/torre-control',
+    'view_direccion_estrategica'
+];
 
-router.get('/energia/instalaciones', authenticateToken, async (req, res) => {
+const horasPicoViewPerms = [
+    '/dashboard/consultas/estaciones/ventas',
+    '/dashboard/consultas/estaciones/resumen-cierre',
+    '/dashboard/consultas/ia-asistente',
+    '/dashboard/estrategia/torre-control',
+    'view_direccion_estrategica',
+    'view_ventas'
+];
+
+router.get('/energia/instalaciones', authenticateToken, requirePermission(energiaSolarViewPerms), async (req, res) => {
     try {
         const data = await solarEnergyService.getInstalacionesSolares();
         res.json({ success: true, data });
@@ -1848,7 +1874,7 @@ router.get('/energia/instalaciones', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/energia/ahorro-diario', authenticateToken, async (req, res) => {
+router.get('/energia/ahorro-diario', authenticateToken, requirePermission(energiaSolarViewPerms), async (req, res) => {
     try {
         const { fecha, estacion_id } = req.query;
         const data = await solarEnergyService.getSolarAhorroDiario(fecha, estacion_id);
@@ -1858,7 +1884,7 @@ router.get('/energia/ahorro-diario', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/energia/ahorro-mensual', authenticateToken, async (req, res) => {
+router.get('/energia/ahorro-mensual', authenticateToken, requirePermission(energiaSolarViewPerms), async (req, res) => {
     try {
         const { anio, mes, year, month, estacion_id } = req.query;
         const data = await solarEnergyService.getSolarAhorroMensual(year || anio, month || mes, estacion_id);
@@ -1868,7 +1894,7 @@ router.get('/energia/ahorro-mensual', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/energia/ahorro-rango', authenticateToken, async (req, res) => {
+router.get('/energia/ahorro-rango', authenticateToken, requirePermission(energiaSolarViewPerms), async (req, res) => {
     try {
         const { fecha_desde, fecha_hasta, estacion_id } = req.query;
         const data = await solarEnergyService.getSolarAhorroRango(fecha_desde, fecha_hasta, estacion_id);
@@ -1878,7 +1904,7 @@ router.get('/energia/ahorro-rango', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/energia/estado-actual', authenticateToken, async (req, res) => {
+router.get('/energia/estado-actual', authenticateToken, requirePermission(energiaSolarViewPerms), async (req, res) => {
     try {
         const data = await solarEnergyService.getSolarEstadoActual();
         res.json({ success: true, data });
@@ -1891,7 +1917,7 @@ router.get('/energia/estado-actual', authenticateToken, async (req, res) => {
 // SERVICIOS DE ANÁLISIS DE HORAS PICO DE VENTA
 // =========================================================================
 
-router.get('/ventas/horas-pico', authenticateToken, async (req, res) => {
+router.get('/ventas/horas-pico', authenticateToken, requirePermission(horasPicoViewPerms), async (req, res) => {
     try {
         const { fecha, branch_id } = req.query;
         const data = await salesHourlyService.getHorasPicoVentas(fecha, branch_id);
@@ -1901,7 +1927,7 @@ router.get('/ventas/horas-pico', authenticateToken, async (req, res) => {
     }
 });
 
-router.get('/ventas/horas-pico-rango', authenticateToken, async (req, res) => {
+router.get('/ventas/horas-pico-rango', authenticateToken, requirePermission(horasPicoViewPerms), async (req, res) => {
     try {
         const { fecha_desde, fecha_hasta, branch_id } = req.query;
         const data = await salesHourlyService.getHorasPicoRango(fecha_desde, fecha_hasta, branch_id);

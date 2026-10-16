@@ -61,6 +61,16 @@ async function savePortalCredentials({ user, password, url }) {
     if (!cleanUser) throw new Error('El usuario o correo del portal es requerido');
     if (!cleanPass) throw new Error('La contraseña del portal es requerida');
 
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(cleanUrl);
+    } catch (_) {
+        throw new Error('La URL del portal no tiene un formato válido');
+    }
+    if (parsedUrl.protocol !== 'https:') {
+        throw new Error('La URL del portal debe utilizar el protocolo seguro HTTPS');
+    }
+
     const [existing] = await db.query("SELECT id FROM external_configs WHERE type = 'energy_latam' LIMIT 1");
     if (existing.length > 0) {
         await db.query(
@@ -775,8 +785,12 @@ async function checkPortalStatus() {
         const isInvalidCreds = pageText.includes('contraseña incorrecta') || pageText.includes('ha fallado');
         const isSuccess = !finalUrl.includes('/login') && (latestDoGet?.sellToList?.length > 0 || pageText.includes('Fondos disponibles') || pageText.includes('Resumen de cuenta'));
 
-        // Guardar captura para previsualización en frontend
-        const screenshotFile = path.join(__dirname, '..', 'public', 'portal_diagnostic.png');
+        // Guardar captura en directorio privado data/ para previsualización en frontend vía base64
+        const dataDir = path.join(__dirname, '..', 'data');
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
+        const screenshotFile = path.join(dataDir, 'portal_diagnostic.png');
         try {
             await page.screenshot({ path: screenshotFile });
         } catch (e) { /* ignore */ }

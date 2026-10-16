@@ -3,8 +3,14 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../db');
-const { authenticateToken, requirePermission, requireRole, JWT_SECRET, revokeUser, restoreUser } = require('../middleware/auth');
+const { authenticateToken, requirePermission, requireRole, isAdminUser, JWT_SECRET, revokeUser, restoreUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+
+const isRoleRowAdmin = (roleRow) => {
+    if (!roleRow) return false;
+    const name = String(roleRow.name || '').toLowerCase();
+    return Number(roleRow.id) === 1 || name === 'admin' || name === 'administrator' || name === 'administrador';
+};
 
 const withRetry = async (fn, retries = 2) => {
     try {
@@ -109,9 +115,13 @@ router.post('/users', authenticateToken, requirePermission(['/dashboard/users', 
 
     try {
         const db = getDb();
-        const [roleRows] = await db.query('SELECT id FROM roles WHERE id = ?', [cleanRoleId]);
+        const [roleRows] = await db.query('SELECT id, name FROM roles WHERE id = ?', [cleanRoleId]);
         if (roleRows.length === 0) {
             return res.status(400).json({ message: 'El rol seleccionado no existe en el sistema.' });
+        }
+
+        if (!isAdminUser(req.user) && (cleanRoleId === 1 || isRoleRowAdmin(roleRows[0]))) {
+            return res.status(403).json({ message: 'Solo un Administrador puede asignar el rol de Administrador.' });
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -148,10 +158,23 @@ router.put('/users/:id', authenticateToken, requirePermission(['/dashboard/users
 
     try {
         const db = getDb();
+        if (!isAdminUser(req.user)) {
+            const [targetRows] = await db.query(
+                'SELECT u.role_id, r.name as role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?',
+                [id]
+            );
+            if (targetRows.length > 0 && isRoleRowAdmin({ id: targetRows[0].role_id, name: targetRows[0].role_name })) {
+                return res.status(403).json({ message: 'Solo un Administrador puede modificar una cuenta de Administrador.' });
+            }
+        }
+
         if (cleanRoleId !== undefined) {
-            const [roleRows] = await db.query('SELECT id FROM roles WHERE id = ?', [cleanRoleId]);
+            const [roleRows] = await db.query('SELECT id, name FROM roles WHERE id = ?', [cleanRoleId]);
             if (roleRows.length === 0) {
                 return res.status(400).json({ message: 'El rol seleccionado no existe en el sistema.' });
+            }
+            if (!isAdminUser(req.user) && (cleanRoleId === 1 || isRoleRowAdmin(roleRows[0]))) {
+                return res.status(403).json({ message: 'Solo un Administrador puede asignar el rol de Administrador.' });
             }
         }
 
@@ -203,6 +226,15 @@ router.delete('/users/:id', authenticateToken, requirePermission(['/dashboard/us
         if (Number(req.user.id) === parseInt(id, 10)) {
             return res.status(400).json({ message: 'No puedes eliminar tu propio usuario' });
         }
+        if (!isAdminUser(req.user)) {
+            const [targetRows] = await db.query(
+                'SELECT u.role_id, r.name as role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?',
+                [id]
+            );
+            if (targetRows.length > 0 && isRoleRowAdmin({ id: targetRows[0].role_id, name: targetRows[0].role_name })) {
+                return res.status(403).json({ message: 'Solo un Administrador puede eliminar una cuenta de Administrador.' });
+            }
+        }
         await db.query('DELETE FROM users WHERE id = ?', [id]);
         revokeUser(id);
         res.json({ message: 'Usuario eliminado exitosamente' });
@@ -222,6 +254,15 @@ router.put('/users/:id/status', authenticateToken, requirePermission(['/dashboar
     }
     try {
         const db = getDb();
+        if (!isAdminUser(req.user)) {
+            const [targetRows] = await db.query(
+                'SELECT u.role_id, r.name as role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?',
+                [id]
+            );
+            if (targetRows.length > 0 && isRoleRowAdmin({ id: targetRows[0].role_id, name: targetRows[0].role_name })) {
+                return res.status(403).json({ message: 'Solo un Administrador puede modificar el estado de un Administrador.' });
+            }
+        }
         await db.query('UPDATE users SET status = ? WHERE id = ?', [status, id]);
         if (status === 'inactive') {
             revokeUser(id);

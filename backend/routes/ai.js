@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const { GoogleGenAI } = require('@google/genai');
-const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { authenticateToken, requirePermission, isAdminUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const {
     getGeminiApiKey,
@@ -52,6 +53,50 @@ const DEFAULT_AI_SUGGESTIONS = [
     'Saldos en bancos'
 ];
 
+const safeCompareKeys = (a, b) => {
+    if (!a || !b || typeof a !== 'string' || typeof b !== 'string') return false;
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+};
+
+const userHasAnyPerm = (user, allowedPerms = []) => {
+    if (!user || user.isApiKey || isAdminUser(user)) return true;
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    return allowedPerms.some(p => perms.includes(p));
+};
+
+const PERMS_BANCOS = [
+    '/dashboard/bancos/saldos',
+    '/dashboard/bancos/cuentas',
+    '/dashboard/bancos/estado-cuenta',
+    'view_direccion_estrategica',
+    '/dashboard/estrategia/torre-control',
+    '/dashboard/estrategia/flujo-caja'
+];
+const PERMS_CHEQUERA = [
+    '/dashboard/bancos/chequeras',
+    '/dashboard/bancos/saldos',
+    '/dashboard/bancos/cuentas',
+    'view_direccion_estrategica',
+    '/dashboard/estrategia/torre-control'
+];
+const PERMS_ANDELSA = [
+    '/dashboard/consultas/ia-asistente',
+    'view_direccion_estrategica',
+    '/dashboard/estrategia/torre-control',
+    '/dashboard/estrategia/rentabilidad'
+];
+const PERMS_VENTAS_OPERACIONES = [
+    '/dashboard/consultas/ia-asistente',
+    'view_direccion_estrategica',
+    '/dashboard/estrategia/torre-control',
+    '/dashboard/consultas/estaciones/ventas',
+    '/dashboard/consultas/estaciones/cierres',
+    '/dashboard/operaciones/energia-solar'
+];
+
 /**
  * Middleware de autenticación flexible para el AI Gateway y automatizaciones:
  * Permite el acceso si viene una cabecera `x-api-key` válida
@@ -59,9 +104,15 @@ const DEFAULT_AI_SUGGESTIONS = [
  */
 const authenticateAiRequest = (req, res, next) => {
     const apiKey = req.headers?.['x-api-key'] || req.headers?.['X-API-Key'];
-    const validKey = process.env.AI_GATEWAY_KEY || process.env.PORTAL_SYNC_API_KEY || 'sipe-ai-gateway-2026';
+    const validKeys = [
+        process.env.AI_GATEWAY_KEY,
+        process.env.PORTAL_SYNC_API_KEY,
+        process.env.INTERNAL_API_KEY,
+        process.env.N8N_API_KEY,
+        process.env.NODE_ENV !== 'production' ? 'sipe-ai-gateway-2026' : null
+    ].filter(Boolean);
 
-    if (apiKey && apiKey === validKey) {
+    if (apiKey && validKeys.some(k => safeCompareKeys(String(apiKey), String(k)))) {
         req.user = {
             id: 0,
             username: 'ai-gateway-agent',
@@ -275,6 +326,9 @@ const handleAiQuery = async (req, res) => {
 
         // 1. INTENT: SOLAR
         if (parsed.isSolar) {
+            if (!userHasAnyPerm(req.user, PERMS_VENTAS_OPERACIONES)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para consultar métricas de energía solar.' });
+            }
             intent = 'solar';
             const targetStation = stationId || (parsed.matchedStation
                 ? (parsed.matchedStation.branch_id || parsed.matchedStation.id || parsed.matchedStation.name)
@@ -341,6 +395,9 @@ const handleAiQuery = async (req, res) => {
             parsed.isAndelsaFinanzasResumen ||
             parsed.isAndelsaRelated
         ) {
+            if (!userHasAnyPerm(req.user, PERMS_ANDELSA)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para consultar información financiera de Andelsa.' });
+            }
             intent = 'andelsa';
             const sDate = parsed.startDate || startDate || null;
             const eDate = parsed.endDate || endDate || null;
@@ -469,6 +526,9 @@ const handleAiQuery = async (req, res) => {
         }
         // 3. INTENT: HORAS PICO
         else if (parsed.isHourlyPeak) {
+            if (!userHasAnyPerm(req.user, PERMS_VENTAS_OPERACIONES)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para consultar horas pico de ventas.' });
+            }
             intent = 'horas_pico';
             const branchId = parsed.matchedStation ? (parsed.matchedStation.saas_branch_id || parsed.matchedStation.branch_id || null) : null;
             const peakData = (parsed.isRange && parsed.startDate && parsed.endDate)
@@ -497,6 +557,9 @@ const handleAiQuery = async (req, res) => {
         }
         // 4. INTENT: CHEQUERA
         else if (/\b(chequera|chequeras|cheques?|saldo en chequera|saldos en chequera)\b/i.test(norm)) {
+            if (!userHasAnyPerm(req.user, PERMS_CHEQUERA)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para consultar saldos de chequera.' });
+            }
             intent = 'chequera';
             const cheqData = await getSaldosChequeraData();
             replyHtml = formatChequeraMessage(cheqData);
@@ -517,6 +580,9 @@ const handleAiQuery = async (req, res) => {
         }
         // 5. INTENT: BANCOS
         else if (parsed.matchedBank || /\b(banco|bancos|saldo bancario|saldos bancarios|saldo en banco|saldos en bancos|tesoreria|cuentas bancarias)\b/i.test(norm)) {
+            if (!userHasAnyPerm(req.user, PERMS_BANCOS)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para consultar saldos bancarios.' });
+            }
             intent = 'bancos';
             const bancosData = await getSaldosBancosData();
             replyHtml = parsed.matchedBank
@@ -539,6 +605,9 @@ const handleAiQuery = async (req, res) => {
         }
         // 6. INTENT: ALERTAS
         else if (parsed.isAlertas) {
+            if (!userHasAnyPerm(req.user, PERMS_VENTAS_OPERACIONES)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para consultar alertas de cierres.' });
+            }
             intent = 'alertas';
             const targetDate = parsed.targetDate || getIsoDate(-1);
             const consolData = await getConsolidadoVentasSafe(targetDate);
@@ -571,6 +640,9 @@ const handleAiQuery = async (req, res) => {
             parsed.matchedFuel ||
             /\b(venta|ventas|galon|galones|galonaje|combustible|combustibles|estacion|estaciones|gasolinera|gasolineras|pista|vendio|vendieron|cierre|cierres|resumen)\b/i.test(norm)
         ) {
+            if (!userHasAnyPerm(req.user, PERMS_VENTAS_OPERACIONES)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para consultar ventas de estaciones.' });
+            }
             intent = 'ventas';
             const targetDate = parsed.targetDate || getIsoDate(-1);
             const consolData = await getConsolidadoVentasSafe(targetDate);
@@ -625,6 +697,9 @@ const handleAiQuery = async (req, res) => {
         }
         // 8. INTENT: GENERAL / CONVERSACIONAL
         else {
+            if (!userHasAnyPerm(req.user, PERMS_VENTAS_OPERACIONES)) {
+                return res.status(403).json({ ok: false, message: 'No tiene permisos para acceder al Asistente IA.' });
+            }
             intent = 'general';
             const targetDate = parsed.targetDate || getIsoDate(-1);
             let aiReply = null;
@@ -634,10 +709,10 @@ const handleAiQuery = async (req, res) => {
                     prompt: rawQuery,
                     chatId: req.user?.id || 'ai_gateway_session',
                     effectivePerms: {
-                        ventas: true,
-                        saldos_banco: true,
-                        saldos_chequera: true,
-                        alertas: true
+                        ventas: userHasAnyPerm(req.user, PERMS_VENTAS_OPERACIONES),
+                        saldos_banco: userHasAnyPerm(req.user, PERMS_BANCOS),
+                        saldos_chequera: userHasAnyPerm(req.user, PERMS_CHEQUERA),
+                        alertas: userHasAnyPerm(req.user, PERMS_VENTAS_OPERACIONES)
                     }
                 });
             } catch (_aiErr) {
@@ -744,6 +819,13 @@ router.get('/schema-context', authenticateAiRequest, handleSchemaContext);
  */
 const handleWebhooksTrigger = async (req, res) => {
     try {
+        if (!userHasAnyPerm(req.user, ['/dashboard/seguridad/telegram', 'manage_telegram', 'view_direccion_estrategica'])) {
+            return res.status(403).json({
+                ok: false,
+                message: 'No tiene permisos para disparar alertas de Telegram.'
+            });
+        }
+
         const {
             event,
             fecha = null,
@@ -907,7 +989,18 @@ const handleSolarAndelsaDashboard = async (req, res) => {
     }
 };
 
-router.get('/solar-andelsa/dashboard', authenticateToken, handleSolarAndelsaDashboard);
+router.get(
+    '/solar-andelsa/dashboard',
+    authenticateToken,
+    requirePermission([
+        '/dashboard/consultas/ia-asistente',
+        '/dashboard/estrategia/torre-control',
+        'view_direccion_estrategica',
+        '/dashboard/consultas/estaciones/ventas',
+        '/dashboard/operaciones/energia-solar'
+    ]),
+    handleSolarAndelsaDashboard
+);
 
 router.authenticateAiRequest = authenticateAiRequest;
 router.handleAiQuery = handleAiQuery;

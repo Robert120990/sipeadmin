@@ -249,7 +249,7 @@ router.get('/planillas/pagos', authenticateToken, requirePermission(PERMISSION_R
 /**
  * 11. Registrar formas de pago de planilla y generar movimientos bancarios (conciliables)
  */
-router.post('/planillas/pagar', authenticateToken, requirePermission(PERMISSION_REQUIRED), async (req, res) => {
+router.post('/planillas/pagar', authenticateToken, requirePermission(['pay_rrhh_planillas']), async (req, res) => {
     try {
         const { company_id, anio, mes, quincena, pagos } = req.body;
         if (!company_id || !anio || !mes || !quincena || !Array.isArray(pagos) || pagos.length === 0) {
@@ -275,7 +275,7 @@ router.post('/planillas/pagar', authenticateToken, requirePermission(PERMISSION_
 /**
  * 12. Anular un pago de planilla registrado y revertir movimiento bancario
  */
-router.delete('/planillas/pagos/:id', authenticateToken, requirePermission(PERMISSION_REQUIRED), async (req, res) => {
+router.delete('/planillas/pagos/:id', authenticateToken, requirePermission(['pay_rrhh_planillas']), async (req, res) => {
     try {
         const { id } = req.params;
         const resultado = await rhPlanillaService.anularPagoPlanilla({

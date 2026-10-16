@@ -54,6 +54,13 @@ async function createAndEmitNotification(req, { userId, type, title, message, da
     }
 }
 
+const hasTaskManagePermission = (user) => {
+    if (!user) return false;
+    if (isAdminUser(user)) return true;
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    return taskPerms.some(p => perms.includes(p));
+};
+
 /**
  * GET /api/tasks/collaborators
  * Retrieve all active collaborators/users available for task assignment
@@ -85,7 +92,7 @@ router.get('/collaborators', authenticateToken, async (req, res) => {
 /**
  * GET /api/tasks
  * List tasks with optional filters
- * Allows all collaborators to collaborate and see team tasks or filter by assigned_to / solo_mias
+ * Allows collaborators with task permissions to see team tasks, while restricting users without manage_tasks to their own tasks
  */
 router.get('/', authenticateToken, async (req, res) => {
     try {
@@ -117,9 +124,10 @@ router.get('/', authenticateToken, async (req, res) => {
         `;
 
         const params = [];
+        const canViewAllTasks = hasTaskManagePermission(req.user);
 
-        // If "solo_mias" is true, show tasks assigned to or created by the current user
-        if (solo_mias === 'true') {
+        // If "solo_mias" is true or the user lacks task management permissions, show only tasks assigned to or created by the current user
+        if (solo_mias === 'true' || !canViewAllTasks) {
             query += ' AND (t.assigned_to = ? OR t.created_by = ?)';
             params.push(req.user.id, req.user.id);
         } else if (assigned_to) {
@@ -198,8 +206,9 @@ router.get('/kpis/summary', authenticateToken, async (req, res) => {
 
         let whereClause = 'WHERE 1=1';
         const params = [];
+        const canViewAllTasks = hasTaskManagePermission(req.user);
 
-        if (solo_mias === 'true') {
+        if (solo_mias === 'true' || !canViewAllTasks) {
             whereClause += ' AND (assigned_to = ? OR created_by = ?)';
             params.push(req.user.id, req.user.id);
         } else if (assigned_to) {
@@ -266,6 +275,10 @@ router.get('/:id', authenticateToken, async (req, res) => {
         }
 
         const task = tasks[0];
+        if (!hasTaskManagePermission(req.user) && Number(task.created_by) !== Number(req.user.id) && Number(task.assigned_to) !== Number(req.user.id)) {
+            return res.status(403).json({ message: 'No tiene permisos para ver esta tarea.' });
+        }
+
         task.checklist = typeof task.checklist === 'string' ? JSON.parse(task.checklist) : (task.checklist || []);
 
         // Fetch comments

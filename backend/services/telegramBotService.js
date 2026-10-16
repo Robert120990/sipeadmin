@@ -1012,6 +1012,49 @@ const handleCallbackQuery = async (cq) => {
         return;
     }
 
+    // Verificar autorización del usuario antes de ejecutar callbacks de datos sensibles
+    if (
+        data.startsWith('andelsa_') ||
+        data.startsWith('solar_') ||
+        data.startsWith('pdf_rep:') ||
+        data.startsWith('alert_')
+    ) {
+        try {
+            const db = getDb();
+            if (db && cq.from) {
+                const tgUser = await resolveTelegramUser(cq.from);
+                if (tgUser && !tgUser.activo) {
+                    await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                    return;
+                }
+                if (tgUser) {
+                    const effPerms = await getUserEffectivePermissions(tgUser);
+                    if (effPerms.inactiveInSipe) {
+                        await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                        return;
+                    }
+                    if (data.startsWith('pdf_rep:')) {
+                        const reqTopic = data.replace('pdf_rep:', '').trim().toLowerCase();
+                        if (reqTopic.includes('banco') && !effPerms.saldos_banco) {
+                            await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de bancos.');
+                            return;
+                        }
+                        if (reqTopic.includes('cheque') && !effPerms.saldos_chequera) {
+                            await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de chequera.');
+                            return;
+                        }
+                    }
+                    if (data.startsWith('alert_') && !effPerms.alertas && !effPerms.ventas) {
+                        await answerCallbackQuery(cq.id, '⛔ No tienes permiso para gestionar alertas.');
+                        return;
+                    }
+                }
+            }
+        } catch (authErr) {
+            console.warn('[TelegramBot] Warning verificando permisos en callback:', authErr.message);
+        }
+    }
+
     // Callbacks interactivos para Andelsa / Nova SaaS (sys.sipesv.com)
     if (data.startsWith('andelsa_')) {
         await answerCallbackQuery(cq.id, 'Consultando Nova SaaS...');
@@ -1269,29 +1312,15 @@ const resolveTelegramUser = async (from) => {
             return { ...user, telegram_username: username, first_name: firstName, last_name: lastName };
         }
 
-        // Intentar autovinculación inteligente con usuario de SIPE si coincide nombre o username
-        let matchedUserId = null;
-        try {
-            const fullName = `${firstName} ${lastName}`.trim();
-            const cleanUser = (username || '').replace(/^@/, '').trim();
-            const [matchedUsers] = await db.query(`
-                SELECT id, nombre, username, email FROM users 
-                WHERE (LOWER(TRIM(nombre)) = LOWER(TRIM(?)) AND ? != '')
-                   OR (LOWER(TRIM(username)) = LOWER(TRIM(?)) AND ? != '')
-                LIMIT 1
-            `, [fullName, fullName, cleanUser, cleanUser]);
-            if (matchedUsers && matchedUsers.length > 0) {
-                matchedUserId = matchedUsers[0].id;
-            }
-        } catch (_) {
-            // Silenciosamente continuar sin vinculación automática
-        }
+        // No realizar autovinculación por nombre de pantalla (first_name/last_name) para evitar suplantación.
+        // La vinculación con un usuario de SIPE (user_id) debe ser asignada por un Administrador en el panel de seguridad.
+        const matchedUserId = null;
 
-        // Si no existe, insertar con activo = 0 para aprobación administrativa
+        // Si no existe, insertar con activo = 0 y privilegios mínimos para aprobación administrativa
         const [insertRes] = await db.query(
             `INSERT INTO telegram_usuarios 
              (telegram_user_id, telegram_username, first_name, last_name, user_id, activo, permiso_ventas, permiso_saldos_banco, permiso_saldos_chequera, permiso_alertas, notas, last_interaction)
-             VALUES (?, ?, ?, ?, ?, 0, 1, 1, 1, 1, 'Solicitud automática desde Telegram', NOW())`,
+             VALUES (?, ?, ?, ?, ?, 0, 1, 0, 0, 0, 'Solicitud automática desde Telegram (pendiente de vinculación)', NOW())`,
             [telegramUserId, username, firstName, lastName, matchedUserId]
         );
 
@@ -1304,9 +1333,9 @@ const resolveTelegramUser = async (from) => {
             user_id: matchedUserId,
             activo: 0,
             permiso_ventas: 1,
-            permiso_saldos_banco: 1,
-            permiso_saldos_chequera: 1,
-            permiso_alertas: 1
+            permiso_saldos_banco: 0,
+            permiso_saldos_chequera: 0,
+            permiso_alertas: 0
         };
     } catch (err) {
         console.error('[TelegramBot] Error resolviendo usuario:', err.message);
