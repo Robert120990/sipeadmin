@@ -119,11 +119,9 @@ fi
 echo "Fecha fin: $(date)" >> "$DEBUG_FILE"
 echo "=== Despliegue completado con éxito ===" >> "$DEBUG_FILE"
 
-# Copiar DEBUG_FILE a frontend/dist y frontend/public para disponibilidad web inmediata
-mkdir -p "$PROJECT_DIR/frontend/dist"
-mkdir -p "$PROJECT_DIR/frontend/public"
-cp "$DEBUG_FILE" "$PROJECT_DIR/frontend/dist/deploy-debug.txt" 2>/dev/null || true
-cp "$DEBUG_FILE" "$PROJECT_DIR/frontend/public/deploy-debug.txt" 2>/dev/null || true
+# Asegurar que el log de despliegue tenga permisos restringidos y no quede expuesto en directorios públicos web
+chmod 600 "$DEBUG_FILE" 2>/dev/null || true
+rm -f "$PROJECT_DIR/frontend/dist/deploy-debug.txt" "$PROJECT_DIR/frontend/public/deploy-debug.txt" 2>/dev/null || true
 
 echo "=== [$(date)] Despliegue completado con éxito ==="
 

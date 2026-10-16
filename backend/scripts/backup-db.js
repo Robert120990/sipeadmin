@@ -110,7 +110,7 @@ const fallbackNodeDump = async (config, outputPath) => {
                         if (v === null || v === undefined) return 'NULL';
                         if (typeof v === 'number') return v;
                         if (v instanceof Date) return `'${v.toISOString().slice(0, 19).replace('T', ' ')}'`;
-                        if (typeof v === 'object') return `'${JSON.stringify(v).replace(/'/g, "\\'")}'`;
+                        if (typeof v === 'object') return `'${JSON.stringify(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
                         return `'${String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
                     }).join(', ');
                     gzip.write(`INSERT INTO \`${tableName}\` (${keys}) VALUES (${values});\n`);
@@ -133,7 +133,7 @@ const fallbackNodeDump = async (config, outputPath) => {
 
 const executeBackup = async () => {
     if (!fs.existsSync(BACKUP_DIR)) {
-        fs.mkdirSync(BACKUP_DIR, { recursive: true });
+        fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 });
     }
 
     const host = process.env.DB_HOST || 'localhost';
@@ -150,11 +150,13 @@ const executeBackup = async () => {
 
     try {
         await runMysqldump(host, port, user, password, database, outputPath);
+        try { fs.chmodSync(outputPath, 0o600); } catch (_) { /* ignore on Windows */ }
         console.log(`[Backup] Respaldo completado exitosamente vía mysqldump: ${fileName}`);
     } catch (err) {
         console.warn(`[Backup] mysqldump no disponible o falló (${err.message}). Ejecutando fallback...`);
         try {
             await fallbackNodeDump({ host, port, user, password, database }, outputPath);
+            try { fs.chmodSync(outputPath, 0o600); } catch (_) { /* ignore on Windows */ }
             console.log(`[Backup] Respaldo completado exitosamente vía conector Node.js: ${fileName}`);
         } catch (nodeErr) {
             console.error('[Backup Error] Falló el respaldo por completo:', nodeErr);

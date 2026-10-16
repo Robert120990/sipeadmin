@@ -6,10 +6,16 @@
 # ==============================================================================
 
 TASK_DIR="/home/rsboosted/sipe-tasks"
+[ -f "$TASK_DIR/.env" ] && source "$TASK_DIR/.env" 2>/dev/null || true
 LOG_FILE="$TASK_DIR/sync_portal.log"
 LOCK_FILE="/tmp/sipe_sync_portal.lock"
-API_URL="https://admin.sipesv.com/api/operaciones/portal/auto-sync-remote"
-API_KEY="sipe_orchestrator_2026_secure_token"
+API_URL="${SIPE_SYNC_PORTAL_URL:-https://admin.sipesv.com/api/operaciones/portal/auto-sync-remote}"
+API_KEY="${SYNC_API_KEY:-${PORTAL_SYNC_API_KEY:-}}"
+
+if [ -z "$API_KEY" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] Variable SYNC_API_KEY no configurada en el entorno." >> "$LOG_FILE"
+    exit 1
+fi
 
 # Evitar traslape de ejecuciones concurrentes
 if [ -f "$LOCK_FILE" ]; then

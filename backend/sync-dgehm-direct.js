@@ -6,8 +6,6 @@ const dotenv = require('dotenv');
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
 const { getDb } = require('./db');
 
 const logFile = path.join(__dirname, 'logs', 'dgehm_sync.log');

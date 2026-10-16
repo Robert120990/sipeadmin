@@ -1,22 +1,28 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const mysql = require('mysql2/promise');
 
 async function syncLocalDb() {
-  console.log('Connecting to VPS (5.252.55.29)...');
+  if (!process.env.VPS_DB_HOST || !process.env.VPS_DB_USER || !process.env.VPS_DB_PASSWORD) {
+    throw new Error('Faltan variables de entorno VPS_DB_HOST, VPS_DB_USER o VPS_DB_PASSWORD para sincronización.');
+  }
+
+  console.log(`Connecting to VPS (${process.env.VPS_DB_HOST})...`);
   const vps = await mysql.createConnection({
-    host: '5.252.55.29',
-    user: 'sysadmin',
-    password: 'QwErTy?123',
-    database: 'db_system_rrs',
-    port: 3306
+    host: process.env.VPS_DB_HOST,
+    user: process.env.VPS_DB_USER,
+    password: process.env.VPS_DB_PASSWORD,
+    database: process.env.VPS_RRS_DB_NAME || 'db_system_rrs',
+    port: Number(process.env.VPS_DB_PORT || 3306)
   });
 
-  console.log('Connecting to local MySQL (127.0.0.1)...');
+  console.log('Connecting to local MySQL...');
   const local = await mysql.createConnection({
-    host: '127.0.0.1',
-    user: 'root',
-    password: 'QwErTy123',
-    database: 'db_system_rrs',
-    port: 3306
+    host: process.env.DB_HOST || '127.0.0.1',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.RRS_DB_NAME || 'db_system_rrs',
+    port: Number(process.env.DB_PORT || 3306)
   });
 
   // Expand column sizes on local tables to fit production data

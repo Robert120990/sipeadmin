@@ -13,10 +13,11 @@ RUN pnpm install
 COPY . .
 
 # Build frontend
-RUN pnpm --filter frontend run build
+RUN pnpm --filter frontend run build && chown -R node:node /app
 
 EXPOSE 5001
 ENV NODE_ENV=production
 ENV PORT=5001
 
+USER node
 CMD ["node", "backend/server.js"]

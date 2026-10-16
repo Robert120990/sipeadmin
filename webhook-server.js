@@ -31,26 +31,29 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
         const sig = req.headers['x-hub-signature-256'] || '';
 
-        if (SECRET) {
-            if (!sig) {
+        if (!SECRET) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Webhook secret not configured on server' }));
+        }
+
+        if (!sig) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
+        }
+
+        try {
+            const hmac = crypto.createHmac('sha256', SECRET);
+            const digest = 'sha256=' + hmac.update(body).digest('hex');
+            const sigBuffer = Buffer.from(sig, 'utf8');
+            const digestBuffer = Buffer.from(digest, 'utf8');
+
+            if (sigBuffer.length !== digestBuffer.length || !crypto.timingSafeEqual(sigBuffer, digestBuffer)) {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ error: 'Missing x-hub-signature-256 header' }));
+                return res.end(JSON.stringify({ error: 'Invalid signature' }));
             }
-
-            try {
-                const hmac = crypto.createHmac('sha256', SECRET);
-                const digest = 'sha256=' + hmac.update(body).digest('hex');
-                const sigBuffer = Buffer.from(sig, 'utf8');
-                const digestBuffer = Buffer.from(digest, 'utf8');
-
-                if (sigBuffer.length !== digestBuffer.length || !crypto.timingSafeEqual(sigBuffer, digestBuffer)) {
-                    res.writeHead(401, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'Invalid signature' }));
-                }
-            } catch (cryptoErr) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ error: 'Signature verification failed' }));
-            }
+        } catch (cryptoErr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Signature verification failed' }));
         }
 
         try {
