@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1792459065.4584312,
-    "seen": 1792459071.6590607,
-    "ast_hash": "9014b720fd0088951af3489eec7c6ca3",
+    "mtime": 1792507776.7584956,
+    "seen": 1792507912.4130576,
+    "ast_hash": "1e626b8c9eb50527815b1818aefe5670",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -714,10 +714,10 @@
     "semantic_hash": "c42816a5f8c7238d45189bd31b17bec2"
   },
   "frontend/src/pages/ConsultaCambiosGithub.jsx": {
-    "mtime": 1791408358.5577514,
-    "seen": 1791822880.7085679,
-    "ast_hash": "a06e5cdf849f68177ed059cca4f2bc2a",
-    "semantic_hash": "a06e5cdf849f68177ed059cca4f2bc2a"
+    "mtime": 1792465999.8807864,
+    "seen": 1792507912.4130576,
+    "ast_hash": "4e94a08672a9a6a1356d029f99ee0aa4",
+    "semantic_hash": ""
   },
   "frontend/src/pages/Consultas.jsx": {
     "mtime": 1790452996.93818,
@@ -1320,27 +1320,27 @@
     "semantic_hash": ""
   },
   "backend/routes/tickets.js": {
-    "mtime": 1792452180.5353174,
-    "seen": 1792453416.2319262,
-    "ast_hash": "96f1bfdb1b676e03ca201064430ead7a",
+    "mtime": 1792465822.7510078,
+    "seen": 1792507912.4130576,
+    "ast_hash": "3f07488fce3a3f2869cf59abe910c4c7",
     "semantic_hash": ""
   },
   "backend/services/ticketService.js": {
-    "mtime": 1792459027.0350115,
-    "seen": 1792459071.6590607,
-    "ast_hash": "c8a698a2853af9eb88237172b7ff5741",
+    "mtime": 1792465966.7356484,
+    "seen": 1792507912.4130576,
+    "ast_hash": "4cf3e2d21b1d21c0f5d6765366a0c7a9",
     "semantic_hash": ""
   },
   "backend/test/supportTickets.test.js": {
-    "mtime": 1792453366.2642052,
-    "seen": 1792453416.2319262,
-    "ast_hash": "3f4911afbc86032651e4ead5035b7075",
+    "mtime": 1792465824.9021716,
+    "seen": 1792507912.4130576,
+    "ast_hash": "d6a2f058b5e8613eb1fbeae6ef8d17e1",
     "semantic_hash": ""
   },
   "frontend/src/components/CommandPalette.jsx": {
-    "mtime": 1792452801.2500732,
-    "seen": 1792453416.2319262,
-    "ast_hash": "1b14469f7bad4d022ec2c94d3a5d3e57",
+    "mtime": 1792507754.4673362,
+    "seen": 1792507912.4130576,
+    "ast_hash": "c7fd85bd5d7a9fdabd1bb23d8cac762c",
     "semantic_hash": ""
   },
   "frontend/src/components/tickets/QuickTicketModal.jsx": {
@@ -1410,15 +1410,15 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/SupportTickets.jsx": {
-    "mtime": 1792452876.6914873,
-    "seen": 1792453416.2319262,
-    "ast_hash": "8b4a23ea0017f2d6e7d0f1887a72ba1a",
+    "mtime": 1792459911.279888,
+    "seen": 1792507912.4130576,
+    "ast_hash": "ce1baf6d3a3e0a6e8196e5897ac9511f",
     "semantic_hash": ""
   },
   "frontend/src/utils/calculatorUtils.js": {
-    "mtime": 1792452297.1378949,
-    "seen": 1792453416.2329328,
-    "ast_hash": "5e9bd7c4f00187497504f62e26d72721",
+    "mtime": 1792507660.8389752,
+    "seen": 1792507912.4130576,
+    "ast_hash": "91d77efeadb2e09e092c6d2601c7e879",
     "semantic_hash": ""
   },
   "frontend/src/utils/ticketDiagnostics.js": {
