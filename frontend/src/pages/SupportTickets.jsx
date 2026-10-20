@@ -117,7 +117,11 @@ export default function SupportTickets() {
                         mine: mineOnly ? 'true' : undefined
                     }
                 }),
-                api.get('/tickets/stats')
+                api.get('/tickets/stats', {
+                    params: {
+                        mine: mineOnly ? 'true' : undefined
+                    }
+                })
             ]);
 
             setTickets(Array.isArray(listRes.data?.data) ? listRes.data.data : []);

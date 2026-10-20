@@ -1,7 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { getDb, getAccountingDb } = require('../db');
+const db = require('../db');
+const getDb = (...args) => db.getDb(...args);
+const getAccountingDb = (...args) => db.getAccountingDb(...args);
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const SIBLING_SAAS_UPLOADS = [
@@ -18,6 +20,13 @@ const ensureUploadsDir = () => {
 };
 
 const schemaInitializedPools = new WeakSet();
+const poolTicketColsMap = new WeakMap();
+
+const hasTicketCol = (pool, colName) => {
+    const colSet = pool ? poolTicketColsMap.get(pool) : null;
+    if (!colSet || colSet.size === 0) return true;
+    return colSet.has(colName);
+};
 
 const ensureTicketSchema = async (pool) => {
     if (!pool || schemaInitializedPools.has(pool)) return;
@@ -76,28 +85,28 @@ const ensureTicketSchema = async (pool) => {
         `);
 
         const extraColumns = [
-            ['admin_user_id', 'INT NULL AFTER user_id'],
-            ['source_system', "VARCHAR(40) NULL DEFAULT 'sys.sipesv.com' AFTER page_url"],
-            ['attachments_json', 'LONGTEXT NULL AFTER screenshot_url'],
-            ['diagnostics_json', 'LONGTEXT NULL AFTER attachments_json'],
-            ['diagnostic_relevance', "VARCHAR(30) NULL DEFAULT 'sin_errores' AFTER diagnostics_json"],
-            ['diagnostic_score', 'INT NOT NULL DEFAULT 0 AFTER diagnostic_relevance'],
-            ['include_in_ai_prompt', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER diagnostic_score'],
-            ['ai_notes', 'TEXT NULL AFTER include_in_ai_prompt'],
-            ['custom_logs', 'LONGTEXT NULL AFTER ai_notes'],
-            ['ai_mode', "VARCHAR(30) NOT NULL DEFAULT 'agent_prompt' AFTER custom_logs"],
-            ['agent_platform', "VARCHAR(40) NOT NULL DEFAULT 'antigravity' AFTER ai_mode"],
-            ['ai_bundled_at', 'DATETIME NULL AFTER agent_platform'],
-            ['agy_status', "VARCHAR(40) NOT NULL DEFAULT 'idle' AFTER ai_bundled_at"],
-            ['agy_model', "VARCHAR(80) NULL DEFAULT 'gemini-4-argon-high' AFTER agy_status"],
-            ['agy_plan_markdown', 'LONGTEXT NULL AFTER agy_model'],
-            ['agy_execution_log', 'LONGTEXT NULL AFTER agy_plan_markdown'],
-            ['agy_approved_by', 'VARCHAR(120) NULL AFTER agy_execution_log'],
-            ['agy_plan_version', 'INT NOT NULL DEFAULT 0 AFTER agy_approved_by'],
-            ['agy_telegram_msg_id', 'VARCHAR(64) NULL AFTER agy_plan_version'],
-            ['agy_updated_at', 'DATETIME NULL AFTER agy_telegram_msg_id'],
-            ['resolved_version', 'VARCHAR(50) NULL AFTER resolution_notes'],
-            ['resolved_by', 'INT NULL AFTER resolved_version']
+            ['admin_user_id', 'INT NULL'],
+            ['source_system', "VARCHAR(40) NULL DEFAULT 'sys.sipesv.com'"],
+            ['attachments_json', 'LONGTEXT NULL'],
+            ['diagnostics_json', 'LONGTEXT NULL'],
+            ['diagnostic_relevance', "VARCHAR(30) NULL DEFAULT 'sin_errores'"],
+            ['diagnostic_score', 'INT NOT NULL DEFAULT 0'],
+            ['include_in_ai_prompt', 'TINYINT(1) NOT NULL DEFAULT 0'],
+            ['ai_notes', 'TEXT NULL'],
+            ['custom_logs', 'LONGTEXT NULL'],
+            ['ai_mode', "VARCHAR(30) NOT NULL DEFAULT 'agent_prompt'"],
+            ['agent_platform', "VARCHAR(40) NOT NULL DEFAULT 'antigravity'"],
+            ['ai_bundled_at', 'DATETIME NULL'],
+            ['agy_status', "VARCHAR(40) NOT NULL DEFAULT 'idle'"],
+            ['agy_model', "VARCHAR(80) NULL DEFAULT 'gemini-4-argon-high'"],
+            ['agy_plan_markdown', 'LONGTEXT NULL'],
+            ['agy_execution_log', 'LONGTEXT NULL'],
+            ['agy_approved_by', 'VARCHAR(120) NULL'],
+            ['agy_plan_version', 'INT NOT NULL DEFAULT 0'],
+            ['agy_telegram_msg_id', 'VARCHAR(64) NULL'],
+            ['agy_updated_at', 'DATETIME NULL'],
+            ['resolved_version', 'VARCHAR(50) NULL'],
+            ['resolved_by', 'INT NULL']
         ];
 
         for (const [colName, colDef] of extraColumns) {
@@ -107,8 +116,20 @@ const ensureTicketSchema = async (pool) => {
                     await pool.query(`ALTER TABLE support_tickets ADD COLUMN ${colName} ${colDef}`);
                 }
             } catch (_) {
-                // Ignore if already exists
+                // Ignore if already exists or restricted
             }
+        }
+
+        try {
+            const [allCols] = await pool.query('SHOW COLUMNS FROM support_tickets');
+            if (Array.isArray(allCols) && allCols.length > 0) {
+                const colSet = new Set(allCols.map((c) => c.Field || c.COLUMN_NAME).filter(Boolean));
+                if (colSet.size > 0) {
+                    poolTicketColsMap.set(pool, colSet);
+                }
+            }
+        } catch (_) {
+            // Ignore in mock test pools
         }
 
         await pool.query(`
@@ -129,12 +150,12 @@ const ensureTicketSchema = async (pool) => {
         `);
 
         const msgExtraColumns = [
-            ['sender_type', "VARCHAR(30) NOT NULL DEFAULT 'user' AFTER ticket_id"],
-            ['sender_id', 'INT NULL AFTER sender_type'],
-            ['sender_user_id', 'INT NULL AFTER sender_id'],
-            ['sender_role', "VARCHAR(60) NOT NULL DEFAULT 'user' AFTER sender_name"],
-            ['source', "VARCHAR(30) NOT NULL DEFAULT 'web' AFTER sender_role"],
-            ['attachment_url', 'VARCHAR(500) NULL AFTER message']
+            ['sender_type', "VARCHAR(30) NOT NULL DEFAULT 'user'"],
+            ['sender_id', 'INT NULL'],
+            ['sender_user_id', 'INT NULL'],
+            ['sender_role', "VARCHAR(60) NOT NULL DEFAULT 'user'"],
+            ['source', "VARCHAR(30) NOT NULL DEFAULT 'web'"],
+            ['attachment_url', 'VARCHAR(500) NULL']
         ];
         for (const [colName, colDef] of msgExtraColumns) {
             try {
@@ -407,6 +428,11 @@ const sendTelegramSupportAlert = async (htmlText) => {
     }
 };
 
+const toApiUploadUrl = (url) => {
+    if (!url || typeof url !== 'string') return url;
+    return url.startsWith('/uploads/') ? `/api${url}` : url;
+};
+
 const enrichTicketRow = (r) => {
     if (!r) return null;
     let attachments = [];
@@ -417,8 +443,11 @@ const enrichTicketRow = (r) => {
             attachments = [];
         }
     }
-    if ((!Array.isArray(attachments) || attachments.length === 0) && r.screenshot_url) {
-        attachments = [{ url: r.screenshot_url, caption: '', annotated: false }];
+    const normalizedScreenshotUrl = toApiUploadUrl(r.screenshot_url);
+    if ((!Array.isArray(attachments) || attachments.length === 0) && normalizedScreenshotUrl) {
+        attachments = [{ url: normalizedScreenshotUrl, caption: '', annotated: false }];
+    } else if (Array.isArray(attachments)) {
+        attachments = attachments.map((a) => (a && a.url ? { ...a, url: toApiUploadUrl(a.url) } : a));
     }
 
     let diagnostics = null;
@@ -435,6 +464,7 @@ const enrichTicketRow = (r) => {
         code: r.ticket_code,
         creator_name: r.user_name,
         creator_username: r.user_name,
+        screenshot_url: normalizedScreenshotUrl,
         company_name: r.company_name || (r.source_system === 'admin.sipesv.com' ? 'SIPE Admin (admin.sipesv.com)' : 'SIPE SaaS (sys.sipesv.com)'),
         attachments: Array.isArray(attachments) ? attachments : [],
         diagnostics
@@ -475,6 +505,7 @@ const getTicketById = async (id) => {
     const enriched = enrichTicketRow(rows[0]);
     const normalizedMessages = (messages || []).map((m) => ({
         ...m,
+        attachment_url: toApiUploadUrl(m.attachment_url),
         sender_user_id: m.sender_user_id ?? m.sender_id ?? null,
         sender_role: m.sender_role || (m.sender_type === 'user' ? 'user' : 'tech'),
         source: m.source || (m.sender_type === 'telegram' ? 'telegram' : 'web')
@@ -691,8 +722,18 @@ const getTickets = async ({
     const params = [];
 
     if (!canManage || mineOnly) {
-        const userConds = ['t.admin_user_id = ?', '(t.source_system = "admin.sipesv.com" AND t.user_id = ?)'];
-        params.push(Number(userId || 0), Number(userId || 0));
+        const userConds = [];
+        if (hasTicketCol(pool, 'admin_user_id')) {
+            userConds.push('t.admin_user_id = ?');
+            params.push(Number(userId || 0));
+        }
+        if (hasTicketCol(pool, 'source_system')) {
+            userConds.push("(t.source_system = 'admin.sipesv.com' AND t.user_id = ?)");
+            params.push(Number(userId || 0));
+        } else {
+            userConds.push('t.user_id = ?');
+            params.push(Number(userId || 0));
+        }
         if (userName) {
             userConds.push('LOWER(t.user_name) = LOWER(?)');
             params.push(String(userName));
@@ -783,8 +824,18 @@ const getTicketStats = async ({ userId = null, userName = null, username = null,
     const params = [];
 
     if (!canManage && userId) {
-        const userConds = ['admin_user_id = ?', '(source_system = "admin.sipesv.com" AND user_id = ?)'];
-        params.push(Number(userId), Number(userId));
+        const userConds = [];
+        if (hasTicketCol(pool, 'admin_user_id')) {
+            userConds.push('admin_user_id = ?');
+            params.push(Number(userId));
+        }
+        if (hasTicketCol(pool, 'source_system')) {
+            userConds.push("(source_system = 'admin.sipesv.com' AND user_id = ?)");
+            params.push(Number(userId));
+        } else {
+            userConds.push('user_id = ?');
+            params.push(Number(userId));
+        }
         if (userName) {
             userConds.push('LOWER(user_name) = LOWER(?)');
             params.push(String(userName));
@@ -796,6 +847,10 @@ const getTicketStats = async ({ userId = null, userName = null, username = null,
         where.push(`(${userConds.join(' OR ')})`);
     }
 
+    const aiSumExpr = hasTicketCol(pool, 'include_in_ai_prompt')
+        ? "SUM(CASE WHEN include_in_ai_prompt = 1 AND status IN ('abierto', 'en_proceso') THEN 1 ELSE 0 END)"
+        : '0';
+
     const [rows] = await pool.query(
         `SELECT
             COUNT(*) AS total,
@@ -804,7 +859,7 @@ const getTicketStats = async ({ userId = null, userName = null, username = null,
             SUM(CASE WHEN status = 'resuelto' THEN 1 ELSE 0 END) AS resueltos,
             SUM(CASE WHEN status = 'cerrado' THEN 1 ELSE 0 END) AS cerrados,
             SUM(CASE WHEN priority = 'urgente' AND status IN ('abierto', 'en_proceso') THEN 1 ELSE 0 END) AS urgentes_pendientes,
-            SUM(CASE WHEN include_in_ai_prompt = 1 AND status IN ('abierto', 'en_proceso') THEN 1 ELSE 0 END) AS seleccionados_ia
+            ${aiSumExpr} AS seleccionados_ia
          FROM support_tickets
          WHERE ${where.join(' AND ')}`,
         params
@@ -1027,8 +1082,19 @@ const addTicketMessage = async (
 const getPendingResolvedForUser = async (userId, userName = null, username = null) => {
     if (!userId) return [];
     const { pool } = await getTicketPool();
-    const userConds = ['t.admin_user_id = ?', '(t.source_system = "admin.sipesv.com" AND t.user_id = ?)'];
-    const params = [Number(userId), Number(userId)];
+    const userConds = [];
+    const params = [];
+    if (hasTicketCol(pool, 'admin_user_id')) {
+        userConds.push('t.admin_user_id = ?');
+        params.push(Number(userId));
+    }
+    if (hasTicketCol(pool, 'source_system')) {
+        userConds.push("(t.source_system = 'admin.sipesv.com' AND t.user_id = ?)");
+        params.push(Number(userId));
+    } else {
+        userConds.push('t.user_id = ?');
+        params.push(Number(userId));
+    }
     if (userName) {
         userConds.push('LOWER(t.user_name) = LOWER(?)');
         params.push(String(userName));
@@ -1053,8 +1119,14 @@ const getPendingResolvedForUser = async (userId, userName = null, username = nul
 
 const acknowledgeResolution = async (id, userId, userName = null, username = null) => {
     const { pool } = await getTicketPool();
-    const userConds = ['admin_user_id = ?', 'user_id = ?'];
-    const params = [Number(id), Number(userId || 0), Number(userId || 0)];
+    const userConds = [];
+    const params = [Number(id)];
+    if (hasTicketCol(pool, 'admin_user_id')) {
+        userConds.push('admin_user_id = ?');
+        params.push(Number(userId || 0));
+    }
+    userConds.push('user_id = ?');
+    params.push(Number(userId || 0));
     if (userName) {
         userConds.push('LOWER(user_name) = LOWER(?)');
         params.push(String(userName));
@@ -1080,30 +1152,48 @@ const updateTicketAiReview = async (
     const { pool } = await getTicketPool();
     const sets = [];
     const params = [];
-    if (includeInAiPrompt !== undefined) {
+    if (includeInAiPrompt !== undefined && hasTicketCol(pool, 'include_in_ai_prompt')) {
         sets.push('include_in_ai_prompt = ?');
         params.push(includeInAiPrompt ? 1 : 0);
     }
-    if (aiNotes !== undefined) {
+    if (aiNotes !== undefined && hasTicketCol(pool, 'ai_notes')) {
         sets.push('ai_notes = ?');
         params.push(aiNotes ? String(aiNotes).trim() : null);
     }
-    if (customLogs !== undefined) {
+    if (customLogs !== undefined && hasTicketCol(pool, 'custom_logs')) {
         sets.push('custom_logs = ?');
         params.push(customLogs ? String(customLogs).trim() : null);
     }
-    if (aiMode !== undefined) {
+    if (aiMode !== undefined && hasTicketCol(pool, 'ai_mode')) {
         sets.push('ai_mode = ?');
         params.push(aiMode === 'internal_api' ? 'internal_api' : 'agent_prompt');
     }
-    if (agentPlatform !== undefined) {
+    if (agentPlatform !== undefined && hasTicketCol(pool, 'agent_platform')) {
         sets.push('agent_platform = ?');
         params.push(String(agentPlatform || 'antigravity').slice(0, 40));
     }
     if (sets.length === 0) return getTicketById(id);
 
     params.push(id);
-    await pool.query(`UPDATE support_tickets SET ${sets.join(', ')} WHERE id = ?`, params);
+    try {
+        await pool.query(`UPDATE support_tickets SET ${sets.join(', ')} WHERE id = ?`, params);
+    } catch (_) {
+        // Fallback a solo columnas base v297 si alguna columna extendida no existe
+        const fallbackSets = [];
+        const fallbackParams = [];
+        if (includeInAiPrompt !== undefined) {
+            fallbackSets.push('include_in_ai_prompt = ?');
+            fallbackParams.push(includeInAiPrompt ? 1 : 0);
+        }
+        if (aiNotes !== undefined) {
+            fallbackSets.push('ai_notes = ?');
+            fallbackParams.push(aiNotes ? String(aiNotes).trim() : null);
+        }
+        if (fallbackSets.length > 0) {
+            fallbackParams.push(id);
+            await pool.query(`UPDATE support_tickets SET ${fallbackSets.join(', ')} WHERE id = ?`, fallbackParams);
+        }
+    }
     return getTicketById(id);
 };
 
@@ -1185,10 +1275,20 @@ const saveAndGenerateAiBundle = async ({ items = [], extraContext = '', aiMode =
     const tickets = await getAiBundleTickets({ ticketIds: ids.length > 0 ? ids : null });
     if (tickets.length > 0) {
         const ticketIds = tickets.map((t) => t.id);
-        await pool.query(
-            `UPDATE support_tickets SET ai_bundled_at = NOW(), status = CASE WHEN status = 'abierto' THEN 'en_proceso' ELSE status END WHERE id IN (${ticketIds.map(() => '?').join(',')})`,
-            ticketIds
-        );
+        const setBundled = hasTicketCol(pool, 'ai_bundled_at')
+            ? "ai_bundled_at = NOW(), status = CASE WHEN status = 'abierto' THEN 'en_proceso' ELSE status END"
+            : "status = CASE WHEN status = 'abierto' THEN 'en_proceso' ELSE status END";
+        try {
+            await pool.query(
+                `UPDATE support_tickets SET ${setBundled} WHERE id IN (${ticketIds.map(() => '?').join(',')})`,
+                ticketIds
+            );
+        } catch (_) {
+            await pool.query(
+                `UPDATE support_tickets SET status = CASE WHEN status = 'abierto' THEN 'en_proceso' ELSE status END WHERE id IN (${ticketIds.map(() => '?').join(',')})`,
+                ticketIds
+            );
+        }
     }
     const promptMarkdown = buildAiPromptPackage(tickets, { extraContext, agentPlatform, aiMode });
     return {
@@ -1373,8 +1473,7 @@ const syncRealtimeTicketUpdates = async (io) => {
     try {
         const { pool } = await getTicketPool();
         const [rows] = await pool.query(
-            `SELECT id, ticket_code, user_id, admin_user_id, user_name, status, subject,
-                    source_system, resolution_notes, resolved_by_name, updated_at, resolved_at
+            `SELECT *
              FROM support_tickets
              WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
              ORDER BY updated_at DESC
@@ -1390,8 +1489,19 @@ const syncRealtimeTicketUpdates = async (io) => {
                 resolvedAt: String(r.resolved_at || '')
             };
 
-            if (!watcherBootstrapped || !prev) {
+            if (!watcherBootstrapped) {
                 knownTicketStateCache.set(id, currState);
+                continue;
+            }
+
+            if (!prev) {
+                knownTicketStateCache.set(id, currState);
+                if (io) {
+                    const fullNewTicket = await getTicketById(id);
+                    if (fullNewTicket) {
+                        io.emit('ticket:created', fullNewTicket);
+                    }
+                }
                 continue;
             }
 
@@ -1441,6 +1551,14 @@ const syncRealtimeTicketUpdates = async (io) => {
                     io.emit('ticket:updated', fullTicket);
                     if (currState.status === 'resuelto') {
                         io.emit('ticket:resolved', fullTicket);
+                    }
+                }
+            } else if (prev.updatedAt !== currState.updatedAt) {
+                knownTicketStateCache.set(id, currState);
+                if (io) {
+                    const fullTicket = await getTicketById(id);
+                    if (fullTicket) {
+                        io.emit('ticket:updated', fullTicket);
                     }
                 }
             }

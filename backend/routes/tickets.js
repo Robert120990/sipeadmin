@@ -18,7 +18,7 @@ const getActorName = (user) => {
 // GET /api/tickets/stats
 router.get('/stats', authenticateToken, async (req, res) => {
     try {
-        const canManage = canManageTickets(req.user);
+        const canManage = canManageTickets(req.user) && req.query.mine !== 'true';
         const stats = await ticketService.getTicketStats({
             userId: req.user.id,
             userName: req.user.nombre || req.user.name,
