@@ -77,7 +77,7 @@ const getCleanStationName = (id, defaultTitulo) => {
     if (id === '008' && (upper.includes('COSTA') || upper === '008')) return 'Puma Costa del Sol';
     if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA') || upper === '014')) return 'Puma La Loma (San Martín)';
     if (id === '015' && (upper.includes('14') || upper === '015')) return 'Shell 14 Avenida';
-    if ((id === '016' || id === '7') && (upper.includes('POLIEDRO') || upper === '016' || upper === '7')) return 'Shell Poliedro';
+    if ((id === '016' || id === '7' || id === '12') && (upper.includes('POLIEDRO') || upper === '016' || upper === '7' || upper === '12')) return 'Shell Poliedro';
     if (upper.includes('POLIEDRO')) return 'Shell Poliedro';
     return defaultTitulo;
 };
@@ -101,8 +101,9 @@ const saasBranchMap = {
     '008': 8, // Costa del Sol -> Puma Costa del Sol
     'E-1': 8, // Costa del Sol alias
     '015': 2, // Shell 14 Avenida
-    '016': 7, // Shell Poliedro
-    '7': 7    // Shell Poliedro alias
+    '016': 12, // Shell Poliedro (nuevo branch_id = 12)
+    '7': 12,   // Shell Poliedro alias histórico
+    '12': 12   // Shell Poliedro alias directo
 };
 
 const branchToEmpId = {
@@ -112,8 +113,11 @@ const branchToEmpId = {
     4: '002',
     8: '008',
     6: '009',
-    7: '016'
+    7: '016',
+    12: '016'
 };
+
+const normalizeSaasBranchId = (bId) => (Number(bId) === 7 ? 12 : Number(bId));
 
 const OFFICIAL_ESTACIONES = [
     { id_empresa: '002', branch_id: 4, saas_branch_id: 4, titulo: 'Puma Miraflores', orden: 1 },
@@ -121,7 +125,7 @@ const OFFICIAL_ESTACIONES = [
     { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
     { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
     { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 },
-    { id_empresa: '016', branch_id: 7, saas_branch_id: 7, titulo: 'Shell Poliedro', orden: 6 }
+    { id_empresa: '016', branch_id: 12, legacy_branch_id: 7, saas_branch_id: 12, titulo: 'Shell Poliedro', orden: 6 }
 ];
 
 // Tokens y conceptos genéricos para auditoría de movimientos sin descripción suficiente
@@ -948,7 +952,17 @@ const getConsolidadoVentasData = async (date) => {
             const [saasSalesRows] = await withRetry(() => accountingDb.query(sqlSaasEstaciones, [date]));
             const saasEstMap = {};
             (saasSalesRows || []).forEach(r => {
-                saasEstMap[r.branch_id] = r;
+                const bId = normalizeSaasBranchId(r.branch_id);
+                if (!saasEstMap[bId]) {
+                    saasEstMap[bId] = { ...r, branch_id: bId };
+                } else {
+                    saasEstMap[bId].diesel = Number(saasEstMap[bId].diesel || 0) + Number(r.diesel || 0);
+                    saasEstMap[bId].regular = Number(saasEstMap[bId].regular || 0) + Number(r.regular || 0);
+                    saasEstMap[bId].super = Number(saasEstMap[bId].super || 0) + Number(r.super || 0);
+                    saasEstMap[bId].ion = Number(saasEstMap[bId].ion || 0) + Number(r.ion || 0);
+                    saasEstMap[bId].galonaje = Number(saasEstMap[bId].galonaje || 0) + Number(r.galonaje || 0);
+                    saasEstMap[bId].monto = Number(saasEstMap[bId].monto || 0) + Number(r.monto || 0);
+                }
             });
 
             estacionesLocal = OFFICIAL_ESTACIONES.map(st => {
@@ -1009,7 +1023,7 @@ const getConsolidadoVentasData = async (date) => {
             const [saasPreciosRows] = await withRetry(() => accountingDb.query(sqlSaasPrecios, [date]));
             const saasMargenMap = {};
             (saasPreciosRows || []).forEach(r => {
-                saasMargenMap[r.branch_id] = r;
+                saasMargenMap[normalizeSaasBranchId(r.branch_id)] = r;
             });
             margenesRows = OFFICIAL_ESTACIONES.map(st => {
                 const row = saasMargenMap[st.branch_id] || {};
@@ -1066,8 +1080,8 @@ const getConsolidadoVentasData = async (date) => {
                 `, [dateDesde7d, date]))
             ]);
 
-            const tankList = saasTankRows[0] || [];
-            const promedios7d = saas7dRows[0] || [];
+            const tankList = (saasTankRows[0] || []).map(t => ({ ...t, branch_id: normalizeSaasBranchId(t.branch_id) }));
+            const promedios7d = (saas7dRows[0] || []).map(p => ({ ...p, branch_id: normalizeSaasBranchId(p.branch_id) }));
 
             inventarioLocal = OFFICIAL_ESTACIONES.map(s => {
                 const bId = s.branch_id;
@@ -1087,8 +1101,9 @@ const getConsolidadoVentasData = async (date) => {
                 const nI = Math.round(getInv('I') * 100) / 100;
 
                 const getProm = (tipo) => {
-                    const row = promedios7d.find(p => p.branch_id === bId && p.tipo_combustible === tipo);
-                    return (Number(row?.total_7d || 0) / 7);
+                    const rows = promedios7d.filter(p => p.branch_id === bId && p.tipo_combustible === tipo);
+                    const total7d = rows.reduce((sum, r) => sum + Number(r?.total_7d || 0), 0);
+                    return (total7d / 7);
                 };
                 const pD = getProm('D'), pR = getProm('R'), pS = getProm('S'), pI = getProm('I');
 
@@ -1129,7 +1144,7 @@ const getConsolidadoVentasData = async (date) => {
             const [saasCierreRows] = await withRetry(() => accountingDb.query(sqlSaasCierre, [date]));
             const saasCierreMap = {};
             (saasCierreRows || []).forEach(r => {
-                saasCierreMap[r.branch_id] = r;
+                saasCierreMap[normalizeSaasBranchId(r.branch_id)] = r;
             });
 
             resumenCierreLocal = OFFICIAL_ESTACIONES.map(st => {
@@ -1886,20 +1901,31 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                     }
                 }
 
-                const estacionesLocal = saasEstRows.map(row => {
-                    const matchedOfficial = OFFICIAL_ESTACIONES.find(st => st.branch_id === Number(row.id_empresa) || String(st.id_empresa) === String(row.id_empresa));
-                    const cleanName = getCleanStationName(String(row.id_empresa), row.empresa) || (matchedOfficial ? matchedOfficial.titulo : row.empresa);
-                    return {
-                        id_empresa: String(matchedOfficial ? matchedOfficial.id_empresa : row.id_empresa),
+                const estacionesMap = new Map();
+                saasEstRows.forEach(row => {
+                    const normBranch = normalizeSaasBranchId(row.id_empresa);
+                    const matchedOfficial = OFFICIAL_ESTACIONES.find(st => st.branch_id === normBranch || String(st.id_empresa) === String(row.id_empresa));
+                    const empKey = String(matchedOfficial ? matchedOfficial.id_empresa : row.id_empresa);
+                    const cleanName = getCleanStationName(empKey, row.empresa) || (matchedOfficial ? matchedOfficial.titulo : row.empresa);
+                    const existing = estacionesMap.get(empKey) || {
+                        id_empresa: empKey,
                         empresa: cleanName,
-                        diesel: Math.round(Number(row.diesel || 0) * 100) / 100,
-                        regular: Math.round(Number(row.regular || 0) * 100) / 100,
-                        super: Math.round(Number(row.super || 0) * 100) / 100,
-                        ion: Math.round(Number(row.ion || 0) * 100) / 100,
-                        galonaje: Math.round(Number(row.galonaje || 0) * 100) / 100,
-                        venta: Math.round(Number(row.venta_estacion || 0) * 100) / 100
+                        diesel: 0,
+                        regular: 0,
+                        super: 0,
+                        ion: 0,
+                        galonaje: 0,
+                        venta: 0
                     };
+                    existing.diesel = Math.round((existing.diesel + Number(row.diesel || 0)) * 100) / 100;
+                    existing.regular = Math.round((existing.regular + Number(row.regular || 0)) * 100) / 100;
+                    existing.super = Math.round((existing.super + Number(row.super || 0)) * 100) / 100;
+                    existing.ion = Math.round((existing.ion + Number(row.ion || 0)) * 100) / 100;
+                    existing.galonaje = Math.round((existing.galonaje + Number(row.galonaje || 0)) * 100) / 100;
+                    existing.venta = Math.round((existing.venta + Number(row.venta_estacion || 0)) * 100) / 100;
+                    estacionesMap.set(empKey, existing);
                 });
+                const estacionesLocal = Array.from(estacionesMap.values());
 
                 const tiendasLocal = (saasTiendasRows || []).map(row => {
                     const empId = branchToEmpId[row.id_empresa] || String(row.id_empresa);
@@ -2239,20 +2265,31 @@ const getResumenRangoVentasData = async (externalDb, startDate, endDate, account
                     }
                 }
 
-                const estacionesLocal = saasEstRows.map(row => {
-                    const matchedOfficial = OFFICIAL_ESTACIONES.find(st => st.branch_id === Number(row.id_empresa) || String(st.id_empresa) === String(row.id_empresa));
-                    const cleanName = getCleanStationName(String(row.id_empresa), row.empresa) || (matchedOfficial ? matchedOfficial.titulo : row.empresa);
-                    return {
-                        id_empresa: String(matchedOfficial ? matchedOfficial.id_empresa : row.id_empresa),
+                const estacionesMap = new Map();
+                saasEstRows.forEach(row => {
+                    const normBranch = normalizeSaasBranchId(row.id_empresa);
+                    const matchedOfficial = OFFICIAL_ESTACIONES.find(st => st.branch_id === normBranch || String(st.id_empresa) === String(row.id_empresa));
+                    const empKey = String(matchedOfficial ? matchedOfficial.id_empresa : row.id_empresa);
+                    const cleanName = getCleanStationName(empKey, row.empresa) || (matchedOfficial ? matchedOfficial.titulo : row.empresa);
+                    const existing = estacionesMap.get(empKey) || {
+                        id_empresa: empKey,
                         empresa: cleanName,
-                        diesel: Math.round(Number(row.diesel || 0) * 100) / 100,
-                        regular: Math.round(Number(row.regular || 0) * 100) / 100,
-                        super: Math.round(Number(row.super || 0) * 100) / 100,
-                        ion: Math.round(Number(row.ion || 0) * 100) / 100,
-                        galonaje: Math.round(Number(row.galonaje || 0) * 100) / 100,
-                        venta: Math.round(Number(row.venta_estacion || 0) * 100) / 100
+                        diesel: 0,
+                        regular: 0,
+                        super: 0,
+                        ion: 0,
+                        galonaje: 0,
+                        venta: 0
                     };
+                    existing.diesel = Math.round((existing.diesel + Number(row.diesel || 0)) * 100) / 100;
+                    existing.regular = Math.round((existing.regular + Number(row.regular || 0)) * 100) / 100;
+                    existing.super = Math.round((existing.super + Number(row.super || 0)) * 100) / 100;
+                    existing.ion = Math.round((existing.ion + Number(row.ion || 0)) * 100) / 100;
+                    existing.galonaje = Math.round((existing.galonaje + Number(row.galonaje || 0)) * 100) / 100;
+                    existing.venta = Math.round((existing.venta + Number(row.venta_estacion || 0)) * 100) / 100;
+                    estacionesMap.set(empKey, existing);
                 });
+                const estacionesLocal = Array.from(estacionesMap.values());
 
                 const tiendasLocal = (saasTiendasRows || []).map(row => {
                     const empId = branchToEmpId[row.id_empresa] || String(row.id_empresa);
@@ -2848,7 +2885,10 @@ router.get('/ventas/lubricantes/:start/:end', authenticateToken, requirePermissi
                 `;
                 const [saasRows] = await withRetry(() => accountingDb.query(sql, [start, end]));
                 const saasMap = {};
-                (saasRows || []).forEach(r => { saasMap[r.branch_id] = r; });
+                (saasRows || []).forEach(r => {
+                    const bId = normalizeSaasBranchId(r.branch_id);
+                    saasMap[bId] = { branch_id: bId, venta: Number(saasMap[bId]?.venta || 0) + Number(r.venta || 0) };
+                });
                 const result = OFFICIAL_ESTACIONES.map(st => {
                     const row = saasMap[st.branch_id] || {};
                     return {
@@ -2923,7 +2963,7 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(
                 const [saasCierreRows] = await withRetry(() => accountingDb.query(sqlSaasCierre, [date]));
                 const saasCierreMap = {};
                 (saasCierreRows || []).forEach(r => {
-                    saasCierreMap[r.branch_id] = r;
+                    saasCierreMap[normalizeSaasBranchId(r.branch_id)] = r;
                 });
 
                 const resumenCierreLocal = OFFICIAL_ESTACIONES.map(st => {
@@ -3296,6 +3336,7 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
         }
         const cleanId = String(id_empresa).padStart(3, '0');
         const saasBranchId = saasBranchMap[cleanId] || saasBranchMap[id_empresa];
+        const saasBranchIds = saasBranchId === 12 ? [12, 7] : [saasBranchId];
         let saasHasClosedShifts = false;
         let accountingDb = null;
         if (saasBranchId) {
@@ -3303,8 +3344,8 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                 accountingDb = await getAccountingDb();
                 if (accountingDb) {
                     const [chk] = await withRetry(() => accountingDb.query(
-                        "SELECT COUNT(*) as count FROM gas_station_closeouts WHERE branch_id = ? AND fecha_turno = ? AND estado = 'cerrado'",
-                        [saasBranchId, date]
+                        "SELECT COUNT(*) as count FROM gas_station_closeouts WHERE branch_id IN (?) AND fecha_turno = ? AND estado = 'cerrado'",
+                        [saasBranchIds, date]
                     ));
                     if (chk && chk[0]?.count > 0) {
                         saasHasClosedShifts = true;
@@ -3329,9 +3370,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                                g.valor, g.comentario as concepto, g.rubro
                         FROM gas_station_closeout_expenses g
                         JOIN gas_station_closeouts c ON g.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY g.id
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = gRows || [];
                     mapFn = (r) => {
                         const conceptoStr = r.concepto || r.rubro || '';
@@ -3368,9 +3409,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                         FROM gas_station_closeout_tarjetas t
                         JOIN gas_station_closeouts c ON t.closeout_id = c.id
                         LEFT JOIN gas_station_pos_types p ON t.pos_type_id = p.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY t.id
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = tRows || [];
                     mapFn = (r) => ({
                         id: r.id,
@@ -3392,9 +3433,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                                r.codigo as num_voucher, r.tipo_operacion
                         FROM gas_station_closeout_remesas r
                         JOIN gas_station_closeouts c ON r.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY r.id
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = remRows || [];
                     mapFn = (r) => ({
                         id: r.id,
@@ -3420,9 +3461,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                                cr.cantidad, cr.precio, cr.monto as valor, cr.placa, cr.kilometraje
                         FROM gas_station_closeout_creditos cr
                         JOIN gas_station_closeouts c ON cr.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY cr.id
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = crRows || [];
                     mapFn = (r) => ({
                         id: r.id,
@@ -3448,10 +3489,10 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                                l.ventas, l.precio as precio_unitario, l.total as precio_total
                         FROM gas_station_closeout_lubricant_readings l
                         JOIN gas_station_closeouts c ON l.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                           AND (l.lectura_inicial > 0 OR l.ventas > 0 OR l.recarga > 0)
                         ORDER BY l.producto_descripcion
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = lRows || [];
                     mapFn = (r) => ({
                         codigo: r.id_producto || '-',
@@ -3475,9 +3516,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                                r.diferencia as galones, r.precio, r.monto
                         FROM gas_station_closeout_readings r
                         JOIN gas_station_closeouts c ON r.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY c.numero_turno, r.descripcion_producto
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = lecRows || [];
                     mapFn = (r) => ({
                         id: r.id,
@@ -3498,9 +3539,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                                cp.producto_descripcion as cod_producto, cp.monto as valor
                         FROM gas_station_closeout_cupones cp
                         JOIN gas_station_closeouts c ON cp.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY cp.id
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = cupRows || [];
                     mapFn = (r) => ({
                         id: r.id,
@@ -3518,9 +3559,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                         SELECT a.id, a.closeout_id, '-' as id_cajero, a.empleado as id_empleado, a.monto as valor
                         FROM gas_station_closeout_adelantos a
                         JOIN gas_station_closeouts c ON a.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY a.id
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = antRows || [];
                     mapFn = (r) => ({
                         id: r.id,
@@ -3538,9 +3579,9 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                                d.cantidad, d.valor, d.total
                         FROM gas_station_closeout_descuentos d
                         JOIN gas_station_closeouts c ON d.closeout_id = c.id
-                        WHERE c.branch_id = ? AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
                         ORDER BY d.id
-                    `, [saasBranchId, date]));
+                    `, [saasBranchIds, date]));
                     rows = descRows || [];
                     mapFn = (r) => ({
                         id: r.id,
@@ -4033,7 +4074,7 @@ const getPreciosEstacionData = async (date) => {
             `;
             const [saasPreciosRows] = await withRetry(() => accountingDb.query(sqlSaasPrecios, [date]));
             const saasPreciosMap = {};
-            (saasPreciosRows || []).forEach(r => { saasPreciosMap[r.branch_id] = r; });
+            (saasPreciosRows || []).forEach(r => { saasPreciosMap[normalizeSaasBranchId(r.branch_id)] = r; });
             return OFFICIAL_ESTACIONES.map(st => {
                 const row = saasPreciosMap[st.branch_id] || {};
                 return {
@@ -4144,6 +4185,7 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
                         c.fecha_turno,
                         c.numero_turno,
                         tr.tank_id,
+                        COALESCE(t.codigo, CAST(tr.tank_id AS CHAR)) as tank_code,
                         CASE 
                             WHEN t.tipo_combustible = 1 OR tr.descripcion_tanque LIKE '%REGULAR%' THEN 'R'
                             WHEN t.tipo_combustible = 2 OR tr.descripcion_tanque LIKE '%SUPER%' THEN 'S'
@@ -4157,15 +4199,16 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
                     JOIN gas_station_closeout_tank_readings tr ON tr.closeout_id = c.id
                     LEFT JOIN gas_station_tanks t ON tr.tank_id = t.id
                     WHERE c.fecha_turno BETWEEN ? AND ? AND c.estado = 'cerrado'
-                    ORDER BY c.branch_id, tipo, c.fecha_turno ASC, c.numero_turno ASC, tr.id ASC
+                    ORDER BY c.fecha_turno ASC, c.numero_turno ASC, tr.id ASC
                 `;
                 const [tankRows] = await withRetry(() => accountingDb.query(sqlTanques, [desde, hasta]));
 
                 const groups = {};
                 (tankRows || []).forEach(r => {
-                    const key = `${r.branch_id}_${r.tipo}_${r.tank_id}`;
+                    const normBranch = normalizeSaasBranchId(r.branch_id);
+                    const key = `${normBranch}_${r.tipo}_${r.tank_code || r.tank_id}`;
                     if (!groups[key]) groups[key] = [];
-                    groups[key].push(r);
+                    groups[key].push({ ...r, branch_id: normBranch });
                 });
 
                 const stationFuelTotals = {};
@@ -4194,8 +4237,8 @@ router.get('/consultas/diferencias-combustible/:desde/:hasta', authenticateToken
                     ['D', 'R', 'S', 'I'].forEach(tipo => {
                         const tankKey = `${st.branch_id}_${tipo}`;
                         const tData = stationFuelTotals[tankKey] || { inicial: 0, recargas: 0, final: 0 };
-                        const vRow = (ventasRows || []).find(v => v.branch_id === st.branch_id && v.tipo === tipo);
-                        const venta = Number(vRow?.venta || 0);
+                        const vRows = (ventasRows || []).filter(v => normalizeSaasBranchId(v.branch_id) === st.branch_id && v.tipo === tipo);
+                        const venta = vRows.reduce((sum, r) => sum + Number(r?.venta || 0), 0);
 
                         if (tData.inicial === 0 && tData.final === 0 && venta === 0) return;
 

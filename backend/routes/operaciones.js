@@ -105,7 +105,7 @@ function buildEstacionFilterClause(estacionInput) {
     }
 
     // 3. Shell Poliedro (prioridad sobre Desvío de Opico)
-    if (s === '016' || s === '7' || s.includes('POLIEDRO') || s.includes('OPICO')) {
+    if (s === '016' || s === '7' || s === '12' || s.includes('POLIEDRO') || s.includes('OPICO')) {
         return {
             sql: "(p.id_estacion = '016' OR p.estacion_nombre LIKE '%POLIEDRO%' OR p.estacion_nombre LIKE '%OPICO%')",
             params: []
@@ -181,11 +181,13 @@ const OFFICIAL_ESTACIONES = [
     { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
     { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
     { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 },
-    { id_empresa: '016', branch_id: 7, saas_branch_id: 7, titulo: 'Shell Poliedro', orden: 6 }
+    { id_empresa: '016', branch_id: 12, legacy_branch_id: 7, saas_branch_id: 12, titulo: 'Shell Poliedro', orden: 6 }
 ];
 
+const POLIEDRO_RESERVA_FALLBACK = { S: 175, R: 320, D: 210, I: 210 };
+
 const getCleanStationName = (id, defaultTitulo) => {
-    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === String(id) || String(s.branch_id) === String(id));
+    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === String(id) || String(s.branch_id) === String(id) || String(s.legacy_branch_id) === String(id));
     if (matched) return matched.titulo;
     const upper = String(defaultTitulo || '').toUpperCase();
     if (upper.includes('POLIEDRO')) return 'Shell Poliedro';
@@ -252,7 +254,7 @@ router.get('/operaciones/fecha-servidor-global', authenticateToken, requirePermi
 async function resolveStationBranchId(accountingDb, id_empresa) {
     if (!id_empresa) return null;
     const cleanId = String(id_empresa).trim();
-    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === cleanId || String(s.branch_id) === cleanId);
+    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === cleanId || String(s.branch_id) === cleanId || String(s.legacy_branch_id) === cleanId);
     if (matched) return matched.branch_id;
     if (!accountingDb) return null;
     try {
@@ -275,16 +277,18 @@ async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
         try {
             const branchId = await resolveStationBranchId(accountingDb, id_empresa);
             if (branchId) {
+                const branchIds = (branchId === 12 || branchId === 7) ? [12, 7] : [branchId];
                 const [closeoutRows] = await accountingDb.query(`
-                    SELECT id, fecha_turno, numero_turno 
+                    SELECT id, branch_id, fecha_turno, numero_turno 
                     FROM gas_station_closeouts 
-                    WHERE branch_id = ? AND fecha_turno <= ? AND estado = 'cerrado'
+                    WHERE branch_id IN (?) AND fecha_turno <= ? AND estado = 'cerrado'
                     ORDER BY fecha_turno DESC, numero_turno DESC 
                     LIMIT 1
-                `, [branchId, fecha]);
+                `, [branchIds, fecha]);
 
                 if (closeoutRows.length) {
                     const closeout = closeoutRows[0];
+                    const effectiveBranchId = closeout.branch_id || branchId;
                     const [tanks] = await accountingDb.query(`
                         SELECT 
                             t.codigo as id_tanque,
@@ -302,13 +306,20 @@ async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
                         LEFT JOIN gas_station_closeout_tank_readings tr ON t.id = tr.tank_id AND tr.closeout_id = ?
                         WHERE t.branch_id = ?
                         ORDER BY t.codigo
-                    `, [closeout.id, branchId]);
+                    `, [closeout.id, effectiveBranchId]);
 
                     if (tanks && tanks.length > 0) {
+                        const normalizedTanks = tanks.map(t => {
+                            const rVal = Number(t.reserva || 0);
+                            if (rVal === 0 && (effectiveBranchId === 12 || effectiveBranchId === 7)) {
+                                return { ...t, reserva: POLIEDRO_RESERVA_FALLBACK[t.tipo_combustible] || 0 };
+                            }
+                            return t;
+                        });
                         const effectiveDate = closeout.fecha_turno instanceof Date 
                             ? closeout.fecha_turno.toISOString().split('T')[0] 
                             : String(closeout.fecha_turno || fecha).split('T')[0];
-                        return { fecha: effectiveDate, inventario: tanks };
+                        return { fecha: effectiveDate, inventario: normalizedTanks };
                     }
                 }
             }
@@ -406,6 +417,7 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
                 const dateDesde = cDesde.toISOString().split('T')[0];
                 const dateHasta = cHasta.toISOString().split('T')[0];
 
+                const branchIds = (branchId === 12 || branchId === 7) ? [12, 7] : [branchId];
                 const [rows] = await accountingDb.query(`
                     SELECT 
                         CASE 
@@ -417,11 +429,11 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
                         SUM(r.diferencia) / 7 as promedio
                     FROM gas_station_closeouts c
                     JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
-                    WHERE c.branch_id = ? 
+                    WHERE c.branch_id IN (?) 
                       AND c.fecha_turno BETWEEN ? AND ? 
                       AND c.estado = 'cerrado'
                     GROUP BY tipo_combustible
-                `, [branchId, dateDesde, dateHasta]);
+                `, [branchIds, dateDesde, dateHasta]);
 
                 let totalProm = 0;
                 (rows || []).forEach(r => {

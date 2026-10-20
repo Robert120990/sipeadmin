@@ -7,9 +7,9 @@ const { getAccountingDb, withRetry } = require('../db');
 const getTanquesAutonomia = async () => {
     const accountingDb = await getAccountingDb();
 
-    // 1. Obtener lista de estaciones con tanques
+    // 1. Obtener lista de estaciones con tanques (excluyendo branch_id 7 histórico migrado a 12)
     const [stations] = await withRetry(() => accountingDb.query(
-        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
+        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id != 7 AND id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
     ));
 
     // 2. Obtener la última fecha registrada de cierres de estación cerrados
@@ -58,6 +58,7 @@ const getTanquesAutonomia = async () => {
             ) m ON tr.tank_id = m.tank_id AND tr.closeout_id = m.max_closeout_id
         ) lr ON t.id = lr.tank_id
         LEFT JOIN gas_station_closeouts c ON lr.closeout_id = c.id
+        WHERE t.branch_id != 7
         ORDER BY b.nombre, t.codigo
     `;
     const [tankRows] = await withRetry(() => accountingDb.query(tankQuery));
@@ -67,7 +68,7 @@ const getTanquesAutonomia = async () => {
         SELECT id_empresa, tipo_combustible, SUM(diferencia) as total_7d
         FROM (
             SELECT 
-                c.branch_id as id_empresa,
+                CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
                 CASE 
                     WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
                     WHEN r.codigo_producto LIKE '%DIESEL%' OR r.descripcion_producto LIKE '%DIESEL%' OR p.tipo_combustible = 3 THEN 'D'
@@ -286,7 +287,8 @@ const getAuditoriaMermas = async (desde, hasta) => {
 
     // Ventas acumuladas de cierres
     const sqlVentas = `
-        SELECT c.branch_id as id_empresa, b.nombre as estacion,
+        SELECT CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
+               CASE WHEN c.branch_id = 7 THEN 'Shell EL Poliedro' ELSE b.nombre END as estacion,
                CASE 
                    WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
                    WHEN r.codigo_producto LIKE '%DIESEL%' OR r.descripcion_producto LIKE '%DIESEL%' OR p.tipo_combustible = 3 THEN 'D'
@@ -300,16 +302,16 @@ const getAuditoriaMermas = async (desde, hasta) => {
         JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
         LEFT JOIN products p ON r.product_id = p.id
         WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
-        GROUP BY c.branch_id, b.nombre, tipo
-        ORDER BY c.branch_id, tipo
+        GROUP BY id_empresa, estacion, tipo
+        ORDER BY id_empresa, tipo
     `;
     const [ventasRows] = await withRetry(() => accountingDb.query(sqlVentas, [dInicio, dFin]));
 
     // Movimientos físicos de tanques (inicial, recargas, final)
     const sqlMovs = `
         SELECT 
-            c.branch_id as id_empresa,
-            b.nombre as estacion,
+            CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
+            CASE WHEN c.branch_id = 7 THEN 'Shell EL Poliedro' ELSE b.nombre END as estacion,
             CASE 
                 WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
                 WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
@@ -325,8 +327,8 @@ const getAuditoriaMermas = async (desde, hasta) => {
         JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
         JOIN gas_station_tanks t ON tr.tank_id = t.id
         WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
-        GROUP BY c.branch_id, b.nombre, tipo_combustible
-        ORDER BY c.branch_id, tipo_combustible
+        GROUP BY id_empresa, estacion, tipo_combustible
+        ORDER BY id_empresa, tipo_combustible
     `;
     const [movsRows] = await withRetry(() => accountingDb.query(sqlMovs, [dInicio, dFin]));
 
