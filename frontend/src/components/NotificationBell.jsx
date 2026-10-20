@@ -57,6 +57,20 @@ function getNotificationIcon(type) {
                 bg: 'rgba(16, 185, 129, 0.15)',
                 color: '#10b981'
             };
+        case 'ticket_resolved':
+            return {
+                icon: <CheckCircle2 size={16} />,
+                bg: 'rgba(16, 185, 129, 0.18)',
+                color: '#10b981'
+            };
+        case 'ticket_pending':
+        case 'ticket_created':
+            return {
+                icon: <ClipboardCheck size={16} />,
+                bg: 'rgba(245, 158, 11, 0.18)',
+                color: '#f59e0b'
+            };
+        case 'ticket_comment':
         case 'task_comment':
             return {
                 icon: <MessageSquare size={16} />,
@@ -123,6 +137,15 @@ export default function NotificationBell({ isMobile = false }) {
         }
         setIsOpen(false);
 
+        if (notification.data?.ticket_id || String(notification.type || '').startsWith('ticket_')) {
+            navigate('/dashboard/seguridad/tickets');
+            if (notification.data?.ticket_id) {
+                window.dispatchEvent(new CustomEvent('sipe:open-ticket-detail', {
+                    detail: { ticketId: notification.data.ticket_id }
+                }));
+            }
+            return;
+        }
         if (notification.data?.link) {
             navigate(notification.data.link);
         }
@@ -563,6 +586,13 @@ export function RealtimeNotificationToast() {
     const handleClickAction = () => {
         markAsRead(activeToast.id);
         dismissToast();
+        if (activeToast.data?.ticket_id || String(activeToast.type || '').startsWith('ticket_')) {
+            navigate('/dashboard/seguridad/tickets');
+            if (activeToast.data?.ticket_id) {
+                window.dispatchEvent(new CustomEvent('sipe:open-ticket-detail', { detail: { ticketId: activeToast.data.ticket_id } }));
+            }
+            return;
+        }
         if (activeToast.data?.link) {
             navigate(activeToast.data.link);
         }
@@ -654,7 +684,7 @@ export function RealtimeNotificationToast() {
                             borderRadius: '6px'
                         }}
                     >
-                        <span>Ver Tarea</span>
+                        <span>{(activeToast.data?.ticket_id || String(activeToast.type || '').startsWith('ticket_')) ? 'Ver Ticket' : 'Ver Tarea'}</span>
                         <ExternalLink size={12} />
                     </button>
                 </div>

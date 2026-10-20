@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, Settings as SettingsIcon, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, DollarSign, BarChart3, Compass, BookOpen, Landmark, Briefcase, Users as UsersIcon, Palette, GitCommit } from 'lucide-react';
+import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, Palette, GitCommit, Search, Ticket } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import NotificationBell from '../components/NotificationBell';
+import CommandPalette from '../components/CommandPalette';
+import { useTickets } from '../context/TicketContext';
 import ColorIcon from '../components/ColorIcon';
 import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, rrhhMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
 
@@ -58,7 +60,8 @@ import {
     PedidosProgramadosConsulta,
     TelegramUsers,
     AsistenteIA,
-    EnergiaSolarAndelsa
+    EnergiaSolarAndelsa,
+    SupportTickets
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -70,9 +73,11 @@ export default function DashboardLayout() {
     const location = useLocation();
     const { theme, toggleTheme, openThemeModal } = useTheme();
     const { isMobile } = useViewport();
+    const { openQuickTicket } = useTickets();
     
     // UI State
     const [isCollapsed, setIsCollapsed] = useState(false);
+    const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
     const [openMenus, setOpenMenus] = useState({
         estrategia: false,
         catalogs: false,
@@ -87,6 +92,15 @@ export default function DashboardLayout() {
         rrhh: false,
         configuracion: false
     });
+
+    // Listen to toggle-command-palette custom event
+    useEffect(() => {
+        const handleTogglePalette = () => {
+            setIsCommandPaletteOpen((prev) => !prev);
+        };
+        window.addEventListener('toggle-command-palette', handleTogglePalette);
+        return () => window.removeEventListener('toggle-command-palette', handleTogglePalette);
+    }, []);
 
     // Tabs State
     const [tabs, setTabs] = useState([
@@ -123,7 +137,7 @@ export default function DashboardLayout() {
 
     const user = getStoredUser();
     const hasPermission = (path) => {
-        if (path === '/dashboard/settings/theme') return true;
+        if (path === '/dashboard/settings/theme' || path === '/dashboard/seguridad/tickets') return true;
         if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
         if (user.permissions?.includes(path)) return true;
         if (path?.startsWith('/dashboard/estrategia') && (user.permissions?.includes('view_direccion_estrategica') || user.permissions?.includes('/dashboard/estrategia'))) return true;
@@ -186,6 +200,7 @@ export default function DashboardLayout() {
         '/dashboard/estrategia/creditos': <EstrategiaCreditos />,
         '/dashboard/seguridad/cambios': <ConsultaCambiosGithub />,
         '/dashboard/seguridad/telegram': <TelegramUsers />,
+        '/dashboard/seguridad/tickets': <SupportTickets />,
         '/dashboard/consultas/ia-asistente': <AsistenteIA />,
         '/dashboard/operaciones/energia-solar': <EnergiaSolarAndelsa />,
     };
@@ -378,6 +393,49 @@ export default function DashboardLayout() {
     const filteredOtras = getFiltered(consultasOtras);
     const filteredSecurity = getFiltered(securityItems);
     const filteredConfiguracionMenu = getFiltered(configuracionMenu);
+
+    const commandPaletteItems = useMemo(() => {
+        const groups = [
+            { category: 'General', items: [{ name: 'Dashboard Principal', path: '/dashboard', icon: LayoutDashboard }] },
+            { category: 'Dirección Estratégica', items: filteredEstrategia },
+            { category: 'Catálogos', items: filteredCatalogs },
+            { category: 'Operaciones', items: filteredOperaciones },
+            { category: 'Bancos', items: filteredBancosMenu },
+            { category: 'Bancos · Reportes', items: filteredBancosReportes },
+            { category: 'Finanzas', items: filteredFinanzasMenu },
+            { category: 'Recursos Humanos', items: filteredRrhhMenu },
+            { category: 'Consultas · Estaciones', items: filteredEstaciones },
+            { category: 'Consultas · Otras', items: filteredOtras },
+            { category: 'Seguridad', items: filteredSecurity },
+            { category: 'Configuración', items: filteredConfiguracionMenu }
+        ];
+        const list = [];
+        const seen = new Set();
+        for (const group of groups) {
+            for (const item of group.items) {
+                if (!seen.has(item.path)) {
+                    seen.add(item.path);
+                    list.push({
+                        ...item,
+                        category: group.category
+                    });
+                }
+            }
+        }
+        return list;
+    }, [
+        filteredEstrategia,
+        filteredCatalogs,
+        filteredOperaciones,
+        filteredBancosMenu,
+        filteredBancosReportes,
+        filteredFinanzasMenu,
+        filteredRrhhMenu,
+        filteredEstaciones,
+        filteredOtras,
+        filteredSecurity,
+        filteredConfiguracionMenu
+    ]);
 
     const toggleMenu = (key) => {
         if (isCollapsed) return;
@@ -743,7 +801,64 @@ export default function DashboardLayout() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                         {renderTabsBar(desktopTabsRef)}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', paddingLeft: '0.5rem', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', paddingLeft: '0.5rem', flexShrink: 0 }}>
+                        <button
+                            type="button"
+                            onClick={() => setIsCommandPaletteOpen(true)}
+                            title="Buscador rápido, calculadora y soporte (Ctrl + K)"
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.45rem',
+                                height: '32px',
+                                padding: '0 0.65rem',
+                                borderRadius: '8px',
+                                border: '1px solid var(--border)',
+                                background: 'var(--card-bg)',
+                                color: 'var(--text-muted)',
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                cursor: 'pointer'
+                            }}
+                        >
+                            <Search size={14} color="var(--primary)" />
+                            <span>Buscar o calcular...</span>
+                            <kbd
+                                style={{
+                                    padding: '0.1rem 0.35rem',
+                                    borderRadius: '4px',
+                                    background: 'var(--bg)',
+                                    border: '1px solid var(--border)',
+                                    fontSize: '0.66rem',
+                                    fontWeight: 700,
+                                    color: 'var(--text)'
+                                }}
+                            >
+                                Ctrl+K
+                            </kbd>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => openQuickTicket({ autoCapture: true })}
+                            title="Reportar Ticket Rápido con Captura (Ctrl + Shift + K)"
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                height: '32px',
+                                padding: '0 0.6rem',
+                                borderRadius: '8px',
+                                border: '1px solid rgba(79, 70, 229, 0.35)',
+                                background: 'rgba(79, 70, 229, 0.1)',
+                                color: 'var(--primary)',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                            }}
+                        >
+                            <Ticket size={14} />
+                            <span>Ticket</span>
+                        </button>
                         <NotificationBell />
                     </div>
                 </div>
@@ -767,6 +882,14 @@ export default function DashboardLayout() {
                     <div className="header-title">{headerTitle}</div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <button
+                        className="header-btn"
+                        onClick={() => setIsCommandPaletteOpen(true)}
+                        aria-label="Buscar (Ctrl+K)"
+                        title="Buscar o crear ticket"
+                    >
+                        <Search size={20} />
+                    </button>
                     <NotificationBell isMobile={true} />
                     <button className="header-btn" onClick={openMore} aria-label="Más opciones">
                         <MoreHorizontal size={22} />
@@ -832,6 +955,10 @@ export default function DashboardLayout() {
                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
                             </div>
                         </div>
+                        <button className="sheet-item" onClick={() => { closeMore(); openQuickTicket({ autoCapture: true }); }}>
+                            <Ticket size={18} />
+                            Nuevo Ticket de Soporte
+                        </button>
                         <button className="sheet-item" onClick={() => { closeMore(); openThemeModal(); }}>
                             <Palette size={18} />
                             Tema y Apariencia
@@ -878,5 +1005,15 @@ export default function DashboardLayout() {
         </div>
     );
 
-    return isMobile ? mobileShell : desktopShell;
+    return (
+        <>
+            {isMobile ? mobileShell : desktopShell}
+            <CommandPalette
+                isOpen={isCommandPaletteOpen}
+                onClose={() => setIsCommandPaletteOpen(false)}
+                navItems={commandPaletteItems}
+                onSelectItem={openTab}
+            />
+        </>
+    );
 }

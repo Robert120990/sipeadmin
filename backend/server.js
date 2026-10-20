@@ -63,7 +63,8 @@ const largePayloadPrefixes = [
     '/api/bancos/conciliacion/parse-extracto',
     '/api/bancos/conciliacion/crear-masivo-y-aplicar',
     '/api/conciliacion/parse-extracto',
-    '/api/conciliacion/crear-masivo-y-aplicar'
+    '/api/conciliacion/crear-masivo-y-aplicar',
+    '/api/tickets'
 ];
 
 app.use((req, res, next) => {
@@ -192,6 +193,10 @@ const notificationsRoutes = require('./routes/notifications');
 const githubChangesRoutes = require('./routes/githubChanges').router;
 const rrhhRoutes = require('./routes/rrhh');
 const telegramRoutes = require('./routes/telegram');
+const ticketsRoutes = require('./routes/tickets');
+const { UPLOADS_DIR, SIBLING_SAAS_UPLOADS, initTicketRealtimeWatcher } = require('./services/ticketService');
+const fs = require('fs');
+const path = require('path');
 
 // Mount Routes
 app.use('/api', authRoutes); // Login, Users, Roles
@@ -213,6 +218,20 @@ app.use('/api/ai', aiRoutes);
 app.use('/api', bitacoraRoutes);
 app.use('/api/check-designer', checkDesignerRoutes);
 app.use('/api/telegram', telegramRoutes);
+app.use('/api/tickets', ticketsRoutes);
+app.use('/api/uploads', express.static(UPLOADS_DIR));
+app.get('/api/uploads/:filename', (req, res) => {
+    const safeName = path.basename(req.params.filename || '');
+    for (const dir of SIBLING_SAAS_UPLOADS) {
+        try {
+            const candidate = path.join(dir, safeName);
+            if (fs.existsSync(candidate)) {
+                return res.sendFile(candidate);
+            }
+        } catch (_) { /* ignore */ }
+    }
+    return res.redirect(`https://sys.sipesv.com/api/uploads/${encodeURIComponent(safeName)}`);
+});
 
 // Health Check público
 app.get('/api/debug-ping', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
@@ -263,6 +282,7 @@ initDB().then(() => {
     initPaymentScheduler();
     initTelegramBot();
     initAutoSyncScheduler(io);
+    initTicketRealtimeWatcher(io);
     server.listen(PORT, () => {
         console.log(`Server HTTP y Socket.io running on port ${PORT}`);
     });

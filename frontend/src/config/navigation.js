@@ -99,6 +99,7 @@ export const securityItems = [
     { name: 'Usuarios de Telegram', path: '/dashboard/seguridad/telegram', icon: createColorIcon('flat-color-icons:comments') },
     { name: 'Bitácora', path: '/dashboard/bitacora', icon: createColorIcon('flat-color-icons:timeline') },
     { name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: createColorIcon('flat-color-icons:workflow') },
+    { name: 'Tickets de Soporte', path: '/dashboard/seguridad/tickets', icon: createColorIcon('flat-color-icons:online-support') },
 ];
 
 export const configuracionMenu = [

@@ -49,3 +49,4 @@ export const PedidosProgramadosConsulta = lazy(() => import('./PedidosProgramado
 export const TelegramUsers = lazy(() => import('./TelegramUsers'));
 export const AsistenteIA = lazy(() => import('./AsistenteIA'));
 export const EnergiaSolarAndelsa = lazy(() => import('./EnergiaSolarAndelsa'));
+export const SupportTickets = lazy(() => import('./SupportTickets'));

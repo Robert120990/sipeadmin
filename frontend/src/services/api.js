@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { recordApiError } from '../utils/errorDiagnostics';
+import { recordNetworkErrorForTicket } from '../utils/ticketDiagnostics';
 
 const api = axios.create({
     baseURL: '/api'
@@ -24,6 +25,7 @@ api.interceptors.response.use(
         }
 
         // Registrar en buffer de diagnóstico para contexto de depuración
+        recordNetworkErrorForTicket(error);
         recordApiError({
             method: error.config?.method?.toUpperCase() || 'GET',
             url: error.config?.url || '',

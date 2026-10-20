@@ -476,7 +476,10 @@ const initDB = async () => {
                 ['manage_telegram', 'Gestionar configuración y accesos de Telegram Bot'],
                 ['/dashboard/seguridad/telegram', 'Acceso a Gestión de Usuarios y Bot de Telegram'],
                 ['/dashboard/consultas/ia-asistente', 'Acceso al Asistente IA y Copiloto Gerencial'],
-                ['/dashboard/operaciones/energia-solar', 'Acceso al Tablero de Energía Solar, Baterías y Andelsa']
+                ['/dashboard/operaciones/energia-solar', 'Acceso al Tablero de Energía Solar, Baterías y Andelsa'],
+                ['/dashboard/seguridad/tickets', 'Acceso a Centro de Soporte y Tickets'],
+                ['view_support_tickets', 'Consultar tickets de soporte técnico'],
+                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -1006,7 +1009,10 @@ const initDB = async () => {
                 ['manage_telegram', 'Gestionar configuración y accesos de Telegram Bot'],
                 ['/dashboard/seguridad/telegram', 'Acceso a Gestión de Usuarios y Bot de Telegram'],
                 ['/dashboard/consultas/ia-asistente', 'Acceso al Asistente IA y Copiloto Gerencial'],
-                ['/dashboard/operaciones/energia-solar', 'Acceso al Tablero de Energía Solar, Baterías y Andelsa']
+                ['/dashboard/operaciones/energia-solar', 'Acceso al Tablero de Energía Solar, Baterías y Andelsa'],
+                ['/dashboard/seguridad/tickets', 'Acceso a Centro de Soporte y Tickets'],
+                ['view_support_tickets', 'Consultar tickets de soporte técnico'],
+                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte']
             ];
             for (const [name, desc] of telegramPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1319,6 +1325,122 @@ const initDB = async () => {
             await seedSolarEnergyData(pool);
         } catch (e) {
             console.error('Migration energia_instalaciones & registros_diarios:', e.message);
+        }
+
+        // ==============================================================
+        // MIGRATION: Centro de Soporte y Tickets (integrado con sys.sipesv.com)
+        // ==============================================================
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    ticket_code VARCHAR(32) NOT NULL UNIQUE,
+                    company_id INT NULL,
+                    user_id INT NOT NULL,
+                    admin_user_id INT NULL,
+                    user_name VARCHAR(150) NOT NULL,
+                    user_role VARCHAR(60) NULL,
+                    type ENUM('problema', 'requerimiento', 'mejora', 'consulta') NOT NULL DEFAULT 'problema',
+                    priority ENUM('baja', 'media', 'alta', 'urgente') NOT NULL DEFAULT 'media',
+                    status ENUM('abierto', 'en_proceso', 'resuelto', 'cerrado') NOT NULL DEFAULT 'abierto',
+                    subject VARCHAR(255) NOT NULL,
+                    description TEXT NOT NULL,
+                    module_name VARCHAR(120) NULL,
+                    page_url VARCHAR(255) NULL,
+                    source_system VARCHAR(40) NULL DEFAULT 'admin.sipesv.com',
+                    screenshot_url VARCHAR(500) NULL,
+                    attachments_json LONGTEXT NULL,
+                    diagnostics_json LONGTEXT NULL,
+                    diagnostic_relevance VARCHAR(30) NULL DEFAULT 'sin_errores',
+                    diagnostic_score INT NOT NULL DEFAULT 0,
+                    include_in_ai_prompt TINYINT(1) NOT NULL DEFAULT 0,
+                    ai_notes TEXT NULL,
+                    custom_logs LONGTEXT NULL,
+                    ai_mode VARCHAR(30) NOT NULL DEFAULT 'agent_prompt',
+                    agent_platform VARCHAR(40) NOT NULL DEFAULT 'antigravity',
+                    ai_bundled_at DATETIME NULL,
+                    agy_status VARCHAR(40) NOT NULL DEFAULT 'idle',
+                    agy_model VARCHAR(80) NULL DEFAULT 'gemini-4-argon-high',
+                    agy_plan_markdown LONGTEXT NULL,
+                    agy_execution_log LONGTEXT NULL,
+                    agy_approved_by VARCHAR(120) NULL,
+                    agy_plan_version INT NOT NULL DEFAULT 0,
+                    agy_telegram_msg_id VARCHAR(64) NULL,
+                    agy_updated_at DATETIME NULL,
+                    resolution_notes TEXT NULL,
+                    resolved_version VARCHAR(50) NULL,
+                    resolved_by INT NULL,
+                    resolved_by_name VARCHAR(150) NULL,
+                    resolved_at DATETIME NULL,
+                    creator_notified_at DATETIME NULL,
+                    telegram_message_id VARCHAR(64) NULL,
+                    telegram_chat_id VARCHAR(64) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_support_tickets_company_status (company_id, status),
+                    INDEX idx_support_tickets_user_status (user_id, status),
+                    INDEX idx_support_tickets_admin_user (admin_user_id, status),
+                    INDEX idx_support_tickets_created (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS support_ticket_messages (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    ticket_id INT NOT NULL,
+                    sender_user_id INT NULL,
+                    sender_name VARCHAR(150) NOT NULL,
+                    sender_role VARCHAR(60) NOT NULL DEFAULT 'user',
+                    source ENUM('web', 'telegram', 'system') NOT NULL DEFAULT 'web',
+                    message TEXT NOT NULL,
+                    attachment_url VARCHAR(500) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_ticket_messages_ticket (ticket_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS agy_server_settings (
+                    id INT PRIMARY KEY DEFAULT 1,
+                    ssh_host VARCHAR(150) NOT NULL DEFAULT '5.252.55.29',
+                    ssh_port INT NOT NULL DEFAULT 22,
+                    ssh_user VARCHAR(80) NOT NULL DEFAULT 'root',
+                    ssh_password VARCHAR(255) NULL,
+                    ssh_key_path VARCHAR(255) NULL,
+                    project_path VARCHAR(255) NOT NULL DEFAULT '/var/www/sipeadmin',
+                    agy_command VARCHAR(120) NOT NULL DEFAULT 'agy',
+                    default_model VARCHAR(80) NOT NULL DEFAULT 'gemini-4-argon-high',
+                    available_models_json TEXT NULL,
+                    execution_mode VARCHAR(30) NOT NULL DEFAULT 'auto',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            const ticketPerms = [
+                ['/dashboard/seguridad/tickets', 'Acceso a Centro de Soporte y Tickets'],
+                ['view_support_tickets', 'Consultar tickets de soporte técnico'],
+                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte']
+            ];
+            for (const [name, desc] of ticketPerms) {
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
+            }
+
+            const [allRoles] = await pool.query('SELECT id, name FROM roles');
+            const [viewPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('/dashboard/seguridad/tickets', 'view_support_tickets')");
+            const [managePerms] = await pool.query("SELECT id FROM permissions WHERE name = 'manage_support_tickets'");
+            for (const r of allRoles) {
+                for (const vp of viewPerms) {
+                    await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, vp.id]);
+                }
+                const isAdminRole = ['admin', 'administrator', 'administrador', 'super admin', 'superadmin', 'super administrador'].includes(String(r.name || '').toLowerCase()) || r.id === 1;
+                if (isAdminRole) {
+                    for (const mp of managePerms) {
+                        await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, mp.id]);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Migration support_tickets & permissions:', e.message);
         }
 
         return pool;
