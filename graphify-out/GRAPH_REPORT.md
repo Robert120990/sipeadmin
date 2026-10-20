@@ -1,7 +1,7 @@
 # Graph Report - SIPEOFI  (2026-10-19)
 
 ## Corpus Check
-- 228 files · ~515,519 words
+- 228 files · ~515,949 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 10 file(s) not represented in the graph (top: (none) 3, .example 2, .bat 2)
 
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `af14c9c9`
+- Built from commit: `ce97b971`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 

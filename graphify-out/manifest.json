@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1792452247.0230181,
-    "seen": 1792453416.2319262,
-    "ast_hash": "d900e1180cf1661e357e337adc16ca46",
+    "mtime": 1792459065.4584312,
+    "seen": 1792459071.6590607,
+    "ast_hash": "9014b720fd0088951af3489eec7c6ca3",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -1326,9 +1326,9 @@
     "semantic_hash": ""
   },
   "backend/services/ticketService.js": {
-    "mtime": 1792452111.180003,
-    "seen": 1792453416.2319262,
-    "ast_hash": "7c8c4a1fa4297bb83aaf5e77957ab72c",
+    "mtime": 1792459027.0350115,
+    "seen": 1792459071.6590607,
+    "ast_hash": "c8a698a2853af9eb88237172b7ff5741",
     "semantic_hash": ""
   },
   "backend/test/supportTickets.test.js": {

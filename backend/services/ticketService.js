@@ -96,7 +96,8 @@ const ensureTicketSchema = async (pool) => {
             ['agy_plan_version', 'INT NOT NULL DEFAULT 0 AFTER agy_approved_by'],
             ['agy_telegram_msg_id', 'VARCHAR(64) NULL AFTER agy_plan_version'],
             ['agy_updated_at', 'DATETIME NULL AFTER agy_telegram_msg_id'],
-            ['resolved_version', 'VARCHAR(50) NULL AFTER resolution_notes']
+            ['resolved_version', 'VARCHAR(50) NULL AFTER resolution_notes'],
+            ['resolved_by', 'INT NULL AFTER resolved_version']
         ];
 
         for (const [colName, colDef] of extraColumns) {
@@ -114,16 +115,37 @@ const ensureTicketSchema = async (pool) => {
             CREATE TABLE IF NOT EXISTS support_ticket_messages (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 ticket_id INT NOT NULL,
+                sender_type VARCHAR(30) NOT NULL DEFAULT 'user',
+                sender_id INT NULL,
                 sender_user_id INT NULL,
                 sender_name VARCHAR(150) NOT NULL,
                 sender_role VARCHAR(60) NOT NULL DEFAULT 'user',
-                source ENUM('web', 'telegram', 'system') NOT NULL DEFAULT 'web',
+                source VARCHAR(30) NOT NULL DEFAULT 'web',
                 message TEXT NOT NULL,
                 attachment_url VARCHAR(500) NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_ticket_messages_ticket (ticket_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
+
+        const msgExtraColumns = [
+            ['sender_type', "VARCHAR(30) NOT NULL DEFAULT 'user' AFTER ticket_id"],
+            ['sender_id', 'INT NULL AFTER sender_type'],
+            ['sender_user_id', 'INT NULL AFTER sender_id'],
+            ['sender_role', "VARCHAR(60) NOT NULL DEFAULT 'user' AFTER sender_name"],
+            ['source', "VARCHAR(30) NOT NULL DEFAULT 'web' AFTER sender_role"],
+            ['attachment_url', 'VARCHAR(500) NULL AFTER message']
+        ];
+        for (const [colName, colDef] of msgExtraColumns) {
+            try {
+                const [cols] = await pool.query(`SHOW COLUMNS FROM support_ticket_messages LIKE ?`, [colName]);
+                if (!cols || cols.length === 0) {
+                    await pool.query(`ALTER TABLE support_ticket_messages ADD COLUMN ${colName} ${colDef}`);
+                }
+            } catch (_) {
+                // Ignore
+            }
+        }
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS agy_server_settings (
@@ -192,14 +214,16 @@ const saveBase64Screenshot = (base64Data, prefix = 'ticket') => {
     const filepath = path.join(UPLOADS_DIR, filename);
     fs.writeFileSync(filepath, buffer);
 
-    // Copiar también al directorio uploads de sys.sipesv.com si existe en el mismo servidor
-    for (const siblingDir of SIBLING_SAAS_UPLOADS) {
-        try {
-            if (fs.existsSync(siblingDir)) {
-                fs.writeFileSync(path.join(siblingDir, filename), buffer);
+    // Copiar también al directorio uploads de sys.sipesv.com si existe en el mismo servidor (excepto tests)
+    if (!String(prefix).startsWith('TEST-')) {
+        for (const siblingDir of SIBLING_SAAS_UPLOADS) {
+            try {
+                if (fs.existsSync(siblingDir)) {
+                    fs.writeFileSync(path.join(siblingDir, filename), buffer);
+                }
+            } catch (_) {
+                // Ignorar si no tiene permisos en directorio hermano
             }
-        } catch (_) {
-            // Ignorar si no tiene permisos en directorio hermano
         }
     }
 
@@ -427,9 +451,10 @@ const getTicketById = async (id) => {
     `;
     if (isSharedSaas) {
         query = `
-            SELECT t.*, c.name AS company_name
+            SELECT t.*, c.razon_social AS company_name, b.nombre AS branch_name
             FROM support_tickets t
             LEFT JOIN companies c ON c.id = t.company_id
+            LEFT JOIN branches b ON b.id = t.branch_id
             WHERE t.id = ?
             LIMIT 1
         `;
@@ -448,9 +473,15 @@ const getTicketById = async (id) => {
     );
 
     const enriched = enrichTicketRow(rows[0]);
+    const normalizedMessages = (messages || []).map((m) => ({
+        ...m,
+        sender_user_id: m.sender_user_id ?? m.sender_id ?? null,
+        sender_role: m.sender_role || (m.sender_type === 'user' ? 'user' : 'tech'),
+        source: m.source || (m.sender_type === 'telegram' ? 'telegram' : 'web')
+    }));
     return {
         ...enriched,
-        messages: messages || []
+        messages: normalizedMessages
     };
 };
 
@@ -480,7 +511,9 @@ const createTicket = async ({
     const diagResult = computeDiagnosticRelevance(diagnostics);
     const diagnosticsJson = diagResult.payload ? JSON.stringify(diagResult.payload) : null;
 
-    const effectiveAdminUserId = adminUserId || userId;
+    const effectiveCompanyId = Number(companyId) || 1;
+    const effectiveUserId = Number(userId) || 1;
+    const effectiveAdminUserId = Number(adminUserId || userId) || effectiveUserId;
     const effectiveModuleName = moduleName
         ? (String(moduleName).includes('Admin') ? moduleName : `${moduleName} (Admin)`)
         : 'SIPE Admin';
@@ -496,8 +529,8 @@ const createTicket = async ({
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'abierto', ?, ?, ?, ?, 'admin.sipesv.com', ?, ?, ?, ?, ?)`,
                 [
                     ticketCode,
-                    companyId || null,
-                    userId,
+                    effectiveCompanyId,
+                    effectiveUserId,
                     effectiveAdminUserId,
                     userName || 'Usuario SIPE Admin',
                     userRole || 'user',
@@ -521,16 +554,54 @@ const createTicket = async ({
                 ticketCode = `TKT-${Date.now().toString().slice(-5)}`;
                 continue;
             }
+            if (err.code === 'ER_BAD_FIELD_ERROR') {
+                const [fallbackResult] = await pool.query(
+                    `INSERT INTO support_tickets
+                     (ticket_code, company_id, user_id, user_name, user_role, type, priority, status,
+                      subject, description, module_name, page_url, screenshot_url,
+                      attachments_json, diagnostics_json, diagnostic_relevance, diagnostic_score)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'abierto', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        ticketCode,
+                        effectiveCompanyId,
+                        effectiveUserId,
+                        userName || 'Usuario SIPE Admin',
+                        userRole || 'user',
+                        type || 'problema',
+                        priority || 'media',
+                        subject,
+                        description,
+                        effectiveModuleName,
+                        pageUrl || '/dashboard',
+                        primaryScreenshotUrl,
+                        attachmentsJson,
+                        diagnosticsJson,
+                        diagResult.relevance,
+                        diagResult.score
+                    ]
+                );
+                insertId = fallbackResult.insertId;
+                break;
+            }
             throw err;
         }
     }
 
-    await pool.query(
-        `INSERT INTO support_ticket_messages
-         (ticket_id, sender_user_id, sender_name, sender_role, source, message, attachment_url)
-         VALUES (?, ?, ?, ?, 'web', ?, ?)`,
-        [insertId, userId, userName || 'Usuario', userRole || 'user', description, primaryScreenshotUrl]
-    );
+    try {
+        await pool.query(
+            `INSERT INTO support_ticket_messages
+             (ticket_id, sender_type, sender_id, sender_user_id, sender_name, sender_role, source, message, attachment_url)
+             VALUES (?, 'user', ?, ?, ?, ?, 'web', ?, ?)`,
+            [insertId, effectiveUserId, effectiveUserId, userName || 'Usuario', userRole || 'user', description, primaryScreenshotUrl]
+        );
+    } catch (_) {
+        await pool.query(
+            `INSERT INTO support_ticket_messages
+             (ticket_id, sender_type, sender_id, sender_name, message, attachment_url)
+             VALUES (?, 'user', ?, ?, ?, ?)`,
+            [insertId, effectiveUserId, userName || 'Usuario', description, primaryScreenshotUrl]
+        );
+    }
 
     const ticket = await getTicketById(insertId);
 
@@ -666,9 +737,10 @@ const getTickets = async ({
     try {
         if (isSharedSaas) {
             [rows] = await pool.query(
-                `SELECT t.*, c.name AS company_name
+                `SELECT t.*, c.razon_social AS company_name, b.nombre AS branch_name
                  FROM support_tickets t
                  LEFT JOIN companies c ON c.id = t.company_id
+                 LEFT JOIN branches b ON b.id = t.branch_id
                  WHERE ${whereClause}
                  ORDER BY
                     CASE t.status WHEN 'abierto' THEN 1 WHEN 'en_proceso' THEN 2 WHEN 'resuelto' THEN 3 ELSE 4 END ASC,
@@ -763,24 +835,43 @@ const updateTicketStatus = async (
     const finalVersion = resolvedVersion !== null ? resolvedVersion : current.resolved_version;
 
     if (isResolving) {
-        await pool.query(
-            `UPDATE support_tickets
-             SET status = 'resuelto',
-                 resolution_notes = ?,
-                 resolved_version = ?,
-                 resolved_by = ?,
-                 resolved_by_name = ?,
-                 resolved_at = NOW(),
-                 creator_notified_at = NULL
-             WHERE id = ?`,
-            [
-                finalNotes || 'Ticket resuelto satisfactoriamente.',
-                finalVersion || null,
-                actorId,
-                actorName,
-                id
-            ]
-        );
+        try {
+            await pool.query(
+                `UPDATE support_tickets
+                 SET status = 'resuelto',
+                     resolution_notes = ?,
+                     resolved_version = ?,
+                     resolved_by = ?,
+                     resolved_by_name = ?,
+                     resolved_at = NOW(),
+                     creator_notified_at = NULL
+                 WHERE id = ?`,
+                [
+                    finalNotes || 'Ticket resuelto satisfactoriamente.',
+                    finalVersion || null,
+                    actorId,
+                    actorName,
+                    id
+                ]
+            );
+        } catch (_) {
+            await pool.query(
+                `UPDATE support_tickets
+                 SET status = 'resuelto',
+                     resolution_notes = ?,
+                     resolved_version = ?,
+                     resolved_by_name = ?,
+                     resolved_at = NOW(),
+                     creator_notified_at = NULL
+                 WHERE id = ?`,
+                [
+                    finalNotes || 'Ticket resuelto satisfactoriamente.',
+                    finalVersion || null,
+                    actorName,
+                    id
+                ]
+            );
+        }
     } else {
         await pool.query(`UPDATE support_tickets SET status = ? WHERE id = ?`, [nextStatus, id]);
     }
@@ -796,12 +887,21 @@ const updateTicketStatus = async (
         ? `✅ Ticket marcado como RESUELTO por ${actorName}${finalVersion ? ` (Versión ${finalVersion})` : ''}${finalNotes ? `: "${finalNotes}"` : '.'}`
         : `🔄 Estado cambiado a "${statusLabelMap[nextStatus] || nextStatus}" por ${actorName}.`;
 
-    await pool.query(
-        `INSERT INTO support_ticket_messages
-         (ticket_id, sender_user_id, sender_name, sender_role, source, message)
-         VALUES (?, ?, ?, 'tech', ?, ?)`,
-        [id, actorId, actorName, source, sysMessage]
-    );
+    try {
+        await pool.query(
+            `INSERT INTO support_ticket_messages
+             (ticket_id, sender_type, sender_id, sender_user_id, sender_name, sender_role, source, message)
+             VALUES (?, 'tech', ?, ?, ?, 'tech', ?, ?)`,
+            [id, actorId, actorId, actorName, source, sysMessage]
+        );
+    } catch (_) {
+        await pool.query(
+            `INSERT INTO support_ticket_messages
+             (ticket_id, sender_type, sender_id, sender_name, message)
+             VALUES (?, 'tech', ?, ?, ?)`,
+            [id, actorId, actorName, sysMessage]
+        );
+    }
 
     const updated = await getTicketById(id);
 
@@ -878,12 +978,22 @@ const addTicketMessage = async (
     if (!current) return null;
 
     const attachmentUrl = attachmentBase64 ? saveBase64Screenshot(attachmentBase64, `ticket-reply-${id}`) : null;
-    await pool.query(
-        `INSERT INTO support_ticket_messages
-         (ticket_id, sender_user_id, sender_name, sender_role, source, message, attachment_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [id, senderUserId, senderName, senderRole, source, message, attachmentUrl]
-    );
+    const senderTypeVal = senderRole === 'user' ? 'user' : (source === 'telegram' ? 'telegram' : 'tech');
+    try {
+        await pool.query(
+            `INSERT INTO support_ticket_messages
+             (ticket_id, sender_type, sender_id, sender_user_id, sender_name, sender_role, source, message, attachment_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, senderTypeVal, senderUserId, senderUserId, senderName, senderRole, source, message, attachmentUrl]
+        );
+    } catch (_) {
+        await pool.query(
+            `INSERT INTO support_ticket_messages
+             (ticket_id, sender_type, sender_id, sender_name, message, attachment_url)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [id, senderTypeVal, senderUserId, senderName, message, attachmentUrl]
+        );
+    }
 
     await pool.query(`UPDATE support_tickets SET updated_at = NOW() WHERE id = ?`, [id]);
 
