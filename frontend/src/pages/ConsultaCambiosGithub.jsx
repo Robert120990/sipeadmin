@@ -277,7 +277,7 @@ export default function ConsultaCambiosGithub() {
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Historial_Cambios');
 
-        const fileName = `Cambios_GitHub_${repoName.replace(/\//g, '_')}_v${activeVersion}_${new Date().toISOString().split('T')[0]}.xlsx`;
+        const fileName = `Cambios_GitHub_v${activeVersion}_${new Date().toISOString().split('T')[0]}.xlsx`;
         XLSX.writeFile(wb, fileName);
         addToast('Historial de cambios exportado a Excel correctamente', 'success');
     };
@@ -312,7 +312,7 @@ export default function ConsultaCambiosGithub() {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(8.5);
         doc.setTextColor(203, 213, 225);
-        doc.text(`Repositorio Oficial: https://github.com/${repoName} | Versión Activa: v${activeVersion}`, 14, 18);
+        doc.text(`Versión Activa: v${activeVersion}`, 14, 18);
         doc.text(`Generado: ${new Date().toLocaleString('es-ES')} | Usuario: Auditoría SIPE`, 14, 22);
 
         // Subheader summary boxes
@@ -382,7 +382,7 @@ export default function ConsultaCambiosGithub() {
         setPreviewPdfBlob(blob);
         setPreviewPages(totalPdfPages);
         setPreviewTitle('Auditoría de Cambios y Versiones GitHub');
-        setPreviewSubtitle(`Repositorio: ${repoName} | ${commits.length} registros | Versión v${activeVersion}`);
+        setPreviewSubtitle(`${commits.length} registros | Versión v${activeVersion}`);
         setPreviewModalOpen(true);
     };
 
@@ -419,7 +419,7 @@ export default function ConsultaCambiosGithub() {
                             </span>
                         </h1>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.2rem 0 0 0' }}>
-                            Historial ejecutivo de actualizaciones, nuevas funciones y correcciones subidas al repositorio oficial <strong style={{ color: 'var(--text-color)' }}>{repoName}</strong>.
+                            Historial ejecutivo de actualizaciones, nuevas funciones y correcciones subidas al repositorio oficial.
                         </p>
                     </div>
                 </div>
