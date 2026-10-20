@@ -3,7 +3,7 @@ import {
     Search, CornerDownLeft, ArrowRight, X, Calculator, Copy, Check,
     Ticket, Camera, FileText
 } from 'lucide-react';
-import { evaluateSafeMath } from '../utils/calculatorUtils';
+import { evaluateSafeMath, copyTextToClipboard } from '../utils/calculatorUtils';
 import { useTickets } from '../context/TicketContext';
 import { useToast } from './Toast';
 
@@ -63,12 +63,12 @@ const CommandPalette = ({ isOpen, onClose, navItems = [], onSelectItem }) => {
     const copyCalculatorValue = async (val, label = 'Resultado') => {
         if (val === null || val === undefined) return;
         const cleanText = String(val).replace(/,/g, '');
-        try {
-            await navigator.clipboard.writeText(cleanText);
+        const ok = await copyTextToClipboard(cleanText);
+        if (ok) {
             setCopiedValue(label);
             addToast(`${label} copiado: ${val}`, 'success', 2000);
             setTimeout(() => setCopiedValue(null), 1800);
-        } catch {
+        } else {
             addToast('No se pudo copiar al portapapeles', 'error');
         }
     };
