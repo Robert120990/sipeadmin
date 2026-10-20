@@ -363,7 +363,7 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
 
             assert.ok(created, 'Ticket should be created');
             assert.strictEqual(created.company_id, 1, 'company_id must default to 1 (non-null)');
-            assert.strictEqual(created.ticket_code, 'TKT-0001');
+            assert.strictEqual(created.ticket_code, 'ADM-0001');
             assert.strictEqual(created.screenshot_url, '/api/uploads/sample-from-saas.webp', '/uploads/ must normalize to /api/uploads/');
             assert.ok(emittedEvents.some((e) => e.event === 'ticket:created'), 'Should emit ticket:created');
             assert.ok(emittedEvents.some((e) => e.event === 'notification:new' && e.payload.type === 'ticket_pending'), 'Should emit pending notification to creator');

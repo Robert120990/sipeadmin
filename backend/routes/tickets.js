@@ -426,7 +426,13 @@ router.post('/:id/agy/resend-telegram', authenticateToken, async (req, res) => {
     try {
         const ticket = await ticketService.getTicketById(req.params.id);
         if (!ticket) return res.status(404).json({ message: 'Ticket no encontrado' });
-        res.json({ success: true, message: 'Plan reenviado a Telegram' });
+        await ticketService.approveAndGeneratePlan(req.params.id, {
+            model: ticket.agy_model || 'gemini-4-argon-high',
+            aiNotes: ticket.ai_notes || '',
+            actorName: getActorName(req.user),
+            io: req.io
+        });
+        res.json({ success: true, message: 'Plan reenviado a Telegram con botones de reacción' });
     } catch (err) {
         res.status(500).json({ message: 'Error al reenviar plan a Telegram' });
     }

@@ -320,9 +320,27 @@ const computeDiagnosticRelevance = (diagnostics) => {
 };
 
 const generateTicketCode = async (pool) => {
+    try {
+        const [admRows] = await pool.query(
+            "SELECT ticket_code FROM support_tickets WHERE ticket_code LIKE 'ADM-%' ORDER BY id DESC LIMIT 50"
+        );
+        let maxSeq = 0;
+        for (const r of admRows || []) {
+            const m = String(r.ticket_code || '').match(/^ADM-(\d+)$/i);
+            if (m) {
+                const n = parseInt(m[1], 10);
+                if (!isNaN(n) && n > maxSeq) maxSeq = n;
+            }
+        }
+        if (maxSeq > 0) {
+            return `ADM-${String(maxSeq + 1).padStart(4, '0')}`;
+        }
+    } catch (_) {
+        // Fallback a MAX(id)
+    }
     const [rows] = await pool.query('SELECT MAX(id) AS maxId FROM support_tickets');
     const nextNum = (Number(rows[0]?.maxId) || 0) + 1;
-    return `TKT-${String(nextNum).padStart(4, '0')}`;
+    return `ADM-${String(nextNum).padStart(4, '0')}`;
 };
 
 /**
@@ -389,26 +407,92 @@ const createAndEmitAdminNotification = async ({ io, userId, type, title, message
     }
 };
 
+const buildInteractiveTicketKeyboard = (ticketId, status = 'abierto') => {
+    if (!ticketId) return undefined;
+    if (status === 'resuelto' || status === 'cerrado') {
+        return { inline_keyboard: [[{ text: '💬 Enviar Comentario Adicional', callback_data: `ticket_comment:${ticketId}` }]] };
+    }
+    return {
+        inline_keyboard: [
+            [{ text: '🤖 Aprobar y Planificar AGY', callback_data: `agy_start_plan:${ticketId}` }],
+            [{ text: '🛠️ En Proceso', callback_data: `ticket_take:${ticketId}` }, { text: '✅ Marcar Resuelto', callback_data: `ticket_resolve:${ticketId}` }],
+            [{ text: '✍️ Resolver con Nota', callback_data: `ticket_resolve_note:${ticketId}` }, { text: '💬 Comentar al Usuario', callback_data: `ticket_comment:${ticketId}` }]
+        ]
+    };
+};
+
+const buildAgyPlanApprovalKeyboard = (ticketId) => ({
+    inline_keyboard: [
+        [{ text: '✅ Aprobar y Ejecutar Plan', callback_data: `agy_plan_approve:${ticketId}` }],
+        [
+            { text: '✏️ Ampliar / Re-planificar', callback_data: `agy_plan_feedback:${ticketId}` },
+            { text: '❌ Denegar Plan', callback_data: `agy_plan_reject:${ticketId}` }
+        ]
+    ]
+});
+
 /**
- * Envía aviso a Telegram si el bot de SIPE está configurado
+ * Envía aviso interactivo a Telegram compartiendo el bot y chats técnicos de sys.sipesv.com (db_sistema_saas)
+ * para que los administradores puedan reaccionar con botones inline (Aprobar AGY, En Proceso, Resolver, Comentar).
  */
-const sendTelegramSupportAlert = async (htmlText) => {
+const sendTelegramSupportAlert = async (htmlText, options = {}) => {
     try {
+        const { pool: ticketPool, isSharedSaas } = await getTicketPool();
         const localDb = getDb();
-        const [cfgRows] = await localDb.query('SELECT bot_token, is_active FROM telegram_config WHERE id = 1 LIMIT 1');
-        const botToken = cfgRows?.[0]?.bot_token || process.env.TELEGRAM_BOT_TOKEN;
-        if (!botToken) return;
-        const [tgUsers] = await localDb.query('SELECT telegram_user_id FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1');
-        const targets = (tgUsers || []).map((u) => u.telegram_user_id).filter(Boolean);
-        if (process.env.TELEGRAM_SUPPORT_CHAT_ID && !targets.includes(process.env.TELEGRAM_SUPPORT_CHAT_ID)) {
-            targets.push(process.env.TELEGRAM_SUPPORT_CHAT_ID);
+        let botToken = null;
+        const targetChatIds = new Set();
+
+        // 1. Priorizar bot y destinatarios de db_sistema_saas (donde está conectado el webhook interactivo de tickets/AGY)
+        if (isSharedSaas && ticketPool) {
+            try {
+                const [saasCfg] = await ticketPool.query('SELECT bot_token, is_active, support_tickets_active FROM telegram_settings WHERE id = 1 LIMIT 1');
+                if (saasCfg?.[0]?.bot_token && saasCfg[0].is_active !== 0 && saasCfg[0].support_tickets_active !== 0) {
+                    botToken = saasCfg[0].bot_token;
+                }
+                const [saasChats] = await ticketPool.query(
+                    `SELECT DISTINCT chat_id FROM telegram_chat_bindings WHERE COALESCE(receive_support_tickets, 1) = 1`
+                );
+                for (const c of saasChats || []) {
+                    if (c.chat_id) targetChatIds.add(String(c.chat_id));
+                }
+            } catch (_) { /* ignore */ }
         }
-        for (const chatId of targets.slice(0, 5)) {
-            const payload = JSON.stringify({
+
+        // 2. Fallback al bot local de db_sipe_admin si no se obtuvo de SaaS
+        if (!botToken) {
+            try {
+                const [cfgRows] = await localDb.query('SELECT bot_token, is_active FROM telegram_config WHERE id = 1 LIMIT 1');
+                botToken = cfgRows?.[0]?.bot_token || process.env.TELEGRAM_BOT_TOKEN;
+            } catch (_) {
+                botToken = process.env.TELEGRAM_BOT_TOKEN;
+            }
+        }
+        if (!botToken) return false;
+
+        try {
+            const [tgUsers] = await localDb.query('SELECT telegram_user_id FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1');
+            for (const u of tgUsers || []) {
+                if (u.telegram_user_id) targetChatIds.add(String(u.telegram_user_id));
+            }
+        } catch (_) { /* ignore */ }
+
+        if (process.env.TELEGRAM_SUPPORT_CHAT_ID) {
+            targetChatIds.add(String(process.env.TELEGRAM_SUPPORT_CHAT_ID));
+        }
+
+        const replyMarkup = options.replyMarkup || (options.ticketId ? buildInteractiveTicketKeyboard(options.ticketId, options.status || 'abierto') : undefined);
+        const targets = Array.from(targetChatIds).slice(0, 8);
+
+        for (const chatId of targets) {
+            const payloadObj = {
                 chat_id: chatId,
                 text: htmlText,
                 parse_mode: 'HTML'
-            });
+            };
+            if (replyMarkup) {
+                payloadObj.reply_markup = replyMarkup;
+            }
+            const payload = JSON.stringify(payloadObj);
             const req = https.request({
                 hostname: 'api.telegram.org',
                 path: `/bot${botToken}/sendMessage`,
@@ -417,14 +501,16 @@ const sendTelegramSupportAlert = async (htmlText) => {
                     'Content-Type': 'application/json',
                     'Content-Length': Buffer.byteLength(payload)
                 },
-                timeout: 6000
+                timeout: 8000
             });
             req.on('error', () => {});
             req.write(payload);
             req.end();
         }
+        return targets.length > 0;
     } catch (_) {
         // Silencioso para no bloquear flujo principal
+        return false;
     }
 };
 
@@ -582,7 +668,7 @@ const createTicket = async ({
             break;
         } catch (err) {
             if (err.code === 'ER_DUP_ENTRY' && attempt < 2) {
-                ticketCode = `TKT-${Date.now().toString().slice(-5)}`;
+                ticketCode = `ADM-${Date.now().toString().slice(-5)}`;
                 continue;
             }
             if (err.code === 'ER_BAD_FIELD_ERROR') {
@@ -692,13 +778,15 @@ const createTicket = async ({
     }
 
     sendTelegramSupportAlert(
-        `🎫 <b>NUEVO TICKET DE SOPORTE (${ticket.ticket_code})</b>\n` +
-        `🌐 <b>Origen:</b> admin.sipesv.com\n` +
-        `👤 <b>Solicitante:</b> ${ticket.user_name}\n` +
-        `📂 <b>Módulo:</b> ${ticket.module_name || 'General'}\n` +
-        `⚡ <b>Prioridad:</b> ${String(ticket.priority).toUpperCase()} (${ticket.type})\n` +
+        `🎫 <b>NUEVO TICKET DE SOPORTE — #${ticket.ticket_code}</b>\n` +
+        `🌐 <b>Proyecto:</b> <code>admin.sipesv.com</code> (SIPE Admin)\n\n` +
         `📌 <b>Asunto:</b> ${ticket.subject}\n` +
-        `📝 <b>Detalle:</b> ${String(ticket.description || '').slice(0, 350)}`
+        `⚡ <b>Prioridad:</b> ${String(ticket.priority).toUpperCase()}  |  <b>Tipo:</b> ${ticket.type}\n` +
+        `📂 <b>Módulo:</b> ${ticket.module_name || 'SIPE Admin'} (<code>${ticket.page_url || '/dashboard'}</code>)\n` +
+        `👤 <b>Solicitante:</b> ${ticket.user_name}\n\n` +
+        `📝 <b>Descripción:</b>\n${String(ticket.description || '').slice(0, 400)}\n\n` +
+        `<i>Selecciona una acción abajo o usa /agy ${ticket.ticket_code} o /resolver ${ticket.ticket_code} &lt;nota&gt;</i>`,
+        { ticketId: ticket.id, status: ticket.status }
     );
 
     return ticket;
@@ -1076,6 +1164,17 @@ const addTicketMessage = async (
         io.emit('ticket:updated', updated);
     }
 
+    if (senderRole === 'user') {
+        sendTelegramSupportAlert(
+            `💬 <b>NUEVO COMENTARIO EN TICKET #${updated.ticket_code}</b>\n` +
+            `🌐 <b>Proyecto:</b> <code>admin.sipesv.com</code>\n` +
+            `📌 <b>Asunto:</b> ${updated.subject}\n` +
+            `👤 <b>Usuario:</b> ${senderName}\n\n` +
+            `"${String(message || '').slice(0, 400)}"`,
+            { ticketId: updated.id, status: updated.status }
+        );
+    }
+
     return updated;
 };
 
@@ -1426,6 +1525,20 @@ const approveAndGeneratePlan = async (id, { model = 'gemini-4-argon-high', aiNot
 
     const updated = await getTicketById(id);
     if (io) io.emit('ticket:updated', updated);
+
+    sendTelegramSupportAlert(
+        `🤖 <b>PLAN DE EJECUCIÓN AGY (v${nextVersion}) — #${updated.ticket_code}</b>\n` +
+        `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
+        `🖥️ <b>Entorno:</b> <code>Consola AGY</code>  |  🧠 <b>Modelo:</b> <code>${model}</code>\n` +
+        `📌 <b>Asunto:</b> ${updated.subject}\n` +
+        `📂 <b>Módulo / Ruta:</b> ${updated.module_name || 'SIPE Admin'} (<code>${updated.page_url || '/dashboard'}</code>)\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `${planMd}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `👇 <b>Selecciona una decisión para la Consola AGY:</b>`,
+        { replyMarkup: buildAgyPlanApprovalKeyboard(updated.id) }
+    );
+
     return updated;
 };
 
@@ -1442,6 +1555,15 @@ const executeApprovedPlan = async (id, { actorName = 'Administrador', io = null 
     );
     const updated = await getTicketById(id);
     if (io) io.emit('ticket:updated', updated);
+
+    sendTelegramSupportAlert(
+        `✅ <b>PLAN AGY APROBADO — #${updated.ticket_code}</b>\n` +
+        `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
+        `📌 <b>Asunto:</b> ${updated.subject}\n` +
+        `👤 <b>Aprobado por:</b> ${actorName}`,
+        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, updated.status) }
+    );
+
     return updated;
 };
 
@@ -1458,6 +1580,16 @@ const rejectPlan = async (id, { reason = 'Denegado por administrador', actorName
     );
     const updated = await getTicketById(id);
     if (io) io.emit('ticket:updated', updated);
+
+    sendTelegramSupportAlert(
+        `❌ <b>PLAN AGY DENEGADO — #${updated.ticket_code}</b>\n` +
+        `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
+        `📌 <b>Asunto:</b> ${updated.subject}\n` +
+        `👤 <b>Por:</b> ${actorName}\n` +
+        `📝 <b>Motivo:</b> ${reason}`,
+        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, updated.status) }
+    );
+
     return updated;
 };
 
