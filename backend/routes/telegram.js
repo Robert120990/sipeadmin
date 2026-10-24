@@ -53,6 +53,9 @@ router.post('/webhook', (req, res) => {
     // Verificación de secret token con comparación constante en tiempo
     const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
     const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (process.env.NODE_ENV === 'production' && !expectedSecret) {
+        return res.status(503).json({ error: 'TELEGRAM_WEBHOOK_SECRET no configurado en producción' });
+    }
     if (expectedSecret && !safeCompareSecret(String(secretHeader || ''), String(expectedSecret))) {
         return res.status(403).json({ error: 'Secret token inválido' });
     }

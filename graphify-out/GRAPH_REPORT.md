@@ -1,7 +1,7 @@
 # Graph Report - SIPEOFI  (2026-10-24)
 
 ## Corpus Check
-- 228 files · ~520,806 words
+- 228 files · ~520,854 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 10 file(s) not represented in the graph (top: (none) 3, .example 2, .bat 2)
 
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `40218397`
+- Built from commit: `dc414f28`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -514,9 +514,9 @@ _Questions this graph is uniquely positioned to answer:_
   _18 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Modal` be split into smaller, more focused modules?**
   _Cohesion score 0.12753623188405797 - nodes in this community are weakly interconnected._
-- **Why does `authenticateToken()` connect `authenticateToken` to `cheques.js`, `conciliacion.js`, `tasks.js`, `server.js`, `operaciones.js`, `consultas.js`, `middleware/auth.js`, `config.js`, `githubChanges.js`, `middleware/bitacora.js`, `withRetry`, `onedrive.js`, `ai.js`, `finanzas.js`, `telegram.js`, `sendSafeError`, `bancos.js`?**
+- **Why does `react` connect `useToast` to `Modal`, `lazyPages.js`, `DashboardLayout.jsx`, `frontend/package.json`, `VentasEstaciones.jsx`, `TicketContext.jsx`, `ReportPreviewModal`, `ConsultasPreciosCompetencia.jsx`, `Dashboard.jsx`, `SupportTickets.jsx`, `NotificationBell.jsx`, `DesignerView.jsx`, `FinanzasInversiones.jsx`, `themeUtils.js`, `DesignCanvas.jsx`, `AGENTS.md`, `FinanzasPrestamos.jsx`, `errorDiagnostics.js`?**
   _High betweenness centrality (0.032) - this node is a cross-community bridge._
 - **Should `lazyPages.js` be split into smaller, more focused modules?**
   _Cohesion score 0.13376623376623376 - nodes in this community are weakly interconnected._
-- **Why does `react` connect `useToast` to `Modal`, `lazyPages.js`, `DashboardLayout.jsx`, `frontend/package.json`, `VentasEstaciones.jsx`, `TicketContext.jsx`, `ReportPreviewModal`, `ConsultasPreciosCompetencia.jsx`, `Dashboard.jsx`, `SupportTickets.jsx`, `NotificationBell.jsx`, `DesignerView.jsx`, `FinanzasInversiones.jsx`, `themeUtils.js`, `DesignCanvas.jsx`, `AGENTS.md`, `FinanzasPrestamos.jsx`, `errorDiagnostics.js`?**
-  _High betweenness centrality (0.032) - this node is a cross-community bridge._
+- **Why does `authenticateToken()` connect `authenticateToken` to `cheques.js`, `conciliacion.js`, `tasks.js`, `server.js`, `operaciones.js`, `consultas.js`, `middleware/auth.js`, `config.js`, `githubChanges.js`, `middleware/bitacora.js`, `withRetry`, `onedrive.js`, `ai.js`, `finanzas.js`, `telegram.js`, `sendSafeError`, `bancos.js`?**
+  _High betweenness centrality (0.031) - this node is a cross-community bridge._

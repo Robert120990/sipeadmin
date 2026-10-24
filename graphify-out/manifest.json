@@ -66,10 +66,10 @@
     "semantic_hash": "cfa6cd6595f7f3e45450283a6825e5e9"
   },
   "backend/package.json": {
-    "mtime": 1791036945.2789805,
-    "seen": 1791822880.7085679,
-    "ast_hash": "9ba83791924f71474fd6d96d52685d0b",
-    "semantic_hash": "9ba83791924f71474fd6d96d52685d0b"
+    "mtime": 1792884304.3817036,
+    "seen": 1792884397.0716672,
+    "ast_hash": "673508769014ebdb3735e1eb37da9d66",
+    "semantic_hash": ""
   },
   "backend/routes/ai.js": {
     "mtime": 1792115922.7544818,
@@ -180,9 +180,9 @@
     "semantic_hash": ""
   },
   "backend/routes/telegram.js": {
-    "mtime": 1792881903.9686975,
-    "seen": 1792882144.410899,
-    "ast_hash": "62cbc03d2bf275aa660004a11ff78973",
+    "mtime": 1792884247.674428,
+    "seen": 1792884397.0716672,
+    "ast_hash": "a981307575f191c2805748a87b7fc07a",
     "semantic_hash": ""
   },
   "backend/scripts/backup-db.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1792537317.9741912,
-    "seen": 1792882144.410899,
-    "ast_hash": "d635a76d4134f169783b151b745bd275",
+    "mtime": 1792884284.3130147,
+    "seen": 1792884397.0716672,
+    "ast_hash": "02fabc652aed1fcb3aadf18a6d5c8808",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -1320,15 +1320,15 @@
     "semantic_hash": ""
   },
   "backend/routes/tickets.js": {
-    "mtime": 1792465822.7510078,
-    "seen": 1792507912.4130576,
-    "ast_hash": "3f07488fce3a3f2869cf59abe910c4c7",
+    "mtime": 1792884243.5649686,
+    "seen": 1792884397.0716672,
+    "ast_hash": "53bfd7e3540a5a55076caeab6a5fcca5",
     "semantic_hash": ""
   },
   "backend/services/ticketService.js": {
-    "mtime": 1792465966.7356484,
-    "seen": 1792507912.4130576,
-    "ast_hash": "4cf3e2d21b1d21c0f5d6765366a0c7a9",
+    "mtime": 1792884245.6637435,
+    "seen": 1792884397.0716672,
+    "ast_hash": "9a21b3687821ec7ab578be26cd6beb1f",
     "semantic_hash": ""
   },
   "backend/test/supportTickets.test.js": {

@@ -144,6 +144,9 @@ router.post('/ai-bundle/resolve-batch', authenticateToken, async (req, res) => {
 // GET /api/tickets/agy-settings
 router.get('/agy-settings', authenticateToken, async (req, res) => {
     try {
+        if (!canManageTickets(req.user)) {
+            return res.status(403).json({ message: 'Permisos insuficientes' });
+        }
         const cfg = await ticketService.getAgySettings();
         res.json({ success: true, data: cfg });
     } catch (err) {
@@ -424,6 +427,9 @@ router.post('/:id/agy/reject', authenticateToken, async (req, res) => {
 // POST /api/tickets/:id/agy/resend-telegram
 router.post('/:id/agy/resend-telegram', authenticateToken, async (req, res) => {
     try {
+        if (!canManageTickets(req.user)) {
+            return res.status(403).json({ message: 'Permisos insuficientes' });
+        }
         const ticket = await ticketService.getTicketById(req.params.id);
         if (!ticket) return res.status(404).json({ message: 'Ticket no encontrado' });
         await ticketService.approveAndGeneratePlan(req.params.id, {

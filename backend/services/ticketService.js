@@ -1451,8 +1451,11 @@ const getAgySettings = async () => {
         default_model: 'gemini-4-argon-high',
         execution_mode: 'auto'
     };
+    const { ssh_password, ...safeCfg } = cfg;
     return {
-        ...cfg,
+        ...safeCfg,
+        ssh_password: '',
+        has_ssh_password: Boolean(ssh_password),
         available_models: [
             { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Máxima Velocidad e Inteligencia)' },
             { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
