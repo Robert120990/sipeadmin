@@ -255,7 +255,7 @@ describe('Telegram Auditor Service Unit Tests', () => {
 
             // Gemini API
             assert.ok(diag.gemini);
-            assert.strictEqual(diag.gemini.configured, !!process.env.GEMINI_API_KEY);
+            assert.strictEqual(typeof diag.gemini.configured, 'boolean');
             assert.strictEqual(diag.gemini.model, 'gemini-2.0-flash');
 
             // Sesiones y memoria

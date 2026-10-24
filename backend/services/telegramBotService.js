@@ -2841,21 +2841,184 @@ const formatIntelligentGuidanceMessage = () => {
 };
 
 /**
- * Obtener clave de Gemini API (desde tabla telegram_config o variable de entorno)
+ * Sanitizar y validar una clave de API de Gemini, descartando valores placeholder o malformados
  */
-const getGeminiApiKey = async () => {
+const sanitizeGeminiApiKey = (rawKey) => {
+    if (!rawKey || typeof rawKey !== 'string') return null;
+    let key = rawKey.trim()
+        .replace(/^GEMINI_API_KEY\s*=\s*/i, '')
+        .replace(/^GOOGLE_API_KEY\s*=\s*/i, '')
+        .replace(/^["'`]+|["'`]+$/g, '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .trim();
+
+    if (!key || key.length < 10) return null;
+
+    const lower = key.toLowerCase();
+    if (
+        lower === 'your_gemini_api_key_here' ||
+        lower === 'your_api_key_here' ||
+        lower === 'tu_api_key_aqui' ||
+        lower === 'tu_gemini_api_key' ||
+        lower === 'placeholder' ||
+        lower === 'null' ||
+        lower === 'undefined' ||
+        lower === 'none' ||
+        lower.startsWith('your_') ||
+        lower.includes('api_key_here') ||
+        lower.includes('tu_clave_aqui')
+    ) {
+        return null;
+    }
+
+    return key;
+};
+
+const ensuredTelegramSchemaPools = new WeakSet();
+
+/**
+ * Asegurar que la tabla telegram_config tenga las columnas necesarias en MySQL 8.0+
+ * (Auto-reparación en caliente si la migración previa falló por sintaxis IF NOT EXISTS de MariaDB)
+ */
+const ensureTelegramConfigSchema = async (db) => {
+    if (!db || typeof db.query !== 'function') return;
+    if (ensuredTelegramSchemaPools.has(db)) return;
+    ensuredTelegramSchemaPools.add(db);
+
+    try {
+        await db.query("ALTER TABLE telegram_config MODIFY COLUMN bot_token VARCHAR(255) NOT NULL DEFAULT ''");
+    } catch (_) {
+        // Ignorar si ya está aplicado o es un mock de test
+    }
+    try {
+        await db.query('ALTER TABLE telegram_config ADD COLUMN gemini_api_key VARCHAR(255) NULL');
+    } catch (_) {
+        // Ignorar ER_DUP_FIELDNAME (1060) si la columna ya existe
+    }
+    try {
+        await db.query('ALTER TABLE telegram_config ADD COLUMN openclaw_url VARCHAR(255) NULL');
+    } catch (_) {
+        // Ignorar ER_DUP_FIELDNAME (1060) si la columna ya existe
+    }
+};
+
+const isRunningNodeTests = () => {
+    return Boolean(
+        process.env.NODE_TEST_CONTEXT ||
+        (Array.isArray(process.execArgv) && process.execArgv.some(arg => String(arg).includes('--test'))) ||
+        (Array.isArray(process.argv) && process.argv.some(arg => String(arg).includes('.test.js')))
+    );
+};
+
+let cachedSiblingEnvKeys = null;
+
+/**
+ * Buscar claves de Gemini configuradas en servicios hermanos del mismo VPS (ej. SIPEWEBgas / nova-saas)
+ */
+const getSiblingEnvGeminiKeys = () => {
+    if (isRunningNodeTests()) return [];
+    if (Array.isArray(cachedSiblingEnvKeys)) return cachedSiblingEnvKeys;
+
+    const foundKeys = [];
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const candidatePaths = [
+            path.resolve(__dirname, '../.env'),
+            '/opt/nova-saas/server/.env',
+            '/var/www/SIPEWEBgas/server/.env',
+            '/var/www/nova-saas/server/.env',
+            '/home/sistemas/SIPEWEBgas/server/.env',
+            '/var/www/sipeadmin/backend/.env',
+            '/home/sistemas/sipeadmin/backend/.env'
+        ];
+
+        for (const envPath of candidatePaths) {
+            try {
+                if (!fs.existsSync(envPath)) continue;
+                const content = fs.readFileSync(envPath, 'utf8');
+                const lines = content.split(/\r?\n/);
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || trimmed.startsWith('#')) continue;
+                    const match = trimmed.match(/^(?:GEMINI_API_KEY|GOOGLE_API_KEY)\s*=\s*(.+)$/i);
+                    if (match && match[1]) {
+                        const clean = sanitizeGeminiApiKey(match[1]);
+                        if (clean && !foundKeys.includes(clean)) {
+                            foundKeys.push(clean);
+                        }
+                    }
+                }
+            } catch (_) {
+                // Ignorar archivos sin permisos de lectura
+            }
+        }
+    } catch (_) {
+        // Ignorar errores de FS
+    }
+
+    cachedSiblingEnvKeys = foundKeys;
+    return foundKeys;
+};
+
+/**
+ * Actualizar la clave de Gemini en memoria del proceso cuando se guarda desde la UI
+ */
+const setRuntimeGeminiApiKey = (rawKey) => {
+    const clean = sanitizeGeminiApiKey(rawKey);
+    if (clean && !isRunningNodeTests()) {
+        process.env.GEMINI_API_KEY = clean;
+    }
+    return clean;
+};
+
+/**
+ * Obtener lista priorizada de claves candidatas de Gemini API
+ * (1. Base de datos telegram_config, 2. Variables de entorno, 3. Servicios hermanos en VPS)
+ */
+const getGeminiApiKeyCandidates = async () => {
+    const candidates = [];
+    const addCandidate = (raw) => {
+        const clean = sanitizeGeminiApiKey(raw);
+        if (clean && !candidates.includes(clean)) {
+            candidates.push(clean);
+        }
+    };
+
     try {
         const db = getDb();
-        if (db) {
-            const [rows] = await db.query('SELECT gemini_api_key FROM telegram_config WHERE id = 1 LIMIT 1');
-            if (rows && rows.length > 0 && rows[0].gemini_api_key && rows[0].gemini_api_key.trim().length > 10) {
-                return rows[0].gemini_api_key.trim();
+        if (db && typeof db.query === 'function') {
+            try {
+                const [rows] = await db.query('SELECT gemini_api_key FROM telegram_config WHERE id = 1 LIMIT 1');
+                if (rows && rows.length > 0 && rows[0].gemini_api_key) {
+                    addCandidate(rows[0].gemini_api_key);
+                }
+            } catch (dbErr) {
+                if (dbErr && (dbErr.code === 'ER_BAD_FIELD_ERROR' || String(dbErr.message || '').includes('gemini_api_key'))) {
+                    await ensureTelegramConfigSchema(db);
+                }
             }
         }
     } catch (_) {
         // Base de datos ocupada o no disponible en pruebas
     }
-    return (process.env.GEMINI_API_KEY || '').trim() || null;
+
+    addCandidate(process.env.GEMINI_API_KEY);
+    addCandidate(process.env.GOOGLE_API_KEY);
+
+    for (const siblingKey of getSiblingEnvGeminiKeys()) {
+        addCandidate(siblingKey);
+    }
+
+    return candidates;
+};
+
+/**
+ * Obtener clave principal de Gemini API (desde tabla telegram_config, variable de entorno o fallback VPS)
+ */
+const getGeminiApiKey = async () => {
+    const candidates = await getGeminiApiKeyCandidates();
+    return candidates.length > 0 ? candidates[0] : null;
 };
 
 /**
@@ -2880,85 +3043,111 @@ const sanitizeAudioMimeType = (rawMime = '') => {
     return clean || 'audio/ogg';
 };
 
+const GEMINI_FALLBACK_MODELS = [
+    'gemini-2.0-flash',
+    'gemini-2.5-flash',
+    'gemini-flash-latest',
+    'gemini-2.5-flash-lite',
+    'gemini-1.5-flash'
+];
+
+const isGeminiApiKeyInvalidError = (err) => {
+    const msg = String(err?.message || err || '');
+    return /(API_KEY_INVALID|API key not valid|API key expired|INVALID_ARGUMENT.*API key|key not valid)/i.test(msg);
+};
+
 /**
  * Consulta con Gemini API (GenAI) si está configurado en el servidor
  */
 const askGeminiAssistant = async (prompt, dataContext) => {
-    const apiKey = await getGeminiApiKey();
-    if (!apiKey) return null;
-    try {
-        const { GoogleGenAI } = require('@google/genai');
-        const ai = new GoogleGenAI({ apiKey });
-        const systemInstruction = `Eres el asistente gerencial de SIPE Admin para estaciones de servicio de combustible en El Salvador.
+    const candidates = await getGeminiApiKeyCandidates();
+    if (candidates.length === 0) return null;
+
+    const { GoogleGenAI } = require('@google/genai');
+    const systemInstruction = `Eres el asistente gerencial de SIPE Admin para estaciones de servicio de combustible en El Salvador.
 Responde de forma ejecutiva, concisa, cálida y directa en español salvadoreño formal.
 Usa viñetas limpias y negritas en HTML para Telegram (<b>texto</b>, <code>código</code>).
 Si te preguntan comparaciones o análisis, apóyate en el contexto de datos reales proporcionado.`;
 
-        const result = await ai.models.generateContent({
-            model: 'gemini-2.0-flash',
-            contents: [{
-                role: 'user',
-                parts: [{ text: `CONTEXTO OPERATIVO REAL: ${JSON.stringify(dataContext)}\n\nPREGUNTA DEL USUARIO: ${prompt}` }]
-            }],
-            config: { systemInstruction }
-        });
+    for (const apiKey of candidates) {
+        const ai = new GoogleGenAI({ apiKey });
+        for (const modelName of GEMINI_FALLBACK_MODELS) {
+            try {
+                const result = await ai.models.generateContent({
+                    model: modelName,
+                    contents: [{
+                        role: 'user',
+                        parts: [{ text: `CONTEXTO OPERATIVO REAL: ${JSON.stringify(dataContext)}\n\nPREGUNTA DEL USUARIO: ${prompt}` }]
+                    }],
+                    config: { systemInstruction }
+                });
 
-        const reply = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text;
-        return reply ? reply.trim() : null;
-    } catch (e) {
-        console.warn('[TelegramBot] Gemini fallback error:', e.message);
-        return null;
+                const reply = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (reply) return reply.trim();
+            } catch (e) {
+                console.warn(`[TelegramBot] Gemini fallback error (${modelName}):`, e.message);
+                if (isGeminiApiKeyInvalidError(e)) break;
+            }
+        }
     }
+    return null;
 };
 
 /**
- * Transcribir nota de voz de Telegram a texto utilizando Gemini 2.0 Flash (@google/genai)
+ * Transcribir nota de voz de Telegram a texto utilizando Gemini (@google/genai)
+ * Soporta rotación automática de claves candidatas y modelos de respaldo
  */
 const transcribeTelegramVoice = async (audioBuffer, mimeType = 'audio/ogg') => {
     if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0) {
         throw new Error('Buffer de audio inválido o vacío');
     }
 
-    const apiKey = await getGeminiApiKey();
-    if (!apiKey) {
+    const candidates = await getGeminiApiKeyCandidates();
+    if (candidates.length === 0) {
         throw new Error('GEMINI_API_KEY no configurado en el servidor ni en telegram_config');
     }
 
     const { GoogleGenAI } = require('@google/genai');
-    const ai = new GoogleGenAI({ apiKey });
     const cleanMime = sanitizeAudioMimeType(mimeType);
     const base64Audio = audioBuffer.toString('base64');
     const prompt = 'Transcribe exactamente el siguiente mensaje de voz en español salvadoreño formal, sin añadir notas explicativas, etiquetas ni comentarios adicionales, únicamente el texto que dijo el usuario.';
 
-    const payload = {
-        model: 'gemini-2.0-flash',
-        contents: [
-            {
-                role: 'user',
-                parts: [
-                    { text: prompt },
-                    {
-                        inlineData: {
-                            mimeType: cleanMime,
-                            data: base64Audio
+    let lastErr = null;
+    for (const apiKey of candidates) {
+        const ai = new GoogleGenAI({ apiKey });
+        for (const modelName of GEMINI_FALLBACK_MODELS) {
+            try {
+                const payload = {
+                    model: modelName,
+                    contents: [
+                        {
+                            role: 'user',
+                            parts: [
+                                { text: prompt },
+                                {
+                                    inlineData: {
+                                        mimeType: cleanMime,
+                                        data: base64Audio
+                                    }
+                                }
+                            ]
                         }
-                    }
-                ]
+                    ]
+                };
+                const response = await ai.models.generateContent(payload);
+                const text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text;
+                return text ? text.trim() : '';
+            } catch (err) {
+                lastErr = err;
+                console.warn(`[TelegramBot] Fallo transcripción con ${modelName}:`, err.message);
+                if (isGeminiApiKeyInvalidError(err)) {
+                    break;
+                }
             }
-        ]
-    };
-
-    let response;
-    try {
-        response = await ai.models.generateContent(payload);
-    } catch (primaryErr) {
-        console.warn('[TelegramBot] Fallo transcripción con gemini-2.0-flash, reintentando con gemini-1.5-flash:', primaryErr.message);
-        payload.model = 'gemini-1.5-flash';
-        response = await ai.models.generateContent(payload);
+        }
     }
 
-    const text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text;
-    return text ? text.trim() : '';
+    throw lastErr || new Error('No fue posible transcribir la nota de voz con Gemini API');
 };
 
 /**
@@ -2969,13 +3158,12 @@ const analyzeTelegramImageReceipt = async (imageBuffer, mimeType = 'image/jpeg',
         throw new Error('Buffer de imagen inválido o vacío');
     }
 
-    const apiKey = await getGeminiApiKey();
-    if (!apiKey) {
+    const candidates = await getGeminiApiKeyCandidates();
+    if (candidates.length === 0) {
         throw new Error('GEMINI_API_KEY no configurado en el servidor ni en telegram_config');
     }
 
     const { GoogleGenAI } = require('@google/genai');
-    const ai = new GoogleGenAI({ apiKey });
     const cleanImageMime = ((mimeType || 'image/jpeg').split(';')[0].trim().toLowerCase()) || 'image/jpeg';
     const base64Image = imageBuffer.toString('base64');
 
@@ -2993,31 +3181,45 @@ Extrae los datos y responde ÚNICAMENTE con un objeto JSON válido con la siguie
   "observaciones": "Observación ejecutiva breve sobre la validez y legibilidad del documento"
 }`;
 
-    const payload = {
-        model: 'gemini-2.0-flash',
-        contents: [
-            {
-                role: 'user',
-                parts: [
-                    { text: prompt },
-                    {
-                        inlineData: {
-                            mimeType: cleanImageMime,
-                            data: base64Image
+    let response = null;
+    let lastErr = null;
+    for (const apiKey of candidates) {
+        const ai = new GoogleGenAI({ apiKey });
+        for (const modelName of GEMINI_FALLBACK_MODELS) {
+            try {
+                const payload = {
+                    model: modelName,
+                    contents: [
+                        {
+                            role: 'user',
+                            parts: [
+                                { text: prompt },
+                                {
+                                    inlineData: {
+                                        mimeType: cleanImageMime,
+                                        data: base64Image
+                                    }
+                                }
+                            ]
                         }
-                    }
-                ]
+                    ]
+                };
+                response = await ai.models.generateContent(payload);
+                lastErr = null;
+                break;
+            } catch (err) {
+                lastErr = err;
+                console.warn(`[TelegramBot] Fallo análisis de imagen con ${modelName}:`, err.message);
+                if (isGeminiApiKeyInvalidError(err)) {
+                    break;
+                }
             }
-        ]
-    };
+        }
+        if (response) break;
+    }
 
-    let response;
-    try {
-        response = await ai.models.generateContent(payload);
-    } catch (primaryErr) {
-        console.warn('[TelegramBot] Fallo análisis de imagen con gemini-2.0-flash, reintentando con gemini-1.5-flash:', primaryErr.message);
-        payload.model = 'gemini-1.5-flash';
-        response = await ai.models.generateContent(payload);
+    if (!response) {
+        throw lastErr || new Error('No fue posible analizar la imagen con Gemini Vision');
     }
 
     const rawReply = (response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
@@ -4068,7 +4270,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
     }
 
     // 7. Si Gemini API está activo, intentar respuesta generativa
-    if (process.env.GEMINI_API_KEY) {
+    if (await getGeminiApiKey()) {
         try {
             const data = await getConsolidadoVentas(parsed.targetDate);
             const aiReply = await askGeminiAssistant(rawText, {
@@ -4193,10 +4395,15 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                 // Ignorar fallo de registro en auditoría
             }
 
+            const isKeyError = isGeminiApiKeyInvalidError(voiceErr);
+            const friendlyReason = isKeyError
+                ? 'La clave de Gemini API configurada es inválida o ha expirado. Un administrador debe actualizarla en <b>Seguridad &gt; Usuarios de Telegram &gt; Configurar Token / IA</b> en SIPE Admin.'
+                : 'Ocurrió un inconveniente al descargar o transcribir tu audio (' + escapeHtml(voiceErr.message || 'error de procesamiento') + ').';
+
             await sendTelegramMessage(
                 chatId,
                 '🎙️ <b>No se pudo procesar la nota de voz</b>\n\n' +
-                'Ocurrió un inconveniente al descargar o transcribir tu audio (' + escapeHtml(voiceErr.message || 'error de procesamiento') + ').\n' +
+                friendlyReason + '\n\n' +
                 'Por favor, intenta nuevamente o escribe tu consulta por texto para atenderte de inmediato.',
                 getMainReplyKeyboard()
             );
@@ -5522,6 +5729,10 @@ module.exports = {
     findFuelByKey,
     transcribeTelegramVoice,
     getGeminiApiKey,
+    getGeminiApiKeyCandidates,
+    sanitizeGeminiApiKey,
+    ensureTelegramConfigSchema,
+    setRuntimeGeminiApiKey,
     sanitizeAudioMimeType,
     KNOWN_STATIONS,
     KNOWN_FUELS,

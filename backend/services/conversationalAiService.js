@@ -23,19 +23,16 @@ const normalizeStr = (str) => {
 };
 
 /**
- * Obtener clave de Gemini API (de BD o de variable de entorno)
+ * Obtener clave de Gemini API (de BD, variable de entorno o fallback VPS, ignorando placeholders)
  */
 const getGeminiApiKey = async () => {
     try {
-        const db = getDb();
-        if (db && typeof db.query === 'function') {
-            const [rows] = await db.query('SELECT gemini_api_key FROM telegram_config WHERE id = 1 LIMIT 1');
-            if (rows && rows.length > 0 && rows[0].gemini_api_key && rows[0].gemini_api_key.trim().length > 10) {
-                return rows[0].gemini_api_key.trim();
-            }
+        const { getGeminiApiKey: resolveBotGeminiKey } = require('./telegramBotService');
+        if (typeof resolveBotGeminiKey === 'function') {
+            return await resolveBotGeminiKey();
         }
-    } catch (e) {
-        // Base de datos puede estar ocupada o iniciando
+    } catch (_) {
+        // Fallback local
     }
     return (process.env.GEMINI_API_KEY || '').trim() || null;
 };

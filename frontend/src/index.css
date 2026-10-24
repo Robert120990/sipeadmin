@@ -538,8 +538,10 @@ td {
 /* ---------- Utility classes (shared Desktop/Mobile) ---------- */
 
 .table-responsive {
-  overflow-x: auto;
+  overflow-x: auto !important;
   -webkit-overflow-scrolling: touch;
+  width: 100%;
+  max-width: 100%;
 }
 
 .page-header {

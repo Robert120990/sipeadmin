@@ -865,7 +865,9 @@ const initDB = async () => {
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS telegram_config (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    bot_token VARCHAR(255) NOT NULL,
+                    bot_token VARCHAR(255) NOT NULL DEFAULT '',
+                    gemini_api_key VARCHAR(255) NULL,
+                    openclaw_url VARCHAR(255) NULL,
                     bot_username VARCHAR(100) NULL,
                     bot_first_name VARCHAR(100) NULL,
                     is_active TINYINT(1) DEFAULT 1,
@@ -955,13 +957,10 @@ const initDB = async () => {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
 
-            // Migración para configuración de IA y Gemini en telegram_config
-            try {
-                await pool.query("ALTER TABLE telegram_config ADD COLUMN IF NOT EXISTS gemini_api_key VARCHAR(255) NULL");
-                await pool.query("ALTER TABLE telegram_config ADD COLUMN IF NOT EXISTS openclaw_url VARCHAR(255) NULL");
-            } catch (err) {
-                // Columnas ya existentes o base de datos no compatible
-            }
+            // Migración para configuración de IA y Gemini en telegram_config (compatible con MySQL 8.0 y MariaDB)
+            try { await pool.query("ALTER TABLE telegram_config MODIFY COLUMN bot_token VARCHAR(255) NOT NULL DEFAULT ''"); } catch (_) { /* ignore */ }
+            try { await pool.query("ALTER TABLE telegram_config ADD COLUMN gemini_api_key VARCHAR(255) NULL"); } catch (_) { /* column already exists */ }
+            try { await pool.query("ALTER TABLE telegram_config ADD COLUMN openclaw_url VARCHAR(255) NULL"); } catch (_) { /* column already exists */ }
 
             // Sembrar alias iniciales del proyecto para automejora
             await pool.query(`

@@ -2,6 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
     sanitizeAudioMimeType,
+    sanitizeGeminiApiKey,
     getGeminiApiKey,
     transcribeTelegramVoice
 } = require('../services/telegramBotService');
@@ -36,13 +37,41 @@ describe('Telegram Voice Note Transcription & Gemini Integration Tests', () => {
         });
     });
 
-    describe('2. Gemini API Key Resolution (getGeminiApiKey)', () => {
+    describe('2. Gemini API Key Resolution & Sanitization (getGeminiApiKey / sanitizeGeminiApiKey)', () => {
         it('debe resolver la clave desde variable de entorno si está presente', async () => {
             const prev = process.env.GEMINI_API_KEY;
             try {
                 process.env.GEMINI_API_KEY = 'AIzaSyFakeTestKeyForUnitTests1234567890';
                 const key = await getGeminiApiKey();
                 assert.equal(key, 'AIzaSyFakeTestKeyForUnitTests1234567890');
+            } finally {
+                if (prev) {
+                    process.env.GEMINI_API_KEY = prev;
+                } else {
+                    delete process.env.GEMINI_API_KEY;
+                }
+            }
+        });
+
+        it('debe descartar claves placeholder como your_gemini_api_key_here y limpiar comillas o prefijos', async () => {
+            assert.equal(sanitizeGeminiApiKey('your_gemini_api_key_here'), null);
+            assert.equal(sanitizeGeminiApiKey('YOUR_API_KEY_HERE'), null);
+            assert.equal(sanitizeGeminiApiKey('placeholder'), null);
+            assert.equal(sanitizeGeminiApiKey('short'), null);
+            assert.equal(
+                sanitizeGeminiApiKey('GEMINI_API_KEY="AIzaSyRealLookingKey1234567890"'),
+                'AIzaSyRealLookingKey1234567890'
+            );
+            assert.equal(
+                sanitizeGeminiApiKey(" 'AIzaSyRealLookingKey1234567890' "),
+                'AIzaSyRealLookingKey1234567890'
+            );
+
+            const prev = process.env.GEMINI_API_KEY;
+            try {
+                process.env.GEMINI_API_KEY = 'your_gemini_api_key_here';
+                const resolved = await getGeminiApiKey();
+                assert.equal(resolved, null);
             } finally {
                 if (prev) {
                     process.env.GEMINI_API_KEY = prev;

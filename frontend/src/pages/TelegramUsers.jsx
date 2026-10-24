@@ -389,6 +389,10 @@ export default function TelegramUsers() {
             if (res.data?.ok) {
                 setGeminiTestResult(res.data);
                 addToast(res.data.message || 'Gemini AI conectado exitosamente', 'success');
+                if (res.data.saved) {
+                    fetchTokenConfig();
+                    fetchHealthDiagnostics();
+                }
             }
         } catch (err) {
             const msg = err.response?.data?.message || 'Error al conectar con Gemini AI';
@@ -846,7 +850,7 @@ export default function TelegramUsers() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%', maxWidth: '100%', minWidth: 0 }}>
             {/* Header Compacto */}
             <div className="page-header" style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -1015,7 +1019,7 @@ export default function TelegramUsers() {
             )}
 
             {/* Pestañas de Vista */}
-            <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderBottom: '1px solid var(--border)', paddingBottom: '0.25rem' }}>
                 <button
                     onClick={() => setActiveTab('users')}
                     style={{
@@ -1153,8 +1157,8 @@ export default function TelegramUsers() {
                     </div>
 
                     {/* Tabla de Usuarios */}
-                    <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '850px' }}>
+                    <div className="card glass table-responsive" style={{ padding: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch', width: '100%', maxWidth: '100%' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '850px', marginTop: 0 }}>
                             <thead>
                                 <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
                                     <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>
@@ -1402,8 +1406,8 @@ export default function TelegramUsers() {
 
             {activeTab === 'bitacora' && (
                 /* Tab de Bitácora de Consultas */
-                <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
-                    <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+                <div className="card glass" style={{ padding: 0, width: '100%', maxWidth: '100%', minWidth: 0 }}>
+                    <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border)' }}>
                         <span style={{ fontSize: '0.825rem', fontWeight: 600 }}>Registro Forense de Consultas vía Telegram (Últimas 100)</span>
                         <button
                             className="btn-secondary"
@@ -1414,7 +1418,8 @@ export default function TelegramUsers() {
                             <RefreshCw size={13} className={loadingBitacora ? 'spin' : ''} /> Actualizar
                         </button>
                     </div>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '750px' }}>
+                    <div className="table-responsive" style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '750px', marginTop: 0 }}>
                         <thead>
                             <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
                                 <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha / Hora</th>
@@ -1473,6 +1478,7 @@ export default function TelegramUsers() {
                             )}
                         </tbody>
                     </table>
+                    </div>
                 </div>
             )}
 
@@ -1533,9 +1539,9 @@ export default function TelegramUsers() {
                     </div>
 
                     {/* Tabla de Retroalimentación Forense */}
-                    <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div className="card glass" style={{ padding: 0, width: '100%', maxWidth: '100%', minWidth: 0 }}>
                         <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: '0.825rem', fontWeight: 600 }}>Registro Forense de Retroalimentación & Sugerencias</span>
                                 <select
                                     value={feedbackFilter}
@@ -1557,7 +1563,8 @@ export default function TelegramUsers() {
                                 <RefreshCw size={13} className={loadingFeedback ? 'spin' : ''} /> Actualizar
                             </button>
                         </div>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '950px' }}>
+                        <div className="table-responsive" style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '950px', marginTop: 0 }}>
                             <thead>
                                 <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
                                     <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha / Hora</th>
@@ -1662,6 +1669,7 @@ export default function TelegramUsers() {
                                 )}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </div>
             )}
@@ -1673,7 +1681,7 @@ export default function TelegramUsers() {
                     {renderBotHealthCard()}
 
                     {/* Tabla de Eventos y Errores Forenses (Buffer Circular) */}
-                    <div className="card glass table-responsive" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div className="card glass" style={{ padding: 0, width: '100%', maxWidth: '100%', minWidth: 0 }}>
                         <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -1735,7 +1743,8 @@ export default function TelegramUsers() {
                             </div>
                         </div>
 
-                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '950px' }}>
+                        <div className="table-responsive" style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '950px', marginTop: 0 }}>
                             <thead>
                                 <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
                                     <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha / Hora</th>
@@ -1843,6 +1852,7 @@ export default function TelegramUsers() {
                                 )}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </div>
             )}
