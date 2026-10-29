@@ -34,6 +34,7 @@ export const FinanzasCalculadora = lazy(() => import('./FinanzasCalculadora'));
 export const FinanzasInversiones = lazy(() => import('./FinanzasInversiones'));
 export const FinanzasPlanesMantenimiento = lazy(() => import('./FinanzasPlanesMantenimiento'));
 export const FinanzasAsesor = lazy(() => import('./FinanzasAsesor'));
+export const FinanzasCrecimiento = lazy(() => import('./FinanzasCrecimiento'));
 export const FinanzasResumen = lazy(() => import('./FinanzasResumen'));
 export const EstrategiaTorreControl = lazy(() => import('./EstrategiaTorreControl'));
 export const EstrategiaCombustible = lazy(() => import('./EstrategiaCombustible'));

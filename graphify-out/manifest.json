@@ -18,9 +18,9 @@
     "semantic_hash": "7beccc830c416d1a5d5a99d5fa6988b0"
   },
   "backend/db.js": {
-    "mtime": 1792881669.8621485,
-    "seen": 1792882144.410899,
-    "ast_hash": "9c61b91ded204c90587ace6cdd04a4ee",
+    "mtime": 1793284800.3908513,
+    "seen": 1793285787.6527047,
+    "ast_hash": "de7d43f5b851c7d5911bcc870edb071b",
     "semantic_hash": ""
   },
   "backend/middleware/auth.js": {
@@ -132,10 +132,10 @@
     "semantic_hash": ""
   },
   "backend/routes/finanzas.js": {
-    "mtime": 1791033552.5333161,
-    "seen": 1791822880.7085679,
-    "ast_hash": "85033fef7218ca190beb22c5e33ace70",
-    "semantic_hash": "85033fef7218ca190beb22c5e33ace70"
+    "mtime": 1793285248.4948063,
+    "seen": 1793285787.6537268,
+    "ast_hash": "53bdc8f15f33ace863206bf63737b8d5",
+    "semantic_hash": ""
   },
   "backend/routes/githubChanges.js": {
     "mtime": 1792116615.9634547,
@@ -216,9 +216,9 @@
     "semantic_hash": "95bc5f979ecea73b9feb01f8bf87ee87"
   },
   "backend/server.js": {
-    "mtime": 1792452221.667769,
-    "seen": 1792453416.2319262,
-    "ast_hash": "5a8ed8fc3b7eba63176b9691c405db11",
+    "mtime": 1793285244.800732,
+    "seen": 1793285787.6537268,
+    "ast_hash": "fc38e0c4bb471a53705e17c17fcc1863",
     "semantic_hash": ""
   },
   "backend/services/birthdayNotifier.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1792884284.3130147,
-    "seen": 1792884397.0716672,
-    "ast_hash": "02fabc652aed1fcb3aadf18a6d5c8808",
+    "mtime": 1792884806.9815946,
+    "seen": 1793285787.6537268,
+    "ast_hash": "f250410834fe1dc198cfd28d4d3d4e36",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -432,9 +432,9 @@
     "semantic_hash": "d64eb1ed56f6aa76812960769c981127"
   },
   "frontend/src/App.jsx": {
-    "mtime": 1792453058.277887,
-    "seen": 1792453416.2319262,
-    "ast_hash": "11dae532aa42d3cfc26c5c83862febca",
+    "mtime": 1793285586.621426,
+    "seen": 1793285787.6537268,
+    "ast_hash": "5011822ac8ab128db019d248225dcf13",
     "semantic_hash": ""
   },
   "frontend/src/components/CalendarGrid.jsx": {
@@ -534,9 +534,9 @@
     "semantic_hash": "0247c08dcb575d8cf94859c79a8a3e3e"
   },
   "frontend/src/config/navigation.js": {
-    "mtime": 1792452925.428434,
-    "seen": 1792453416.2319262,
-    "ast_hash": "28ba1689c74f5c33e9282227c2636763",
+    "mtime": 1793285578.9899096,
+    "seen": 1793285787.6537268,
+    "ast_hash": "bcdc8e16ad1636a465bc261deb6404f1",
     "semantic_hash": ""
   },
   "frontend/src/context/NotificationContext.jsx": {
@@ -756,9 +756,9 @@
     "semantic_hash": "aa01878571f43d6fe2903747fc0609d7"
   },
   "frontend/src/pages/DashboardLayout.jsx": {
-    "mtime": 1792453174.485121,
-    "seen": 1792453416.2319262,
-    "ast_hash": "7d8a2399fbd64b93024e858e3884018f",
+    "mtime": 1793285583.4615936,
+    "seen": 1793285787.6537268,
+    "ast_hash": "2015347927c1b6d9d348ea2fa82cdd49",
     "semantic_hash": ""
   },
   "frontend/src/pages/DiferenciasCombustible.jsx": {
@@ -942,9 +942,9 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/lazyPages.js": {
-    "mtime": 1792452926.8197122,
-    "seen": 1792453416.2329328,
-    "ast_hash": "ee19bfac41f73ae2fcf3f84983d3d174",
+    "mtime": 1793285580.8222156,
+    "seen": 1793285787.6537268,
+    "ast_hash": "d02de72e2619cb62cac36fad6a692633",
     "semantic_hash": ""
   },
   "frontend/src/services/api.js": {
@@ -1431,6 +1431,30 @@
     "mtime": 1792452301.7556849,
     "seen": 1792453416.2329328,
     "ast_hash": "5d32ff55b12daeab9010666e0248d1d9",
+    "semantic_hash": ""
+  },
+  "backend/routes/finanzasCrecimiento.js": {
+    "mtime": 1793285732.871224,
+    "seen": 1793285787.6537268,
+    "ast_hash": "9ec7747e9739f351aea5346c231de088",
+    "semantic_hash": ""
+  },
+  "backend/services/businessGrowthAgyService.js": {
+    "mtime": 1793285716.8136451,
+    "seen": 1793285787.6537268,
+    "ast_hash": "2a2fb4f8506f6451131d45750bcc9c50",
+    "semantic_hash": ""
+  },
+  "backend/test/finanzasCrecimiento.test.js": {
+    "mtime": 1793285658.8525147,
+    "seen": 1793285787.6537268,
+    "ast_hash": "882bfa4f11693846d6bfe3f0fb0d8b71",
+    "semantic_hash": ""
+  },
+  "frontend/src/pages/FinanzasCrecimiento.jsx": {
+    "mtime": 1793285541.2468066,
+    "seen": 1793285787.6537268,
+    "ast_hash": "fa88cda170784f307b7870f83b22eeb7",
     "semantic_hash": ""
   }
 }

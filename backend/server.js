@@ -170,6 +170,7 @@ const heavyProcessLimiter = rateLimit({
 app.use('/api/login', loginLimiter);
 app.use('/api/ai/', aiLimiter);
 app.use('/api/finanzas/chat', aiLimiter);
+app.use('/api/finanzas/crecimiento/conversaciones/mensaje', aiLimiter);
 app.use('/api/onedrive', heavyProcessLimiter);
 app.use('/api/', apiLimiter);
 

@@ -479,7 +479,9 @@ const initDB = async () => {
                 ['/dashboard/operaciones/energia-solar', 'Acceso al Tablero de Energía Solar, Baterías y Andelsa'],
                 ['/dashboard/seguridad/tickets', 'Acceso a Centro de Soporte y Tickets'],
                 ['view_support_tickets', 'Consultar tickets de soporte técnico'],
-                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte']
+                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
+                ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -1011,7 +1013,9 @@ const initDB = async () => {
                 ['/dashboard/operaciones/energia-solar', 'Acceso al Tablero de Energía Solar, Baterías y Andelsa'],
                 ['/dashboard/seguridad/tickets', 'Acceso a Centro de Soporte y Tickets'],
                 ['view_support_tickets', 'Consultar tickets de soporte técnico'],
-                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte']
+                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
+                ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
             ];
             for (const [name, desc] of telegramPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1418,7 +1422,9 @@ const initDB = async () => {
             const ticketPerms = [
                 ['/dashboard/seguridad/tickets', 'Acceso a Centro de Soporte y Tickets'],
                 ['view_support_tickets', 'Consultar tickets de soporte técnico'],
-                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte']
+                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
+                ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
             ];
             for (const [name, desc] of ticketPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1440,6 +1446,93 @@ const initDB = async () => {
             }
         } catch (e) {
             console.error('Migration support_tickets & permissions:', e.message);
+        }
+
+        // ==============================================================
+        // MIGRATION: Crecimiento Empresarial, Auto-Build Knowledge & Consola AGY
+        // ==============================================================
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS finanzas_conocimiento (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    clave VARCHAR(140) UNIQUE NULL,
+                    categoria VARCHAR(60) NOT NULL DEFAULT 'estrategia_crecimiento',
+                    titulo VARCHAR(220) NOT NULL,
+                    contenido TEXT NOT NULL,
+                    resumen_ejecutivo VARCHAR(500) NULL,
+                    etiquetas VARCHAR(300) NULL,
+                    origen VARCHAR(40) NOT NULL DEFAULT 'auto_sistema',
+                    confianza DECIMAL(4,2) NOT NULL DEFAULT 0.95,
+                    fijado TINYINT(1) NOT NULL DEFAULT 1,
+                    activo TINYINT(1) NOT NULL DEFAULT 1,
+                    empresa_id INT NULL,
+                    metricas_json JSON NULL,
+                    veces_usado INT NOT NULL DEFAULT 0,
+                    created_by INT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_fin_conocimiento_cat (categoria, activo, fijado)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS finanzas_conversaciones (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    titulo VARCHAR(220) NOT NULL,
+                    modo VARCHAR(40) NOT NULL DEFAULT 'consultoria_financiera',
+                    proyecto_destino VARCHAR(30) NOT NULL DEFAULT 'sipeadmin',
+                    modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-argon-high',
+                    empresa_id INT NULL,
+                    ticket_id INT NULL,
+                    ticket_code VARCHAR(32) NULL,
+                    estado_agy VARCHAR(40) NOT NULL DEFAULT 'idle',
+                    plan_markdown LONGTEXT NULL,
+                    plan_version INT NOT NULL DEFAULT 0,
+                    execution_log LONGTEXT NULL,
+                    archivos_relacionados JSON NULL,
+                    created_by INT NULL,
+                    created_by_name VARCHAR(150) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_fin_conv_user (created_by, updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS finanzas_conversacion_mensajes (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    conversacion_id INT NOT NULL,
+                    rol VARCHAR(30) NOT NULL DEFAULT 'user',
+                    autor VARCHAR(120) NULL,
+                    contenido LONGTEXT NOT NULL,
+                    conocimientos_extraidos_json JSON NULL,
+                    metadata_json JSON NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (conversacion_id) REFERENCES finanzas_conversaciones(id) ON DELETE CASCADE,
+                    INDEX idx_fin_msg_conv (conversacion_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            const crecimientoPerms = [
+                ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
+            ];
+            for (const [name, desc] of crecimientoPerms) {
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
+            }
+
+            const [allRolesCrec] = await pool.query('SELECT id, name FROM roles');
+            const [crecPermRows] = await pool.query("SELECT id FROM permissions WHERE name IN ('/dashboard/finanzas/crecimiento', 'manage_finanzas_crecimiento')");
+            for (const r of allRolesCrec) {
+                const isAdminRole = ['admin', 'administrator', 'administrador', 'super admin', 'superadmin', 'super administrador'].includes(String(r.name || '').toLowerCase()) || r.id === 1;
+                if (isAdminRole) {
+                    for (const cp of crecPermRows) {
+                        await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, cp.id]);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Migration finanzas_crecimiento & permissions:', e.message);
         }
 
         return pool;

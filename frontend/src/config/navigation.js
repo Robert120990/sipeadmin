@@ -86,6 +86,7 @@ export const finanzasMenu = [
     { name: 'Evaluador de Inversiones y ROI', path: '/dashboard/finanzas/inversiones', icon: createColorIcon('flat-color-icons:line-chart') },
     { name: 'Planes y Mantenimiento', path: '/dashboard/finanzas/planes-mantenimiento', icon: createColorIcon('flat-color-icons:services') },
     { name: 'Asesor y Proyecciones IA', path: '/dashboard/finanzas/asesor', icon: createColorIcon('flat-color-icons:idea') },
+    { name: 'Crecimiento Empresarial & AGY', path: '/dashboard/finanzas/crecimiento', icon: createColorIcon('flat-color-icons:bullish'), keywords: ['holding', 'impuestos', 'agy', 'conocimiento', '10m', 'granja', 'servidor'] },
     { name: 'Resumen y Vencimientos', path: '/dashboard/finanzas/resumen', icon: createColorIcon('flat-color-icons:combo-chart') },
 ];
 

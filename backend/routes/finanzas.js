@@ -40,6 +40,8 @@ const finanzasCatalogosPerms = [
     '/dashboard/finanzas/inversiones',
     '/dashboard/finanzas/planes-mantenimiento',
     '/dashboard/finanzas/asesor',
+    '/dashboard/finanzas/crecimiento',
+    'manage_finanzas_crecimiento',
     '/dashboard/finanzas/resumen'
 ];
 
@@ -1374,5 +1376,7 @@ ${recomendacionArbitraje}
         sendSafeError(res, error, 'Error al procesar asesoría financiera con IA');
     }
 });
+
+router.use('/crecimiento', require('./finanzasCrecimiento'));
 
 module.exports = router;

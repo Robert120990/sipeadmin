@@ -45,6 +45,7 @@ import {
     FinanzasInversiones,
     FinanzasPlanesMantenimiento,
     FinanzasAsesor,
+    FinanzasCrecimiento,
     FinanzasResumen,
     EstrategiaTorreControl,
     EstrategiaCombustible,
@@ -142,6 +143,7 @@ function App() {
                                             <Route path="finanzas/inversiones" element={<PermissionRoute pathKey="/dashboard/finanzas/inversiones"><FinanzasInversiones /></PermissionRoute>} />
                                             <Route path="finanzas/planes-mantenimiento" element={<PermissionRoute pathKey="/dashboard/finanzas/planes-mantenimiento"><FinanzasPlanesMantenimiento /></PermissionRoute>} />
                                             <Route path="finanzas/asesor" element={<PermissionRoute pathKey="/dashboard/finanzas/asesor"><FinanzasAsesor /></PermissionRoute>} />
+                                            <Route path="finanzas/crecimiento" element={<PermissionRoute pathKey="/dashboard/finanzas/crecimiento"><FinanzasCrecimiento /></PermissionRoute>} />
                                             <Route path="finanzas/resumen" element={<PermissionRoute pathKey="/dashboard/finanzas/resumen"><FinanzasResumen /></PermissionRoute>} />
                                             <Route path="rrhh/planillas" element={<PermissionRoute pathKey="/dashboard/rrhh/planillas"><PlanillasRRHH /></PermissionRoute>} />
                                             <Route path="estrategia" element={<Navigate to="/dashboard/estrategia/torre-control" replace />} />
