@@ -1618,6 +1618,30 @@ const getConsolidadoVentasData = async (date) => {
             }
         });
 
+        // Y si alguna tienda no tenía corte en cort_cabecera/pos_shifts pero sí registra venta en ventas_tienda, complementar
+        cortesTiendaLocal.forEach(c => {
+            if (Number(c.venta || 0) === 0 && !c.tiene_corte) {
+                const t = tiendasLocal.find(k => k.empresa === c.empresa);
+                if (t && Number(t.venta || 0) > 0) {
+                    c.venta = t.venta;
+                    c.tiene_corte = true;
+                    c.responsable = c.responsable || 'Cierre Diario (SIPE)';
+                    c.alertas = (c.alertas || []).filter(a => a.tipo !== 'sin_corte' && a.tipo !== 'venta_cero');
+                    c.tiene_incongruencia = c.alertas.length > 0;
+                }
+            }
+        });
+
+        // Si tiendasLocal quedó vacío (ej. externalDb sin conexión), poblar desde cortesTiendaLocal
+        if (tiendasLocal.length === 0 && cortesTiendaLocal.length > 0) {
+            tiendasLocal = cortesTiendaLocal.map(c => ({
+                fecha: date,
+                empresa: c.empresa,
+                venta: Number(c.venta || 0),
+                promedio: Number(c.venta || 0)
+            }));
+        }
+
         // Resumen global de auditoría e incongruencias
         const auditoria = {
             total_alertas: 0,
@@ -1866,12 +1890,12 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                         b.nombre as empresa,
                         COALESCE(SUM(s.total_sales), 0.0) as venta,
                         COUNT(DISTINCT DATE(s.shift_date)) as dias_con_venta,
-                        IFNULL(AVG(s.total_sales), 0.0) as promedio_diario
+                        ROUND(COALESCE(SUM(s.total_sales), 0.0) / GREATEST(COUNT(DISTINCT DATE(s.shift_date)), 1), 2) as promedio_diario
                     FROM branches b
                     JOIN pos_shifts s ON b.id = s.branch_id
                     JOIN points_of_sale p ON s.pos_id = p.id
                     WHERE s.status = 'closed' 
-                      AND s.shift_date BETWEEN ? AND ?
+                      AND DATE(s.shift_date) BETWEEN ? AND ?
                       AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
                     GROUP BY b.id, b.nombre
                     ORDER BY b.id
@@ -1885,10 +1909,10 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                                 b.nombre as empresa,
                                 COALESCE(SUM(sh.total), 0.0) as venta,
                                 COUNT(DISTINCT DATE(sh.fecha_emision)) as dias_con_venta,
-                                IFNULL(AVG(sh.total), 0.0) as promedio_diario
+                                ROUND(COALESCE(SUM(sh.total), 0.0) / GREATEST(COUNT(DISTINCT DATE(sh.fecha_emision)), 1), 2) as promedio_diario
                             FROM branches b
                             JOIN sales_headers sh ON b.id = sh.branch_id
-                            WHERE sh.fecha_emision BETWEEN ? AND ?
+                            WHERE DATE(sh.fecha_emision) BETWEEN ? AND ?
                             GROUP BY b.id, b.nombre
                             ORDER BY b.id
                         `;
@@ -1925,18 +1949,126 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                     existing.venta = Math.round((existing.venta + Number(row.venta_estacion || 0)) * 100) / 100;
                     estacionesMap.set(empKey, existing);
                 });
-                const estacionesLocal = Array.from(estacionesMap.values());
 
-                const tiendasLocal = (saasTiendasRows || []).map(row => {
+                const tiendasMap = new Map();
+                (saasTiendasRows || []).forEach(row => {
                     const empId = branchToEmpId[row.id_empresa] || String(row.id_empresa);
                     const storeName = getCleanTiendaName(empId, row.empresa) || row.empresa;
-                    return {
+                    const venta = Math.round(Number(row.venta || 0) * 100) / 100;
+                    const dias = Number(row.dias_con_venta || 0);
+                    const prom = dias > 0 ? Math.round((venta / dias) * 100) / 100 : Math.round(Number(row.promedio_diario || 0) * 100) / 100;
+                    tiendasMap.set(empId, {
                         id_empresa: empId,
                         empresa: storeName,
-                        venta: Math.round(Number(row.venta || 0) * 100) / 100,
-                        dias_con_venta: Number(row.dias_con_venta || 0),
-                        promedio_diario: Math.round(Number(row.promedio_diario || 0) * 100) / 100
-                    };
+                        venta,
+                        dias_con_venta: dias,
+                        promedio_diario: prom
+                    });
+                });
+
+                // Complementar con db_system_rrs (ej. tiendas Miraflores 002 y Costa del Sol 008 o meses de transición)
+                if (externalDb && typeof externalDb.query === 'function') {
+                    try {
+                        const datesArr = [];
+                        for (let d = 1; d <= daysInMonth; d++) {
+                            datesArr.push(`${String(d).padStart(2, '0')}/${monthStr}/${y}`);
+                        }
+                        const sqlLegEst = `
+                            SELECT a.id_empresa, a.titulo, a.orden,
+                                   IFNULL(SUM(IF(d.clasificacion = 'D', b.total, 0.0)), 0.0) as diesel, 
+                                   IFNULL(SUM(IF(d.clasificacion = 'R', b.total, 0.0)), 0.0) as regular, 
+                                   IFNULL(SUM(IF(d.clasificacion = 'S', b.total, 0.0)), 0.0) as super, 
+                                   IFNULL(SUM(IF(d.clasificacion = 'I', b.total, 0.0)), 0.0) as ion, 
+                                   IFNULL(SUM(b.total), 0.0) as galonaje, 
+                                   COALESCE(SUM(b.monto), SUM(b.total * b.precio), 0.0) as monto
+                            FROM web_consolidado a 
+                            LEFT JOIN (
+                                SELECT ct_l.id_empresa, ct_l.id_producto, ct_l.total, ct_l.precio, ct_l.monto
+                                FROM cierre_turno_lecturas ct_l
+                                INNER JOIN cierre_turno ct ON ct_l.id_cierre_turno = ct.id AND ct_l.id_empresa = ct.id_empresa
+                                WHERE ct.fecha_turno IN (?)
+                            ) b ON a.id_empresa = b.id_empresa
+                            LEFT JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto
+                            WHERE a.grupo = 'ESTACION' AND a.id_empresa != '004'
+                            GROUP BY a.id_empresa, a.titulo, a.orden
+                            ORDER BY a.orden
+                        `;
+                        const sqlLegTda = `
+                            SELECT a.id_empresa, a.titulo, a.orden, 
+                                   IFNULL(SUM(b.monto), 0.0) as monto,
+                                   COUNT(DISTINCT IF(b.monto > 0, b.fecha, NULL)) as dias_con_venta,
+                                   IFNULL(AVG(IF(b.monto > 0, b.monto, NULL)), 0.0) as promedio_diario
+                            FROM web_consolidado a 
+                            LEFT JOIN ventas_tienda b ON a.id_empresa = b.id_empresa AND b.fecha BETWEEN ? AND ?
+                            WHERE a.grupo = 'TIENDA' AND a.id_empresa NOT IN ('004', '022')
+                            GROUP BY a.id_empresa, a.titulo, a.orden
+                            ORDER BY a.orden
+                        `;
+                        const [[legEstRows], [legTdaRows]] = await Promise.all([
+                            withRetry(() => externalDb.query(sqlLegEst, [datesArr])).catch(() => [[]]),
+                            withRetry(() => externalDb.query(sqlLegTda, [startDate, endDate])).catch(() => [[]])
+                        ]);
+
+                        (legEstRows || []).forEach(leg => {
+                            if (leg.id_empresa === '004') return;
+                            const empKey = String(leg.id_empresa);
+                            const legGal = Math.round(Number(leg.galonaje || 0) * 100) / 100;
+                            const legVenta = Math.round(Number(leg.monto || 0) * 100) / 100;
+                            if (legGal <= 0 && legVenta <= 0) return;
+                            const existing = estacionesMap.get(empKey);
+                            if (!existing || (legGal > existing.galonaje && legVenta > existing.venta)) {
+                                estacionesMap.set(empKey, {
+                                    id_empresa: empKey,
+                                    empresa: getCleanStationName(empKey, leg.titulo),
+                                    diesel: Math.round(Number(leg.diesel || 0) * 100) / 100,
+                                    regular: Math.round(Number(leg.regular || 0) * 100) / 100,
+                                    super: Math.round(Number(leg.super || 0) * 100) / 100,
+                                    ion: Math.round(Number(leg.ion || 0) * 100) / 100,
+                                    galonaje: legGal,
+                                    venta: legVenta
+                                });
+                            }
+                        });
+
+                        (legTdaRows || []).forEach(legT => {
+                            if (legT.id_empresa === '004' || legT.id_empresa === '022') return;
+                            const empId = String(legT.id_empresa);
+                            const legVenta = Math.round(Number(legT.monto || 0) * 100) / 100;
+                            const legDias = Number(legT.dias_con_venta || 0);
+                            if (legVenta <= 0 && tiendasMap.has(empId)) return;
+                            const existingT = tiendasMap.get(empId);
+                            if (!existingT || legVenta > existingT.venta) {
+                                const prom = legDias > 0 ? Math.round((legVenta / legDias) * 100) / 100 : Math.round(Number(legT.promedio_diario || 0) * 100) / 100;
+                                tiendasMap.set(empId, {
+                                    id_empresa: empId,
+                                    empresa: getCleanTiendaName(empId, legT.titulo),
+                                    venta: legVenta,
+                                    dias_con_venta: legDias,
+                                    promedio_diario: prom
+                                });
+                            }
+                        });
+                    } catch (legErr) {
+                        console.warn('[Ventas Mensual] Nota: no se pudo complementar con db_system_rrs:', legErr.message);
+                    }
+                }
+
+                const officialOrder = ['002', '006', '008', '014', '015', '016', '009'];
+                const estacionesLocal = Array.from(estacionesMap.values()).sort((a, b) => {
+                    const ia = officialOrder.indexOf(String(a.id_empresa));
+                    const ib = officialOrder.indexOf(String(b.id_empresa));
+                    if (ia !== -1 && ib !== -1) return ia - ib;
+                    if (ia !== -1) return -1;
+                    if (ib !== -1) return 1;
+                    return 0;
+                });
+                const tiendasLocal = Array.from(tiendasMap.values()).sort((a, b) => {
+                    const ia = officialOrder.indexOf(String(a.id_empresa));
+                    const ib = officialOrder.indexOf(String(b.id_empresa));
+                    if (ia !== -1 && ib !== -1) return ia - ib;
+                    if (ia !== -1) return -1;
+                    if (ib !== -1) return 1;
+                    return 0;
                 });
 
                 const matchedTiendaIds = new Set();
@@ -2230,12 +2362,12 @@ const getResumenRangoVentasData = async (externalDb, startDate, endDate, account
                         b.nombre as empresa,
                         COALESCE(SUM(s.total_sales), 0.0) as venta,
                         COUNT(DISTINCT DATE(s.shift_date)) as dias_con_venta,
-                        IFNULL(AVG(s.total_sales), 0.0) as promedio_diario
+                        ROUND(COALESCE(SUM(s.total_sales), 0.0) / GREATEST(COUNT(DISTINCT DATE(s.shift_date)), 1), 2) as promedio_diario
                     FROM branches b
                     JOIN pos_shifts s ON b.id = s.branch_id
                     JOIN points_of_sale p ON s.pos_id = p.id
                     WHERE s.status = 'closed' 
-                      AND s.shift_date BETWEEN ? AND ?
+                      AND DATE(s.shift_date) BETWEEN ? AND ?
                       AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
                     GROUP BY b.id, b.nombre
                     ORDER BY b.id
@@ -2249,10 +2381,10 @@ const getResumenRangoVentasData = async (externalDb, startDate, endDate, account
                                 b.nombre as empresa,
                                 COALESCE(SUM(sh.total), 0.0) as venta,
                                 COUNT(DISTINCT DATE(sh.fecha_emision)) as dias_con_venta,
-                                IFNULL(AVG(sh.total), 0.0) as promedio_diario
+                                ROUND(COALESCE(SUM(sh.total), 0.0) / GREATEST(COUNT(DISTINCT DATE(sh.fecha_emision)), 1), 2) as promedio_diario
                             FROM branches b
                             JOIN sales_headers sh ON b.id = sh.branch_id
-                            WHERE sh.fecha_emision BETWEEN ? AND ?
+                            WHERE DATE(sh.fecha_emision) BETWEEN ? AND ?
                             GROUP BY b.id, b.nombre
                             ORDER BY b.id
                         `;
@@ -2289,18 +2421,122 @@ const getResumenRangoVentasData = async (externalDb, startDate, endDate, account
                     existing.venta = Math.round((existing.venta + Number(row.venta_estacion || 0)) * 100) / 100;
                     estacionesMap.set(empKey, existing);
                 });
-                const estacionesLocal = Array.from(estacionesMap.values());
 
-                const tiendasLocal = (saasTiendasRows || []).map(row => {
+                const tiendasMap = new Map();
+                (saasTiendasRows || []).forEach(row => {
                     const empId = branchToEmpId[row.id_empresa] || String(row.id_empresa);
                     const storeName = getCleanTiendaName(empId, row.empresa) || row.empresa;
-                    return {
+                    const venta = Math.round(Number(row.venta || 0) * 100) / 100;
+                    const dias = Number(row.dias_con_venta || 0);
+                    const prom = dias > 0 ? Math.round((venta / dias) * 100) / 100 : Math.round(Number(row.promedio_diario || 0) * 100) / 100;
+                    tiendasMap.set(empId, {
                         id_empresa: empId,
                         empresa: storeName,
-                        venta: Math.round(Number(row.venta || 0) * 100) / 100,
-                        dias_con_venta: Number(row.dias_con_venta || 0),
-                        promedio_diario: Math.round(Number(row.promedio_diario || 0) * 100) / 100
-                    };
+                        venta,
+                        dias_con_venta: dias,
+                        promedio_diario: prom
+                    });
+                });
+
+                // Complementar con db_system_rrs (ej. tiendas Miraflores 002 y Costa del Sol 008 o meses de transición)
+                if (externalDb && typeof externalDb.query === 'function') {
+                    try {
+                        const sqlLegEst = `
+                            SELECT a.id_empresa, a.titulo, a.orden,
+                                   IFNULL(SUM(IF(d.clasificacion = 'D', b.total, 0.0)), 0.0) as diesel, 
+                                   IFNULL(SUM(IF(d.clasificacion = 'R', b.total, 0.0)), 0.0) as regular, 
+                                   IFNULL(SUM(IF(d.clasificacion = 'S', b.total, 0.0)), 0.0) as super, 
+                                   IFNULL(SUM(IF(d.clasificacion = 'I', b.total, 0.0)), 0.0) as ion, 
+                                   IFNULL(SUM(b.total), 0.0) as galonaje, 
+                                   COALESCE(SUM(b.monto), SUM(b.total * b.precio), 0.0) as monto
+                            FROM web_consolidado a 
+                            LEFT JOIN (
+                                SELECT ct_l.id_empresa, ct_l.id_producto, ct_l.total, ct_l.precio, ct_l.monto
+                                FROM cierre_turno_lecturas ct_l
+                                INNER JOIN cierre_turno ct ON ct_l.id_cierre_turno = ct.id AND ct_l.id_empresa = ct.id_empresa
+                                WHERE STR_TO_DATE(ct.fecha_turno, '%d/%m/%Y') BETWEEN ? AND ?
+                            ) b ON a.id_empresa = b.id_empresa
+                            LEFT JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto
+                            WHERE a.grupo = 'ESTACION' AND a.id_empresa != '004'
+                            GROUP BY a.id_empresa, a.titulo, a.orden
+                            ORDER BY a.orden
+                        `;
+                        const sqlLegTda = `
+                            SELECT a.id_empresa, a.titulo, a.orden, 
+                                   IFNULL(SUM(b.monto), 0.0) as monto,
+                                   COUNT(DISTINCT IF(b.monto > 0, b.fecha, NULL)) as dias_con_venta,
+                                   IFNULL(AVG(IF(b.monto > 0, b.monto, NULL)), 0.0) as promedio_diario
+                            FROM web_consolidado a 
+                            LEFT JOIN ventas_tienda b ON a.id_empresa = b.id_empresa AND b.fecha BETWEEN ? AND ?
+                            WHERE a.grupo = 'TIENDA' AND a.id_empresa NOT IN ('004', '022')
+                            GROUP BY a.id_empresa, a.titulo, a.orden
+                            ORDER BY a.orden
+                        `;
+                        const [[legEstRows], [legTdaRows]] = await Promise.all([
+                            withRetry(() => externalDb.query(sqlLegEst, [startDate, endDate])).catch(() => [[]]),
+                            withRetry(() => externalDb.query(sqlLegTda, [startDate, endDate])).catch(() => [[]])
+                        ]);
+
+                        (legEstRows || []).forEach(leg => {
+                            if (leg.id_empresa === '004') return;
+                            const empKey = String(leg.id_empresa);
+                            const legGal = Math.round(Number(leg.galonaje || 0) * 100) / 100;
+                            const legVenta = Math.round(Number(leg.monto || 0) * 100) / 100;
+                            if (legGal <= 0 && legVenta <= 0) return;
+                            const existing = estacionesMap.get(empKey);
+                            if (!existing || (legGal > existing.galonaje && legVenta > existing.venta)) {
+                                estacionesMap.set(empKey, {
+                                    id_empresa: empKey,
+                                    empresa: getCleanStationName(empKey, leg.titulo),
+                                    diesel: Math.round(Number(leg.diesel || 0) * 100) / 100,
+                                    regular: Math.round(Number(leg.regular || 0) * 100) / 100,
+                                    super: Math.round(Number(leg.super || 0) * 100) / 100,
+                                    ion: Math.round(Number(leg.ion || 0) * 100) / 100,
+                                    galonaje: legGal,
+                                    venta: legVenta
+                                });
+                            }
+                        });
+
+                        (legTdaRows || []).forEach(legT => {
+                            if (legT.id_empresa === '004' || legT.id_empresa === '022') return;
+                            const empId = String(legT.id_empresa);
+                            const legVenta = Math.round(Number(legT.monto || 0) * 100) / 100;
+                            const legDias = Number(legT.dias_con_venta || 0);
+                            if (legVenta <= 0 && tiendasMap.has(empId)) return;
+                            const existingT = tiendasMap.get(empId);
+                            if (!existingT || legVenta > existingT.venta) {
+                                const prom = legDias > 0 ? Math.round((legVenta / legDias) * 100) / 100 : Math.round(Number(legT.promedio_diario || 0) * 100) / 100;
+                                tiendasMap.set(empId, {
+                                    id_empresa: empId,
+                                    empresa: getCleanTiendaName(empId, legT.titulo),
+                                    venta: legVenta,
+                                    dias_con_venta: legDias,
+                                    promedio_diario: prom
+                                });
+                            }
+                        });
+                    } catch (legErr) {
+                        console.warn('[Ventas Rango] Nota: no se pudo complementar con db_system_rrs:', legErr.message);
+                    }
+                }
+
+                const officialOrder = ['002', '006', '008', '014', '015', '016', '009'];
+                const estacionesLocal = Array.from(estacionesMap.values()).sort((a, b) => {
+                    const ia = officialOrder.indexOf(String(a.id_empresa));
+                    const ib = officialOrder.indexOf(String(b.id_empresa));
+                    if (ia !== -1 && ib !== -1) return ia - ib;
+                    if (ia !== -1) return -1;
+                    if (ib !== -1) return 1;
+                    return 0;
+                });
+                const tiendasLocal = Array.from(tiendasMap.values()).sort((a, b) => {
+                    const ia = officialOrder.indexOf(String(a.id_empresa));
+                    const ib = officialOrder.indexOf(String(b.id_empresa));
+                    if (ia !== -1 && ib !== -1) return ia - ib;
+                    if (ia !== -1) return -1;
+                    if (ib !== -1) return 1;
+                    return 0;
                 });
 
                 const matchedTiendaIds = new Set();
@@ -2372,6 +2608,123 @@ const getResumenRangoVentasData = async (externalDb, startDate, endDate, account
             }
         } catch (errSaas) {
             console.warn('[Ventas Rango] Error en mock SaaS:', errSaas.message);
+        }
+    }
+
+    if (externalDb && typeof externalDb.query === 'function') {
+        try {
+            const sqlLegEst = `
+                SELECT a.id_empresa, a.titulo, a.orden,
+                       IFNULL(SUM(IF(d.clasificacion = 'D', b.total, 0.0)), 0.0) as diesel, 
+                       IFNULL(SUM(IF(d.clasificacion = 'R', b.total, 0.0)), 0.0) as regular, 
+                       IFNULL(SUM(IF(d.clasificacion = 'S', b.total, 0.0)), 0.0) as super, 
+                       IFNULL(SUM(IF(d.clasificacion = 'I', b.total, 0.0)), 0.0) as ion, 
+                       IFNULL(SUM(b.total), 0.0) as galonaje, 
+                       COALESCE(SUM(b.monto), SUM(b.total * b.precio), 0.0) as monto
+                FROM web_consolidado a 
+                LEFT JOIN (
+                    SELECT ct_l.id_empresa, ct_l.id_producto, ct_l.total, ct_l.precio, ct_l.monto
+                    FROM cierre_turno_lecturas ct_l
+                    INNER JOIN cierre_turno ct ON ct_l.id_cierre_turno = ct.id AND ct_l.id_empresa = ct.id_empresa
+                    WHERE STR_TO_DATE(ct.fecha_turno, '%d/%m/%Y') BETWEEN ? AND ?
+                ) b ON a.id_empresa = b.id_empresa
+                LEFT JOIN cfg_combustibles d ON b.id_empresa = d.id_empresa AND b.id_producto = d.id_producto
+                WHERE a.grupo = 'ESTACION' AND a.id_empresa != '004'
+                GROUP BY a.id_empresa, a.titulo, a.orden
+                ORDER BY a.orden
+            `;
+            const sqlLegTda = `
+                SELECT a.id_empresa, a.titulo, a.orden, 
+                       IFNULL(SUM(b.monto), 0.0) as monto,
+                       COUNT(DISTINCT IF(b.monto > 0, b.fecha, NULL)) as dias_con_venta,
+                       IFNULL(AVG(IF(b.monto > 0, b.monto, NULL)), 0.0) as promedio_diario
+                FROM web_consolidado a 
+                LEFT JOIN ventas_tienda b ON a.id_empresa = b.id_empresa AND b.fecha BETWEEN ? AND ?
+                WHERE a.grupo = 'TIENDA' AND a.id_empresa NOT IN ('004', '022')
+                GROUP BY a.id_empresa, a.titulo, a.orden
+                ORDER BY a.orden
+            `;
+            const [[legEstRows], [legTdaRows]] = await Promise.all([
+                withRetry(() => externalDb.query(sqlLegEst, [startDate, endDate])),
+                withRetry(() => externalDb.query(sqlLegTda, [startDate, endDate]))
+            ]);
+
+            const estacionesLocal = (legEstRows || []).map(row => ({
+                id_empresa: String(row.id_empresa),
+                empresa: getCleanStationName(String(row.id_empresa), row.titulo),
+                diesel: Math.round(Number(row.diesel || 0) * 100) / 100,
+                regular: Math.round(Number(row.regular || 0) * 100) / 100,
+                super: Math.round(Number(row.super || 0) * 100) / 100,
+                ion: Math.round(Number(row.ion || 0) * 100) / 100,
+                galonaje: Math.round(Number(row.galonaje || 0) * 100) / 100,
+                venta: Math.round(Number(row.monto || 0) * 100) / 100
+            }));
+
+            const tiendasLocal = (legTdaRows || []).map(row => ({
+                id_empresa: String(row.id_empresa),
+                empresa: getCleanTiendaName(String(row.id_empresa), row.titulo),
+                venta: Math.round(Number(row.monto || 0) * 100) / 100,
+                dias_con_venta: Number(row.dias_con_venta || 0),
+                promedio_diario: Math.round(Number(row.promedio_diario || 0) * 100) / 100
+            }));
+
+            const matchedTiendaIds = new Set();
+            const consolidadoLocal = estacionesLocal.map(e => {
+                const t = tiendasLocal.find(tienda => String(tienda.id_empresa) === String(e.id_empresa) && !matchedTiendaIds.has(tienda.id_empresa));
+                const vTienda = t ? t.venta : 0;
+                if (t) matchedTiendaIds.add(t.id_empresa);
+                return {
+                    id_empresa: e.id_empresa,
+                    empresa: e.empresa,
+                    tienda_nombre: t ? t.empresa : '',
+                    diesel: e.diesel,
+                    regular: e.regular,
+                    super: e.super,
+                    ion: e.ion,
+                    galonaje: e.galonaje,
+                    venta_estacion: e.venta,
+                    venta_tienda: vTienda,
+                    venta_total: Math.round((e.venta + vTienda) * 100) / 100
+                };
+            });
+
+            tiendasLocal.forEach(t => {
+                if (!matchedTiendaIds.has(t.id_empresa) && t.venta > 0) {
+                    consolidadoLocal.push({
+                        id_empresa: t.id_empresa,
+                        empresa: t.empresa,
+                        tienda_nombre: t.empresa,
+                        diesel: 0, regular: 0, super: 0, ion: 0, galonaje: 0, venta_estacion: 0,
+                        venta_tienda: t.venta,
+                        venta_total: t.venta,
+                        es_tienda_solo: true
+                    });
+                }
+            });
+
+            const totales = {
+                diesel: Math.round(estacionesLocal.reduce((acc, c) => acc + c.diesel, 0) * 100) / 100,
+                regular: Math.round(estacionesLocal.reduce((acc, c) => acc + c.regular, 0) * 100) / 100,
+                super: Math.round(estacionesLocal.reduce((acc, c) => acc + c.super, 0) * 100) / 100,
+                ion: Math.round(estacionesLocal.reduce((acc, c) => acc + c.ion, 0) * 100) / 100,
+                galonaje: Math.round(estacionesLocal.reduce((acc, c) => acc + c.galonaje, 0) * 100) / 100,
+                venta_estacion: Math.round(estacionesLocal.reduce((acc, c) => acc + c.venta, 0) * 100) / 100,
+                venta_tienda: Math.round(tiendasLocal.reduce((acc, c) => acc + c.venta, 0) * 100) / 100,
+                venta_total: Math.round((estacionesLocal.reduce((acc, c) => acc + c.venta, 0) + tiendasLocal.reduce((acc, c) => acc + c.venta, 0)) * 100) / 100
+            };
+
+            return {
+                periodo: `${startDate} al ${endDate}`,
+                fecha_inicio: startDate,
+                fecha_fin: endDate,
+                origen: 'db_system_rrs',
+                estaciones: estacionesLocal,
+                tiendas: tiendasLocal,
+                consolidado: consolidadoLocal,
+                totales
+            };
+        } catch (errLeg) {
+            console.warn('[Ventas Rango] Error en consulta db_system_rrs:', errLeg.message);
         }
     }
 
@@ -2448,8 +2801,9 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
         }
     }
 
-    // Helper para consultar datos de combustible por año (SaaS cerrado con fallback a legado)
+    // Helper para consultar datos de combustible por año (fusionando SaaS cerrado y legado db_system_rrs por estación/mes)
     const getFuelRowsForYear = async (targetYearStr) => {
+        const saasMap = new Map();
         if (accountingDb) {
             try {
                 const [saasCheck] = await withRetry(() => accountingDb.query(
@@ -2476,63 +2830,94 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
                         ORDER BY anio, mes, c.branch_id
                     `;
                     const [saasRows] = await withRetry(() => accountingDb.query(sqlSaas, [targetYearStr]));
-                    return (saasRows || []).map(r => ({
-                        anio: String(r.anio),
-                        mes: Number(r.mes),
-                        id_empresa: branchToEmpId[r.branch_id] || String(r.branch_id),
-                        diesel: Number(r.diesel || 0),
-                        regular: Number(r.regular || 0),
-                        super: Number(r.super || 0),
-                        ion: Number(r.ion || 0),
-                        galonaje: Number(r.galonaje || 0),
-                        venta_estacion: Number(r.venta_estacion || 0)
-                    }));
+                    (saasRows || []).forEach(r => {
+                        const anio = String(r.anio);
+                        const mes = Number(r.mes);
+                        const id_empresa = branchToEmpId[r.branch_id] || String(r.branch_id);
+                        const key = `${anio}_${mes}_${id_empresa}`;
+                        const existing = saasMap.get(key) || {
+                            anio,
+                            mes,
+                            id_empresa,
+                            diesel: 0,
+                            regular: 0,
+                            super: 0,
+                            ion: 0,
+                            galonaje: 0,
+                            venta_estacion: 0
+                        };
+                        existing.diesel = Math.round((existing.diesel + Number(r.diesel || 0)) * 100) / 100;
+                        existing.regular = Math.round((existing.regular + Number(r.regular || 0)) * 100) / 100;
+                        existing.super = Math.round((existing.super + Number(r.super || 0)) * 100) / 100;
+                        existing.ion = Math.round((existing.ion + Number(r.ion || 0)) * 100) / 100;
+                        existing.galonaje = Math.round((existing.galonaje + Number(r.galonaje || 0)) * 100) / 100;
+                        existing.venta_estacion = Math.round((existing.venta_estacion + Number(r.venta_estacion || 0)) * 100) / 100;
+                        saasMap.set(key, existing);
+                    });
                 }
             } catch (errSaasFuel) {
                 console.warn(`[Comparativo Anual] Error consultando SaaS combustible para ${targetYearStr}:`, errSaasFuel.message);
             }
         }
 
-        // Fallback a db_system_rrs
-        if (!externalDb || typeof externalDb.query !== 'function') return [];
-        const sqlLegacy = `
-            SELECT 
-                RIGHT(ct.fecha_turno, 4) as anio,
-                CAST(SUBSTRING(ct.fecha_turno, 4, 2) AS UNSIGNED) AS mes,
-                ct_l.id_empresa,
-                IFNULL(SUM(IF(d.clasificacion = 'D', ct_l.total, 0.0)), 0.0) as diesel,
-                IFNULL(SUM(IF(d.clasificacion = 'R', ct_l.total, 0.0)), 0.0) as regular,
-                IFNULL(SUM(IF(d.clasificacion = 'S', ct_l.total, 0.0)), 0.0) as super,
-                IFNULL(SUM(IF(d.clasificacion = 'I', ct_l.total, 0.0)), 0.0) as ion,
-                IFNULL(SUM(ct_l.total), 0.0) as galonaje,
-                COALESCE(SUM(ct_l.monto), SUM(ct_l.total * ct_l.precio), 0.0) as venta_estacion
-            FROM cierre_turno ct
-            INNER JOIN cierre_turno_lecturas ct_l 
-                ON ct.id = ct_l.id_cierre_turno AND ct.id_empresa = ct_l.id_empresa
-            LEFT JOIN cfg_combustibles d 
-                ON ct_l.id_empresa = d.id_empresa AND ct_l.id_producto = d.id_producto
-            WHERE RIGHT(ct.fecha_turno, 4) = ?
-              AND ct.id_empresa != '004'
-            GROUP BY anio, mes, ct_l.id_empresa
-            ORDER BY anio, mes, ct_l.id_empresa
-        `;
-        const [legRows] = await withRetry(() => externalDb.query(sqlLegacy, [targetYearStr]));
-        return (legRows || []).map(r => ({
-            anio: String(r.anio),
-            mes: Number(r.mes),
-            id_empresa: String(r.id_empresa),
-            diesel: Number(r.diesel || 0),
-            regular: Number(r.regular || 0),
-            super: Number(r.super || 0),
-            ion: Number(r.ion || 0),
-            galonaje: Number(r.galonaje || 0),
-            venta_estacion: Number(r.venta_estacion || 0)
-        }));
+        // Consultar también db_system_rrs para completar meses históricos y sucursales previas a migración
+        if (externalDb && typeof externalDb.query === 'function') {
+            try {
+                const sqlLegacy = `
+                    SELECT 
+                        RIGHT(ct.fecha_turno, 4) as anio,
+                        CAST(SUBSTRING(ct.fecha_turno, 4, 2) AS UNSIGNED) AS mes,
+                        ct_l.id_empresa,
+                        IFNULL(SUM(IF(d.clasificacion = 'D', ct_l.total, 0.0)), 0.0) as diesel,
+                        IFNULL(SUM(IF(d.clasificacion = 'R', ct_l.total, 0.0)), 0.0) as regular,
+                        IFNULL(SUM(IF(d.clasificacion = 'S', ct_l.total, 0.0)), 0.0) as super,
+                        IFNULL(SUM(IF(d.clasificacion = 'I', ct_l.total, 0.0)), 0.0) as ion,
+                        IFNULL(SUM(ct_l.total), 0.0) as galonaje,
+                        COALESCE(SUM(ct_l.monto), SUM(ct_l.total * ct_l.precio), 0.0) as venta_estacion
+                    FROM cierre_turno ct
+                    INNER JOIN cierre_turno_lecturas ct_l 
+                        ON ct.id = ct_l.id_cierre_turno AND ct.id_empresa = ct_l.id_empresa
+                    LEFT JOIN cfg_combustibles d 
+                        ON ct_l.id_empresa = d.id_empresa AND ct_l.id_producto = d.id_producto
+                    WHERE RIGHT(ct.fecha_turno, 4) = ?
+                      AND ct.id_empresa != '004'
+                    GROUP BY anio, mes, ct_l.id_empresa
+                    ORDER BY anio, mes, ct_l.id_empresa
+                `;
+                const [legRows] = await withRetry(() => externalDb.query(sqlLegacy, [targetYearStr]));
+                (legRows || []).forEach(r => {
+                    const anio = String(r.anio);
+                    const mes = Number(r.mes);
+                    const id_empresa = String(r.id_empresa);
+                    const key = `${anio}_${mes}_${id_empresa}`;
+                    const legObj = {
+                        anio,
+                        mes,
+                        id_empresa,
+                        diesel: Number(r.diesel || 0),
+                        regular: Number(r.regular || 0),
+                        super: Number(r.super || 0),
+                        ion: Number(r.ion || 0),
+                        galonaje: Number(r.galonaje || 0),
+                        venta_estacion: Number(r.venta_estacion || 0)
+                    };
+                    const existing = saasMap.get(key);
+                    if (!existing || (legObj.galonaje > existing.galonaje && legObj.venta_estacion > existing.venta_estacion)) {
+                        saasMap.set(key, legObj);
+                    }
+                });
+            } catch (errLegFuel) {
+                console.warn(`[Comparativo Anual] Error consultando legado combustible para ${targetYearStr}:`, errLegFuel.message);
+            }
+        }
+
+        return Array.from(saasMap.values());
     };
 
-    // Helper para consultar datos de tienda por año (SaaS cerrado con fallback a legado)
+    // Helper para consultar datos de tienda por año (fusionando SaaS pos_shifts y legado ventas_tienda por sucursal/mes)
     const getStoreRowsForYear = async (targetYearNum) => {
         const targetYearStr = String(targetYearNum);
+        const storeMap = new Map();
         if (accountingDb) {
             try {
                 const [saasCheck] = await withRetry(() => accountingDb.query(
@@ -2554,38 +2939,57 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
                         ORDER BY anio, mes, s.branch_id
                     `;
                     const [saasRows] = await withRetry(() => accountingDb.query(sqlSaas, [targetYearStr]));
-                    return (saasRows || []).map(r => ({
-                        anio: String(r.anio),
-                        mes: Number(r.mes),
-                        id_empresa: branchToEmpId[r.branch_id] || String(r.branch_id),
-                        venta_tienda: Number(r.venta_tienda || 0)
-                    }));
+                    (saasRows || []).forEach(r => {
+                        const anio = String(r.anio);
+                        const mes = Number(r.mes);
+                        const id_empresa = branchToEmpId[r.branch_id] || String(r.branch_id);
+                        const key = `${anio}_${mes}_${id_empresa}`;
+                        const existing = storeMap.get(key);
+                        const val = Number(r.venta_tienda || 0);
+                        if (!existing) {
+                            storeMap.set(key, { anio, mes, id_empresa, venta_tienda: val });
+                        } else {
+                            existing.venta_tienda = Math.round((existing.venta_tienda + val) * 100) / 100;
+                        }
+                    });
                 }
             } catch (errSaasStore) {
                 console.warn(`[Comparativo Anual] Error consultando SaaS tienda para ${targetYearStr}:`, errSaasStore.message);
             }
         }
 
-        // Fallback a db_system_rrs
-        if (!externalDb || typeof externalDb.query !== 'function') return [];
-        const sqlLegacy = `
-            SELECT 
-                CAST(YEAR(fecha) AS CHAR) as anio,
-                MONTH(fecha) as mes,
-                id_empresa,
-                IFNULL(SUM(monto), 0.0) as venta_tienda
-            FROM ventas_tienda
-            WHERE YEAR(fecha) = ? AND id_empresa != '004'
-            GROUP BY anio, mes, id_empresa
-            ORDER BY anio, mes, id_empresa
-        `;
-        const [legRows] = await withRetry(() => externalDb.query(sqlLegacy, [targetYearNum]));
-        return (legRows || []).map(r => ({
-            anio: String(r.anio),
-            mes: Number(r.mes),
-            id_empresa: String(r.id_empresa),
-            venta_tienda: Number(r.venta_tienda || 0)
-        }));
+        // Complementar con db_system_rrs (incluye Miraflores 002, Costa del Sol 008 y meses históricos)
+        if (externalDb && typeof externalDb.query === 'function') {
+            try {
+                const sqlLegacy = `
+                    SELECT 
+                        CAST(YEAR(fecha) AS CHAR) as anio,
+                        MONTH(fecha) as mes,
+                        id_empresa,
+                        IFNULL(SUM(monto), 0.0) as venta_tienda
+                    FROM ventas_tienda
+                    WHERE YEAR(fecha) = ? AND id_empresa NOT IN ('004', '022')
+                    GROUP BY anio, mes, id_empresa
+                    ORDER BY anio, mes, id_empresa
+                `;
+                const [legRows] = await withRetry(() => externalDb.query(sqlLegacy, [targetYearNum]));
+                (legRows || []).forEach(r => {
+                    const anio = String(r.anio);
+                    const mes = Number(r.mes);
+                    const id_empresa = String(r.id_empresa);
+                    const key = `${anio}_${mes}_${id_empresa}`;
+                    const legVal = Number(r.venta_tienda || 0);
+                    const existing = storeMap.get(key);
+                    if (!existing || legVal > existing.venta_tienda) {
+                        storeMap.set(key, { anio, mes, id_empresa, venta_tienda: legVal });
+                    }
+                });
+            } catch (errLegStore) {
+                console.warn(`[Comparativo Anual] Error consultando legado tienda para ${targetYearStr}:`, errLegStore.message);
+            }
+        }
+
+        return Array.from(storeMap.values());
     };
 
     const [fuelPrincipal, fuelComparar, storePrincipal, storeComparar] = await Promise.all([
@@ -2597,6 +3001,13 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
 
     const fuelRows = [...fuelPrincipal, ...fuelComparar];
     const tiendaRows = [...storePrincipal, ...storeComparar];
+
+    // Asegurar que sucursales exclusivas de tienda con ventas (como Super El Pedregal 009) estén en la lista de estaciones/sucursales
+    if (tiendaRows.some(r => String(r.id_empresa) === '009' && Number(r.venta_tienda) > 0)) {
+        if (!estaciones.some(e => String(e.id_empresa) === '009')) {
+            estaciones.push({ id_empresa: '009', nombre: 'Super El Pedregal' });
+        }
+    }
 
     // 4. Obtener años disponibles en la base de datos
     const yearsSet = new Set([anioPrincipal, anioComparar]);

@@ -31,9 +31,12 @@ const syncRevokedUsersFromDb = async () => {
 };
 
 // Attempt initial sync on startup
-setTimeout(() => {
-    syncRevokedUsersFromDb();
-}, 2000);
+if (process.env.NODE_ENV !== 'test') {
+    const initSyncTimer = setTimeout(() => {
+        syncRevokedUsersFromDb();
+    }, 2000);
+    if (initSyncTimer && typeof initSyncTimer.unref === 'function') initSyncTimer.unref();
+}
 
 const revokeUser = (userId) => {
     if (userId) revokedUsers.add(Number(userId));

@@ -72,6 +72,9 @@ export default function VentasEstaciones() {
     const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
     const [totalPages, setTotalPages] = useState(1);
     const [previewFileName, setPreviewFileName] = useState('');
+    const [previewTitle, setPreviewTitle] = useState('Resumen de Ventas Mensual por Estación');
+    const [previewSubtitle, setPreviewSubtitle] = useState('');
+    const [previewBadge, setPreviewBadge] = useState('Ventas Mensuales');
 
     // --- ESTADO COMPARATIVO ANUAL ---
     const [showComparativoModal, setShowComparativoModal] = useState(false);
@@ -190,6 +193,182 @@ export default function VentasEstaciones() {
         XLSX.utils.book_append_sheet(wb, ws, 'Comparativo Anual');
         XLSX.writeFile(wb, `Comparativo_Anual_${anioPrincipal}_vs_${anioComparar}_${estacionFiltro}.xlsx`);
         addToast('Archivo Excel descargado exitosamente', 'success');
+    };
+
+    const handlePreviewComparativoPDF = () => {
+        if (!comparativoData) {
+            return addToast('No hay datos comparativos para generar el reporte', 'warning');
+        }
+        const estName = estacionFiltro === 'all'
+            ? 'Todas las Estaciones y Tiendas (Consolidado)'
+            : (comparativoData.estaciones?.find(e => e.id_empresa === estacionFiltro)?.nombre || estacionFiltro);
+
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'letter'
+        });
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        doc.setFontSize(13.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(30, 41, 59);
+        doc.text(`SIPEOFI - REPORTE COMPARATIVO ANUAL DE VENTAS (${anioPrincipal} vs ${anioComparar})`, 14, 14);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Sucursal: ${estName}   |   Métrica: ${getMetricaNombre(metricaFiltro)}   |   Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`, 14, 20);
+
+        let t1 = 0, t2 = 0;
+        if (estacionFiltro === 'all') {
+            t1 = comparativoData.totales?.principal?.[metricaFiltro] || 0;
+            t2 = comparativoData.totales?.comparar?.[metricaFiltro] || 0;
+        } else {
+            t1 = comparativoData.totales?.principal?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0;
+            t2 = comparativoData.totales?.comparar?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0;
+        }
+        const td = Math.round((t1 - t2) * 100) / 100;
+        const tpct = t2 > 0 ? `${((td / t2) * 100).toFixed(1)}%` : '0.0%';
+
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(14, 23, pageWidth - 28, 11, 1.5, 1.5, 'F');
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(51, 65, 85);
+        doc.text(`Total ${anioPrincipal}: ${formatMetricVal(t1)}`, 18, 29.8);
+        doc.text(`Total ${anioComparar}: ${formatMetricVal(t2)}`, 95, 29.8);
+        doc.text(`Diferencia Neta: ${td >= 0 ? '+' : ''}${formatMetricVal(td)}`, 175, 29.8);
+        doc.text(`Variación Anual: ${td >= 0 ? '+' : ''}${tpct}`, 235, 29.8);
+
+        const tableColumn = [
+            'Mes',
+            `Año ${anioPrincipal}`,
+            `Año ${anioComparar}`,
+            'Diferencia Neta',
+            '% Variación',
+            'Estado'
+        ];
+
+        const tableRows = (comparativoData.meses || []).map(m => {
+            const v1 = estacionFiltro === 'all' ? (m.principal?.[metricaFiltro] || 0) : (m.principal?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+            const v2 = estacionFiltro === 'all' ? (m.comparar?.[metricaFiltro] || 0) : (m.comparar?.por_estacion?.[estacionFiltro]?.[metricaFiltro] || 0);
+            const d = Math.round((v1 - v2) * 100) / 100;
+            const pct = v2 > 0 ? `${d >= 0 ? '+' : ''}${((d / v2) * 100).toFixed(1)}%` : (v1 > 0 ? '+100.0%' : '0.0%');
+            const estado = v1 === 0 && v2 === 0 ? 'Sin registros' : (d >= 0 ? 'Superávit' : 'Déficit');
+            return [
+                m.nombre,
+                formatMetricVal(v1),
+                formatMetricVal(v2),
+                `${d >= 0 ? '+' : ''}${formatMetricVal(d)}`,
+                pct,
+                estado
+            ];
+        });
+
+        tableRows.push([
+            'TOTAL ANUAL',
+            formatMetricVal(t1),
+            formatMetricVal(t2),
+            `${td >= 0 ? '+' : ''}${formatMetricVal(td)}`,
+            `${td >= 0 ? '+' : ''}${tpct}`,
+            td >= 0 ? 'Crecimiento' : 'Descenso'
+        ]);
+
+        autoTable(doc, {
+            head: [tableColumn],
+            body: tableRows,
+            startY: 37,
+            theme: 'striped',
+            styles: { fontSize: 7.8, cellPadding: 1.8 },
+            columnStyles: {
+                0: { halign: 'left', fontStyle: 'bold' },
+                1: { halign: 'right', fontStyle: 'bold' },
+                2: { halign: 'right' },
+                3: { halign: 'right' },
+                4: { halign: 'center', fontStyle: 'bold' },
+                5: { halign: 'center' }
+            },
+            headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' },
+            alternateRowStyles: { fillColor: [248, 250, 252] },
+            margin: { left: 14, right: 14, bottom: 12 }
+        });
+
+        if (estacionFiltro === 'all' && Array.isArray(comparativoData.estaciones) && comparativoData.estaciones.length > 0) {
+            const nextY = (doc.lastAutoTable?.finalY || 135) + 7;
+            doc.setFontSize(9.5);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(30, 41, 59);
+            doc.text(`RESUMEN ANUAL POR ESTACIÓN Y TIENDA (${anioPrincipal} vs ${anioComparar})`, 14, nextY);
+
+            const stCols = [
+                'Sucursal / Estación',
+                `Galonaje ${anioPrincipal}`,
+                `Venta Pista ${anioPrincipal}`,
+                `Venta Tienda ${anioPrincipal}`,
+                `Venta Total ${anioPrincipal}`,
+                `Venta Total ${anioComparar}`,
+                '% Var. Total'
+            ];
+            const stRows = comparativoData.estaciones.map(est => {
+                const pEst = comparativoData.totales?.principal?.por_estacion?.[est.id_empresa] || {};
+                const cEst = comparativoData.totales?.comparar?.por_estacion?.[est.id_empresa] || {};
+                const vTot1 = pEst.venta_total || 0;
+                const vTot2 = cEst.venta_total || 0;
+                const dTot = vTot1 - vTot2;
+                const pctTot = vTot2 > 0 ? `${dTot >= 0 ? '+' : ''}${((dTot / vTot2) * 100).toFixed(1)}%` : (vTot1 > 0 ? '+100.0%' : '0.0%');
+                return [
+                    est.nombre,
+                    numFmt(pEst.galonaje || 0),
+                    moneyFmt(pEst.venta_estacion || 0),
+                    moneyFmt(pEst.venta_tienda || 0),
+                    moneyFmt(vTot1),
+                    moneyFmt(vTot2),
+                    pctTot
+                ];
+            });
+
+            autoTable(doc, {
+                head: [stCols],
+                body: stRows,
+                startY: nextY + 2.5,
+                theme: 'striped',
+                styles: { fontSize: 7.5, cellPadding: 1.6 },
+                columnStyles: {
+                    0: { halign: 'left', fontStyle: 'bold' },
+                    1: { halign: 'right' },
+                    2: { halign: 'right' },
+                    3: { halign: 'right', fontStyle: 'bold' },
+                    4: { halign: 'right', fontStyle: 'bold' },
+                    5: { halign: 'right' },
+                    6: { halign: 'center', fontStyle: 'bold' }
+                },
+                headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255], fontStyle: 'bold' },
+                alternateRowStyles: { fillColor: [248, 250, 252] },
+                margin: { left: 14, right: 14, bottom: 12 }
+            });
+        }
+
+        const pagesCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pagesCount; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(`Página ${i} de ${pagesCount}`, pageWidth - 14, pageHeight - 7, { align: 'right' });
+            doc.text('SIPEOFI - Sistema de Información de Estaciones | Confidencial', 14, pageHeight - 7);
+        }
+
+        const blob = doc.output('blob');
+        const url = URL.createObjectURL(blob);
+        setPdfSource(url);
+        setPreviewPdfDoc(doc);
+        setTotalPages(pagesCount);
+        setPreviewTitle(`Comparativo Anual de Ventas (${anioPrincipal} vs ${anioComparar})`);
+        setPreviewSubtitle(`${estName} | ${getMetricaNombre(metricaFiltro)}`);
+        setPreviewBadge('Histórico Anual');
+        setPreviewFileName(`Comparativo_Anual_${anioPrincipal}_vs_${anioComparar}_${estacionFiltro}.pdf`);
+        setPreviewModalOpen(true);
     };
 
     const formatMsDate = (msDateStr) => {
@@ -670,6 +849,59 @@ export default function VentasEstaciones() {
             }
         });
 
+        if (monthlyData.tiendas && monthlyData.tiendas.length > 0) {
+            const storeStartY = (doc.lastAutoTable?.finalY || 115) + 8;
+            doc.setFontSize(9.5);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(30, 41, 59);
+            doc.text('DETALLE MENSUAL DE TIENDAS DE CONVENIENCIA (E-MARKET / SUPER 7 / EL PEDREGAL)', 14, storeStartY);
+
+            const storeColumns = [
+                "Tienda / Sucursal",
+                "Días con Venta",
+                "Promedio Diario ($)",
+                "Venta Mensual ($)",
+                "% Participación"
+            ];
+            const storeRows = monthlyData.tiendas.map(t => {
+                const partTda = (totales?.venta_tienda || 0) > 0
+                    ? (((t.venta || 0) / totales.venta_tienda) * 100).toFixed(1) + '%'
+                    : '0.0%';
+                return [
+                    t.empresa,
+                    String(t.dias_con_venta || 0),
+                    moneyFmt(t.promedio_diario || 0),
+                    moneyFmt(t.venta || 0),
+                    partTda
+                ];
+            });
+            storeRows.push([
+                "TOTAL TIENDAS",
+                "-",
+                moneyFmt((totales?.venta_tienda || 0) / (monthlyData.dias_mes || 1)),
+                moneyFmt(totales?.venta_tienda || 0),
+                "100.0%"
+            ]);
+
+            autoTable(doc, {
+                head: [storeColumns],
+                body: storeRows,
+                startY: storeStartY + 2.5,
+                theme: 'striped',
+                styles: { fontSize: 7.8, cellPadding: 2 },
+                columnStyles: {
+                    0: { halign: 'left', fontStyle: 'bold' },
+                    1: { halign: 'center' },
+                    2: { halign: 'right' },
+                    3: { halign: 'right', fontStyle: 'bold', textColor: [22, 163, 74] },
+                    4: { halign: 'center' }
+                },
+                headStyles: { fillColor: [22, 163, 74], textColor: [255, 255, 255], fontStyle: 'bold' },
+                alternateRowStyles: { fillColor: [248, 250, 252] },
+                margin: { left: 14, right: 14, bottom: 12 }
+            });
+        }
+
         const pagesCount = doc.internal.getNumberOfPages();
         for (let i = 1; i <= pagesCount; i++) {
             doc.setPage(i);
@@ -684,6 +916,9 @@ export default function VentasEstaciones() {
         setPdfSource(url);
         setPreviewPdfDoc(doc);
         setTotalPages(pagesCount);
+        setPreviewTitle('Resumen de Ventas Mensual por Estación y Tiendas');
+        setPreviewSubtitle(`Período: ${getNombreMes(periodo)} (${periodo})`);
+        setPreviewBadge('Ventas Mensuales');
         setPreviewFileName(`Resumen_Ventas_Mensual_${periodo}.pdf`);
         setPreviewModalOpen(true);
     };
@@ -1007,6 +1242,18 @@ export default function VentasEstaciones() {
                             style={{ fontSize: '0.75rem', height: '30px', padding: '0 0.65rem' }}
                         >
                             Comparativo Quincenal
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => {
+                                setMetricaFiltro('venta_tienda');
+                                handleOpenComparativoModal();
+                            }}
+                            style={{ fontSize: '0.75rem', height: '30px', padding: '0 0.65rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', borderColor: 'rgba(37, 99, 235, 0.35)', color: '#2563eb' }}
+                            title="Ver gráfica e histórico mensual y anual de ventas de todas las tiendas"
+                        >
+                            <BarChart3 size={13} /> Gráfica / Histórico Tiendas
                         </button>
                     </div>
                 </div>
@@ -2422,9 +2669,9 @@ export default function VentasEstaciones() {
                 onClose={() => setPreviewModalOpen(false)}
                 pdfSource={pdfSource}
                 pdfDoc={previewPdfDoc}
-                title="Resumen de Ventas Mensual por Estación"
-                subtitle={`Período: ${getNombreMes(mesSeleccionado)} (${mesSeleccionado})`}
-                badge="Ventas Mensuales"
+                title={previewTitle || "Resumen de Ventas Mensual por Estación"}
+                subtitle={previewSubtitle || `Período: ${getNombreMes(mesSeleccionado)} (${mesSeleccionado})`}
+                badge={previewBadge || "Ventas Mensuales"}
                 totalPages={totalPages}
                 fileName={previewFileName}
             />
@@ -2456,7 +2703,15 @@ export default function VentasEstaciones() {
                                 ? 'Mostrando consolidado general de todas las estaciones activas' 
                                 : `Filtrando exclusivamente: ${comparativoData?.estaciones?.find(e => e.id_empresa === estacionFiltro)?.nombre || estacionFiltro}`}
                         </div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <button
+                                className="btn-secondary"
+                                onClick={handlePreviewComparativoPDF}
+                                disabled={!comparativoData}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', height: '36px', fontSize: '0.8rem' }}
+                            >
+                                <Printer size={15} color="#2563eb" /> Vista Previa PDF
+                            </button>
                             <button
                                 className="btn-secondary"
                                 onClick={exportComparativoToExcel}

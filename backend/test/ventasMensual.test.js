@@ -137,6 +137,56 @@ describe('Ventas Mensual Backend Logic Tests', () => {
             assert.strictEqual(chalchuapa.venta_tienda, 30000);
             assert.strictEqual(chalchuapa.venta_total, 260000);
         });
+
+        it('debe complementar tiendas faltantes en SaaS (Miraflores 002 y Costa del Sol 008) desde db_system_rrs (ADM-0004)', async () => {
+            const mockSaasDb = {
+                query: async (sql) => {
+                    if (sql.includes('gas_station_closeout_readings')) {
+                        return [[
+                            { id_empresa: 4, empresa: 'Puma Miraflores', galonaje: 110589.09, venta_estacion: 540136.17, diesel: 60780.34, regular: 30826.28, super: 18982.47, ion: 0 },
+                            { id_empresa: 5, empresa: 'Puma Costa del Sol', galonaje: 78152.68, venta_estacion: 383229.28, diesel: 21894.88, regular: 38079.68, super: 18178.12, ion: 0 },
+                            { id_empresa: 3, empresa: 'Shell Chalchuapa', galonaje: 80250.26, venta_estacion: 392600.42, diesel: 41505.05, regular: 27253.30, super: 11491.91, ion: 0 }
+                        ]];
+                    }
+                    if (sql.includes('pos_shifts')) {
+                        return [[
+                            { id_empresa: 3, empresa: 'Shell Chalchuapa', venta: 6353.65, dias_con_venta: 31, promedio_diario: 204.96 },
+                            { id_empresa: 6, empresa: 'Super El Pedregal', venta: 27096.98, dias_con_venta: 27, promedio_diario: 1003.59 }
+                        ]];
+                    }
+                    return [[]];
+                }
+            };
+            const mockLegacyDb = {
+                query: async (sql) => {
+                    if (sql.includes("grupo = 'ESTACION'")) return [[]];
+                    if (sql.includes("grupo = 'TIENDA'")) {
+                        return [[
+                            { id_empresa: '002', titulo: 'E-Market Miraflores', orden: 1, monto: 113635.23, dias_con_venta: 31, promedio_diario: 3665.65 },
+                            { id_empresa: '008', titulo: 'Super 7 Costa', orden: 3, monto: 70687.91, dias_con_venta: 31, promedio_diario: 2280.26 }
+                        ]];
+                    }
+                    return [[]];
+                }
+            };
+
+            const result = await getResumenMensualData(mockLegacyDb, 2026, 10, mockSaasDb);
+            assert.strictEqual(result.tiendas.length, 4);
+
+            const tdaMiraflores = result.tiendas.find(t => t.id_empresa === '002');
+            assert.ok(tdaMiraflores);
+            assert.strictEqual(tdaMiraflores.venta, 113635.23);
+            assert.strictEqual(tdaMiraflores.promedio_diario, 3665.65);
+
+            const tdaCosta = result.tiendas.find(t => t.id_empresa === '008');
+            assert.ok(tdaCosta);
+            assert.strictEqual(tdaCosta.venta, 70687.91);
+
+            const consMiraflores = result.consolidado.find(c => c.id_empresa === '002');
+            assert.ok(consMiraflores);
+            assert.strictEqual(consMiraflores.venta_tienda, 113635.23);
+            assert.strictEqual(consMiraflores.venta_total, 653771.4);
+        });
     });
 
     describe('getComparativoAnualData validación y consolidación anual', () => {
