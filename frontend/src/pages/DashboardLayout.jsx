@@ -263,6 +263,7 @@ export default function DashboardLayout() {
         clearErrorLogs();
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        window.dispatchEvent(new Event('sipe:auth-changed'));
         navigate('/login');
     };
 

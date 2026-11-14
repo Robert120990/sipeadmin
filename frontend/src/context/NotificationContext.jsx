@@ -1,9 +1,17 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import socket from '../services/socket';
 import { playNotificationSound } from '../utils/notificationSound';
 
 const NotificationContext = createContext(null);
+
+const readStoredUser = () => {
+    try {
+        return JSON.parse(localStorage.getItem('user')) || {};
+    } catch {
+        return {};
+    }
+};
 
 export function NotificationProvider({ children }) {
     const [notifications, setNotifications] = useState([]);
@@ -11,14 +19,24 @@ export function NotificationProvider({ children }) {
     const [activeToast, setActiveToast] = useState(null);
     const [bellRinging, setBellRinging] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [currentUser, setCurrentUser] = useState(readStoredUser);
 
-    // Get current logged-in user
-    const currentUser = useMemo(() => {
-        try {
-            return JSON.parse(localStorage.getItem('user')) || {};
-        } catch {
-            return {};
-        }
+    useEffect(() => {
+        const syncUser = () => {
+            const next = readStoredUser();
+            setCurrentUser(next);
+            if (!next?.id) {
+                setNotifications([]);
+                setUnreadCount(0);
+                setActiveToast(null);
+            }
+        };
+        window.addEventListener('sipe:auth-changed', syncUser);
+        window.addEventListener('storage', syncUser);
+        return () => {
+            window.removeEventListener('sipe:auth-changed', syncUser);
+            window.removeEventListener('storage', syncUser);
+        };
     }, []);
 
     // Fetch notifications from server

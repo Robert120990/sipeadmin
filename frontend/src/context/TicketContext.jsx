@@ -1,11 +1,14 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import api from '../services/api';
 import { socket } from '../services/socket';
 import { getStoredUser } from '../utils/auth';
 import { useToast } from '../components/Toast';
 import { initTicketDiagnosticsCollector } from '../utils/ticketDiagnostics';
 import { compressTicketImage } from '../utils/ticketImageCompressor';
-import { QuickTicketModal, TicketResolvedModal, TicketDetailModal } from '../components/tickets';
+
+const QuickTicketModal = lazy(() => import('../components/tickets/QuickTicketModal'));
+const TicketResolvedModal = lazy(() => import('../components/tickets/TicketResolvedModal'));
+const TicketDetailModal = lazy(() => import('../components/tickets/TicketDetailModal'));
 
 const TicketContext = createContext(null);
 
@@ -32,7 +35,17 @@ export const TicketProvider = ({ children }) => {
     const [detailTicketId, setDetailTicketId] = useState(null);
     const [ticketRefreshVersion, setTicketRefreshVersion] = useState(0);
 
-    const user = getStoredUser();
+    const [user, setUser] = useState(getStoredUser);
+    useEffect(() => {
+        const syncUser = () => setUser(getStoredUser());
+        window.addEventListener('sipe:auth-changed', syncUser);
+        window.addEventListener('storage', syncUser);
+        return () => {
+            window.removeEventListener('sipe:auth-changed', syncUser);
+            window.removeEventListener('storage', syncUser);
+        };
+    }, []);
+
     const canManageTickets = Boolean(
         user &&
         (Number(user.role_id) === 1 ||
@@ -230,40 +243,52 @@ export const TicketProvider = ({ children }) => {
         >
             {children}
 
-            <QuickTicketModal
-                open={quickModalOpen}
-                onClose={() => setQuickModalOpen(false)}
-                initialData={quickModalInit}
-                onCaptureRequest={async () => {
-                    setQuickModalOpen(false);
-                    await new Promise((r) => setTimeout(r, 180));
-                    const img = await captureScreenAsWebp();
-                    setQuickModalOpen(true);
-                    return img;
-                }}
-                onSuccess={() => {
-                    triggerTicketRefresh();
-                }}
-            />
+            {quickModalOpen && (
+                <Suspense fallback={null}>
+                    <QuickTicketModal
+                        open={quickModalOpen}
+                        onClose={() => setQuickModalOpen(false)}
+                        initialData={quickModalInit}
+                        onCaptureRequest={async () => {
+                            setQuickModalOpen(false);
+                            await new Promise((r) => setTimeout(r, 180));
+                            const img = await captureScreenAsWebp();
+                            setQuickModalOpen(true);
+                            return img;
+                        }}
+                        onSuccess={() => {
+                            triggerTicketRefresh();
+                        }}
+                    />
+                </Suspense>
+            )}
 
-            <TicketResolvedModal
-                ticket={currentResolvedTicket}
-                onAcknowledge={handleAcknowledgeResolved}
-                onViewDetail={(id) => {
-                    handleAcknowledgeResolved(id);
-                    setDetailTicketId(id);
-                }}
-            />
+            {currentResolvedTicket && (
+                <Suspense fallback={null}>
+                    <TicketResolvedModal
+                        ticket={currentResolvedTicket}
+                        onAcknowledge={handleAcknowledgeResolved}
+                        onViewDetail={(id) => {
+                            handleAcknowledgeResolved(id);
+                            setDetailTicketId(id);
+                        }}
+                    />
+                </Suspense>
+            )}
 
-            <TicketDetailModal
-                open={Boolean(detailTicketId)}
-                ticketId={detailTicketId}
-                canManage={canManageTickets}
-                onClose={() => setDetailTicketId(null)}
-                onUpdated={() => {
-                    triggerTicketRefresh();
-                }}
-            />
+            {Boolean(detailTicketId) && (
+                <Suspense fallback={null}>
+                    <TicketDetailModal
+                        open={Boolean(detailTicketId)}
+                        ticketId={detailTicketId}
+                        canManage={canManageTickets}
+                        onClose={() => setDetailTicketId(null)}
+                        onUpdated={() => {
+                            triggerTicketRefresh();
+                        }}
+                    />
+                </Suspense>
+            )}
         </TicketContext.Provider>
     );
 };

@@ -1,9 +1,30 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const https = require('https');
 const db = require('../db');
 const getDb = (...args) => db.getDb(...args);
 const getAccountingDb = (...args) => db.getAccountingDb(...args);
+
+const emitTicketSocketEvent = (io, eventName, payload, ticketObj = null) => {
+    if (!io) return;
+    if (typeof io.to === 'function') {
+        const rooms = new Set(['perm_support_tickets', 'role_admin']);
+        const targetTicket = ticketObj || payload?.ticket || payload;
+        if (targetTicket) {
+            if (targetTicket.admin_user_id && Number(targetTicket.admin_user_id) > 0) {
+                rooms.add(`user_${Number(targetTicket.admin_user_id)}`);
+            } else if (targetTicket.source_system === 'admin.sipesv.com' && targetTicket.user_id && Number(targetTicket.user_id) > 0) {
+                rooms.add(`user_${Number(targetTicket.user_id)}`);
+            }
+        }
+        io.to([...rooms]).emit(eventName, payload);
+        return;
+    }
+    if (typeof io.emit === 'function') {
+        io.emit(eventName, payload);
+    }
+};
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const SIBLING_SAAS_UPLOADS = [
@@ -231,7 +252,8 @@ const saveBase64Screenshot = (base64Data, prefix = 'ticket') => {
     }
 
     ensureUploadsDir();
-    const filename = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const safePrefix = String(prefix || 'ticket').replace(/[^a-zA-Z0-9_-]/g, '');
+    const filename = `${safePrefix}-${crypto.randomUUID()}.${ext}`;
     const filepath = path.join(UPLOADS_DIR, filename);
     fs.writeFileSync(filepath, buffer);
 
@@ -774,7 +796,7 @@ const createTicket = async ({
     } catch (_) { /* ignore */ }
 
     if (io) {
-        io.emit('ticket:created', ticket);
+        emitTicketSocketEvent(io, 'ticket:created', ticket, ticket);
     }
 
     sendTelegramSupportAlert(
@@ -1095,9 +1117,9 @@ const updateTicketStatus = async (
     }
 
     if (io) {
-        io.emit('ticket:updated', updated);
+        emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
         if (isResolving) {
-            io.emit('ticket:resolved', updated);
+            emitTicketSocketEvent(io, 'ticket:resolved', updated, updated);
         }
     }
 
@@ -1160,8 +1182,8 @@ const addTicketMessage = async (
     }
 
     if (io) {
-        io.emit('ticket:message', { ticketId: Number(id), ticket: updated });
-        io.emit('ticket:updated', updated);
+        emitTicketSocketEvent(io, 'ticket:message', { ticketId: Number(id), ticket: updated }, updated);
+        emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
     }
 
     if (senderRole === 'user') {
@@ -1527,7 +1549,7 @@ const approveAndGeneratePlan = async (id, { model = 'gemini-4-argon-high', aiNot
     );
 
     const updated = await getTicketById(id);
-    if (io) io.emit('ticket:updated', updated);
+    if (io) emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
 
     sendTelegramSupportAlert(
         `🤖 <b>PLAN DE EJECUCIÓN AGY (v${nextVersion}) — #${updated.ticket_code}</b>\n` +
@@ -1557,7 +1579,7 @@ const executeApprovedPlan = async (id, { actorName = 'Administrador', io = null 
         [logLine, id]
     );
     const updated = await getTicketById(id);
-    if (io) io.emit('ticket:updated', updated);
+    if (io) emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
 
     sendTelegramSupportAlert(
         `✅ <b>PLAN AGY APROBADO — #${updated.ticket_code}</b>\n` +
@@ -1582,7 +1604,7 @@ const rejectPlan = async (id, { reason = 'Denegado por administrador', actorName
         [logLine, id]
     );
     const updated = await getTicketById(id);
-    if (io) io.emit('ticket:updated', updated);
+    if (io) emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
 
     sendTelegramSupportAlert(
         `❌ <b>PLAN AGY DENEGADO — #${updated.ticket_code}</b>\n` +
@@ -1634,7 +1656,7 @@ const syncRealtimeTicketUpdates = async (io) => {
                 if (io) {
                     const fullNewTicket = await getTicketById(id);
                     if (fullNewTicket) {
-                        io.emit('ticket:created', fullNewTicket);
+                        emitTicketSocketEvent(io, 'ticket:created', fullNewTicket, fullNewTicket);
                     }
                 }
                 continue;
@@ -1683,9 +1705,9 @@ const syncRealtimeTicketUpdates = async (io) => {
                 }
 
                 if (io && fullTicket) {
-                    io.emit('ticket:updated', fullTicket);
+                    emitTicketSocketEvent(io, 'ticket:updated', fullTicket, fullTicket);
                     if (currState.status === 'resuelto') {
-                        io.emit('ticket:resolved', fullTicket);
+                        emitTicketSocketEvent(io, 'ticket:resolved', fullTicket, fullTicket);
                     }
                 }
             } else if (prev.updatedAt !== currState.updatedAt) {
@@ -1693,7 +1715,7 @@ const syncRealtimeTicketUpdates = async (io) => {
                 if (io) {
                     const fullTicket = await getTicketById(id);
                     if (fullTicket) {
-                        io.emit('ticket:updated', fullTicket);
+                        emitTicketSocketEvent(io, 'ticket:updated', fullTicket, fullTicket);
                     }
                 }
             }

@@ -19,6 +19,7 @@ export default function Login() {
             try {
                 localStorage.removeItem('token');
                 localStorage.removeItem('user');
+                window.dispatchEvent(new Event('sipe:auth-changed'));
             } catch (_) {
                 /* ignore */
             }
@@ -36,6 +37,7 @@ export default function Login() {
             const res = await api.post('/login', { username, password });
             localStorage.setItem('token', res.data.token);
             localStorage.setItem('user', JSON.stringify(res.data.user));
+            window.dispatchEvent(new Event('sipe:auth-changed'));
             navigate('/dashboard', { replace: true });
         } catch (err) {
             const data = err.response?.data;

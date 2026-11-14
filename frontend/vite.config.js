@@ -54,6 +54,15 @@ export default defineConfig({
             if (id.includes('lucide-react')) {
               return 'vendor-ui';
             }
+            if (id.includes('@iconify')) {
+              return 'vendor-icons';
+            }
+            if (id.includes('socket.io-client') || id.includes('engine.io-client')) {
+              return 'vendor-realtime';
+            }
+            if (id.includes('axios')) {
+              return 'vendor-http';
+            }
             if (id.includes('jspdf')) {
               return 'vendor-pdf';
             }
@@ -77,6 +86,9 @@ export default defineConfig({
             ) {
               return 'vendor-react';
             }
+          }
+          if (id.includes('config/bundledIcons')) {
+            return 'vendor-icons';
           }
         }
       }

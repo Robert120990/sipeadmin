@@ -9,6 +9,17 @@ let injectedDb = undefined;
 let injectedAiClient = undefined;
 let schemaReady = false;
 
+const emitCrecimientoAgySocket = (io, payload) => {
+    if (!io) return;
+    if (typeof io.to === 'function') {
+        io.to(['perm_finanzas_crecimiento', 'role_admin']).emit('crecimiento:agy_update', payload);
+        return;
+    }
+    if (typeof io.emit === 'function') {
+        io.emit('crecimiento:agy_update', payload);
+    }
+};
+
 // Caché en memoria para Graphify AST (evita releer disco si mtime no cambió)
 let graphifyCache = {
     mtimeMs: 0,
@@ -1470,7 +1481,7 @@ async function generateAgyServerPlan(customDb = null, conversacionId, {
     );
 
     if (io) {
-        io.emit('crecimiento:agy_update', { conversacion_id: Number(conversacionId), estado_agy: 'planificando', plan_version: nextVersion });
+        emitCrecimientoAgySocket(io, { conversacion_id: Number(conversacionId), estado_agy: 'planificando', plan_version: nextVersion });
     }
 
     let planMarkdown = '';
@@ -1614,7 +1625,7 @@ NO incluyas bloques enormes de código; estructura exactamente con:
     );
 
     if (io) {
-        io.emit('crecimiento:agy_update', {
+        emitCrecimientoAgySocket(io, {
             conversacion_id: Number(conversacionId),
             estado_agy: 'esperando_aprobacion',
             plan_version: nextVersion,
@@ -1686,7 +1697,7 @@ async function executeAgyServerPlan(customDb = null, conversacionId, {
     );
 
     if (io) {
-        io.emit('crecimiento:agy_update', { conversacion_id: Number(conversacionId), estado_agy: 'ejecutando' });
+        emitCrecimientoAgySocket(io, { conversacion_id: Number(conversacionId), estado_agy: 'ejecutando' });
     }
 
     const modifiedFiles = [];
@@ -1877,7 +1888,7 @@ REGLAS:
     }
 
     if (io) {
-        io.emit('crecimiento:agy_update', {
+        emitCrecimientoAgySocket(io, {
             conversacion_id: Number(conversacionId),
             estado_agy: finalState,
             archivos_modificados: modifiedFiles
@@ -1926,7 +1937,7 @@ async function rejectAgyServerPlan(customDb = null, conversacionId, { reason = '
     );
 
     if (io) {
-        io.emit('crecimiento:agy_update', { conversacion_id: Number(conversacionId), estado_agy: 'denegado' });
+        emitCrecimientoAgySocket(io, { conversacion_id: Number(conversacionId), estado_agy: 'denegado' });
     }
 
     return { conversacion_id: Number(conversacionId), estado_agy: 'denegado', message: msg };

@@ -52,7 +52,20 @@ const PORT = process.env.PORT || 5001;
 app.disable('x-powered-by');
 app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
-    contentSecurityPolicy: false
+    contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+            imgSrc: ["'self'", "data:", "blob:", "https:"],
+            connectSrc: ["'self'", "ws:", "wss:", "https:", "http://localhost:5001", "http://127.0.0.1:5001"],
+            frameSrc: ["'self'", "blob:"],
+            objectSrc: ["'self'", "blob:"],
+            workerSrc: ["'self'", "blob:"]
+        }
+    }
 }));
 app.use(cors(corsOptions));
 // Dynamic body parser: 20MB for heavy data uploads / reconciliations, 1MB for all other endpoints
@@ -95,28 +108,43 @@ app.use(autoLogMiddleware());
 
 const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
-const { authenticateToken, requireRole, JWT_SECRET, isUserRevoked } = require('./middleware/auth');
+const { authenticateToken, requireRole, isAdminUser, JWT_SECRET, isUserRevoked } = require('./middleware/auth');
 
 io.use((socket, next) => {
     const rawToken = socket.handshake.auth?.token ||
         (socket.handshake.headers?.authorization ? socket.handshake.headers.authorization.replace(/^Bearer\s+/i, '') : null);
-    if (rawToken) {
-        try {
-            const decoded = jwt.verify(rawToken, JWT_SECRET);
-            if (decoded && decoded.status !== 'inactive' && !isUserRevoked(decoded.id)) {
-                socket.user = decoded;
-            }
-        } catch (_) {
-            // Token inválido o expirado; no se asigna socket.user
-        }
+    if (!rawToken) {
+        return next(new Error('Autenticación requerida para conexión en tiempo real'));
     }
-    next();
+    try {
+        const decoded = jwt.verify(rawToken, JWT_SECRET);
+        if (!decoded || decoded.status === 'inactive' || isUserRevoked(decoded.id)) {
+            return next(new Error('Usuario inactivo o suspendido'));
+        }
+        socket.user = decoded;
+        return next();
+    } catch (_) {
+        return next(new Error('Token inválido o expirado'));
+    }
 });
 
 io.on("connection", (socket) => {
     console.log(`Usuario conectado a Socket.io: ${socket.id}`);
     if (socket.user?.id) {
         socket.join(`user_${socket.user.id}`);
+        const perms = Array.isArray(socket.user.permissions) ? socket.user.permissions : [];
+        if (isAdminUser(socket.user)) {
+            socket.join('role_admin');
+            socket.join('perm_support_tickets');
+            socket.join('perm_finanzas_crecimiento');
+        } else {
+            if (perms.includes('manage_support_tickets')) {
+                socket.join('perm_support_tickets');
+            }
+            if (perms.includes('manage_finanzas_crecimiento') || perms.includes('/dashboard/finanzas/crecimiento')) {
+                socket.join('perm_finanzas_crecimiento');
+            }
+        }
     }
     socket.on("join", (userId) => {
         if (!socket.user?.id) return;
@@ -220,9 +248,12 @@ app.use('/api', bitacoraRoutes);
 app.use('/api/check-designer', checkDesignerRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/tickets', ticketsRoutes);
-app.use('/api/uploads', express.static(UPLOADS_DIR));
+app.use('/api/uploads', express.static(UPLOADS_DIR, { dotfiles: 'deny', index: false, maxAge: '7d' }));
 app.get('/api/uploads/:filename', (req, res) => {
     const safeName = path.basename(req.params.filename || '');
+    if (!safeName || !/^[a-zA-Z0-9._-]+$/.test(safeName)) {
+        return res.status(400).json({ message: 'Nombre de archivo inválido' });
+    }
     for (const dir of SIBLING_SAAS_UPLOADS) {
         try {
             const candidate = path.join(dir, safeName);

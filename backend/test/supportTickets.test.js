@@ -585,4 +585,79 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
             dbModule.getDb = origGetDb;
         }
     });
+
+    it('ticketsRouter.isTicketOwner debe prevenir colisión de homónimos cuando admin_user_id existe y permitir fallback en tickets sincronizados', () => {
+        const ticketsRouter = require('../routes/tickets');
+        const ownerUser = { id: 10, username: 'juan.perez', nombre: 'Juan Perez', email: 'juan@sipesv.com' };
+        const homonymIntruder = { id: 99, username: 'otro.juan', nombre: 'Juan Perez', email: 'juan2@sipesv.com' };
+
+        const localTicket = { id: 500, admin_user_id: 10, user_id: 10, user_name: 'Juan Perez', source_system: 'admin.sipesv.com' };
+        assert.strictEqual(ticketsRouter.isTicketOwner(localTicket, ownerUser), true);
+        assert.strictEqual(ticketsRouter.isTicketOwner(localTicket, homonymIntruder), false, 'Un homónimo con otro ID no debe ser considerado propietario');
+
+        const syncedSaasTicket = { id: 501, admin_user_id: null, user_id: 88, user_name: 'Juan Perez', source_system: 'sys.sipesv.com' };
+        assert.strictEqual(ticketsRouter.isTicketOwner(syncedSaasTicket, ownerUser), true);
+    });
+
+    it('saveBase64Screenshot debe generar nombres no enumerables con UUIDv4 criptográfico y aislar salas Socket.io', async () => {
+        const tinyWebpBase64 = 'data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
+        const url = saveBase64Screenshot(tinyWebpBase64, 'TEST-UUID');
+        assert.match(url, /^\/api\/uploads\/TEST-UUID-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.webp$/i);
+        const savedPath = path.join(UPLOADS_DIR, path.basename(url));
+        try { fs.unlinkSync(savedPath); } catch (_) { /* ignore */ }
+
+        const ticketService = require('../services/ticketService');
+        const dbModule = require('../db');
+        const origGetAccountingDb = dbModule.getAccountingDb;
+        const origGetDb = dbModule.getDb;
+
+        const mockPool = {
+            async query(sql) {
+                const q = String(sql).trim();
+                if (q.startsWith('SHOW COLUMNS')) return [[{ Field: 'id' }, { Field: 'admin_user_id' }, { Field: 'source_system' }]];
+                if (q.startsWith('INSERT INTO support_tickets')) return [{ insertId: 777 }];
+                if (q.includes('FROM support_tickets t') && q.includes('WHERE t.id = ?')) {
+                    return [[{ id: 777, ticket_code: 'ADM-0777', admin_user_id: 42, user_id: 42, user_name: 'Operador', subject: 'Prueba Sala', description: 'Desc', status: 'abierto', priority: 'media', type: 'problema', source_system: 'admin.sipesv.com' }]];
+                }
+                return [[]];
+            }
+        };
+        dbModule.getAccountingDb = async () => { throw new Error('offline'); };
+        dbModule.getDb = () => mockPool;
+
+        const roomEmissions = [];
+        let globalEmits = 0;
+        const scopedIo = {
+            to(rooms) {
+                return {
+                    emit(ev, payload) {
+                        roomEmissions.push({ rooms, ev, payload });
+                    }
+                };
+            },
+            emit() {
+                globalEmits += 1;
+            }
+        };
+
+        try {
+            await ticketService.createTicket({
+                userId: 42,
+                adminUserId: 42,
+                userName: 'Operador',
+                subject: 'Prueba Sala',
+                description: 'Desc',
+                io: scopedIo
+            });
+            assert.strictEqual(globalEmits, 0, 'No debe emitir globalmente a sockets no autorizados');
+            const createdEv = roomEmissions.find((e) => e.ev === 'ticket:created');
+            assert.ok(createdEv, 'Debe emitir ticket:created a salas autorizadas');
+            assert.ok(createdEv.rooms.includes('perm_support_tickets'));
+            assert.ok(createdEv.rooms.includes('role_admin'));
+            assert.ok(createdEv.rooms.includes('user_42'));
+        } finally {
+            dbModule.getAccountingDb = origGetAccountingDb;
+            dbModule.getDb = origGetDb;
+        }
+    });
 });

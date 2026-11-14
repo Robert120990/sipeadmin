@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken, isAdminUser } = require('../middleware/auth');
+const { sendSafeError } = require('../utils/errorHandler');
 const ticketService = require('../services/ticketService');
 
 const canManageTickets = (user) => {
@@ -13,6 +14,32 @@ const canManageTickets = (user) => {
 const getActorName = (user) => {
     if (!user) return 'Usuario';
     return user.nombre || user.name || user.username || `Usuario #${user.id}`;
+};
+
+const isTicketOwner = (ticket, user) => {
+    if (!ticket || !user) return false;
+    const uid = Number(user.id || 0);
+    if (ticket.admin_user_id !== null && ticket.admin_user_id !== undefined && Number(ticket.admin_user_id) > 0) {
+        return uid > 0 && Number(ticket.admin_user_id) === uid;
+    }
+    if (uid > 0 && ticket.source_system === 'admin.sipesv.com' && Number(ticket.user_id) === uid) {
+        return true;
+    }
+    if (uid > 0 && !ticket.source_system && Number(ticket.user_id) === uid) {
+        return true;
+    }
+    const actorName = String(getActorName(user)).trim().toLowerCase();
+    const username = String(user.username || '').trim().toLowerCase();
+    const email = String(user.email || '').trim().toLowerCase();
+    const tName = String(ticket.user_name || '').trim().toLowerCase();
+    const tEmail = String(ticket.user_email || '').trim().toLowerCase();
+    if (tName && (tName === actorName || (username && tName === username))) {
+        return true;
+    }
+    if (email && tEmail && email === tEmail) {
+        return true;
+    }
+    return false;
 };
 
 // GET /api/tickets/stats
@@ -241,14 +268,23 @@ router.post('/', authenticateToken, async (req, res) => {
             message: `Ticket ${ticket.ticket_code} creado y sincronizado con sys.sipesv.com`
         });
     } catch (err) {
-        console.error('Error creating ticket:', err);
-        res.status(500).json({ message: err.message || 'Error al crear el ticket de soporte' });
+        if (String(err?.message || '').includes('excede el límite')) {
+            return res.status(400).json({ message: err.message });
+        }
+        sendSafeError(res, err, 'Error al crear el ticket de soporte');
     }
 });
 
 // PUT /api/tickets/:id/acknowledge
 router.put('/:id/acknowledge', authenticateToken, async (req, res) => {
     try {
+        const ticket = await ticketService.getTicketById(req.params.id);
+        if (!ticket) {
+            return res.status(404).json({ message: 'Ticket no encontrado' });
+        }
+        if (!canManageTickets(req.user) && !isTicketOwner(ticket, req.user)) {
+            return res.status(403).json({ message: 'No tiene permisos para confirmar este ticket' });
+        }
         await ticketService.acknowledgeResolution(
             req.params.id,
             req.user.id,
@@ -257,8 +293,7 @@ router.put('/:id/acknowledge', authenticateToken, async (req, res) => {
         );
         res.json({ success: true, message: 'Notificación de resolución confirmada' });
     } catch (err) {
-        console.error('Error acknowledging ticket:', err);
-        res.status(500).json({ message: 'Error al confirmar lectura de ticket resuelto' });
+        sendSafeError(res, err, 'Error al confirmar lectura de ticket resuelto');
     }
 });
 
@@ -270,21 +305,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
             return res.status(404).json({ message: 'Ticket no encontrado' });
         }
         const canManage = canManageTickets(req.user);
-        const actorName = String(getActorName(req.user)).toLowerCase();
-        const username = String(req.user.username || '').toLowerCase();
-        const isOwner =
-            Number(ticket.admin_user_id) === Number(req.user.id) ||
-            Number(ticket.user_id) === Number(req.user.id) ||
-            String(ticket.user_name || '').toLowerCase() === actorName ||
-            (username && String(ticket.user_name || '').toLowerCase() === username);
-
-        if (!canManage && !isOwner) {
+        if (!canManage && !isTicketOwner(ticket, req.user)) {
             return res.status(403).json({ message: 'No tiene permisos para ver este ticket' });
         }
         res.json({ success: true, data: ticket });
     } catch (err) {
-        console.error('Error getting ticket detail:', err);
-        res.status(500).json({ message: 'Error al obtener detalle del ticket' });
+        sendSafeError(res, err, 'Error al obtener detalle del ticket');
     }
 });
 
@@ -352,7 +378,14 @@ router.post('/:id/messages', authenticateToken, async (req, res) => {
         if ((!message || !String(message).trim()) && !attachment_base64) {
             return res.status(400).json({ message: 'El mensaje o adjunto es obligatorio' });
         }
+        const existingTicket = await ticketService.getTicketById(req.params.id);
+        if (!existingTicket) {
+            return res.status(404).json({ message: 'Ticket no encontrado' });
+        }
         const canManage = canManageTickets(req.user);
+        if (!canManage && !isTicketOwner(existingTicket, req.user)) {
+            return res.status(403).json({ message: 'No tiene permisos para comentar en este ticket' });
+        }
         const updated = await ticketService.addTicketMessage(req.params.id, {
             senderUserId: req.user.id,
             senderName: getActorName(req.user),
@@ -367,8 +400,10 @@ router.post('/:id/messages', authenticateToken, async (req, res) => {
         }
         res.status(201).json({ success: true, data: updated, ticket: updated });
     } catch (err) {
-        console.error('Error adding ticket message:', err);
-        res.status(500).json({ message: 'Error al agregar comentario al ticket' });
+        if (String(err?.message || '').includes('excede el límite')) {
+            return res.status(400).json({ message: err.message });
+        }
+        sendSafeError(res, err, 'Error al agregar comentario al ticket');
     }
 });
 
@@ -387,7 +422,7 @@ router.post('/:id/agy/plan', authenticateToken, async (req, res) => {
         });
         res.json({ success: true, data: updated, message: 'Planificación AGY generada y lista para revisión' });
     } catch (err) {
-        res.status(500).json({ message: err.message || 'Error al generar plan AGY' });
+        sendSafeError(res, err, 'Error al generar plan AGY');
     }
 });
 
@@ -403,7 +438,7 @@ router.post('/:id/agy/execute', authenticateToken, async (req, res) => {
         });
         res.json({ success: true, data: updated, message: 'Plan AGY enviado a ejecución' });
     } catch (err) {
-        res.status(500).json({ message: err.message || 'Error al ejecutar plan AGY' });
+        sendSafeError(res, err, 'Error al ejecutar plan AGY');
     }
 });
 
@@ -420,7 +455,7 @@ router.post('/:id/agy/reject', authenticateToken, async (req, res) => {
         });
         res.json({ success: true, data: updated, message: 'Plan AGY denegado' });
     } catch (err) {
-        res.status(500).json({ message: err.message || 'Error al denegar plan AGY' });
+        sendSafeError(res, err, 'Error al denegar plan AGY');
     }
 });
 
@@ -440,8 +475,11 @@ router.post('/:id/agy/resend-telegram', authenticateToken, async (req, res) => {
         });
         res.json({ success: true, message: 'Plan reenviado a Telegram con botones de reacción' });
     } catch (err) {
-        res.status(500).json({ message: 'Error al reenviar plan a Telegram' });
+        sendSafeError(res, err, 'Error al reenviar plan a Telegram');
     }
 });
+
+router.isTicketOwner = isTicketOwner;
+router.canManageTickets = canManageTickets;
 
 module.exports = router;
