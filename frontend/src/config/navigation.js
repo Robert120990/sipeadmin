@@ -104,6 +104,7 @@ export const securityItems = [
 ];
 
 export const configuracionMenu = [
+    { name: 'Agentes IA & Graphify', path: '/dashboard/configuracion/agentes-ia', icon: createColorIcon('fluent-emoji-flat:robot') },
     { name: 'Tema y Apariencia', path: '/dashboard/settings/theme', icon: createColorIcon('flat-color-icons:gallery') },
     { name: 'Conexión Externa', path: '/dashboard/settings/database', icon: createColorIcon('flat-color-icons:data-backup') },
     { name: 'Conexión Contabilidad', path: '/dashboard/settings/accounting', icon: createColorIcon('flat-color-icons:data-configuration') },

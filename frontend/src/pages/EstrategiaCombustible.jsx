@@ -145,27 +145,31 @@ export default function EstrategiaCombustible() {
                     </div>
                 </div>
 
-                <div className="card glass" style={{ padding: '0.85rem 1rem', borderLeft: resumen.tanques_criticos > 0 ? '4px solid #ef4444' : '4px solid #10b981' }}>
+                <div className="card glass" style={{ padding: '0.85rem 1rem', borderLeft: (resumen.emergencias_reales ?? resumen.tanques_criticos) > 0 ? '4px solid #ef4444' : '4px solid #10b981' }}>
                     <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
-                        Tanques &lt;24 Horas
+                        Emergencias Reales (&lt;24h)
                     </div>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: resumen.tanques_criticos > 0 ? '#ef4444' : '#10b981', marginTop: '0.2rem' }}>
-                        {resumen.tanques_criticos || 0}
+                    <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: (resumen.emergencias_reales ?? resumen.tanques_criticos) > 0 ? '#ef4444' : '#10b981', marginTop: '0.2rem' }}>
+                        {resumen.emergencias_reales ?? resumen.tanques_criticos ?? 0}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: resumen.tanques_criticos > 0 ? '#ef4444' : '#10b981' }}>
-                        {resumen.tanques_criticos > 0 ? 'En riesgo inminente de quiebre' : 'Stock seguro en todas las estaciones'}
+                    <div style={{ fontSize: '0.75rem', color: (resumen.emergencias_reales ?? resumen.tanques_criticos) > 0 ? '#ef4444' : '#10b981' }}>
+                        {(resumen.cubiertos_en_ruta || 0) > 0
+                            ? `${resumen.cubiertos_en_ruta} tanque(s) <24h ya cubiertos en ruta`
+                            : ((resumen.emergencias_reales ?? 0) > 0 ? 'Sin pedido liberado en tránsito' : 'Stock seguro o cubierto')}
                     </div>
                 </div>
 
-                <div className="card glass" style={{ padding: '0.85rem 1rem' }}>
+                <div className="card glass" style={{ padding: '0.85rem 1rem', borderLeft: '4px solid #0ea5e9' }}>
                     <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
-                        Tanques en Alerta (24-48h)
+                        Cisternas Puma en Ruta
                     </div>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#f59e0b', marginTop: '0.2rem' }}>
-                        {resumen.tanques_advertencia || 0}
+                    <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#0284c7', marginTop: '0.2rem' }}>
+                        {(resumen.galones_en_transito_total || 0).toLocaleString()} gal
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        Planificar despacho en 24h
+                    <div style={{ fontSize: '0.75rem', color: (resumen.pedidos_retenidos_total || 0) > 0 ? '#ef4444' : 'var(--text-muted)' }}>
+                        {(resumen.pedidos_retenidos_total || 0) > 0
+                            ? `⛔ ${resumen.pedidos_retenidos_total} orden(es) RETENIDA(S)`
+                            : `${resumen.tanques_advertencia || 0} tanques en alerta 24-48h`}
                     </div>
                 </div>
             </div>
@@ -326,7 +330,7 @@ export default function EstrategiaCombustible() {
                 </div>
 
                 <div className="table-responsive">
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '850px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '940px' }}>
                         <thead>
                             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'left', color: 'var(--text-muted)' }}>ESTACIÓN / TANQUE</th>
@@ -339,22 +343,23 @@ export default function EstrategiaCombustible() {
                                     CAPACIDAD & OCUPACIÓN {ordenNivel === 'asc' ? '↑' : '↓'}
                                 </th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>STOCK ACTUAL</th>
-                                <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>ESPACIO LIBRE (ULLAGE)</th>
+                                <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>ULLAGE LIBRE</th>
+                                <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>TRÁNSITO PUMA</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'right', color: 'var(--text-muted)' }}>CONSUMO DÍA</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'center', color: 'var(--text-muted)' }}>AUTONOMÍA</th>
-                                <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'center', color: 'var(--text-muted)' }}>ESTADO</th>
+                                <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textAlign: 'center', color: 'var(--text-muted)' }}>ESTADO REAL</th>
                             </tr>
                         </thead>
                         <tbody>
                             {loadingAutonomia ? (
                                 <tr>
-                                    <td colSpan="8" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.825rem' }}>
+                                    <td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.825rem' }}>
                                         Cargando datos de tanques...
                                     </td>
                                 </tr>
                             ) : tanquesOrdenados.length === 0 ? (
                                 <tr>
-                                    <td colSpan="8" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.825rem' }}>
+                                    <td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.825rem' }}>
                                         No se encontraron tanques con los filtros aplicados.
                                     </td>
                                 </tr>
@@ -362,14 +367,19 @@ export default function EstrategiaCombustible() {
                                 tanquesOrdenados.map((t, idx) => {
                                     const esCritico = t.estado === 'critico';
                                     const esAdvertencia = t.estado === 'advertencia';
+                                    const enRuta = t.riesgo_real === 'cubierto_en_ruta';
 
                                     let badgeColor = '#10b981';
                                     let badgeBg = 'rgba(16, 185, 129, 0.15)';
                                     let badgeText = 'ÓPTIMO';
-                                    if (esCritico) {
+                                    if (esCritico && enRuta) {
+                                        badgeColor = '#0284c7';
+                                        badgeBg = 'rgba(14, 165, 233, 0.15)';
+                                        badgeText = 'CUBIERTO EN RUTA';
+                                    } else if (esCritico) {
                                         badgeColor = '#ef4444';
                                         badgeBg = 'rgba(239, 68, 68, 0.15)';
-                                        badgeText = 'CRÍTICO (<24h)';
+                                        badgeText = 'EMERGENCIA (<24h)';
                                     } else if (esAdvertencia) {
                                         badgeColor = '#f59e0b';
                                         badgeBg = 'rgba(245, 158, 11, 0.15)';
@@ -385,7 +395,7 @@ export default function EstrategiaCombustible() {
                                             <td style={{ padding: '0.45rem 0.5rem' }}>
                                                 <span style={{ fontWeight: 600 }}>{t.nombre_combustible}</span>
                                             </td>
-                                            <td style={{ padding: '0.45rem 0.5rem', width: '160px' }}>
+                                            <td style={{ padding: '0.45rem 0.5rem', width: '155px' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', marginBottom: '0.2rem', color: 'var(--text-muted)' }}>
                                                     <span>{t.porcentaje_ocupacion}%</span>
                                                     <span>{t.capacidad?.toLocaleString()} gal</span>
@@ -405,6 +415,19 @@ export default function EstrategiaCombustible() {
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: 'var(--primary)', fontWeight: 600 }}>
                                                 {t.espacio_libre_ullage?.toLocaleString()} gal
                                             </td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
+                                                {(t.galones_en_transito || 0) > 0 ? (
+                                                    <span style={{ color: '#0284c7', fontWeight: 'bold' }} title={(t.ordenes_en_ruta || []).join(', ')}>
+                                                        +{t.galones_en_transito.toLocaleString()} gal
+                                                    </span>
+                                                ) : (t.pedidos_retenidos_count || 0) > 0 ? (
+                                                    <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '0.74rem' }}>
+                                                        ⛔ Retenido
+                                                    </span>
+                                                ) : (
+                                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>—</span>
+                                                )}
+                                            </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: 'var(--text-muted)' }}>
                                                 ~{t.consumo_diario_estimado?.toLocaleString()} gal
                                             </td>
@@ -413,7 +436,9 @@ export default function EstrategiaCombustible() {
                                                     {t.horas_restantes > 120 ? '>5 días' : `${t.horas_restantes} hrs`}
                                                 </strong>
                                                 <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                                    ({t.dias_restantes} días)
+                                                    {(t.galones_en_transito || 0) > 0 && t.horas_restantes_con_transito <= 240
+                                                        ? `(${t.horas_restantes_con_transito}h c/ruta)`
+                                                        : `(${t.dias_restantes} días)`}
                                                 </span>
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>

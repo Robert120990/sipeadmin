@@ -61,7 +61,8 @@ import {
     TelegramUsers,
     AsistenteIA,
     EnergiaSolarAndelsa,
-    SupportTickets
+    SupportTickets,
+    ConfiguracionAgentesIA
 } from './pages/lazyPages';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -79,6 +80,7 @@ const PermissionRoute = ({ pathKey, children }) => {
     if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return children;
     if (user.permissions?.includes(pathKey)) return children;
     if (pathKey?.startsWith('/dashboard/estrategia') && (user.permissions?.includes('view_direccion_estrategica') || user.permissions?.includes('/dashboard/estrategia'))) return children;
+    if (pathKey === '/dashboard/configuracion/agentes-ia' && (user.permissions?.includes('manage_telegram') || user.permissions?.includes('view_direccion_estrategica'))) return children;
     if (pathKey === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return children;
     if (pathKey === '/dashboard/bancos/reportes/saldos-chequera' && user.permissions?.includes('/dashboard/consultas/saldos-chequera')) return children;
     return <Navigate to="/dashboard" replace />;
@@ -154,6 +156,7 @@ function App() {
                                             <Route path="estrategia/rentabilidad" element={<PermissionRoute pathKey="/dashboard/estrategia/rentabilidad"><EstrategiaRentabilidad /></PermissionRoute>} />
                                             <Route path="estrategia/creditos" element={<PermissionRoute pathKey="/dashboard/estrategia/creditos"><EstrategiaCreditos /></PermissionRoute>} />
                                             <Route path="settings/theme" element={<PermissionRoute pathKey="/dashboard/settings/theme"><ConfiguracionTema /></PermissionRoute>} />
+                                            <Route path="configuracion/agentes-ia" element={<PermissionRoute pathKey="/dashboard/configuracion/agentes-ia"><ConfiguracionAgentesIA /></PermissionRoute>} />
                                             <Route path="settings/database" element={<PermissionRoute pathKey="/dashboard/settings/database"><ConfiguracionDb /></PermissionRoute>} />
                                             <Route path="settings/accounting" element={<PermissionRoute pathKey="/dashboard/settings/accounting"><ConfiguracionContabilidad /></PermissionRoute>} />
                                             <Route path="settings/email" element={<PermissionRoute pathKey="/dashboard/settings/email"><ConfiguracionEmail /></PermissionRoute>} />

@@ -62,7 +62,8 @@ import {
     TelegramUsers,
     AsistenteIA,
     EnergiaSolarAndelsa,
-    SupportTickets
+    SupportTickets,
+    ConfiguracionAgentesIA
 } from './lazyPages';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
@@ -142,6 +143,7 @@ export default function DashboardLayout() {
         if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
         if (user.permissions?.includes(path)) return true;
         if (path?.startsWith('/dashboard/estrategia') && (user.permissions?.includes('view_direccion_estrategica') || user.permissions?.includes('/dashboard/estrategia'))) return true;
+        if (path === '/dashboard/configuracion/agentes-ia' && (user.permissions?.includes('manage_telegram') || user.permissions?.includes('view_direccion_estrategica'))) return true;
         if (path === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return true;
         if (path === '/dashboard/bancos/reportes/saldos-chequera' && user.permissions?.includes('/dashboard/consultas/saldos-chequera')) return true;
         return false;
@@ -205,6 +207,7 @@ export default function DashboardLayout() {
         '/dashboard/seguridad/tickets': <SupportTickets />,
         '/dashboard/consultas/ia-asistente': <AsistenteIA />,
         '/dashboard/operaciones/energia-solar': <EnergiaSolarAndelsa />,
+        '/dashboard/configuracion/agentes-ia': <ConfiguracionAgentesIA />,
     };
 
     // Sync with URL location
