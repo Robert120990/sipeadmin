@@ -21,9 +21,9 @@ Frontend proxies to `localhost:5001` in dev; no env vars required.
 
 ## Deployment & Architecture (VPS Host)
 - **Production Server**: VPS Linux (`5.252.55.29`) running behind **Caddy** reverse proxy (`admin.sipesv.com`)
-- **Process Manager**: PM2 manages `sipeadmin-backend` (port 5001) and `sipeadmin-webhook` (port 9000)
-- **Package Manager**: pnpm workspace
-- **Auto-deployment**: Webhook listening on port 9000 triggers `/home/sistemas/deploy-sipeadmin.sh` on git push to `main`
+- **Process Manager**: PM2 manages `sipeadmin-backend` (port 5001) and `sipeadmin-webhook` (port 7778, `webhook-server.js`)
+- **Package Manager**: pnpm workspace (`pnpm-lock.yaml` único en raíz)
+- **Auto-deployment**: Webhook listening on `127.0.0.1:7778` triggers `deploy.sh` on git push to `main`
 - **Socket.io & Puppeteer**: Fully supported with persistent Node.js process on VPS
 - **Legacy Vercel**: `vercel.json` kept for fallback/migration compatibility
 

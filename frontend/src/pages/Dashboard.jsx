@@ -16,9 +16,7 @@ const Dashboard = () => {
 
     const fetchDashboardData = async () => {
         try {
-            console.log('Fetching dashboard from:', api.defaults.baseURL);
             const res = await api.get('/dashboard/vencimientos');
-            console.log('Dashboard Data Received:', res.data);
             setWeeklyPayments(res.data || []);
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
@@ -162,8 +160,8 @@ const Dashboard = () => {
                             <div className="spinner"></div>
                         </div>
                     ) : weeklyPayments.length > 0 ? (
-                        <div style={{ flex: 1, overflowY: 'auto', paddingRight: '0.4rem' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <div className="table-responsive" style={{ flex: 1, overflowY: 'auto', paddingRight: '0.4rem' }}>
+                            <table style={{ width: '100%', minWidth: '340px', borderCollapse: 'collapse' }}>
                                 <thead style={{ position: 'sticky', top: 0, backgroundColor: 'var(--card-bg)', zIndex: 10 }}>
                                     <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                                         <th style={{ padding: '0.5rem 0', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Proveedor / Ubicación</th>

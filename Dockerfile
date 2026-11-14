@@ -1,14 +1,14 @@
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+RUN npm install -g pnpm@12
 
 WORKDIR /app
-COPY pnpm-workspace.yaml package.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY frontend/package.json ./frontend/
 COPY backend/package.json ./backend/
 
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 
 COPY . .
 

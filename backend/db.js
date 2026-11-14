@@ -494,82 +494,6 @@ const initDB = async () => {
         }
 
         await pool.query(`
-            CREATE TABLE IF NOT EXISTS validaciones_saldo_banco (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                cuenta_bancaria_id INT NOT NULL,
-                fecha_validacion DATETIME NOT NULL,
-                monto_banco DECIMAL(14,2) NOT NULL DEFAULT 0,
-                saldo_chequera DECIMAL(14,2) DEFAULT 0,
-                diferencia DECIMAL(14,2) DEFAULT 0,
-                notas TEXT,
-                created_by INT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE CASCADE,
-                INDEX idx_cta_fecha (cuenta_bancaria_id, fecha_validacion)
-            );
-        `);
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS prestamos (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                empresa_id INT NOT NULL,
-                banco_id INT NULL,
-                cuenta_bancaria_id INT NULL,
-                numero_prestamo VARCHAR(50) NOT NULL,
-                descripcion VARCHAR(255) NOT NULL,
-                monto_original DECIMAL(14,2) NOT NULL,
-                tasa_interes_anual DECIMAL(6,3) NOT NULL,
-                plazo_meses INT NOT NULL,
-                frecuencia_pago VARCHAR(20) DEFAULT 'mensual',
-                fecha_inicio DATE NOT NULL,
-                fecha_primer_pago DATE NOT NULL,
-                cuota_calculada DECIMAL(14,2) NOT NULL,
-                seguro_tipo VARCHAR(30) DEFAULT 'ninguno',
-                seguro_valor DECIMAL(10,4) DEFAULT 0,
-                seguro_cuota DECIMAL(10,2) DEFAULT 0,
-                ahorro_tipo VARCHAR(30) DEFAULT 'ninguno',
-                ahorro_valor DECIMAL(10,4) DEFAULT 0,
-                ahorro_cuota DECIMAL(10,2) DEFAULT 0,
-                cuota_total DECIMAL(14,2) DEFAULT 0,
-                dias_gracia INT DEFAULT 0,
-                estado VARCHAR(20) DEFAULT 'activo',
-                notas TEXT,
-                created_by INT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                FOREIGN KEY (empresa_id) REFERENCES empresas(id),
-                FOREIGN KEY (banco_id) REFERENCES bancos(id) ON DELETE SET NULL,
-                FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE SET NULL,
-                INDEX idx_empresa_estado (empresa_id, estado)
-            );
-        `);
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS prestamos_pagos (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                prestamo_id INT NOT NULL,
-                numero_cuota INT NULL,
-                fecha_pago DATE NOT NULL,
-                tipo_pago VARCHAR(30) DEFAULT 'cuota_regular',
-                monto_total DECIMAL(14,2) NOT NULL,
-                monto_capital DECIMAL(14,2) NOT NULL,
-                monto_interes DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                monto_seguro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                monto_ahorro DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                monto_otros DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-                saldo_restante DECIMAL(14,2) NOT NULL,
-                numero_comprobante VARCHAR(50) NULL,
-                cuenta_origen_id INT NULL,
-                notas TEXT NULL,
-                created_by INT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (prestamo_id) REFERENCES prestamos(id) ON DELETE CASCADE,
-                FOREIGN KEY (cuenta_origen_id) REFERENCES cuentas_bancarias(id) ON DELETE SET NULL,
-                INDEX idx_prestamo_fecha (prestamo_id, fecha_pago)
-            );
-        `);
-
-        await pool.query(`
             CREATE TABLE IF NOT EXISTS tasks (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 titulo VARCHAR(200) NOT NULL,
@@ -1533,6 +1457,62 @@ const initDB = async () => {
             }
         } catch (e) {
             console.error('Migration finanzas_crecimiento & permissions:', e.message);
+        }
+
+        // Sincronización canónica idempotente de permisos de rutas y acciones críticas
+        try {
+            const canonicalPermissions = [
+                ['/dashboard', 'Panel principal operativo'],
+                ['/dashboard/carriers', 'Catálogo de Transportistas'],
+                ['/dashboard/tankers', 'Catálogo de Pipas'],
+                ['/dashboard/consultas/estaciones/ventas', 'Resumen de Ventas de Estaciones'],
+                ['/dashboard/consultas/estaciones/lubricantes', 'Venta de Lubricantes'],
+                ['/dashboard/consultas/estaciones/resumen-cierre', 'Resumen de Cierre de Pista'],
+                ['/dashboard/consultas/estaciones/diferencias-combustible', 'Diferencias de Combustible'],
+                ['/dashboard/consultas/estaciones/precios', 'Precios de Estación'],
+                ['/dashboard/consultas/estaciones/precios-competencia', 'Precios de la Competencia (DGEHM)'],
+                ['/dashboard/operaciones/pedidos', 'Pedidos de Combustible'],
+                ['/dashboard/operaciones/pedidos-programados', 'Pedidos Programados'],
+                ['/dashboard/operaciones/recordatorios', 'Control de Pagos y Recordatorios'],
+                ['/dashboard/operaciones/tareas', 'Gestión de Tareas'],
+                ['/dashboard/operaciones/energia-solar', 'Energía Solar & Andelsa'],
+                ['/dashboard/bancos/cuentas', 'Cuentas Bancarias'],
+                ['/dashboard/bancos/movimientos', 'Movimientos Bancarios'],
+                ['/dashboard/bancos/conciliacion', 'Conciliación Bancaria'],
+                ['/dashboard/bancos/cheques', 'Gestión de Cheques'],
+                ['/dashboard/bancos/cheques-contado', 'Cheques al Contado'],
+                ['/dashboard/bancos/check-designer', 'Diseñador de Cheques'],
+                ['/dashboard/consultas/ia-asistente', 'Asistente IA y Copiloto Gerencial'],
+                ['/dashboard/consultas/otras/cumpleanos', 'Consulta de Cumpleañeros'],
+                ['/dashboard/consultas/otras/backup-db-check', 'Verificación de Backups de BD'],
+                ['/dashboard/users', 'Gestión de Usuarios'],
+                ['/dashboard/permissions', 'Gestión de Roles y Permisos'],
+                ['/dashboard/seguridad/telegram', 'Gestión de Usuarios y Bot de Telegram'],
+                ['/dashboard/bitacora', 'Bitácora de Auditoría'],
+                ['/dashboard/seguridad/cambios', 'Consulta de Cambios en GitHub'],
+                ['/dashboard/seguridad/tickets', 'Centro de Soporte y Tickets'],
+                ['/dashboard/settings/theme', 'Tema y Apariencia'],
+                ['/dashboard/settings/database', 'Conexión Externa de Base de Datos'],
+                ['/dashboard/settings/accounting', 'Conexión de Contabilidad'],
+                ['/dashboard/settings/email', 'Configuración de Correo'],
+                ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
+                ['view_support_tickets', 'Consultar tickets de soporte técnico'],
+                ['manage_finanzas_pagos', 'Registrar y eliminar pagos de préstamos financieros'],
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos y ejecutar planes AGY'],
+                ['manage_telegram', 'Gestionar configuración y webhooks de Telegram'],
+                ['manage_recordatorios', 'Gestionar recordatorios y control de pagos'],
+                ['view_direccion_estrategica', 'Acceso transversal a Dirección Estratégica'],
+                ['view_rrhh_planillas', 'Consultar y exportar planillas de RRHH'],
+                ['pay_rrhh_planillas', 'Autorizar y registrar pagos de planillas de RRHH'],
+                ['manage_users', 'Crear, editar y eliminar usuarios'],
+                ['manage_roles', 'Administrar roles y matriz de permisos'],
+                ['view_bitacora', 'Consultar registros de bitácora']
+            ];
+            for (const [pName, pDesc] of canonicalPermissions) {
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);
+            }
+        } catch (permErr) {
+            console.error('Migration canonicalPermissions:', permErr.message);
         }
 
         return pool;

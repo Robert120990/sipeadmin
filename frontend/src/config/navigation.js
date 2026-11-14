@@ -114,6 +114,19 @@ export const systemNavItems = [
     { name: 'Configuración', path: '/dashboard/settings', icon: createColorIcon('fluent-color:settings-24') },
 ];
 
+export const specialActionPermissions = [
+    { name: 'Gestionar y Resolver Tickets (Soporte / AGY)', path: 'manage_support_tickets', icon: createColorIcon('flat-color-icons:online-support') },
+    { name: 'Autorizar Pagos de Planillas RRHH', path: 'pay_rrhh_planillas', icon: createColorIcon('flat-color-icons:money-transfer') },
+    { name: 'Consultar y Exportar Planillas RRHH', path: 'view_rrhh_planillas', icon: createColorIcon('fluent-color:people-community-24') },
+    { name: 'Ejecutar Planes en Consola AGY & Conocimiento', path: 'manage_finanzas_crecimiento', icon: createColorIcon('flat-color-icons:bullish') },
+    { name: 'Registrar / Anular Pagos de Préstamos', path: 'manage_finanzas_pagos', icon: createColorIcon('flat-color-icons:debt') },
+    { name: 'Administrar Bot y Webhooks de Telegram', path: 'manage_telegram', icon: createColorIcon('flat-color-icons:comments') },
+    { name: 'Acceso Global a Dirección Estratégica', path: 'view_direccion_estrategica', icon: createColorIcon('fluent-emoji-flat:compass') },
+    { name: 'Administrar Usuarios (Crear / Editar / Baja)', path: 'manage_users', icon: createColorIcon('flat-color-icons:businessman') },
+    { name: 'Administrar Roles y Permisos', path: 'manage_roles', icon: createColorIcon('flat-color-icons:privacy') },
+    { name: 'Consultar Bitácora de Auditoría', path: 'view_bitacora', icon: createColorIcon('flat-color-icons:timeline') },
+];
+
 export const allNavCategories = [
     { title: 'Principal', items: mainNavItems },
     { title: 'Dirección Estratégica', items: estrategiaMenu },
@@ -126,5 +139,6 @@ export const allNavCategories = [
     { title: 'Consultas - Estaciones', items: consultasEstaciones },
     { title: 'Consultas - Otras', items: consultasOtras },
     { title: 'Seguridad', items: securityItems },
-    { title: 'Configuración', items: configuracionMenu }
+    { title: 'Configuración', items: configuracionMenu },
+    { title: 'Permisos Especiales de Acción', items: specialActionPermissions }
 ];

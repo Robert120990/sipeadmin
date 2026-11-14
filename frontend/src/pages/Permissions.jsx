@@ -50,10 +50,12 @@ export default function Permissions() {
         if (!selectedRole || saving) return;
         const currentPerms = selectedRole.permissions || [];
         const allPaths = allNavCategories.flatMap(c => c.items.map(i => i.path));
+        const allPathSet = new Set(allPaths);
+        const customPerms = currentPerms.filter(p => !allPathSet.has(p));
         const hasAll = allPaths.every(path => currentPerms.includes(path));
         setSelectedRole({ 
             ...selectedRole, 
-            permissions: hasAll ? [] : allPaths 
+            permissions: hasAll ? customPerms : [...new Set([...customPerms, ...allPaths])]
         });
     };
 
@@ -225,8 +227,8 @@ export default function Permissions() {
                             </div>
                         )}
 
-                        <div style={{ display: 'flex', gap: '1rem' }}>
-                            <div className="form-group" style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                            <div className="form-group" style={{ flex: '1 1 220px' }}>
                                 <label>Nombre del Rol</label>
                                 <input 
                                     type="text" 
@@ -237,7 +239,7 @@ export default function Permissions() {
                                     disabled={saving || selectedRole.name === 'Administrator'}
                                 />
                             </div>
-                            <div className="form-group" style={{ flex: 2 }}>
+                            <div className="form-group" style={{ flex: '2 1 280px' }}>
                                 <label>Descripción (Opcional)</label>
                                 <input 
                                     type="text" 
