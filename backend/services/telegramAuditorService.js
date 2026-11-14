@@ -408,8 +408,8 @@ const getHealthDiagnostics = async () => {
     };
 
     try {
-        // Intentar obtener de telegramBotService si está disponible
-        const { getBotStatus } = require('./telegramBotService');
+        // Intentar obtener de telegramTransportService si está disponible
+        const { getBotStatus } = require('./telegramTransportService');
         if (typeof getBotStatus === 'function') {
             const bs = await getBotStatus();
             botStatus = {
@@ -443,7 +443,7 @@ const getHealthDiagnostics = async () => {
     // 3. Estado de Gemini API (verificar tanto process.env como tabla telegram_config descartando placeholders)
     let geminiConfigured = false;
     try {
-        const { getGeminiApiKey } = require('./telegramBotService');
+        const { getGeminiApiKey } = require('./telegramGeminiService');
         if (typeof getGeminiApiKey === 'function') {
             const resolvedKey = await getGeminiApiKey();
             geminiConfigured = Boolean(resolvedKey);

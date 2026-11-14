@@ -1,5 +1,6 @@
-const { getDb } = require('../db');
-const { getConsolidadoVentasData } = require('../routes/consultas');
+const dbModule = require('../db');
+const getDb = (...args) => dbModule.getDb(...args);
+const consultasModule = require('../routes/consultas');
 const { getTanquesAutonomia } = require('./fuelIntelligence');
 
 /**
@@ -27,7 +28,7 @@ const normalizeStr = (str) => {
  */
 const getGeminiApiKey = async () => {
     try {
-        const { getGeminiApiKey: resolveBotGeminiKey } = require('./telegramBotService');
+        const { getGeminiApiKey: resolveBotGeminiKey } = require('./telegramGeminiService');
         if (typeof resolveBotGeminiKey === 'function') {
             return await resolveBotGeminiKey();
         }
@@ -165,7 +166,7 @@ const buildLiveProjectContext = async (targetDate = null) => {
 
     // 2. Ventas y Tiendas
     try {
-        const dataVentas = await getConsolidadoVentasData(finalDate);
+        const dataVentas = await consultasModule.getConsolidadoVentasData(finalDate);
         if (dataVentas) {
             context.ventas_ayer = {
                 fecha: finalDate,
@@ -208,7 +209,7 @@ const buildLiveProjectContext = async (targetDate = null) => {
 
     // 3. Bancos y Chequeras
     try {
-        const { getSaldosBancosData, getSaldosChequeraData } = require('./telegramBotService');
+        const { getSaldosBancosData, getSaldosChequeraData } = require('./telegramDataService');
         const bData = await getSaldosBancosData();
         const cData = await getSaldosChequeraData();
         context.bancos = {
@@ -285,7 +286,7 @@ const buildLiveProjectContext = async (targetDate = null) => {
 
     // 7. Precios de la Competencia (DGEHM)
     try {
-        const { getPreciosCompetenciaData } = require('./telegramBotService');
+        const { getPreciosCompetenciaData } = require('./telegramDataService');
         const compData = await getPreciosCompetenciaData();
         if (compData && compData.totalMonitoreadas > 0) {
             context.precios_competencia = {

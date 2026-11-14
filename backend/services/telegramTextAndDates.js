@@ -1,0 +1,873 @@
+/**
+ * Mapeo oficial de nombres amigables de bancos
+ */
+const BANK_NAME_MAP = {
+    'AGRICOLA': 'Banco Agrícola',
+    'PROMERICA': 'Banco Promerica',
+    'DAVIVIENDA': 'Banco Davivienda',
+    'HIPOTECARIO': 'Banco Hipotecario',
+    'ATLANTIDA': 'Banco Atlántida',
+    'BANCO AZUL': 'Banco Azul',
+    'CONSTELACION': 'Constelación',
+    'FOMENTO AGROPECUARIO': 'Banco de Fomento Agropecuario',
+    'CUSCATLAN': 'Banco Cuscatlán',
+    'AMERICA CENTRAL': 'BAC Credomatic',
+    'BAC': 'BAC Credomatic'
+};
+
+/**
+ * Escape de caracteres especiales para Telegram HTML mode
+ */
+const escapeHtml = (text) => {
+    if (!text && text !== 0) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+};
+
+/**
+ * Formateador de moneda en USD
+ */
+const moneyFmt = (val) => {
+    const num = Number(val || 0);
+    const isNeg = num < 0;
+    const abs = Math.abs(num);
+    const formatted = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return (isNeg ? '-' : '') + '$' + formatted;
+};
+
+/**
+ * Formateador de números (galonaje, cantidades)
+ */
+const numFmt = (val) => {
+    const num = Number(val || 0);
+    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+/**
+ * Convertir YYYY-MM-DD a DD/MM/YYYY
+ */
+const toDisplayDate = (ymd) => {
+    if (!ymd) return '';
+    const parts = ymd.split('-');
+    if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return ymd;
+};
+
+/**
+ * Obtener fecha YYYY-MM-DD con desplazamiento en días
+ */
+const getDateStr = (offsetDays = 0) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+/**
+ * Normalizar texto eliminando tildes y caracteres especiales
+ */
+const normalizeText = (str) => {
+    return (str || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[¿?¡!,.;:()]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+};
+
+/**
+ * Escapar caracteres especiales para expresiones regulares
+ */
+const escapeRegex = (s) => (s || '').replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+/**
+ * Mapeo de meses en español y sus abreviaciones estándar
+ */
+const SPANISH_MONTHS = {
+    'enero': 1, 'ene': 1,
+    'febrero': 2, 'feb': 2,
+    'marzo': 3, 'mar': 3,
+    'abril': 4, 'abr': 4,
+    'mayo': 5, 'may': 5,
+    'junio': 6, 'jun': 6,
+    'julio': 7, 'jul': 7,
+    'agosto': 8, 'ago': 8,
+    'septiembre': 9, 'setiembre': 9, 'sep': 9, 'sept': 9, 'set': 9,
+    'octubre': 10, 'oct': 10,
+    'noviembre': 11, 'nov': 11,
+    'diciembre': 12, 'dic': 12
+};
+
+/**
+ * Formatear YYYY-MM-DD validando existencia en calendario
+ */
+const formatYMD = (y, m, d) => {
+    const year = Number(y);
+    const month = Number(m);
+    const day = Number(d);
+    if (!year || !month || !day || month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    if (day > daysInMonth) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+};
+
+/**
+ * Desplazar una fecha YYYY-MM-DD en N días (soporta números negativos para retroceder)
+ */
+const shiftDate = (ymd, offsetDays = -1) => {
+    if (!ymd || typeof ymd !== 'string') return getDateStr(offsetDays);
+    const parts = ymd.split('-');
+    if (parts.length !== 3) return getDateStr(offsetDays);
+    const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    d.setDate(d.getDate() + offsetDays);
+    return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+};
+
+/**
+ * Parser semántico completo de fechas en español natural:
+ * Reconoce '5 de octubre', '15 de septiembre', '05 de oct', 'el dia 5', 'el dia de ayer',
+ * formatos numéricos, etc., asociando el año correspondiente (por defecto año actual 2026).
+ */
+const parseSpanishDateText = (text, ref = 2026) => {
+    if (!text || typeof text !== 'string') return null;
+
+    let refDate = new Date();
+    let defaultYear = 2026;
+    if (ref instanceof Date && !isNaN(ref.getTime())) {
+        refDate = ref;
+        defaultYear = ref.getFullYear();
+    } else if (typeof ref === 'number' && ref > 1900 && ref < 3000) {
+        defaultYear = ref;
+        refDate.setFullYear(ref);
+    } else {
+        defaultYear = refDate.getFullYear() || 2026;
+    }
+    const defaultMonth = refDate.getMonth() + 1;
+    const normalized = normalizeText(text);
+
+    // 1. Expresiones relativas en español
+    if (/\b(el dia de hoy|hoy)\b/.test(normalized)) {
+        const d = new Date(refDate);
+        return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+    if (/\b(el dia de ayer|ayer)\b/.test(normalized)) {
+        const d = new Date(refDate);
+        d.setDate(d.getDate() - 1);
+        return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+    if (/\b(anteayer|antier|el dia de anteayer)\b/.test(normalized)) {
+        const d = new Date(refDate);
+        d.setDate(d.getDate() - 2);
+        return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+
+    // 2. Patrón día + mes + año opcional: '5 de octubre', '15 de septiembre', '05 de oct', 'el dia 5 de octubre del 2025'
+    const dayMonthRegex = /\b(?:el\s+)?(?:dia\s+)?([0-3]?[0-9])\s*(?:de|\/|-)\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?\b/i;
+    const dmMatch = normalized.match(dayMonthRegex);
+    if (dmMatch) {
+        const day = parseInt(dmMatch[1], 10);
+        const month = SPANISH_MONTHS[dmMatch[2].toLowerCase()];
+        const year = dmMatch[3] ? parseInt(dmMatch[3], 10) : defaultYear;
+        const res = formatYMD(year, month, day);
+        if (res) return res;
+    }
+
+    // 3. Patrón mes + día + año opcional: 'octubre 5', 'octubre 5 de 2026'
+    const monthDayRegex = /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)\s+(?:dia\s+|el\s+)?([0-3]?[0-9])(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?\b/i;
+    const mdMatch = normalized.match(monthDayRegex);
+    if (mdMatch) {
+        const month = SPANISH_MONTHS[mdMatch[1].toLowerCase()];
+        const day = parseInt(mdMatch[2], 10);
+        const year = mdMatch[3] ? parseInt(mdMatch[3], 10) : defaultYear;
+        const res = formatYMD(year, month, day);
+        if (res) return res;
+    }
+
+    // 4. Patrón 'el dia X' o 'dia X' (sin mes especificado -> mes actual y año actual)
+    const dayOnlyRegex = /\b(?:el\s+)?dia\s+([0-3]?[0-9])\b/i;
+    const dMatch = normalized.match(dayOnlyRegex);
+    if (dMatch) {
+        const day = parseInt(dMatch[1], 10);
+        const res = formatYMD(defaultYear, defaultMonth, day);
+        if (res) return res;
+    }
+
+    // 5. Formatos numéricos directos: YYYY-MM-DD o DD/MM/YYYY o DD-MM-YYYY
+    const isoMatch = normalized.match(/\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b/);
+    if (isoMatch) {
+        return formatYMD(isoMatch[1], isoMatch[2], isoMatch[3]);
+    }
+    const dmyMatch = normalized.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/);
+    if (dmyMatch) {
+        return formatYMD(dmyMatch[3], dmyMatch[2], dmyMatch[1]);
+    }
+
+    return null;
+};
+
+const SPANISH_MONTH_NAMES = [
+    '', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+];
+
+/**
+ * Parsea un periodo (mes completo, rango de fechas) o una fecha individual en lenguaje natural
+ */
+const parseSpanishPeriodOrDate = (text, ref = 2026) => {
+    if (!text || typeof text !== 'string') return null;
+    let refDate = new Date();
+    let defaultYear = 2026;
+    if (ref instanceof Date && !isNaN(ref.getTime())) {
+        refDate = ref;
+        defaultYear = ref.getFullYear();
+    } else if (typeof ref === 'number' && ref > 1900 && ref < 3000) {
+        defaultYear = ref;
+        refDate.setFullYear(ref);
+    } else {
+        defaultYear = refDate.getFullYear() || 2026;
+    }
+    const normalized = normalizeText(text);
+
+    // 0. Detección de periodos relativos especiales solicitados por usuarios
+
+    // 0.a "esta semana", "semana actual", "de esta semana"
+    if (/\b(esta\s+semana|semana\s+actual|de\s+esta\s+semana)\b/i.test(normalized)) {
+        const dayOfWeek = (refDate.getDay() + 6) % 7; // Lunes = 0, ..., Domingo = 6
+        const monday = new Date(refDate);
+        monday.setDate(monday.getDate() - dayOfWeek);
+        const sunday = new Date(monday);
+        sunday.setDate(sunday.getDate() + 6);
+        const startDate = formatYMD(monday.getFullYear(), monday.getMonth() + 1, monday.getDate());
+        const endDate = formatYMD(sunday.getFullYear(), sunday.getMonth() + 1, sunday.getDate());
+        return {
+            type: 'range',
+            startDate,
+            endDate,
+            label: `Esta semana (${toDisplayDate(startDate)} al ${toDisplayDate(endDate)})`,
+            periodo: 'esta_semana'
+        };
+    }
+
+    // 0.b "semana pasada", "semana anterior", "la semana pasada"
+    if (/\b(semana\s+pasada|semana\s+anterior|la\s+semana\s+pasada)\b/i.test(normalized)) {
+        const dayOfWeek = (refDate.getDay() + 6) % 7;
+        const lastMonday = new Date(refDate);
+        lastMonday.setDate(lastMonday.getDate() - dayOfWeek - 7);
+        const lastSunday = new Date(lastMonday);
+        lastSunday.setDate(lastSunday.getDate() + 6);
+        const startDate = formatYMD(lastMonday.getFullYear(), lastMonday.getMonth() + 1, lastMonday.getDate());
+        const endDate = formatYMD(lastSunday.getFullYear(), lastSunday.getMonth() + 1, lastSunday.getDate());
+        return {
+            type: 'range',
+            startDate,
+            endDate,
+            label: `Semana pasada (${toDisplayDate(startDate)} al ${toDisplayDate(endDate)})`,
+            periodo: 'semana_pasada'
+        };
+    }
+
+    // 0.c "quincena pasada", "quincena anterior", "la quincena pasada"
+    if (/\b(quincena\s+pasada|quincena\s+anterior|la\s+quincena\s+pasada)\b/i.test(normalized)) {
+        const day = refDate.getDate();
+        let startDate, endDate, qLabel;
+        if (day <= 15) {
+            let prevM = refDate.getMonth();
+            let y = refDate.getFullYear();
+            if (prevM === 0) { prevM = 12; y -= 1; }
+            const lastDay = new Date(y, prevM, 0).getDate();
+            startDate = formatYMD(y, prevM, 16);
+            endDate = formatYMD(y, prevM, lastDay);
+            qLabel = `2ª Quincena de ${SPANISH_MONTH_NAMES[prevM]} ${y}`;
+        } else {
+            const y = refDate.getFullYear();
+            const m = refDate.getMonth() + 1;
+            startDate = formatYMD(y, m, 1);
+            endDate = formatYMD(y, m, 15);
+            qLabel = `1ª Quincena de ${SPANISH_MONTH_NAMES[m]} ${y}`;
+        }
+        return {
+            type: 'range',
+            startDate,
+            endDate,
+            label: `Quincena pasada: ${qLabel}`,
+            periodo: 'quincena_pasada'
+        };
+    }
+
+    // 0.d "últimos 7 días", "últimos 3 días", "últimos X días"
+    const ultimosMatch = normalized.match(/\b(?:ultimos|ultimas)\s+([0-9]+|tres|siete)\s+dias?\b/i);
+    if (ultimosMatch) {
+        let numDays = parseInt(ultimosMatch[1], 10);
+        if (ultimosMatch[1].toLowerCase() === 'tres') numDays = 3;
+        if (ultimosMatch[1].toLowerCase() === 'siete') numDays = 7;
+        if (!isNaN(numDays) && numDays > 0) {
+            const endD = new Date(refDate);
+            const startD = new Date(refDate);
+            startD.setDate(startD.getDate() - numDays);
+            const startDate = formatYMD(startD.getFullYear(), startD.getMonth() + 1, startD.getDate());
+            const endDate = formatYMD(endD.getFullYear(), endD.getMonth() + 1, endD.getDate());
+            return {
+                type: 'range',
+                startDate,
+                endDate,
+                days: numDays,
+                label: `Últimos ${numDays} días (${toDisplayDate(startDate)} al ${toDisplayDate(endDate)})`,
+                periodo: `ultimos_${numDays}_dias`
+            };
+        }
+    }
+
+    // 1. Detección de rangos de fechas: 'del 1 al 10 de octubre', 'entre el 5 y 15 de septiembre'
+    const rangeRegex = /\b(?:del|desde|entre)\s+(?:el\s+)?([0-3]?[0-9])\s*(?:al|a|y|hasta)\s*(?:el\s+)?([0-3]?[0-9])\s*(?:de|\/|-)\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?\b/i;
+    const rangeMatch = normalized.match(rangeRegex);
+    if (rangeMatch) {
+        const startDay = parseInt(rangeMatch[1], 10);
+        const endDay = parseInt(rangeMatch[2], 10);
+        const month = SPANISH_MONTHS[rangeMatch[3].toLowerCase()];
+        const year = rangeMatch[4] ? parseInt(rangeMatch[4], 10) : defaultYear;
+        return {
+            type: 'range',
+            startDate: formatYMD(year, month, startDay),
+            endDate: formatYMD(year, month, endDay),
+            year,
+            month,
+            label: `Del ${startDay} al ${endDay} de ${SPANISH_MONTH_NAMES[month]} ${year}`
+        };
+    }
+
+    // 2. Detección de mes completo:
+    // Cuidado: solo tratar como mes si NO hay un número de día antes o después
+    const hasDayNumber = /\b([0-3]?[0-9])\s*(?:de|\/|-)\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)\b/i.test(normalized) ||
+                         /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sept|sep|set|oct|nov|dic)\s+(?:dia\s+|el\s+)?([0-3]?[0-9])\b/i.test(normalized);
+
+    if (!hasDayNumber) {
+        const monthRegex = /\b(?:mes\s+(?:de\s+)?|mensual\s+(?:de\s+)?|del\s+mes\s+de\s+|ventas\s+(?:de|en)\s+|en\s+|de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b(?:\s*(?:de|del|\/|-)?\s*(\d{4}))?/i;
+        const mMatch = normalized.match(monthRegex);
+        if (mMatch && mMatch[1]) {
+            const month = SPANISH_MONTHS[mMatch[1].toLowerCase()];
+            if (month) {
+                const year = mMatch[2] ? parseInt(mMatch[2], 10) : defaultYear;
+                const lastDay = new Date(year, month, 0).getDate();
+                return {
+                    type: 'month',
+                    year,
+                    month,
+                    startDate: formatYMD(year, month, 1),
+                    endDate: formatYMD(year, month, lastDay),
+                    periodo: `${year}-${String(month).padStart(2, '0')}`,
+                    label: `${SPANISH_MONTH_NAMES[month]} ${year}`
+                };
+            }
+        }
+
+        // 'este mes', 'mes actual', 'mes en curso', 'del mes'
+        if (/\b(este\s+mes|mes\s+actual|mes\s+en\s+curso|del\s+mes)\b/i.test(normalized)) {
+            const y = refDate.getFullYear();
+            const m = refDate.getMonth() + 1;
+            const lastDay = new Date(y, m, 0).getDate();
+            return {
+                type: 'month',
+                year: y,
+                month: m,
+                startDate: formatYMD(y, m, 1),
+                endDate: formatYMD(y, m, lastDay),
+                periodo: `${y}-${String(m).padStart(2, '0')}`,
+                label: `${SPANISH_MONTH_NAMES[m]} ${y}`
+            };
+        }
+
+        // 'mes pasado', 'mes anterior'
+        if (/\b(mes\s+pasado|mes\s+anterior)\b/i.test(normalized)) {
+            let y = refDate.getFullYear();
+            let m = refDate.getMonth();
+            if (m === 0) { m = 12; y -= 1; }
+            const lastDay = new Date(y, m, 0).getDate();
+            return {
+                type: 'month',
+                year: y,
+                month: m,
+                startDate: formatYMD(y, m, 1),
+                endDate: formatYMD(y, m, lastDay),
+                periodo: `${y}-${String(m).padStart(2, '0')}`,
+                label: `${SPANISH_MONTH_NAMES[m]} ${y}`
+            };
+        }
+    }
+
+    // 3. Fallback a fecha individual
+    const single = parseSpanishDateText(text, ref);
+    if (single) {
+        return {
+            type: 'single',
+            date: single,
+            label: toDisplayDate(single)
+        };
+    }
+
+    return null;
+};
+
+/**
+ * Normalizar fecha enviada por el usuario (admite YYYY-MM-DD, DD/MM/YYYY o lenguaje natural)
+ */
+const parseUserDate = (input) => {
+    if (!input) return null;
+    const clean = input.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+    const match = clean.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (match) {
+        const day = match[1].padStart(2, '0');
+        const month = match[2].padStart(2, '0');
+        const year = match[3];
+        return `${year}-${month}-${day}`;
+    }
+    return parseSpanishDateText(clean);
+};
+
+const KNOWN_STATIONS = [
+    {
+        id: 'ANDELSA',
+        branch_id: 9,
+        saas_branch_id: 9,
+        name: 'Andelsa',
+        keywords: ['andelsa', 'planta andelsa', 'empresa andelsa', '009', 'andelsa s.a.'],
+        tiendaKey: 'andelsa'
+    },
+    {
+        id: '014',
+        branch_id: 1,
+        saas_branch_id: 1,
+        name: 'San Martín (La Loma)',
+        keywords: ['la loma', 'san martin', 'san martín', 'loma', 'puma la loma', 'puma san martin', '014', 'san martin la loma'],
+        tiendaKey: 'san martin'
+    },
+    {
+        id: '008',
+        branch_id: 8,
+        saas_branch_id: 8,
+        name: 'Puma Costa del Sol',
+        keywords: ['costa del sol', 'costa', 'la costa', 'puma costa', 'super 7 costa', '008'],
+        tiendaKey: 'costa'
+    },
+    {
+        id: '002',
+        branch_id: 4,
+        saas_branch_id: 4,
+        name: 'Puma Miraflores',
+        keywords: ['miraflores', 'puma miraflores', 'e-market miraflores', '002'],
+        tiendaKey: 'miraflores'
+    },
+    {
+        id: '006',
+        branch_id: 3,
+        saas_branch_id: 3,
+        name: 'Shell Chalchuapa',
+        keywords: ['chalchuapa', 'shell chalchuapa', 'e-market chalchuapa', '006'],
+        tiendaKey: 'chalchuapa'
+    },
+    {
+        id: '015',
+        branch_id: 2,
+        saas_branch_id: 2,
+        name: 'Shell 14 Avenida',
+        keywords: ['14 avenida', '14 ave', 'catorce avenida', 'shell 14', '015'],
+        tiendaKey: '14'
+    },
+    {
+        id: '016',
+        branch_id: 12,
+        saas_branch_id: 12,
+        name: 'Shell Poliedro',
+        keywords: ['poliedro', 'shell poliedro', '016'],
+        tiendaKey: 'poliedro'
+    }
+];
+
+const KNOWN_FUELS = [
+    { key: 'ion', label: 'Ion Diesel', icon: '⚡', keywords: ['ion diesel', 'ion-diesel', 'ion'] },
+    { key: 'diesel', label: 'Diesel', icon: '🛢️', keywords: ['diesel', 'diésel'] },
+    { key: 'regular', label: 'Regular', icon: '🟢', keywords: ['regular', 'gasolina regular'] },
+    { key: 'super', label: 'Súper', icon: '🔴', keywords: ['super', 'súper', 'gasolina super', 'gasolina súper'] }
+];
+
+const KNOWN_BANKS = [
+    { key: 'AGRICOLA', label: 'Banco Agrícola', keywords: ['agricola', 'agrícola', 'banco agricola'] },
+    { key: 'PROMERICA', label: 'Banco Promerica', keywords: ['promerica', 'banco promerica'] },
+    { key: 'DAVIVIENDA', label: 'Banco Davivienda', keywords: ['davivienda', 'banco davivienda'] },
+    { key: 'HIPOTECARIO', label: 'Banco Hipotecario', keywords: ['hipotecario', 'banco hipotecario'] },
+    { key: 'ATLANTIDA', label: 'Banco Atlántida', keywords: ['atlantida', 'atlántida', 'banco atlantida'] },
+    { key: 'CUSCATLAN', label: 'Banco Cuscatlán', keywords: ['cuscatlan', 'cuscatlán', 'banco cuscatlan'] },
+    { key: 'BAC', label: 'BAC Credomatic', keywords: ['bac', 'credomatic', 'america central'] },
+    { key: 'AZUL', label: 'Banco Azul', keywords: ['azul', 'banco azul'] }
+];
+
+/**
+ * Resolver el ID interno de una estación a partir de su nombre o texto
+ */
+const resolveStationId = (name) => {
+    if (!name) return '008';
+    const norm = normalizeText(name);
+    for (const st of KNOWN_STATIONS) {
+        for (const kw of st.keywords) {
+            if (norm.includes(normalizeText(kw))) return st.id;
+        }
+    }
+    return '008';
+};
+
+/**
+ * Buscar una estación conocida por su ID, branch_id o nombre/keyword
+ */
+const findStationById = (id) => {
+    if (!id) return null;
+    const clean = String(id).trim().toLowerCase();
+    return KNOWN_STATIONS.find(s => 
+        s.id.toLowerCase() === clean || 
+        String(s.saas_branch_id || '').toLowerCase() === clean ||
+        String(s.branch_id || '').toLowerCase() === clean ||
+        normalizeText(s.name).toLowerCase() === clean ||
+        normalizeText(s.name).includes(clean) ||
+        clean.includes(normalizeText(s.name)) ||
+        s.keywords.some(kw => normalizeText(kw) === clean || clean.includes(normalizeText(kw)))
+    ) || null;
+};
+
+/**
+ * Buscar un combustible conocido por su clave, nombre o keyword
+ */
+const findFuelByKey = (key) => {
+    if (!key) return null;
+    const clean = String(key).trim().toLowerCase();
+    return KNOWN_FUELS.find(f => 
+        f.key.toLowerCase() === clean || 
+        normalizeText(f.label).toLowerCase() === clean ||
+        normalizeText(f.key).toLowerCase() === clean ||
+        f.keywords.some(kw => normalizeText(kw) === clean)
+    ) || null;
+};
+
+/**
+ * Analizador semántico de lenguaje natural para consultas específicas con soporte de memoria de contexto multi-turno
+ */
+const parseNaturalLanguageQuery = (rawText, userContext = null) => {
+    if (!rawText) return null;
+    const normalized = normalizeText(rawText);
+
+    // 1. Detección de periodo o fecha en español natural
+    const period = parseSpanishPeriodOrDate(rawText);
+    let hasExplicitDateOrPeriod = false;
+    let targetDate = getDateStr(-1); // Ayer por defecto (cierres consolidados)
+    let isRange = false;
+    let startDate = null;
+    let endDate = null;
+    let isMonthly = false;
+    let targetMonth = null;
+    let targetYear = null;
+    let targetPeriod = null;
+
+    if (period) {
+        hasExplicitDateOrPeriod = true;
+        if (period.type === 'month') {
+            isMonthly = true;
+            targetMonth = period.month;
+            targetYear = period.year;
+            targetPeriod = period.periodo;
+            startDate = period.startDate;
+            endDate = period.endDate;
+            targetDate = period.endDate;
+        } else if (period.type === 'range') {
+            isRange = true;
+            startDate = period.startDate;
+            endDate = period.endDate;
+            targetDate = period.endDate;
+        } else if (period.type === 'single') {
+            targetDate = period.date;
+        }
+    } else {
+        const naturalDate = parseSpanishDateText(rawText);
+        if (naturalDate) {
+            hasExplicitDateOrPeriod = true;
+            targetDate = naturalDate;
+        }
+    }
+
+    // 2. Detección de estación con límites de palabra estricta (priorizando frases más largas)
+    let matchedStation = null;
+    const stationCandidates = [];
+    for (const st of KNOWN_STATIONS) {
+        for (const kw of st.keywords) {
+            stationCandidates.push({ station: st, normKw: normalizeText(kw) });
+        }
+    }
+    stationCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of stationCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedStation = cand.station;
+            break;
+        }
+    }
+
+    // 3. Detección de combustible con límites de palabra estricta (\bion\b)
+    // PROHIBIDO usar normalized.includes(normKw) sin word boundary para evitar colisiones (ej: 'estacion' contiene 'ion')
+    // Las frases compuestas ('ion diesel') se evalúan antes de términos individuales ('diesel', 'ion')
+    let matchedFuel = null;
+    const fuelCandidates = [];
+    for (const f of KNOWN_FUELS) {
+        for (const kw of f.keywords) {
+            fuelCandidates.push({ fuel: f, normKw: normalizeText(kw) });
+        }
+    }
+    fuelCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of fuelCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedFuel = cand.fuel;
+            break;
+        }
+    }
+
+    // 4. Detección de banco con límites de palabra estricta (priorizando nombres completos)
+    let matchedBank = null;
+    const bankCandidates = [];
+    for (const b of KNOWN_BANKS) {
+        for (const kw of b.keywords) {
+            bankCandidates.push({ bank: b, normKw: normalizeText(kw) });
+        }
+    }
+    bankCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of bankCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedBank = cand.bank;
+            break;
+        }
+    }
+
+    // 5. Detección de tiendas de conveniencia
+    const isTiendas = /\b(tienda|tiendas|conveniencia|cortes|corte|e-market|super 7|pedregal)\b/.test(normalized);
+
+    // 6. Detección de consultas de energía solar / batería
+    const isSolar = /\b(solar|solares|panel|paneles|fotovoltaic[oa]s?|bateria|baterias|inversor|autonomia|kwh|kwp|ahorro solar|energia solar)\b/i.test(normalized);
+
+    // 7. Detección de consultas de horas pico / horario de ventas
+    const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
+                         (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized));
+
+    // 8. Detección de consultas administrativas y financieras de Andelsa / Nova SaaS (sys.sipesv.com)
+    const isAndelsaMention = /\b(andelsa|planta andelsa|empresa andelsa)\b/i.test(normalized) ||
+                             (matchedStation && matchedStation.id === 'ANDELSA');
+    const isSysSaasMention = /\b(sys\.sipesv|sistema saas|nova saas|saas)\b/i.test(normalized);
+    const isAndelsaRelated = isAndelsaMention || isSysSaasMention;
+
+    const isAndelsaInventario = isAndelsaRelated && /\b(inventario|inventarios|stock|existencia|existencias|kardex|almacen)\b/i.test(normalized);
+    const isAndelsaCostos = isAndelsaRelated && /\b(costo|costos|margen|margenes|utilidad|ganancia)\b/i.test(normalized);
+    const isAndelsaCxc = isAndelsaRelated && /\b(cxc|cuentas por cobrar|cuenta por cobrar|por cobrar|cartera|morosidad|mora|deuda|deudores|creditos?)\b/i.test(normalized);
+    const isAndelsaVentasCliente = isAndelsaRelated && /\b(cliente|clientes)\b/i.test(normalized) && (/\b(venta|ventas|facturacion|facturado)\b/i.test(normalized) || !isAndelsaCxc);
+    const isAndelsaVentasProducto = isAndelsaRelated && /\b(producto|productos|items?|articulos?)\b/i.test(normalized) && /\b(venta|ventas|mas vendido|vendidos|desplazamiento)\b/i.test(normalized);
+    const isAndelsaFinanzasResumen = isAndelsaRelated && !isSolar && !isAndelsaInventario && !isAndelsaCostos && !isAndelsaCxc && !isAndelsaVentasCliente && !isAndelsaVentasProducto && !matchedFuel && (
+        /\b(finanzas|financiero|resumen|kpi|metricas|balance|estado general|general)\b/i.test(normalized) ||
+        /\b(andelsa)\b/i.test(normalized)
+    );
+
+    // 9. Detección de Precios de la Competencia (DGEHM) y Marcas Competidoras
+    let matchedCompetitorBrand = null;
+    if (/\b(texaco)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Texaco';
+    } else if (/\b(dlc)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'DLC';
+    } else if (/\b(gasolineras?\s+uno|estacion\s+uno|marca\s+uno|precios?\s+(?:de\s+)?uno|competencia\s+uno|terra\s+uno)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Uno';
+    } else if (!matchedStation && /\b(marca\s+puma|competidores?\s+puma|gasolineras?\s+puma)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Puma';
+    } else if (!matchedStation && /\b(marca\s+shell|competidores?\s+shell|gasolineras?\s+shell)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Shell';
+    }
+
+    const hasExplicitCompetenciaWord = /\b(competencia|competidores|competidor|dgehm|precios?\s+competencia|precios?\s+de\s+(?:la\s+)?competencia|precios?\s+del?\s+mercado|comparativo\s+de\s+precios|comparar\s+precios|monitoreo\s+de\s+precios)\b/i.test(normalized);
+    const hasAuditCashWords = /\b(descuadre|descuadres|merma|mermas|faltante|sobrante|cuadrado|cierre|cierres)\b/i.test(normalized);
+    const hasFuelPriceIntent = !isAndelsaRelated && !isSolar && !matchedBank && !hasAuditCashWords && (
+        /\b(precios?|tarifas?|a\s+como\s+esta|a\s+como\s+tienen|cuanto\s+cuesta|cuanto\s+vale)\b/i.test(normalized) ||
+        /\b(mas\s+barat[oa]s?|mas\s+car[oa]s?|menor\s+precio|mayor\s+precio|mejor\s+precio|precios?\s+bajos?)\b/i.test(normalized)
+    );
+    const hasCompetitorBrandIntent = !isAndelsaRelated && !matchedBank && Boolean(matchedCompetitorBrand) &&
+        !/\b(bancos?|chequera|cheques?|saldo)\b/i.test(normalized);
+
+    let isCompetencia = hasExplicitCompetenciaWord || hasFuelPriceIntent || hasCompetitorBrandIntent;
+    const onlyCheaper = /\b(mas\s+barat[oa]s?|menor\s+precio|precios?\s+mas\s+bajos?|abajo\s+de\s+nosotros|debajo\s+de\s+nosotros|mejor\s+precio|solo\s+barat[oa]s?)\b/i.test(normalized);
+    const competenciaServiceType = /\b(servicio\s+completo|completo|full\s+service)\b/i.test(normalized)
+        ? 'SC'
+        : (/\b(autoservicio|auto\s+servicio)\b/i.test(normalized) ? 'AS' : 'ALL');
+
+    // 10. Detección de auditoría / descuadres (excluyendo consultas de diferencia de precios de competencia)
+    const isAlertas = !isCompetencia && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
+
+    // 11. Detección de rankings o comparativas de ventas (excluyendo comparativas de precios)
+    const isRanking = !isCompetencia && (
+        /\b(cual|quien|que estacion|estacion que|estaciones que)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
+        /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized)
+    );
+
+    // RESOLUCIÓN DE CONTEXTO CONVERSACIONAL MULTI-TURNO
+    if (userContext) {
+        const wantsGlobalScope = /\b(toda\s+la\s+red|todas\s+las\s+estaciones|en\s+general|global|red\s+completa|todas)\b/i.test(normalized);
+        const mentionsExplicitSalesWords = /\b(venta|ventas|vendio|vendieron|galon|galones|galonaje|cierre|cierres|chequera|bancos?|saldo)\b/i.test(normalized);
+
+        // 0. Seguimiento conversacional de Precios de Competencia ("¿Y en Chalchuapa?", "¿Y regular?", "¿Solo los más baratos?")
+        if (
+            userContext.lastTopic === 'competencia' &&
+            !isSolar &&
+            !isHourlyPeak &&
+            !isAndelsaRelated &&
+            !isAlertas &&
+            !isTiendas &&
+            !matchedBank &&
+            !mentionsExplicitSalesWords &&
+            (matchedStation || matchedFuel || matchedCompetitorBrand || onlyCheaper || /\b(servicio\s+completo|autoservicio|resumen|red|todos?)\b/i.test(normalized))
+        ) {
+            isCompetencia = true;
+            if (!matchedStation && userContext.lastStationId && !wantsGlobalScope && (matchedFuel || onlyCheaper || /\b(servicio\s+completo|autoservicio)\b/i.test(normalized))) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+        } else if (isCompetencia && !matchedStation && userContext.lastStationId && /\b(ahi|alli|esa\s+estacion|misma\s+estacion)\b/i.test(normalized)) {
+            matchedStation = findStationById(userContext.lastStationId);
+        }
+
+        // a. Pregunta de seguimiento de fecha: "¿Y el día anterior?", "¿Y ayer?", "¿Y anteayer?"
+        const isPrevDayFollowUp = /\b(y\s+el\s+dia\s+anterior|el\s+dia\s+anterior|dia\s+anterior|un\s+dia\s+antes|y\s+ayer|y\s+el\s+de\s+ayer|y\s+el\s+dia\s+de\s+ayer)\b/i.test(normalized) || (/^(y\s+)?ayer$/i.test(normalized));
+        const isAnteayerFollowUp = /\b(y\s+anteayer|y\s+antier|anteayer|antier)\b/i.test(normalized);
+
+        if (!isCompetencia && userContext.lastDate && (isPrevDayFollowUp || isAnteayerFollowUp)) {
+            const offset = isAnteayerFollowUp ? -2 : -1;
+            targetDate = shiftDate(userContext.lastDate, offset);
+            hasExplicitDateOrPeriod = true;
+
+            if (!matchedStation && userContext.lastStationId) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+            if (!matchedFuel && userContext.lastProduct) {
+                matchedFuel = findFuelByKey(userContext.lastProduct);
+            }
+        }
+
+        // b. Pregunta de seguimiento de estación: "¿Y en Costa del Sol?", "¿Y Miraflores?"
+        if (!isCompetencia && matchedStation && !hasExplicitDateOrPeriod) {
+            if (userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+            if (userContext.lastPeriod && userContext.lastTopic === 'ventas_mensual') {
+                isMonthly = true;
+                targetMonth = userContext.lastMonth;
+                targetYear = userContext.lastYear;
+                targetPeriod = userContext.lastPeriod;
+            }
+            if (!matchedFuel && userContext.lastProduct) {
+                matchedFuel = findFuelByKey(userContext.lastProduct);
+            }
+        }
+
+        // c. Pregunta de seguimiento de combustible: "¿Y de diésel cuánto fue?", "¿Y regular?", "¿Y super?"
+        if (!isCompetencia && matchedFuel && !matchedStation && userContext.lastStationId) {
+            matchedStation = findStationById(userContext.lastStationId);
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+        }
+
+        // d. Pregunta de seguimiento de horas pico: "¿A qué horas vendió más?", "¿Horas pico?"
+        if (isHourlyPeak) {
+            if (!matchedStation && userContext.lastStationId) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+        }
+
+        // e. Pregunta de seguimiento de tiendas: "¿Y las tiendas?"
+        if (isTiendas) {
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+            if (!matchedStation && userContext.lastStationId) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+        }
+
+        // f. Pregunta de seguimiento solar: "¿Y el ahorro solar?"
+        if (isSolar) {
+            if (!hasExplicitDateOrPeriod && userContext.lastDate) {
+                targetDate = userContext.lastDate;
+            }
+        }
+    }
+
+    return {
+        normalized,
+        targetDate,
+        matchedStation,
+        matchedFuel,
+        matchedBank,
+        matchedCompetitorBrand,
+        isCompetencia,
+        onlyCheaper,
+        competenciaServiceType,
+        isRanking,
+        isTiendas,
+        isAlertas,
+        isSolar,
+        isEnergy: isSolar,
+        isHourlyPeak,
+        isHorasPico: isHourlyPeak,
+        isAndelsaRelated,
+        isAndelsaInventario,
+        isAndelsaCostos,
+        isAndelsaCxc,
+        isAndelsaVentasCliente,
+        isAndelsaVentasProducto,
+        isAndelsaFinanzasResumen,
+        isRange,
+        isRango: isRange,
+        startDate,
+        endDate,
+        dateRange: isRange ? { start: startDate, end: endDate } : null,
+        isMonthly,
+        isMensual: isMonthly,
+        targetMonth,
+        targetYear,
+        targetPeriod
+    };
+};
+
+module.exports = {
+    BANK_NAME_MAP,
+    escapeHtml,
+    moneyFmt,
+    numFmt,
+    toDisplayDate,
+    getDateStr,
+    normalizeText,
+    escapeRegex,
+    SPANISH_MONTHS,
+    formatYMD,
+    shiftDate,
+    parseSpanishDateText,
+    SPANISH_MONTH_NAMES,
+    parseSpanishPeriodOrDate,
+    parseUserDate,
+    KNOWN_STATIONS,
+    KNOWN_FUELS,
+    KNOWN_BANKS,
+    resolveStationId,
+    findStationById,
+    findFuelByKey,
+    parseNaturalLanguageQuery
+};

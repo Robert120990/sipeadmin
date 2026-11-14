@@ -308,8 +308,10 @@ const { initBirthdayScheduler } = require('./services/birthdayNotifier');
 const { initPaymentScheduler } = require('./services/paymentNotifier');
 const { initTelegramBot } = require('./services/telegramBotService');
 const { initAutoSyncScheduler } = require('./services/autoSyncScheduler');
+const { runInitialServiceSeeds } = require('./services/dbBootstrapSeeds');
 
-initDB().then(() => {
+initDB().then(async () => {
+    await runInitialServiceSeeds();
     initBirthdayScheduler();
     initPaymentScheduler();
     initTelegramBot();

@@ -1188,13 +1188,6 @@ const initDB = async () => {
                 estacion_nombre = VALUES(estacion_nombre)
             `);
 
-            // Seed orders from snapshot if empty or only partial
-            const [orderCount] = await pool.query('SELECT COUNT(*) as c FROM portal_pedidos');
-            if (orderCount[0].c < 50) {
-                const { seedInitialPortalOrders } = require('./services/energyLatamService');
-                await seedInitialPortalOrders(true);
-            }
-
             // Seed / Ensure Shell Poliedro in web_consolidado
             try {
                 await pool.query(`
@@ -1247,9 +1240,6 @@ const initDB = async () => {
                     UNIQUE KEY uk_instalacion_fecha (instalacion_id, fecha)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             `);
-
-            const { seedSolarEnergyData } = require('./services/solarEnergyService');
-            await seedSolarEnergyData(pool);
         } catch (e) {
             console.error('Migration energia_instalaciones & registros_diarios:', e.message);
         }
