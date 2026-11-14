@@ -4,9 +4,25 @@ const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const { getTanquesAutonomia, calcularSimuladorDGEHM, getAuditoriaMermas } = require('../services/fuelIntelligence');
 const { getFlujoCajaProyectado } = require('../services/cashflowForecast');
-const { getRentabilidadPorEstacion } = require('../services/profitabilityService');
+const { getRentabilidadPorEstacion, getElasticidadPreciosCompetencia } = require('../services/profitabilityService');
 const { getRiesgoCreditoFlotas, getDetalleDtesCliente } = require('../services/creditRiskService');
 const { getFlashEjecutivo, enviarFlashPorEmail } = require('../services/executiveFlashService');
+const {
+    getAuditoriaDineroEnTransito,
+    getHomeResumenInteligente,
+    buildWeeklyExecutiveDossierPayload
+} = require('../services/operationalAuditService');
+const { generateExecutiveReportPdf } = require('../services/telegramPdfService');
+
+// 0. Resumen Inteligente por Rol para Inicio (/dashboard)
+router.get('/home-resumen', authenticateToken, async (req, res) => {
+    try {
+        const data = await getHomeResumenInteligente(req.user);
+        res.json(data);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al cargar el resumen inteligente de inicio');
+    }
+});
 
 // 1. Flash Ejecutivo para Dueños
 router.get('/flash-ejecutivo', authenticateToken, requirePermission(['view_direccion_estrategica', '/dashboard/estrategia/torre-control']), async (req, res) => {
@@ -29,7 +45,7 @@ router.post('/enviar-flash-email', authenticateToken, requirePermission(['view_d
     }
 });
 
-// 2. Autonomía de Tanques (Horas Restantes y Quiebre de Stock)
+// 2. Autonomía de Tanques (Horas Restantes y Quiebre de Stock + Cruce Pedidos Puma)
 router.get('/tanques-autonomia', authenticateToken, requirePermission(['view_direccion_estrategica', '/dashboard/estrategia/combustible']), async (req, res) => {
     try {
         const data = await getTanquesAutonomia();
@@ -61,7 +77,7 @@ router.get('/flujo-caja-proyectado', authenticateToken, requirePermission(['view
     }
 });
 
-// 5. Auditoría de Mermas y Descalibración de Pistolas
+// 5. Auditoría de Mermas, Rachas de Micro-Merma y Descalibración de Pistolas
 router.get('/mermas-auditoria', authenticateToken, requirePermission(['view_direccion_estrategica', '/dashboard/estrategia/mermas']), async (req, res) => {
     const { desde, hasta } = req.query;
     try {
@@ -72,7 +88,28 @@ router.get('/mermas-auditoria', authenticateToken, requirePermission(['view_dire
     }
 });
 
-// 6. Rentabilidad Operativa y P&L por Estación
+// 5B. Auditoría Cruzada de Efectivo/POS en Tránsito (>48h) y Vales Pendientes (>72h)
+router.get(
+    '/auditoria-transito',
+    authenticateToken,
+    requirePermission([
+        'view_direccion_estrategica',
+        '/dashboard/estrategia/mermas',
+        '/dashboard/bancos/conciliacion',
+        '/dashboard/estrategia/torre-control'
+    ]),
+    async (req, res) => {
+        const { dias = 14 } = req.query;
+        try {
+            const data = await getAuditoriaDineroEnTransito({ dias: parseInt(dias, 10) || 14 });
+            res.json(data);
+        } catch (error) {
+            sendSafeError(res, error, 'Error al auditar efectivo en tránsito y vales pendientes');
+        }
+    }
+);
+
+// 6. Rentabilidad Operativa (EBITDA Real) y P&L por Estación
 router.get('/rentabilidad-estaciones', authenticateToken, requirePermission(['view_direccion_estrategica', '/dashboard/estrategia/rentabilidad']), async (req, res) => {
     const { desde, hasta } = req.query;
     try {
@@ -82,6 +119,27 @@ router.get('/rentabilidad-estaciones', authenticateToken, requirePermission(['vi
         sendSafeError(res, error, 'Error al calcular rentabilidad por estación');
     }
 });
+
+// 6B. Elasticidad de Precios DGEHM vs. Volumen de Galones por Estación
+router.get(
+    '/elasticidad-precios',
+    authenticateToken,
+    requirePermission([
+        'view_direccion_estrategica',
+        '/dashboard/estrategia/rentabilidad',
+        '/dashboard/estrategia/combustible',
+        '/dashboard/consultas/estaciones/precios-competencia'
+    ]),
+    async (req, res) => {
+        const { dias = 30 } = req.query;
+        try {
+            const data = await getElasticidadPreciosCompetencia(parseInt(dias, 10) || 30);
+            res.json(data);
+        } catch (error) {
+            sendSafeError(res, error, 'Error al analizar elasticidad de precios frente a competencia');
+        }
+    }
+);
 
 // 7. Riesgo de Crédito y Flotas
 router.get('/credito-flotas', authenticateToken, requirePermission(['view_direccion_estrategica', '/dashboard/estrategia/creditos']), async (req, res) => {
@@ -107,5 +165,29 @@ router.get('/credito-flotas/:customerId/dtes', authenticateToken, requirePermiss
         sendSafeError(res, error, 'Error al consultar DTEs y abonos del cliente');
     }
 });
+
+// 9. Dossier Ejecutivo Semanal en PDF Tamaño Carta (para ReportPreviewModal)
+router.get(
+    '/dossier-ejecutivo-pdf',
+    authenticateToken,
+    requirePermission([
+        'view_direccion_estrategica',
+        '/dashboard/estrategia/torre-control',
+        '/dashboard/estrategia/rentabilidad',
+        '/dashboard/configuracion/agentes-ia'
+    ]),
+    async (req, res) => {
+        try {
+            const payload = await buildWeeklyExecutiveDossierPayload();
+            const pdfBuffer = await generateExecutiveReportPdf(payload);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `inline; filename="${payload.fileName || 'Dossier_Ejecutivo_SIPE.pdf'}"`);
+            res.setHeader('Content-Length', pdfBuffer.length);
+            res.send(pdfBuffer);
+        } catch (error) {
+            sendSafeError(res, error, 'Error al generar el Dossier Ejecutivo Semanal en PDF');
+        }
+    }
+);
 
 module.exports = router;

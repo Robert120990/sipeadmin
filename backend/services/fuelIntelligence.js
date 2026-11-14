@@ -1,8 +1,23 @@
-const { getAccountingDb, withRetry } = require('../db');
-
+const dbModule = require('../db');
+const getDb = (...args) => dbModule.getDb(...args);
+const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
+const withRetry = (...args) => dbModule.withRetry(...args);
+const { branchToEmpId, formatYMD } = require('./consultasCatalog');
 
 /**
- * 1. Obtiene la autonomía en horas y días de todos los tanques por estación
+ * Normaliza código de estación a formato de 3 dígitos ('002', '006', '008', '014', '015', '016')
+ */
+const resolveStationEmpCode = (rawId) => {
+    if (rawId === null || rawId === undefined) return '';
+    const str = String(rawId).trim();
+    if (branchToEmpId[str]) return branchToEmpId[str];
+    if (/^\d+$/.test(str) && str.length < 3) return str.padStart(3, '0');
+    return str;
+};
+
+/**
+ * 1. Obtiene la autonomía en horas y días de todos los tanques por estación,
+ * cruzando stock físico con órdenes de cisterna en tránsito o retenidas en portal_pedidos.
  */
 const getTanquesAutonomia = async () => {
     const accountingDb = await getAccountingDb();
@@ -92,6 +107,75 @@ const getTanquesAutonomia = async () => {
         consumptionMap[key] = (Number(r.total_7d || 0) / 7);
     });
 
+    // 5. Cruzar con pedidos activos/en tránsito o retenidos en portal_pedidos (db_sipe_admin)
+    const transitMap = {};
+    let pedidosRetenidosTotal = 0;
+    try {
+        const db = getDb();
+        if (db) {
+            const [pedidosRows] = await db.query(`
+                SELECT numero_orden, id_estacion, estado,
+                       COALESCE(galones_diesel, 0) as galones_diesel,
+                       COALESCE(galones_regular, 0) as galones_regular,
+                       COALESCE(galones_super, 0) as galones_super,
+                       COALESCE(galones_ion, 0) as galones_ion
+                FROM portal_pedidos
+                WHERE UPPER(estado) IN ('LIBERADO', 'EN_PROCESO', 'PENDIENTE', 'RETENIDO')
+                  AND (
+                      fecha_pedido >= DATE_SUB(CURDATE(), INTERVAL 10 DAY)
+                      OR fecha_solicitada >= DATE_SUB(CURDATE(), INTERVAL 10 DAY)
+                  )
+            `);
+
+            (pedidosRows || []).forEach(ped => {
+                const empCode = resolveStationEmpCode(ped.id_estacion);
+                if (!empCode) return;
+                const estUpper = String(ped.estado || '').trim().toUpperCase();
+                const isRetenido = estUpper === 'RETENIDO';
+                if (isRetenido) pedidosRetenidosTotal += 1;
+
+                const fuelGalMap = {
+                    D: Number(ped.galones_diesel || 0),
+                    R: Number(ped.galones_regular || 0),
+                    S: Number(ped.galones_super || 0),
+                    I: Number(ped.galones_ion || 0)
+                };
+
+                Object.entries(fuelGalMap).forEach(([fKey, gals]) => {
+                    if (gals <= 0 && !isRetenido) return;
+                    const key = `${empCode}_${fKey}`;
+                    if (!transitMap[key]) {
+                        transitMap[key] = {
+                            galones_transito: 0,
+                            galones_retenidos: 0,
+                            pedidos_retenidos_count: 0,
+                            ordenes_en_ruta: []
+                        };
+                    }
+                    if (isRetenido) {
+                        transitMap[key].galones_retenidos += gals;
+                        if (gals > 0) transitMap[key].pedidos_retenidos_count += 1;
+                    } else if (gals > 0) {
+                        transitMap[key].galones_transito += gals;
+                        if (ped.numero_orden) {
+                            transitMap[key].ordenes_en_ruta.push(String(ped.numero_orden));
+                        }
+                    }
+                });
+            });
+        }
+    } catch (_errPedidos) {
+        // Fallback limpio si portal_pedidos no está disponible en entorno aislado
+    }
+
+    // Capacidad acumulada por estación y tipo para prorratear pedidos en tránsito sin duplicar galones
+    const capByStationFuel = {};
+    tankRows.forEach(t => {
+        const empCode = resolveStationEmpCode(t.id_empresa);
+        const key = `${empCode}_${t.tipo_combustible}`;
+        capByStationFuel[key] = (capByStationFuel[key] || 0) + Math.max(1, Number(t.capacidad || 0));
+    });
+
     const combustiblesNombres = {
         'S': 'Súper',
         'R': 'Regular',
@@ -102,11 +186,15 @@ const getTanquesAutonomia = async () => {
     let totalCapacidadGrupo = 0;
     let totalStockGrupo = 0;
     let tanquesCriticosCount = 0;
+    let emergenciasRealesCount = 0;
+    let cubiertosEnRutaCount = 0;
+    let totalGalonesTransito = 0;
 
     const tanquesDetalle = [];
 
     tankRows.forEach(t => {
         const idEmpresa = t.id_empresa;
+        const empCode = resolveStationEmpCode(idEmpresa);
         const tipo = t.tipo_combustible;
         const station = stations.find(s => String(s.id_empresa) === String(idEmpresa));
         const stationName = t.estacion || (station ? station.titulo : `Estación ${idEmpresa}`);
@@ -127,14 +215,41 @@ const getTanquesAutonomia = async () => {
             diasRestantes = Math.round((stockUtil / consumoPromDiario) * 10) / 10;
         }
 
+        // Prorratear galones en tránsito por capacidad del tanque dentro de la misma estación/producto
+        const transitInfo = transitMap[`${empCode}_${tipo}`] || {
+            galones_transito: 0,
+            galones_retenidos: 0,
+            pedidos_retenidos_count: 0,
+            ordenes_en_ruta: []
+        };
+        const totalCapFuel = capByStationFuel[`${empCode}_${tipo}`] || Math.max(1, capacidad);
+        const shareRatio = capacidad > 0 ? (capacidad / totalCapFuel) : 1;
+        const galonesEnTransito = Math.round(transitInfo.galones_transito * shareRatio);
+        const galonesRetenidos = Math.round(transitInfo.galones_retenidos * shareRatio);
+        totalGalonesTransito += galonesEnTransito;
+
+        let horasRestantesConTransito = horasRestantes;
+        if (consumoPorHora > 0) {
+            horasRestantesConTransito = Math.round(((stockUtil + galonesEnTransito) / consumoPorHora) * 10) / 10;
+        }
+
         const porcentajeOcupacion = capacidad > 0 ? Math.round((stockActual / capacidad) * 100) : 0;
 
         let estado = 'optimo'; // optimo (>48h), advertencia (24-48h), critico (<24h)
+        let riesgoReal = 'normal';
         if (horasRestantes < 24) {
             estado = 'critico';
             tanquesCriticosCount++;
+            if (galonesEnTransito > 0 && horasRestantesConTransito >= 24) {
+                riesgoReal = 'cubierto_en_ruta';
+                cubiertosEnRutaCount++;
+            } else {
+                riesgoReal = 'emergencia_real';
+                emergenciasRealesCount++;
+            }
         } else if (horasRestantes < 48) {
             estado = 'advertencia';
+            riesgoReal = 'alerta_preventiva';
         }
 
         totalCapacidadGrupo += capacidad;
@@ -142,8 +257,9 @@ const getTanquesAutonomia = async () => {
 
         tanquesDetalle.push({
             id_empresa: idEmpresa,
+            codigo_estacion: empCode,
             estacion: stationName,
-            tanque_id: t.codigo_producto,
+            tanque_id: t.tanque_codigo || t.tank_id,
             tanque_nombre: t.tanque_nombre || `${combustiblesNombres[tipo] || tipo} Tanque`,
             tipo_combustible: tipo,
             nombre_combustible: combustiblesNombres[tipo] || tipo,
@@ -156,6 +272,12 @@ const getTanquesAutonomia = async () => {
             consumo_hora_estimado: Math.round(consumoPorHora * 10) / 10,
             horas_restantes: horasRestantes,
             dias_restantes: diasRestantes,
+            galones_en_transito: galonesEnTransito,
+            galones_retenidos: galonesRetenidos,
+            pedidos_retenidos_count: transitInfo.pedidos_retenidos_count,
+            ordenes_en_ruta: transitInfo.ordenes_en_ruta,
+            horas_restantes_con_transito: horasRestantesConTransito,
+            riesgo_real: riesgoReal,
             porcentaje_ocupacion: porcentajeOcupacion,
             estado,
             fecha_lectura: lastDate
@@ -174,6 +296,10 @@ const getTanquesAutonomia = async () => {
         resumen: {
             total_tanques: tanquesDetalle.length,
             tanques_criticos: tanquesCriticosCount,
+            emergencias_reales: emergenciasRealesCount,
+            cubiertos_en_ruta: cubiertosEnRutaCount,
+            pedidos_retenidos_total: pedidosRetenidosTotal,
+            galones_en_transito_total: totalGalonesTransito,
             tanques_advertencia: tanquesDetalle.filter(t => t.estado === 'advertencia').length,
             capacidad_total_galones: totalCapacidadGrupo,
             stock_total_galones: totalStockGrupo,
@@ -332,13 +458,14 @@ const getAuditoriaMermas = async (desde, hasta) => {
     `;
     const [movsRows] = await withRetry(() => accountingDb.query(sqlMovs, [dInicio, dFin]));
 
-    // Costos promedio de combustible para valorizar merma
+    // Costos reales por estación (liquidación quincenal + flete) con respaldo a products/costMap
     const costMap = {
         'S': 3.65,
         'R': 3.35,
         'D': 3.10,
         'I': 3.20
     };
+    const stationCostMap = {};
     try {
         const [costosRows] = await withRetry(() => accountingDb.query(`
             SELECT 
@@ -359,16 +486,173 @@ const getAuditoriaMermas = async (desde, hasta) => {
                 costMap[c.tipo] = Number(c.costo);
             }
         });
-    } catch (e) {
+    } catch (_e) {
         // Fallback ya configurado en costMap
     }
 
-    const combustiblesCodigos = {
-        'S': 'SUPER',
-        'R': 'REGULAR',
-        'D': 'DIESEL',
-        'I': 'IONDIESEL'
-    };
+    try {
+        const db = getDb();
+        if (db) {
+            const [fletesRows] = await db.query(
+                'SELECT id_estacion, flete_galon FROM combustible_fletes_estacion WHERE activo = 1'
+            );
+            const fletesByEmp = {};
+            (fletesRows || []).forEach(f => {
+                fletesByEmp[resolveStationEmpCode(f.id_estacion)] = Number(f.flete_galon || 0);
+            });
+
+            const [quincenaRows] = await db.query(`
+                SELECT id_estacion, precio_diesel, precio_regular, precio_super, precio_ion
+                FROM combustible_precios_estacion_quincenal
+                ORDER BY periodo_fin DESC
+            `);
+            (quincenaRows || []).forEach(q => {
+                const empCode = resolveStationEmpCode(q.id_estacion);
+                const flete = fletesByEmp[empCode] || 0;
+                if (!stationCostMap[`${empCode}_D`] && Number(q.precio_diesel) > 0) {
+                    stationCostMap[`${empCode}_D`] = Number(q.precio_diesel) + flete;
+                }
+                if (!stationCostMap[`${empCode}_R`] && Number(q.precio_regular) > 0) {
+                    stationCostMap[`${empCode}_R`] = Number(q.precio_regular) + flete;
+                }
+                if (!stationCostMap[`${empCode}_S`] && Number(q.precio_super) > 0) {
+                    stationCostMap[`${empCode}_S`] = Number(q.precio_super) + flete;
+                }
+                if (!stationCostMap[`${empCode}_I`] && Number(q.precio_ion) > 0) {
+                    stationCostMap[`${empCode}_I`] = Number(q.precio_ion) + flete;
+                }
+            });
+        }
+    } catch (_errLocalCost) {
+        // Fallback a costMap general
+    }
+
+    // Detección de Rachas de Micro-Merma Acumulada (pérdidas diarias consecutivas silenciosas)
+    const rachasMap = {};
+    const rachasMicroMerma = [];
+    try {
+        const [dailyVentas] = await withRetry(() => accountingDb.query(`
+            SELECT
+                CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
+                CASE WHEN c.branch_id = 7 THEN 'Shell EL Poliedro' ELSE b.nombre END as estacion,
+                c.fecha_turno as fecha,
+                CASE 
+                    WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
+                    WHEN r.codigo_producto LIKE '%DIESEL%' OR r.descripcion_producto LIKE '%DIESEL%' OR p.tipo_combustible = 3 THEN 'D'
+                    WHEN r.codigo_producto LIKE '%SUPER%' OR r.descripcion_producto LIKE '%SUPER%' OR p.tipo_combustible = 2 THEN 'S'
+                    WHEN r.codigo_producto LIKE '%REGULAR%' OR r.descripcion_producto LIKE '%REGULAR%' OR p.tipo_combustible = 1 THEN 'R'
+                    ELSE 'D'
+                END as tipo,
+                SUM(r.diferencia) as venta_galones
+            FROM gas_station_closeouts c
+            JOIN branches b ON c.branch_id = b.id
+            JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
+            LEFT JOIN products p ON r.product_id = p.id
+            WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+            GROUP BY id_empresa, estacion, c.fecha_turno, tipo
+            ORDER BY id_empresa, tipo, c.fecha_turno ASC
+        `, [dInicio, dFin]));
+
+        const [dailyMovs] = await withRetry(() => accountingDb.query(`
+            SELECT
+                CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
+                c.fecha_turno as fecha,
+                CASE 
+                    WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                    WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                    WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                    WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                    ELSE 'D'
+                END as tipo,
+                SUM(tr.recarga) as recarga,
+                CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_anterior ORDER BY c.numero_turno ASC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as anterior,
+                CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_actual ORDER BY c.numero_turno DESC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as lectura
+            FROM gas_station_closeouts c
+            JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
+            JOIN gas_station_tanks t ON tr.tank_id = t.id
+            WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+            GROUP BY id_empresa, c.fecha_turno, tipo
+            ORDER BY id_empresa, tipo, c.fecha_turno ASC
+        `, [dInicio, dFin]));
+
+        const movByKey = {};
+        (dailyMovs || []).forEach(m => {
+            const fStr = formatYMD(m.fecha);
+            movByKey[`${m.id_empresa}_${m.tipo}_${fStr}`] = m;
+        });
+
+        const seriesByTank = {};
+        (dailyVentas || []).forEach(dv => {
+            const fStr = formatYMD(dv.fecha);
+            const mv = movByKey[`${dv.id_empresa}_${dv.tipo}_${fStr}`];
+            if (!mv) return;
+            const ini = Number(mv.anterior || 0);
+            const fin = Number(mv.lectura || 0);
+            const rec = Number(mv.recarga || 0);
+            const vta = Number(dv.venta_galones || 0);
+            if (vta <= 0) return;
+            const dif = fin - (ini + rec - vta);
+            const pct = (dif / vta) * 100;
+            const tkKey = `${dv.id_empresa}_${dv.tipo}`;
+            if (!seriesByTank[tkKey]) {
+                seriesByTank[tkKey] = {
+                    id_empresa: dv.id_empresa,
+                    estacion: dv.estacion,
+                    tipo: dv.tipo,
+                    days: []
+                };
+            }
+            seriesByTank[tkKey].days.push({ fecha: fStr, dif, pct, vta });
+        });
+
+        Object.entries(seriesByTank).forEach(([tkKey, info]) => {
+            let maxStreak = 0;
+            let curStreak = 0;
+            let bestGalLoss = 0;
+            let curGalLoss = 0;
+            let curPctSum = 0;
+            let bestPctAvg = 0;
+
+            info.days.forEach(d => {
+                // Variación negativa consistente (< -1.5 gal o < -0.08%)
+                if (d.dif < -1.5 || d.pct < -0.08) {
+                    curStreak += 1;
+                    curGalLoss += Math.abs(d.dif);
+                    curPctSum += d.pct;
+                    if (curStreak >= maxStreak) {
+                        maxStreak = curStreak;
+                        bestGalLoss = curGalLoss;
+                        bestPctAvg = curPctSum / curStreak;
+                    }
+                } else {
+                    curStreak = 0;
+                    curGalLoss = 0;
+                    curPctSum = 0;
+                }
+            });
+
+            rachasMap[tkKey] = maxStreak;
+            if (maxStreak >= 3) {
+                const empCode = resolveStationEmpCode(info.id_empresa);
+                const unitCost = stationCostMap[`${empCode}_${info.tipo}`] || costMap[info.tipo] || 3.50;
+                rachasMicroMerma.push({
+                    id_empresa: info.id_empresa,
+                    estacion: info.estacion,
+                    tipo_combustible: info.tipo,
+                    nombre_combustible: ({ S: 'Súper', R: 'Regular', D: 'Diésel', I: 'Ion Diésel' })[info.tipo] || info.tipo,
+                    dias_consecutivos: maxStreak,
+                    galones_acumulados_perdidos: Math.round(bestGalLoss * 10) / 10,
+                    variacion_promedio_diaria_pct: Math.round(bestPctAvg * 100) / 100,
+                    impacto_acumulado_usd: Math.round(bestGalLoss * unitCost * 100) / 100,
+                    diagnostico: Math.abs(bestPctAvg) <= 0.45
+                        ? 'Micro-merma silenciosa: pérdida continua bajo umbral diario de 0.50%. Revisar calibración fina de pistolas.'
+                        : 'Fuga o descalibración persistente sostenida durante múltiples días consecutivos.'
+                });
+            }
+        });
+    } catch (_errRachas) {
+        // Fallback limpio si consulta diaria no devuelve filas
+    }
 
     const combustiblesNombres = {
         'S': 'Súper',
@@ -396,21 +680,22 @@ const getAuditoriaMermas = async (desde, hasta) => {
 
         const porcentajeMerma = venta > 0 ? (diferenciaGalones / venta) * 100 : 0;
         const porcentajeAbs = Math.abs(porcentajeMerma);
+        const diasRachaNegativa = rachasMap[`${fila.id_empresa}_${fila.tipo}`] || 0;
 
-        // Umbrales de merma: Normal (-0.25% a +0.25%), Alerta (0.25% - 0.50%), Crítico (>0.50%)
+        // Umbrales de merma: Normal (-0.25% a +0.25%), Alerta (0.25% - 0.50% o racha >= 3 días), Crítico (>0.50%)
         let estado = 'normal';
         let severidad = 'verde';
         if (porcentajeAbs > 0.50) {
             estado = 'critico';
             severidad = 'rojo';
             alertasCriticas++;
-        } else if (porcentajeAbs > 0.25) {
+        } else if (porcentajeAbs > 0.25 || diasRachaNegativa >= 3) {
             estado = 'advertencia';
             severidad = 'amarillo';
         }
 
-        const codProd = combustiblesCodigos[fila.tipo] || 'REGULAR';
-        const costoGalon = costMap[`${fila.id_empresa}_${codProd}`] || 3.50; // fallback $3.50
+        const empCode = resolveStationEmpCode(fila.id_empresa);
+        const costoGalon = Math.round((stationCostMap[`${empCode}_${fila.tipo}`] || costMap[fila.tipo] || 3.50) * 10000) / 10000;
         const impactoMonetario = diferenciaGalones * costoGalon;
 
         if (diferenciaGalones < 0) {
@@ -420,6 +705,7 @@ const getAuditoriaMermas = async (desde, hasta) => {
 
         return {
             id_empresa: fila.id_empresa,
+            codigo_estacion: empCode,
             estacion: fila.estacion,
             tipo_combustible: fila.tipo,
             nombre_combustible: combustiblesNombres[fila.tipo] || fila.tipo,
@@ -430,15 +716,18 @@ const getAuditoriaMermas = async (desde, hasta) => {
             teorico: Math.round(inventarioTeorico),
             diferencia_galones: Math.round(diferenciaGalones * 10) / 10,
             porcentaje_variacion: Math.round(porcentajeMerma * 100) / 100,
+            dias_racha_negativa: diasRachaNegativa,
             costo_unitario_estimado: costoGalon,
             impacto_usd: Math.round(impactoMonetario * 100) / 100,
             estado,
             severidad,
             recomendacion: estado === 'critico'
                 ? 'Enviar técnico de calibración o realizar prueba de hermeticidad con serafín de inmediato.'
-                : estado === 'advertencia'
-                    ? 'Monitorear turnos siguientes para confirmar si es variación térmica o fuga leve.'
-                    : 'Variación dentro de tolerancia física y reglamentaria.'
+                : diasRachaNegativa >= 3
+                    ? `Racha de ${diasRachaNegativa} días consecutivos en negativo: verificar descalibración fina de surtidor.`
+                    : estado === 'advertencia'
+                        ? 'Monitorear turnos siguientes para confirmar si es variación térmica o fuga leve.'
+                        : 'Variación dentro de tolerancia física y reglamentaria.'
         };
     });
 
@@ -448,8 +737,12 @@ const getAuditoriaMermas = async (desde, hasta) => {
             total_galones_perdidos: Math.round(totalGalonesMerma),
             costo_total_perdida_usd: Math.round(totalCostoMermaUsd * 100) / 100,
             alertas_criticas: alertasCriticas,
-            estatus_general: alertasCriticas > 0 ? 'ATENCIÓN REQUERIDA' : 'CONTROL OPERATIVO ADECUADO'
+            rachas_micro_merma_count: rachasMicroMerma.length,
+            estatus_general: alertasCriticas > 0
+                ? 'ATENCIÓN REQUERIDA'
+                : (rachasMicroMerma.length > 0 ? 'MONITOREO PREVENTIVO (RACHAS)' : 'CONTROL OPERATIVO ADECUADO')
         },
+        rachas_micro_merma: rachasMicroMerma,
         auditorias: mermasDetalle
     };
 };
@@ -457,5 +750,6 @@ const getAuditoriaMermas = async (desde, hasta) => {
 module.exports = {
     getTanquesAutonomia,
     calcularSimuladorDGEHM,
-    getAuditoriaMermas
+    getAuditoriaMermas,
+    resolveStationEmpCode
 };

@@ -1,6 +1,10 @@
 const nodemailer = require('nodemailer');
 const { GoogleGenAI } = require('@google/genai');
-const { getDb, getAccountingDb, getExternalDb, withRetry } = require('../db');
+const dbModule = require('../db');
+const getDb = (...args) => dbModule.getDb(...args);
+const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
+const getExternalDb = (...args) => dbModule.getExternalDb(...args);
+const withRetry = (...args) => dbModule.withRetry(...args);
 const { getTanquesAutonomia } = require('./fuelIntelligence');
 
 /**
@@ -193,11 +197,15 @@ const getFlashEjecutivo = async () => {
         }
     }
 
-    // 3. Autonomía de Tanques y Alertas Críticas
+    // 3. Autonomía de Tanques y Alertas Críticas (distinguiendo emergencia real vs cisterna en tránsito)
     let tanquesCriticos = [];
+    let emergenciasReales = [];
+    let cubiertosEnRuta = [];
     try {
         const autonomia = await getTanquesAutonomia();
         tanquesCriticos = (autonomia?.tanques || []).filter(t => t.estado === 'critico' || t.horas_restantes < 24);
+        emergenciasReales = tanquesCriticos.filter(t => t.riesgo_real === 'emergencia_real');
+        cubiertosEnRuta = tanquesCriticos.filter(t => t.riesgo_real === 'cubierto_en_ruta');
     } catch (err) {
         console.warn('Error al verificar tanques críticos:', err.message);
     }
@@ -300,9 +308,14 @@ Responde únicamente con el texto ejecutivo directo sin títulos ni introduccion
     if (tanquesCriticos.length > 0) {
         whatsappText += `\n🚨 *ALERTA TANQUES (<24h combustible):*\n`;
         tanquesCriticos.forEach(t => {
-            whatsappText += `   ⚠️ ${t.estacion} - ${t.nombre_combustible}: ${t.horas_restantes}h restantes (${t.stock_actual} gal)\n`;
+            const rutaTag = t.riesgo_real === 'cubierto_en_ruta'
+                ? ` [🚚 En ruta: +${(t.galones_en_transito || 0).toLocaleString()} gal]`
+                : (t.pedidos_retenidos_count > 0 ? ' [⛔ Pedido RETENIDO]' : ' [🚨 SIN PEDIDO EN RUTA]');
+            whatsappText += `   ⚠️ ${t.estacion} - ${t.nombre_combustible}: ${t.horas_restantes}h restantes (${t.stock_actual} gal)${rutaTag}\n`;
         });
-        whatsappText += `   👉 _Acción: Generar pedido de cisterna inmediato._\n`;
+        whatsappText += emergenciasReales.length > 0
+            ? `   👉 _Acción urgente: Generar/liberar pedido inmediato para ${emergenciasReales.length} tanque(s) sin cobertura._\n`
+            : `   ✅ _Cobertura activa: Todos los tanques <24h cuentan con cisterna liberada en tránsito._\n`;
     } else {
         whatsappText += `\n✅ *Inventario en Tanques:* Todos los tanques con autonomía superior a 24 horas.\n`;
     }
@@ -321,7 +334,9 @@ Responde únicamente con el texto ejecutivo directo sin títulos ni introduccion
             ventas_hoy_galones: ventasHoy.total_galones,
             liquidez_bancos_usd: Math.round(totalBancos),
             compromisos_48h_usd: Math.round(totalCompromisos48h),
-            tanques_criticos_count: tanquesCriticos.length
+            tanques_criticos_count: tanquesCriticos.length,
+            emergencias_reales_count: emergenciasReales.length,
+            cubiertos_en_ruta_count: cubiertosEnRuta.length
         },
         ventas_ayer: ventasAyer,
         ventas_hoy: ventasHoy,

@@ -2082,12 +2082,16 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
 
     // 0. Comandos o solicitudes de exportación de Reporte Ejecutivo en PDF Tamaño Carta
     const normForPdf = normalizeText(rawText);
-    const isPdfCommand = cleanLower === 'pdf' || cleanLower.startsWith('pdf ') ||
+    const isDossierCommand = cleanLower === 'dossier' || cleanLower === '/dossier' ||
+        /\b(dossier|dossier ejecutivo|dossier semanal|reporte semanal pdf)\b/i.test(normForPdf);
+    const isPdfCommand = isDossierCommand || cleanLower === 'pdf' || cleanLower.startsWith('pdf ') ||
         /\b(pdf|documento pdf|reporte en pdf|exportar pdf|mandame el pdf|enviame el pdf)\b/i.test(normForPdf);
     if (isPdfCommand) {
         const userCtx = getUserConversationContext(user.telegram_user_id);
         let pdfTopic = 'ventas';
-        if (/\b(banco|bancos|saldos bancarios|cuentas bancarias)\b/i.test(normForPdf)) {
+        if (isDossierCommand || /\b(dossier|semanal)\b/i.test(normForPdf)) {
+            pdfTopic = 'dossier';
+        } else if (/\b(banco|bancos|saldos bancarios|cuentas bancarias)\b/i.test(normForPdf)) {
             pdfTopic = 'bancos';
         } else if (/\b(chequera|chequeras|cheques)\b/i.test(normForPdf)) {
             pdfTopic = 'chequeras';
@@ -2104,6 +2108,10 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         }
 
         const canCompetenciaPdf = Boolean(effectivePerms.precios_competencia ?? (effectivePerms.ventas || effectivePerms.alertas));
+        if (pdfTopic === 'dossier' && (!effectivePerms.ventas || !effectivePerms.saldos_banco) && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ El Dossier Ejecutivo Semanal requiere permisos gerenciales de Ventas y Bancos.', keyboard);
+            return;
+        }
         if ((pdfTopic.includes('competencia') || pdfTopic.includes('precio') || pdfTopic.includes('dgehm')) && !canCompetenciaPdf) {
             await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de precios de competencia.', keyboard);
             return;

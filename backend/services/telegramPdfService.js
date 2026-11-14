@@ -1,5 +1,6 @@
 const solarEnergyService = require('./solarEnergyService');
 const sysSaasService = require('./sysSaasService');
+const { buildWeeklyExecutiveDossierPayload } = require('./operationalAuditService');
 const {
     moneyFmt,
     numFmt,
@@ -171,6 +172,17 @@ const buildAndSendTopicPdf = async (chatId, topicKey = 'ventas', options = {}) =
     const targetDate = options.targetDate || getDateStr(-1);
 
     sendChatAction(chatId, 'upload_document').catch(() => {});
+
+    if (cleanTopic.includes('dossier') || cleanTopic.includes('semanal')) {
+        const dossierPayload = await buildWeeklyExecutiveDossierPayload();
+        const pdfBuffer = await generateExecutiveReportPdf(dossierPayload);
+        const filename = dossierPayload.fileName || `Dossier_Ejecutivo_SIPE_${getDateStr(0)}.pdf`;
+        const caption =
+            `📄 <b>Dossier Ejecutivo Semanal • Grupo SIPE (Tamaño Carta)</b>\n` +
+            `📈 EBITDA Operativo (7d): <b>${moneyFmt(dossierPayload.meta?.utilidad_operativa_total || 0)}</b>\n` +
+            `🏦 Liquidez Consolidada: <b>${moneyFmt(dossierPayload.meta?.liquidez_bancos_usd || 0)}</b>`;
+        return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
+    }
 
     if (cleanTopic.includes('banco')) {
         const data = await getSaldosBancosData();

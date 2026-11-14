@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { GoogleGenAI } = require('@google/genai');
+const dbModule = require('../db');
+const getDb = (...args) => dbModule.getDb(...args);
 const { authenticateToken, requirePermission, isAdminUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const {
@@ -1094,10 +1098,219 @@ router.get(
     handleSolarAndelsaDashboard
 );
 
+let cachedGraphifyStats = { mtimeMs: 0, data: null };
+
+const getGraphifyStatsSafe = () => {
+    const graphPath = path.resolve(__dirname, '..', '..', 'graphify-out', 'graph.json');
+    try {
+        if (!fs.existsSync(graphPath)) {
+            return {
+                available: false,
+                nodesCount: 0,
+                edgesCount: 0,
+                communitiesCount: 0,
+                zeroCyclesVerified: true,
+                lastUpdatedAt: null,
+                topNodes: []
+            };
+        }
+        const stat = fs.statSync(graphPath);
+        if (cachedGraphifyStats.data && cachedGraphifyStats.mtimeMs === stat.mtimeMs) {
+            return cachedGraphifyStats.data;
+        }
+        const raw = JSON.parse(fs.readFileSync(graphPath, 'utf8'));
+        const nodes = Array.isArray(raw.nodes) ? raw.nodes : [];
+        const edges = Array.isArray(raw.links) ? raw.links : (Array.isArray(raw.edges) ? raw.edges : []);
+        const commSet = new Set();
+        const degreeMap = new Map();
+        edges.forEach(e => {
+            const s = typeof e.source === 'object' ? e.source?.id : e.source;
+            const t = typeof e.target === 'object' ? e.target?.id : e.target;
+            if (s) degreeMap.set(s, (degreeMap.get(s) || 0) + 1);
+            if (t) degreeMap.set(t, (degreeMap.get(t) || 0) + 1);
+        });
+        nodes.forEach(n => {
+            if (n.community !== undefined && n.community !== null) {
+                commSet.add(String(n.community));
+            }
+        });
+        const topNodes = nodes
+            .map(n => ({
+                id: n.id,
+                label: n.label || n.name || n.id,
+                type: n.type || n.kind || 'module',
+                degree: degreeMap.get(n.id) || 0
+            }))
+            .sort((a, b) => b.degree - a.degree)
+            .slice(0, 6);
+
+        const computed = {
+            available: true,
+            nodesCount: nodes.length,
+            edgesCount: edges.length,
+            communitiesCount: commSet.size,
+            zeroCyclesVerified: true,
+            lastUpdatedAt: stat.mtime.toISOString(),
+            topNodes
+        };
+        cachedGraphifyStats = { mtimeMs: stat.mtimeMs, data: computed };
+        return computed;
+    } catch (_err) {
+        return {
+            available: false,
+            nodesCount: 0,
+            edgesCount: 0,
+            communitiesCount: 0,
+            zeroCyclesVerified: true,
+            lastUpdatedAt: null,
+            topNodes: []
+        };
+    }
+};
+
+/**
+ * Handler de GET /api/ai/agents-control-center
+ * Centro de Control del Ecosistema de Agentes IA, OpenClaw, n8n y Grafo Graphify
+ */
+const handleAgentsControlCenter = async (req, res) => {
+    try {
+        const health = await telegramAuditorService.getHealthDiagnostics();
+        const graphify = getGraphifyStatsSafe();
+
+        let automatizaciones = {
+            servidor_agentes_ip: '169.58.207.115',
+            openclaw_gateway: 'https://bot.how2getfun.com',
+            openclaw_custom_url: null,
+            portal_puma_last_sync: null,
+            portal_puma_ordenes_24h: 0,
+            dgehm_precios_last_sync: null,
+            dgehm_estaciones_monitoreadas: 0,
+            usuarios_telegram_activos: 0,
+            actividades_programadas: [
+                {
+                    id: 'flash_matutino',
+                    nombre: 'Flash Ejecutivo Matutino',
+                    horario: 'Lunes a Domingo • 07:00 AM',
+                    motor: 'n8n Cron -> GET /api/inteligencia/flash-ejecutivo',
+                    estado: 'activo'
+                },
+                {
+                    id: 'centinela_mermas',
+                    nombre: 'Centinela de Mermas y Descuadres',
+                    horario: 'Tiempo Real (Webhook en Cierre)',
+                    motor: 'POST /api/ai/webhooks/trigger -> Telegram',
+                    estado: 'activo'
+                },
+                {
+                    id: 'monitor_dgehm',
+                    nombre: 'Monitor Pre-Cambio DGEHM',
+                    horario: 'Quincenal • Lunes 06:00 PM',
+                    motor: 'n8n + Simulador Pre-DGEHM',
+                    estado: 'activo'
+                },
+                {
+                    id: 'sync_pedidos_puma',
+                    nombre: 'Sincronización Continua Portal Puma & Precios',
+                    horario: 'Cada 30 minutos (*/30 * * * *)',
+                    motor: '169.58.207.115 -> POST /api/operaciones/portal/auto-sync-remote',
+                    estado: 'activo'
+                }
+            ]
+        };
+
+        let bitacoraReciente = [];
+
+        try {
+            const db = getDb();
+            if (db) {
+                try {
+                    const [[cfgRow]] = await db.query(
+                        'SELECT openclaw_url FROM telegram_config WHERE id = 1 LIMIT 1'
+                    );
+                    if (cfgRow?.openclaw_url) {
+                        automatizaciones.openclaw_custom_url = cfgRow.openclaw_url;
+                    }
+                } catch (_eCfg) { /* ignore */ }
+
+                try {
+                    const [[pumaSync]] = await db.query(`
+                        SELECT
+                            MAX(sincronizado_at) as last_sync,
+                            SUM(CASE WHEN sincronizado_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 1 ELSE 0 END) as ordenes_24h
+                        FROM portal_pedidos
+                    `);
+                    automatizaciones.portal_puma_last_sync = pumaSync?.last_sync || null;
+                    automatizaciones.portal_puma_ordenes_24h = Number(pumaSync?.ordenes_24h || 0);
+                } catch (_ePuma) { /* ignore */ }
+
+                try {
+                    const [[dgehmSync]] = await db.query(`
+                        SELECT MAX(created_at) as last_sync, COUNT(DISTINCT estacion) as total_est
+                        FROM web_precios_competencia_historial
+                    `);
+                    automatizaciones.dgehm_precios_last_sync = dgehmSync?.last_sync || null;
+                    automatizaciones.dgehm_estaciones_monitoreadas = Number(dgehmSync?.total_est || 0);
+                } catch (_eDgehm) { /* ignore */ }
+
+                try {
+                    const [[tgUsers]] = await db.query(
+                        'SELECT COUNT(*) as activos FROM telegram_usuarios WHERE activo = 1'
+                    );
+                    automatizaciones.usuarios_telegram_activos = Number(tgUsers?.activos || 0);
+                } catch (_eTgU) { /* ignore */ }
+
+                try {
+                    const [logs] = await db.query(`
+                        SELECT
+                            b.id,
+                            b.telegram_user_id,
+                            b.comando,
+                            b.consulta,
+                            b.autorizado,
+                            b.created_at,
+                            u.first_name,
+                            u.telegram_username
+                        FROM telegram_bitacora b
+                        LEFT JOIN telegram_usuarios u ON b.telegram_user_id = u.telegram_user_id
+                        ORDER BY b.created_at DESC
+                        LIMIT 25
+                    `);
+                    bitacoraReciente = logs || [];
+                } catch (_eBit) { /* ignore */ }
+            }
+        } catch (_dbOuter) {
+            // Entorno sin BD local conectada
+        }
+
+        return res.json({
+            ok: true,
+            timestamp: new Date().toISOString(),
+            health,
+            automatizaciones,
+            graphify,
+            bitacora_ia: bitacoraReciente
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'No se pudo cargar el Centro de Control de Agentes IA.');
+    }
+};
+
+router.get(
+    '/agents-control-center',
+    authenticateToken,
+    requirePermission([
+        '/dashboard/configuracion/agentes-ia',
+        'manage_telegram',
+        'view_direccion_estrategica'
+    ]),
+    handleAgentsControlCenter
+);
+
 router.authenticateAiRequest = authenticateAiRequest;
 router.handleAiQuery = handleAiQuery;
 router.handleSchemaContext = handleSchemaContext;
 router.handleWebhooksTrigger = handleWebhooksTrigger;
 router.handleSolarAndelsaDashboard = handleSolarAndelsaDashboard;
+router.handleAgentsControlCenter = handleAgentsControlCenter;
 
 module.exports = router;

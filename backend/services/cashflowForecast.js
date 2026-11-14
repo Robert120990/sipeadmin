@@ -1,4 +1,7 @@
-const { getDb, getAccountingDb, withRetry } = require('../db');
+const dbModule = require('../db');
+const getDb = (...args) => dbModule.getDb(...args);
+const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
+const withRetry = (...args) => dbModule.withRetry(...args);
 
 /**
  * Genera el flujo de caja proyectado a 30 o 60 días
@@ -99,11 +102,12 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         console.warn('Error al cargar purchase_quedans:', err.message);
     }
 
-    // 5. Mantenimientos programados en la ventana (SIPE local)
+    // 5. Mantenimientos programados en la ventana (SIPE local) y facturas pendientes de Puma (portal_pedidos)
     let mantenimientosProgramados = [];
+    let compromisosPumaPendientesUsd = 0;
     try {
         const [mRows] = await db.query(`
-            SELECT fecha_programada, nombre_activo, costo_estimado
+            SELECT fecha_programada, nombre AS nombre_activo, costo_estimado
             FROM finanzas_planes_mantenimiento
             WHERE fecha_programada BETWEEN ? AND ?
               AND estado IN ('programado', 'pendiente')
@@ -111,6 +115,32 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         mantenimientosProgramados = mRows;
     } catch (err) {
         console.warn('Error al cargar mantenimientos:', err.message);
+    }
+
+    try {
+        const [pumaRows] = await db.query(`
+            SELECT
+                COALESCE(factura_fecha_vencimiento, fecha_solicitada, DATE(fecha_pedido)) as fecha_vence,
+                CONCAT('Pedido Puma #', numero_orden) as descripcion,
+                CASE WHEN factura_saldo_pendiente > 0 THEN factura_saldo_pendiente ELSE (monto_total - COALESCE(monto_pagado, 0)) END as monto
+            FROM portal_pedidos
+            WHERE estado_pago IN ('PENDIENTE', 'PARCIAL')
+              AND UPPER(estado) IN ('FACTURADO', 'LIBERADO')
+              AND COALESCE(factura_fecha_vencimiento, fecha_solicitada, DATE(fecha_pedido)) BETWEEN ? AND ?
+        `, [todayStr, fechaFinHorizonteStr]);
+        (pumaRows || []).forEach(pr => {
+            const m = Number(pr.monto || 0);
+            if (m > 0) {
+                compromisosPumaPendientesUsd += m;
+                recordatoriosPendientes.push({
+                    fecha_vence: pr.fecha_vence,
+                    descripcion: pr.descripcion,
+                    monto: m
+                });
+            }
+        });
+    } catch (_errPuma) {
+        // Fallback limpio si portal_pedidos no tiene facturas pendientes
     }
 
     // 6. Nómina quincenal real calculada desde rh_planillas
@@ -307,6 +337,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
             fecha_saldo_minimo: fechaSaldoMinimo,
             total_ingresos_proyectados: Math.round(timeline.reduce((s, d) => s + d.ingresos.total, 0)),
             total_egresos_proyectados: Math.round(timeline.reduce((s, d) => s + d.egresos.total, 0)),
+            compromisos_puma_pendientes_usd: Math.round(compromisosPumaPendientesUsd),
             dias_con_deficit: brechasDeLiquidez.length,
             salud_flujo: brechasDeLiquidez.length === 0 ? 'SALUDABLE' : (saldoMinimoProyectado < 0 ? 'CRÍTICO' : 'PRECAUCIÓN')
         },

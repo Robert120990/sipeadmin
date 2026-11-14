@@ -481,7 +481,8 @@ const initDB = async () => {
                 ['view_support_tickets', 'Consultar tickets de soporte técnico'],
                 ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
-                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -939,14 +940,15 @@ const initDB = async () => {
                 ['view_support_tickets', 'Consultar tickets de soporte técnico'],
                 ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
-                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
             ];
             for (const [name, desc] of telegramPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
             }
 
             const [adminRoles] = await pool.query("SELECT id FROM roles WHERE name IN ('admin', 'Administrator', 'Administrador', 'Super Admin', 'Superadmin', 'Super Administrador') OR id = 1");
-            const [allTgPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('manage_telegram', '/dashboard/seguridad/telegram', '/dashboard/consultas/ia-asistente', '/dashboard/operaciones/energia-solar')");
+            const [allTgPerms] = await pool.query("SELECT id FROM permissions WHERE name IN ('manage_telegram', '/dashboard/seguridad/telegram', '/dashboard/consultas/ia-asistente', '/dashboard/operaciones/energia-solar', '/dashboard/configuracion/agentes-ia')");
             for (const r of adminRoles) {
                 for (const p of allTgPerms) {
                     await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, p.id]);
@@ -1338,7 +1340,8 @@ const initDB = async () => {
                 ['view_support_tickets', 'Consultar tickets de soporte técnico'],
                 ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
-                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
             ];
             for (const [name, desc] of ticketPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1429,7 +1432,8 @@ const initDB = async () => {
 
             const crecimientoPerms = [
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
-                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor']
+                ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
             ];
             for (const [name, desc] of crecimientoPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1485,6 +1489,7 @@ const initDB = async () => {
                 ['/dashboard/settings/database', 'Conexión Externa de Base de Datos'],
                 ['/dashboard/settings/accounting', 'Conexión de Contabilidad'],
                 ['/dashboard/settings/email', 'Configuración de Correo'],
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
                 ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
                 ['view_support_tickets', 'Consultar tickets de soporte técnico'],
                 ['manage_finanzas_pagos', 'Registrar y eliminar pagos de préstamos financieros'],
