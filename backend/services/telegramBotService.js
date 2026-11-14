@@ -1,5 +1,8 @@
 const axios = require('axios');
-const { getDb, getExternalDb, getAccountingDb } = require('../db');
+const dbModule = require('../db');
+const getDb = (...args) => dbModule.getDb(...args);
+const getExternalDb = (...args) => dbModule.getExternalDb(...args);
+const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
 const salesHourlyService = require('./salesHourlyService');
 const solarEnergyService = require('./solarEnergyService');
 const sysSaasService = require('./sysSaasService');
@@ -478,9 +481,10 @@ const getMainReplyKeyboard = () => {
     return {
         keyboard: [
             [{ text: '⛽ Ventas de Hoy' }, { text: '⛽ Ventas de Ayer' }],
+            [{ text: '📊 Precios Competencia' }, { text: '🚨 Alertas en Estaciones' }],
             [{ text: '🏦 Saldo en Banco' }, { text: '🧾 Saldo en Chequera' }],
             [{ text: '☀️ Paneles Solares' }, { text: '🏛️ Andelsa (sys)' }],
-            [{ text: '🚨 Alertas en Estaciones' }, { text: 'ℹ️ Mi Perfil' }]
+            [{ text: 'ℹ️ Mi Perfil' }, { text: '❓ Ayuda' }]
         ],
         resize_keyboard: true,
         is_persistent: true
@@ -1016,6 +1020,7 @@ const handleCallbackQuery = async (cq) => {
     if (
         data.startsWith('andelsa_') ||
         data.startsWith('solar_') ||
+        data.startsWith('comp_') ||
         data.startsWith('pdf_rep:') ||
         data.startsWith('alert_')
     ) {
@@ -1033,6 +1038,11 @@ const handleCallbackQuery = async (cq) => {
                         await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
                         return;
                     }
+                    const canCompetencia = Boolean(effPerms.precios_competencia ?? (effPerms.ventas || effPerms.alertas));
+                    if (data.startsWith('comp_') && !canCompetencia) {
+                        await answerCallbackQuery(cq.id, '⛔ No tienes permiso para consultar precios de competencia.');
+                        return;
+                    }
                     if (data.startsWith('pdf_rep:')) {
                         const reqTopic = data.replace('pdf_rep:', '').trim().toLowerCase();
                         if (reqTopic.includes('banco') && !effPerms.saldos_banco) {
@@ -1041,6 +1051,10 @@ const handleCallbackQuery = async (cq) => {
                         }
                         if (reqTopic.includes('cheque') && !effPerms.saldos_chequera) {
                             await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de chequera.');
+                            return;
+                        }
+                        if ((reqTopic.includes('competencia') || reqTopic.includes('precio') || reqTopic.includes('dgehm')) && !canCompetencia) {
+                            await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de precios de competencia.');
                             return;
                         }
                     }
@@ -1053,6 +1067,62 @@ const handleCallbackQuery = async (cq) => {
         } catch (authErr) {
             console.warn('[TelegramBot] Warning verificando permisos en callback:', authErr.message);
         }
+    }
+
+    // Callbacks interactivos para Precios de la Competencia (DGEHM)
+    if (data.startsWith('comp_')) {
+        if (data === 'comp_sync') {
+            await answerCallbackQuery(cq.id, '🔄 Sincronizando precios oficiales DGEHM...');
+            sendChatAction(chatId, 'typing').catch(() => {});
+            try {
+                const runSyncDgehm = require('../sync-dgehm-direct');
+                const syncResult = await runSyncDgehm();
+                queryMemoryCache.delete('competencia:precios');
+                const compData = await getPreciosCompetenciaData({ forceRefresh: true });
+                const syncBanner = syncResult?.success
+                    ? `✅ <b>Sincronización DGEHM completada</b> (<code>${syncResult.updatedCount || compData.totalMonitoreadas || 0}</code> estaciones actualizadas)\n\n`
+                    : `⚠️ <i>Sincronización finalizada con observación: ${escapeHtml(syncResult?.message || 'Usando último snapshot local')}</i>\n\n`;
+                if (fromId) {
+                    setUserConversationContext(fromId, { lastTopic: 'competencia', lastStationId: null });
+                }
+                await sendTelegramMessage(chatId, syncBanner + formatPreciosCompetenciaMessage(compData), getCompetenciaInlineMarkup());
+            } catch (syncErr) {
+                console.error('[TelegramBot] Error en comp_sync DGEHM:', syncErr.message);
+                await sendTelegramMessage(chatId, '❌ Error al sincronizar precios con DGEHM: ' + escapeHtml(syncErr.message));
+            }
+            return;
+        }
+
+        await answerCallbackQuery(cq.id, 'Consultando precios de competencia...');
+        try {
+            const compData = await getPreciosCompetenciaData();
+            if (data === 'comp_all') {
+                if (fromId) {
+                    setUserConversationContext(fromId, { lastTopic: 'competencia', lastStationId: null });
+                }
+                await sendTelegramMessage(chatId, formatPreciosCompetenciaMessage(compData), getCompetenciaInlineMarkup());
+            } else if (data === 'comp_cheaper') {
+                if (fromId) {
+                    setUserConversationContext(fromId, { lastTopic: 'competencia', lastStationId: null });
+                }
+                await sendTelegramMessage(chatId, formatPreciosCompetenciaMessage(compData, { onlyCheaper: true }), getCompetenciaInlineMarkup());
+            } else if (data.startsWith('comp_st:')) {
+                const stId = data.split(':')[1] || '002';
+                const stObj = findStationById(stId) || { id: stId, name: COMPETENCIA_STATION_NAMES[stId] || stId };
+                if (fromId) {
+                    setUserConversationContext(fromId, {
+                        lastTopic: 'competencia',
+                        lastStationId: stId,
+                        lastStationName: stObj.name
+                    });
+                }
+                await sendTelegramMessage(chatId, formatPreciosCompetenciaMessage(compData, { station: stObj }), getCompetenciaInlineMarkup(stId));
+            }
+        } catch (compErr) {
+            console.error('[TelegramBot] Error en callback de competencia:', compErr.message);
+            await sendTelegramMessage(chatId, '❌ Error al consultar precios de la competencia: ' + escapeHtml(compErr.message));
+        }
+        return;
     }
 
     // Callbacks interactivos para Andelsa / Nova SaaS (sys.sipesv.com)
@@ -1357,7 +1427,8 @@ const getUserEffectivePermissions = async (user) => {
             ventas: false,
             saldos_banco: false,
             saldos_chequera: false,
-            alertas: false
+            alertas: false,
+            precios_competencia: false
         };
     }
 
@@ -1369,7 +1440,8 @@ const getUserEffectivePermissions = async (user) => {
             ventas: Boolean(user.permiso_ventas),
             saldos_banco: Boolean(user.permiso_saldos_banco),
             saldos_chequera: Boolean(user.permiso_saldos_chequera),
-            alertas: Boolean(user.permiso_alertas)
+            alertas: Boolean(user.permiso_alertas),
+            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
         };
     }
 
@@ -1381,8 +1453,9 @@ const getUserEffectivePermissions = async (user) => {
             inactiveInSipe: false,
             ventas: Boolean(user.permiso_ventas),
             saldos_banco: Boolean(user.permiso_saldos_banco),
-            saldos_chequera: Boolean(user.permiso_saldos_chequera),
-            alertas: Boolean(user.permiso_alertas)
+            saldos_chequera: Boolean(user.permiso_chequera ?? user.permiso_saldos_chequera),
+            alertas: Boolean(user.permiso_alertas),
+            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
         };
     }
 
@@ -1406,7 +1479,8 @@ const getUserEffectivePermissions = async (user) => {
                 ventas: Boolean(user.permiso_ventas),
                 saldos_banco: Boolean(user.permiso_saldos_banco),
                 saldos_chequera: Boolean(user.permiso_saldos_chequera),
-                alertas: Boolean(user.permiso_alertas)
+                alertas: Boolean(user.permiso_alertas),
+                precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
             };
         }
 
@@ -1419,7 +1493,8 @@ const getUserEffectivePermissions = async (user) => {
                 ventas: false,
                 saldos_banco: false,
                 saldos_chequera: false,
-                alertas: false
+                alertas: false,
+                precios_competencia: false
             };
         }
 
@@ -1430,6 +1505,13 @@ const getUserEffectivePermissions = async (user) => {
         const hasBancos = isAdmin || permsList.includes('/dashboard/bancos/reportes/saldos-bancos') || permsList.includes('/dashboard/bancos/cuentas') || permsList.includes('/dashboard/bancos/movimientos');
         const hasChequera = isAdmin || permsList.includes('/dashboard/bancos/reportes/saldos-chequera') || permsList.includes('/dashboard/bancos/cheques');
         const hasAlertas = isAdmin || permsList.includes('/dashboard/consultas/estaciones/diferencias-combustible') || permsList.includes('/dashboard/consultas/estaciones/resumen-cierre');
+        const hasPreciosCompetencia = isAdmin ||
+            hasVentas ||
+            permsList.includes('manage_precios_competencia') ||
+            permsList.includes('/dashboard/consultas/estaciones/precios-competencia') ||
+            permsList.includes('/dashboard/consultas/estaciones/precios') ||
+            permsList.includes('/dashboard/estrategia/combustible') ||
+            permsList.includes('/dashboard/estrategia/torre-control');
 
         return {
             isLinked: true,
@@ -1439,7 +1521,8 @@ const getUserEffectivePermissions = async (user) => {
             ventas: hasVentas,
             saldos_banco: hasBancos,
             saldos_chequera: hasChequera,
-            alertas: hasAlertas
+            alertas: hasAlertas,
+            precios_competencia: hasPreciosCompetencia
         };
     } catch (err) {
         console.error('[TelegramBot] Error resolviendo permisos heredados:', err.message);
@@ -1451,7 +1534,8 @@ const getUserEffectivePermissions = async (user) => {
             ventas: Boolean(user.permiso_ventas),
             saldos_banco: Boolean(user.permiso_saldos_banco),
             saldos_chequera: Boolean(user.permiso_saldos_chequera),
-            alertas: Boolean(user.permiso_alertas)
+            alertas: Boolean(user.permiso_alertas),
+            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
         };
     }
 };
@@ -1647,6 +1731,619 @@ const getConsolidadoVentas = async (date) => {
     const ttlMs = (date === today) ? 30000 : 120000;
     setCachedQuery(key, data, ttlMs);
     return data;
+};
+
+/**
+ * Mapeo amigable de zonas/estaciones propias para monitoreo de competencia DGEHM
+ */
+const COMPETENCIA_STATION_NAMES = {
+    '002': 'Puma Miraflores',
+    '006': 'Shell Chalchuapa',
+    '008': 'Puma Costa del Sol',
+    '014': 'San Martín (La Loma)',
+    '015': 'Shell 14 Avenida',
+    '016': 'Shell Poliedro'
+};
+
+/**
+ * Catálogo de marcas competidoras monitoreadas en DGEHM
+ */
+const KNOWN_COMPETITOR_BRANDS = [
+    { key: 'Texaco', label: 'Texaco', icon: '⭐' },
+    { key: 'Uno', label: 'Uno', icon: '🔵' },
+    { key: 'DLC', label: 'DLC', icon: '🟠' },
+    { key: 'Puma', label: 'Puma', icon: '🟢' },
+    { key: 'Shell', label: 'Shell', icon: '🟡' }
+];
+
+/**
+ * Extraer la marca comercial desde el nombre de la estación DGEHM
+ */
+const extractCompetitorBrand = (stationName = '') => {
+    const upper = String(stationName || '').toUpperCase();
+    if (upper.includes('TEXACO')) return 'Texaco';
+    if (upper.includes('PUMA')) return 'Puma';
+    if (/\bUNO\b/.test(upper)) return 'Uno';
+    if (upper.includes('SHELL')) return 'Shell';
+    if (/\bDLC\b/.test(upper)) return 'DLC';
+    return 'Otros';
+};
+
+/**
+ * Formateador de precio unitario de combustible ($X.XX)
+ */
+const priceFmt = (val) => {
+    const num = Number(val || 0);
+    if (!Number.isFinite(num) || num <= 0) return '—';
+    return '$' + num.toFixed(2);
+};
+
+/**
+ * Calcular diferencial en centavos (Competidor - Propia)
+ */
+const calcPriceDiff = (compVal, ownVal) => {
+    const c = Number(compVal || 0);
+    const o = Number(ownVal || 0);
+    if (c <= 0 || o <= 0) return null;
+    const diff = Number((c - o).toFixed(2));
+    const sign = diff > 0 ? '+' : (diff < 0 ? '-' : '');
+    const formatted = diff === 0 ? '$0.00' : `${sign}$${Math.abs(diff).toFixed(2)}`;
+    const icon = diff < -0.001 ? '🔻' : (diff > 0.001 ? '🔺' : '🟰');
+    return { diff, formatted, icon };
+};
+
+/**
+ * Obtener precio efectivo de referencia (prioriza Autoservicio, fallback a Servicio Completo)
+ */
+const pickEffectivePrice = (row, fuelKey, serviceType = 'AS') => {
+    if (!row) return 0;
+    const asVal = Number(row[`${fuelKey}_a`] || 0);
+    const scVal = Number(row[`${fuelKey}_c`] || 0);
+    if (serviceType === 'SC') {
+        return scVal > 0 ? scVal : asVal;
+    }
+    return asVal > 0 ? asVal : scVal;
+};
+
+/**
+ * Consulta estructurada de Precios de la Competencia (DGEHM)
+ * Soporta inyección de `options.customRows` para pruebas unitarias deterministas
+ */
+const getPreciosCompetenciaData = async (options = {}) => {
+    const cacheKey = 'competencia:precios';
+    if (!options.forceRefresh && !Array.isArray(options.customRows)) {
+        const cached = getCachedQuery(cacheKey);
+        if (cached) return cached;
+    }
+
+    let rawRows = [];
+    let ultimaValidacion = options.ultimaValidacion || null;
+
+    if (Array.isArray(options.customRows)) {
+        rawRows = options.customRows;
+    } else {
+        const db = getDb();
+        if (db && typeof db.query === 'function') {
+            try {
+                const [joinedRows] = await db.query(`
+                    SELECT b.id_estacion, c.titulo, a.estacion, a.modificacion,
+                           a.super_c, a.regular_c, a.ion_c, a.diesel_c,
+                           a.super_a, a.regular_a, a.ion_a, a.diesel_a,
+                           IFNULL(b.es_propia, 0) as es_propia
+                    FROM web_precios_competencia a
+                    INNER JOIN web_estaciones_competencia b
+                        ON UPPER(TRIM(a.estacion)) = UPPER(TRIM(b.competencia))
+                    LEFT JOIN web_consolidado c
+                        ON b.id_estacion = c.id_empresa AND c.grupo = 'ESTACION'
+                    ORDER BY COALESCE(c.orden, 99), c.titulo, b.es_propia DESC, a.estacion
+                `);
+                rawRows = Array.isArray(joinedRows) ? joinedRows : [];
+
+                if (rawRows.length === 0) {
+                    const [fallbackRows] = await db.query(`
+                        SELECT 'GENERAL' as id_estacion, 'Red General DGEHM' as titulo,
+                               estacion, modificacion,
+                               super_c, regular_c, ion_c, diesel_c,
+                               super_a, regular_a, ion_a, diesel_a,
+                               0 as es_propia
+                        FROM web_precios_competencia
+                        ORDER BY estacion
+                        LIMIT 60
+                    `);
+                    rawRows = Array.isArray(fallbackRows) ? fallbackRows : [];
+                }
+            } catch (err) {
+                console.warn('[TelegramBot] Error consultando web_precios_competencia:', err.message);
+            }
+
+            try {
+                const [meta] = await db.query('SELECT MAX(created_at) as ultima_validacion FROM web_precios_competencia_historial');
+                if (Array.isArray(meta) && meta[0]?.ultima_validacion) {
+                    ultimaValidacion = meta[0].ultima_validacion;
+                }
+            } catch (_) {
+                // Historial opcional
+            }
+        }
+    }
+
+    // Normalizar filas
+    const normalizedRows = rawRows.map(r => {
+        let idEstacion = r.id_estacion ? String(r.id_estacion).trim() : null;
+        if (!idEstacion && r.titulo) {
+            const matchedKnown = KNOWN_STATIONS.find(s =>
+                s.id !== 'ANDELSA' && (
+                    normalizeText(r.titulo).includes(normalizeText(s.name)) ||
+                    s.keywords.some(kw => kw.length > 3 && normalizeText(r.titulo).includes(normalizeText(kw)))
+                )
+            );
+            idEstacion = matchedKnown ? matchedKnown.id : 'GENERAL';
+        }
+        idEstacion = idEstacion || 'GENERAL';
+
+        const zona = COMPETENCIA_STATION_NAMES[idEstacion] || r.titulo || 'Zona General';
+        const esPropia = (r.es_propia === 1 || r.es_propia === true || r.es_propia === '1') ? 1 : 0;
+
+        return {
+            id_estacion: idEstacion,
+            zona,
+            titulo: r.titulo || zona,
+            estacion: String(r.estacion || '').trim(),
+            marca: extractCompetitorBrand(r.estacion),
+            modificacion: r.modificacion ? String(r.modificacion).trim() : '',
+            es_propia: esPropia,
+            super_c: Number(r.super_c || 0),
+            regular_c: Number(r.regular_c || 0),
+            ion_c: Number(r.ion_c || 0),
+            diesel_c: Number(r.diesel_c || 0),
+            super_a: Number(r.super_a || 0),
+            regular_a: Number(r.regular_a || 0),
+            ion_a: Number(r.ion_a || 0),
+            diesel_a: Number(r.diesel_a || 0)
+        };
+    });
+
+    // Agrupar por zona / estación SIPE
+    const zonasMap = new Map();
+    for (const row of normalizedRows) {
+        const key = row.id_estacion || row.zona;
+        if (!zonasMap.has(key)) {
+            zonasMap.set(key, {
+                id_estacion: row.id_estacion,
+                zona: row.zona,
+                propia: null,
+                competidores: [],
+                todos: []
+            });
+        }
+        const group = zonasMap.get(key);
+        group.todos.push(row);
+        if (row.es_propia === 1 && !group.propia) {
+            group.propia = row;
+        } else if (row.es_propia !== 1) {
+            group.competidores.push(row);
+        }
+    }
+
+    const competidoresMasBaratos = [];
+    const zonas = [];
+
+    for (const group of zonasMap.values()) {
+        const own = group.propia;
+        let masBaratosCount = 0;
+
+        group.competidores = group.competidores.map(comp => {
+            const diffSuperA = own ? calcPriceDiff(pickEffectivePrice(comp, 'super', 'AS'), pickEffectivePrice(own, 'super', 'AS')) : null;
+            const diffRegularA = own ? calcPriceDiff(pickEffectivePrice(comp, 'regular', 'AS'), pickEffectivePrice(own, 'regular', 'AS')) : null;
+            const diffDieselA = own ? calcPriceDiff(pickEffectivePrice(comp, 'diesel', 'AS'), pickEffectivePrice(own, 'diesel', 'AS')) : null;
+            const diffSuperC = own ? calcPriceDiff(comp.super_c, own.super_c) : null;
+            const diffRegularC = own ? calcPriceDiff(comp.regular_c, own.regular_c) : null;
+            const diffDieselC = own ? calcPriceDiff(comp.diesel_c, own.diesel_c) : null;
+
+            const cheaperFuels = [];
+            if (diffSuperA && diffSuperA.diff < -0.001) cheaperFuels.push({ fuel: 'Súper', ...diffSuperA, compPrice: pickEffectivePrice(comp, 'super', 'AS'), ownPrice: pickEffectivePrice(own, 'super', 'AS') });
+            else if (diffSuperC && diffSuperC.diff < -0.001) cheaperFuels.push({ fuel: 'Súper (SC)', ...diffSuperC, compPrice: comp.super_c, ownPrice: own.super_c });
+
+            if (diffRegularA && diffRegularA.diff < -0.001) cheaperFuels.push({ fuel: 'Regular', ...diffRegularA, compPrice: pickEffectivePrice(comp, 'regular', 'AS'), ownPrice: pickEffectivePrice(own, 'regular', 'AS') });
+            else if (diffRegularC && diffRegularC.diff < -0.001) cheaperFuels.push({ fuel: 'Regular (SC)', ...diffRegularC, compPrice: comp.regular_c, ownPrice: own.regular_c });
+
+            if (diffDieselA && diffDieselA.diff < -0.001) cheaperFuels.push({ fuel: 'Diésel', ...diffDieselA, compPrice: pickEffectivePrice(comp, 'diesel', 'AS'), ownPrice: pickEffectivePrice(own, 'diesel', 'AS') });
+            else if (diffDieselC && diffDieselC.diff < -0.001) cheaperFuels.push({ fuel: 'Diésel (SC)', ...diffDieselC, compPrice: comp.diesel_c, ownPrice: own.diesel_c });
+
+            const isCheaper = cheaperFuels.length > 0;
+            const enriched = {
+                ...comp,
+                isCheaper,
+                cheaperFuels,
+                diffs: {
+                    super_a: diffSuperA,
+                    regular_a: diffRegularA,
+                    diesel_a: diffDieselA,
+                    super_c: diffSuperC,
+                    regular_c: diffRegularC,
+                    diesel_c: diffDieselC
+                }
+            };
+
+            if (isCheaper) {
+                masBaratosCount += 1;
+                competidoresMasBaratos.push({
+                    ...enriched,
+                    propiaEstacion: own ? own.estacion : group.zona
+                });
+            }
+
+            return enriched;
+        });
+
+        zonas.push({
+            id_estacion: group.id_estacion,
+            zona: group.zona,
+            propia: own,
+            competidores: group.competidores,
+            totalCompetidores: group.competidores.length,
+            masBaratosCount
+        });
+    }
+
+    // Calcular promedios y extremos de mercado
+    const calcAvg = (field, fallbackField = null) => {
+        const vals = normalizedRows
+            .map(r => Number(r[field] || 0) > 0 ? Number(r[field]) : (fallbackField ? Number(r[fallbackField] || 0) : 0))
+            .filter(v => v > 0);
+        if (vals.length === 0) return 0;
+        return Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2));
+    };
+
+    const calcExtremes = (fuelKey) => {
+        const candidates = normalizedRows
+            .map(r => ({
+                estacion: r.estacion,
+                zona: r.zona,
+                es_propia: r.es_propia,
+                marca: r.marca,
+                precio: pickEffectivePrice(r, fuelKey, 'AS')
+            }))
+            .filter(x => x.precio > 0);
+        if (candidates.length === 0) return { min: null, max: null };
+        candidates.sort((a, b) => a.precio - b.precio);
+        return {
+            min: candidates[0],
+            max: candidates[candidates.length - 1]
+        };
+    };
+
+    const modificacionReciente = normalizedRows.find(r => r.modificacion)?.modificacion || null;
+
+    const result = {
+        rows: normalizedRows,
+        zonas,
+        promedios: {
+            super_a: calcAvg('super_a', 'super_c'),
+            regular_a: calcAvg('regular_a', 'regular_c'),
+            diesel_a: calcAvg('diesel_a', 'diesel_c'),
+            super_c: calcAvg('super_c'),
+            regular_c: calcAvg('regular_c'),
+            diesel_c: calcAvg('diesel_c')
+        },
+        extremos: {
+            super: calcExtremes('super'),
+            regular: calcExtremes('regular'),
+            diesel: calcExtremes('diesel')
+        },
+        competidoresMasBaratos,
+        totalMonitoreadas: normalizedRows.length,
+        totalCompetidores: normalizedRows.filter(r => r.es_propia !== 1).length,
+        totalZonas: zonas.length,
+        ultimaValidacion,
+        modificacionReciente
+    };
+
+    if (!Array.isArray(options.customRows)) {
+        setCachedQuery(cacheKey, result, 30000);
+    }
+    return result;
+};
+
+/**
+ * Generar botones inline interactivos para Precios de la Competencia
+ */
+const getCompetenciaInlineMarkup = (selectedStationId = null) => {
+    const mark = (id, label) => (selectedStationId === id ? `✅ ${label}` : `⛽ ${label}`);
+    return {
+        inline_keyboard: [
+            [
+                { text: '⚠️ Más Baratos', callback_data: 'comp_cheaper' },
+                { text: '📊 Resumen Red', callback_data: 'comp_all' }
+            ],
+            [
+                { text: mark('002', 'Miraflores'), callback_data: 'comp_st:002' },
+                { text: mark('006', 'Chalchuapa'), callback_data: 'comp_st:006' },
+                { text: mark('008', 'Costa'), callback_data: 'comp_st:008' }
+            ],
+            [
+                { text: mark('014', 'La Loma'), callback_data: 'comp_st:014' },
+                { text: mark('015', '14 Ave'), callback_data: 'comp_st:015' },
+                { text: mark('016', 'Poliedro'), callback_data: 'comp_st:016' }
+            ],
+            [
+                { text: '🔄 Sincronizar DGEHM', callback_data: 'comp_sync' },
+                { text: '📄 Exportar PDF', callback_data: 'pdf_rep:competencia' }
+            ]
+        ]
+    };
+};
+
+/**
+ * Formatear mensaje ejecutivo de Precios de la Competencia para Telegram HTML
+ */
+const formatPreciosCompetenciaMessage = (data, options = {}) => {
+    const zonas = data?.zonas || [];
+    const rows = data?.rows || [];
+    const serviceType = options.serviceType === 'SC' ? 'SC' : 'AS';
+    const serviceLabel = serviceType === 'SC' ? 'Servicio Completo' : 'Autoservicio';
+
+    let syncStr = '';
+    if (data?.ultimaValidacion) {
+        try {
+            const dt = new Date(data.ultimaValidacion);
+            if (!isNaN(dt.getTime())) {
+                syncStr = dt.toLocaleString('es-SV', { dateStyle: 'short', timeStyle: 'short' });
+            } else {
+                syncStr = String(data.ultimaValidacion);
+            }
+        } catch (_) {
+            syncStr = String(data.ultimaValidacion);
+        }
+    } else if (data?.modificacionReciente) {
+        syncStr = data.modificacionReciente;
+    }
+
+    if (rows.length === 0) {
+        let emptyMsg = `📊 <b>PRECIOS DE LA COMPETENCIA (DGEHM)</b>\n`;
+        emptyMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        emptyMsg += `ℹ️ Actualmente no hay registros cargados en el monitoreo local de precios de competencia.\n\n`;
+        emptyMsg += `Pulsa el botón <b>🔄 Sincronizar DGEHM</b> abajo para descargar los precios oficiales vigentes desde la Dirección General de Energía, Hidrocarburos y Minas.`;
+        return emptyMsg;
+    }
+
+    // 1. Vista filtrada por Estación / Zona específica
+    if (options.station) {
+        const stObj = typeof options.station === 'object' ? options.station : (findStationById(options.station) || { id: String(options.station), name: COMPETENCIA_STATION_NAMES[options.station] || String(options.station) });
+        const zoneGroup = zonas.find(z =>
+            String(z.id_estacion) === String(stObj.id) ||
+            normalizeText(z.zona).includes(normalizeText(stObj.name || ''))
+        );
+
+        let msg = `⛽ <b>PRECIOS DE COMPETENCIA • ${escapeHtml((zoneGroup?.zona || stObj.name || 'ESTACIÓN').toUpperCase())}</b>\n`;
+        if (syncStr) msg += `🕒 <b>Actualización DGEHM:</b> ${escapeHtml(syncStr)}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+        if (!zoneGroup) {
+            msg += `⚠️ No hay estaciones competidoras asignadas actualmente a la zona de <b>${escapeHtml(stObj.name || String(options.station))}</b>.\n`;
+            msg += `\n<i>Puedes asignar estaciones competidoras en SIPE Admin &gt; Consultas &gt; Precios Competencia.</i>`;
+            return msg;
+        }
+
+        const own = zoneGroup.propia;
+        if (options.fuel) {
+            const fObj = typeof options.fuel === 'object' ? options.fuel : findFuelByKey(options.fuel);
+            if (fObj) {
+                const ownF = own ? pickEffectivePrice(own, fObj.key, serviceType) : 0;
+                const compVals = zoneGroup.competidores
+                    .map(c => ({ estacion: c.estacion, precio: pickEffectivePrice(c, fObj.key, serviceType) }))
+                    .filter(x => x.precio > 0)
+                    .sort((a, b) => a.precio - b.precio);
+                msg += `${fObj.icon} <b>Enfoque ${escapeHtml(fObj.label)} (${serviceLabel}):</b> `;
+                msg += ownF > 0 ? `SIPE <b>${priceFmt(ownF)}</b>` : 'SIPE —';
+                if (compVals.length > 0) {
+                    msg += ` | Menor comp.: <code>${priceFmt(compVals[0].precio)}</code> (${escapeHtml(compVals[0].estacion)})`;
+                }
+                msg += `\n\n`;
+            }
+        }
+        if (own) {
+            msg += `🏠 <b>Nuestra Estación: ${escapeHtml(own.estacion)}</b>\n`;
+            msg += `• <b>Autoservicio:</b> 🔴 ${priceFmt(own.super_a)} | 🟢 ${priceFmt(own.regular_a)} | 🛢️ ${priceFmt(own.diesel_a)}`;
+            if (own.ion_a > 0) msg += ` | ⚡ ${priceFmt(own.ion_a)}`;
+            msg += `\n`;
+            if (own.super_c > 0 || own.regular_c > 0 || own.diesel_c > 0) {
+                msg += `• <b>Serv. Completo:</b> 🔴 ${priceFmt(own.super_c)} | 🟢 ${priceFmt(own.regular_c)} | 🛢️ ${priceFmt(own.diesel_c)}\n`;
+            }
+            if (own.modificacion) msg += `• <i>Vigencia: ${escapeHtml(own.modificacion)}</i>\n`;
+            msg += `\n`;
+        }
+
+        if (zoneGroup.competidores.length === 0) {
+            msg += `<i>No hay competidores externos registrados en esta zona.</i>\n`;
+        } else {
+            msg += `🏁 <b>Competidores en Zona (${zoneGroup.competidores.length}):</b>\n`;
+            zoneGroup.competidores.forEach((c, idx) => {
+                const sPrice = pickEffectivePrice(c, 'super', serviceType);
+                const rPrice = pickEffectivePrice(c, 'regular', serviceType);
+                const dPrice = pickEffectivePrice(c, 'diesel', serviceType);
+                const dS = serviceType === 'SC' ? c.diffs?.super_c : c.diffs?.super_a;
+                const dR = serviceType === 'SC' ? c.diffs?.regular_c : c.diffs?.regular_a;
+                const dD = serviceType === 'SC' ? c.diffs?.diesel_c : c.diffs?.diesel_a;
+
+                const alertTag = c.isCheaper ? ' ⚠️ <i>(Más bajo)</i>' : '';
+                msg += `${idx + 1}. <b>${escapeHtml(c.estacion)}</b>${alertTag}\n`;
+                msg += `   └ 🔴 ${priceFmt(sPrice)}${dS && dS.diff !== 0 ? ` (${dS.icon}${dS.formatted})` : ''} | `;
+                msg += `🟢 ${priceFmt(rPrice)}${dR && dR.diff !== 0 ? ` (${dR.icon}${dR.formatted})` : ''} | `;
+                msg += `🛢️ ${priceFmt(dPrice)}${dD && dD.diff !== 0 ? ` (${dD.icon}${dD.formatted})` : ''}\n`;
+            });
+        }
+
+        msg += `\n<i>🔴 Súper | 🟢 Regular | 🛢️ Diésel (${serviceLabel}) • 🔻 Menor vs SIPE | 🔺 Mayor vs SIPE</i>`;
+        return msg;
+    }
+
+    // 2. Vista de alertas: únicamente competidores más baratos que nuestras estaciones
+    if (options.onlyCheaper && !options.fuel && !options.brand) {
+        const cheaper = data?.competidoresMasBaratos || [];
+        let msg = `⚠️ <b>COMPETIDORES CON PRECIO MENOR A SIPE</b>\n`;
+        if (syncStr) msg += `🕒 <b>Actualización DGEHM:</b> ${escapeHtml(syncStr)}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+        if (cheaper.length === 0) {
+            msg += `✅ <b>Excelente posición competitiva</b>\n`;
+            msg += `Ninguna de las <b>${data.totalCompetidores || 0}</b> estaciones competidoras monitoreadas presenta precios inferiores a nuestras estaciones en su respectiva zona.\n\n`;
+            msg += `📈 <b>Promedio Red (${serviceLabel}):</b>\n`;
+            msg += `• 🔴 Súper: <code>${priceFmt(data.promedios?.super_a)}</code> | 🟢 Regular: <code>${priceFmt(data.promedios?.regular_a)}</code> | 🛢️ Diésel: <code>${priceFmt(data.promedios?.diesel_a)}</code>\n`;
+            return msg;
+        }
+
+        msg += `Se detectaron <b>${cheaper.length}</b> competidor(es) por debajo de nuestro precio de referencia:\n\n`;
+        cheaper.slice(0, 18).forEach((c, idx) => {
+            const diffsText = (c.cheaperFuels || [])
+                .map(cf => `<b>${cf.fuel}:</b> ${priceFmt(cf.compPrice)} vs ${priceFmt(cf.ownPrice)} (<code>${cf.formatted}</code>)`)
+                .join(' • ');
+            msg += `${idx + 1}. 🔻 <b>${escapeHtml(c.estacion)}</b> <i>[${escapeHtml(c.zona)}]</i>\n`;
+            msg += `   └ ${diffsText}\n`;
+        });
+        if (cheaper.length > 18) {
+            msg += `\n<i>... y ${cheaper.length - 18} competidor(es) adicional(es). Exporta el PDF para ver el listado completo.</i>\n`;
+        }
+        msg += `\n<i>Fuente: Monitoreo DGEHM • SIPE Admin</i>`;
+        return msg;
+    }
+
+    // 3. Vista filtrada por Marca Competidora (ej. Texaco, Uno, DLC)
+    if (options.brand) {
+        const brandKey = typeof options.brand === 'object' ? options.brand.key : String(options.brand);
+        const brandMatches = [];
+        zonas.forEach(z => {
+            z.competidores.forEach(c => {
+                if (c.marca.toLowerCase() === brandKey.toLowerCase() || normalizeText(c.estacion).includes(normalizeText(brandKey))) {
+                    brandMatches.push({ ...c, zona: z.zona });
+                }
+            });
+            if (z.propia && (z.propia.marca.toLowerCase() === brandKey.toLowerCase())) {
+                brandMatches.push({ ...z.propia, zona: z.zona });
+            }
+        });
+
+        let msg = `🏷️ <b>PRECIOS DE COMPETENCIA • MARCA ${escapeHtml(brandKey.toUpperCase())}</b>\n`;
+        if (syncStr) msg += `🕒 <b>Actualización DGEHM:</b> ${escapeHtml(syncStr)}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+        if (brandMatches.length === 0) {
+            msg += `ℹ️ No se encontraron estaciones monitoreadas de la marca <b>${escapeHtml(brandKey)}</b> en el catálogo actual.\n`;
+            return msg;
+        }
+
+        brandMatches.slice(0, 16).forEach((item, idx) => {
+            const tag = item.es_propia === 1 ? '🏠 <i>(Propia)</i>' : (item.isCheaper ? '🔻 <i>(Más bajo)</i>' : '🏁');
+            msg += `${idx + 1}. ${tag} <b>${escapeHtml(item.estacion)}</b> <i>[${escapeHtml(item.zona)}]</i>\n`;
+            msg += `   └ 🔴 ${priceFmt(pickEffectivePrice(item, 'super', serviceType))} | 🟢 ${priceFmt(pickEffectivePrice(item, 'regular', serviceType))} | 🛢️ ${priceFmt(pickEffectivePrice(item, 'diesel', serviceType))}\n`;
+        });
+        msg += `\n<i>Precios en modalidad ${serviceLabel} • Fuente DGEHM</i>`;
+        return msg;
+    }
+
+    // 4. Vista filtrada por Combustible específico (ej. "¿Quién tiene más barato el diésel?")
+    if (options.fuel) {
+        const fuelObj = typeof options.fuel === 'object' ? options.fuel : (findFuelByKey(options.fuel) || { key: 'diesel', label: 'Diésel', icon: '🛢️' });
+        const fKey = fuelObj.key;
+
+        const entries = [];
+        const seen = new Set();
+        zonas.forEach(z => {
+            const allInZone = [...(z.propia ? [z.propia] : []), ...z.competidores];
+            allInZone.forEach(item => {
+                const dedupKey = `${item.id_estacion}:${item.estacion}`;
+                if (seen.has(dedupKey)) return;
+                seen.add(dedupKey);
+                const val = pickEffectivePrice(item, fKey, serviceType);
+                if (val > 0) {
+                    const diffObj = item.es_propia === 1 ? null : (
+                        serviceType === 'SC' ? item.diffs?.[`${fKey}_c`] : item.diffs?.[`${fKey}_a`]
+                    );
+                    entries.push({
+                        estacion: item.estacion,
+                        zona: z.zona,
+                        es_propia: item.es_propia,
+                        precio: val,
+                        diffObj
+                    });
+                }
+            });
+        });
+
+        entries.sort((a, b) => a.precio - b.precio || b.es_propia - a.es_propia);
+
+        let msg = `${fuelObj.icon} <b>COMPARATIVO DE PRECIOS • ${escapeHtml(fuelObj.label.toUpperCase())}</b>\n`;
+        if (syncStr) msg += `🕒 <b>Actualización DGEHM:</b> ${escapeHtml(syncStr)}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+        if (entries.length === 0) {
+            msg += `\nℹ️ No hay precios registrados para <b>${escapeHtml(fuelObj.label)}</b> en este momento.`;
+            return msg;
+        }
+
+        const minEntry = entries[0];
+        const maxEntry = entries[entries.length - 1];
+        const avgVal = Number((entries.reduce((s, e) => s + e.precio, 0) / entries.length).toFixed(2));
+
+        msg += `• 🥇 <b>Precio Más Bajo:</b> <b>${priceFmt(minEntry.precio)}</b> — ${escapeHtml(minEntry.estacion)} <i>(${escapeHtml(minEntry.zona)})</i>\n`;
+        msg += `• 📈 <b>Promedio Monitoreado:</b> <code>${priceFmt(avgVal)}</code>\n`;
+        msg += `• 🔺 <b>Precio Más Alto:</b> <code>${priceFmt(maxEntry.precio)}</code> — ${escapeHtml(maxEntry.estacion)}\n\n`;
+
+        msg += `📋 <b>Ranking del Más Económico al Más Alto (${serviceLabel}):</b>\n`;
+        entries.slice(0, 15).forEach((e, idx) => {
+            const badge = e.es_propia === 1 ? '🏠' : (e.diffObj && e.diffObj.diff < -0.001 ? '🔻' : '🏁');
+            const diffTxt = e.diffObj && e.diffObj.diff !== 0 ? ` (${e.diffObj.formatted} vs SIPE)` : (e.es_propia === 1 ? ' <b>[SIPE]</b>' : '');
+            msg += `${idx + 1}. ${badge} <b>${priceFmt(e.precio)}</b> — ${escapeHtml(e.estacion)} <i>[${escapeHtml(e.zona)}]</i>${diffTxt}\n`;
+        });
+        if (entries.length > 15) {
+            msg += `<i>... y ${entries.length - 15} estaciones más en monitoreo.</i>\n`;
+        }
+        msg += `\n<i>Pulsa una estación abajo para ver su comparativo zonal completo.</i>`;
+        return msg;
+    }
+
+    // 5. Resumen Ejecutivo Consolidado de Toda la Red (Por Defecto)
+    let msg = `📊 <b>PRECIOS DE LA COMPETENCIA (DGEHM)</b>\n`;
+    if (syncStr) msg += `🕒 <b>Última actualización:</b> ${escapeHtml(syncStr)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    msg += `📈 <b>Promedio Mercado (${serviceLabel}):</b>\n`;
+    msg += `• 🔴 <b>Súper:</b> <code>${priceFmt(data.promedios?.super_a)}</code> | 🟢 <b>Regular:</b> <code>${priceFmt(data.promedios?.regular_a)}</code> | 🛢️ <b>Diésel:</b> <code>${priceFmt(data.promedios?.diesel_a)}</code>\n`;
+
+    const cheaperCount = (data.competidoresMasBaratos || []).length;
+    if (cheaperCount > 0) {
+        msg += `⚠️ <b>Alerta Competitiva:</b> <b>${cheaperCount}</b> competidor(es) tienen algún combustible por debajo de nuestra estación.\n\n`;
+    } else {
+        msg += `✅ <b>Posición Competitiva:</b> Ningún competidor monitoreado está por debajo de nuestras estaciones.\n\n`;
+    }
+
+    zonas.forEach(z => {
+        const own = z.propia;
+        msg += `⛽ <b>${escapeHtml(z.zona)}</b>`;
+        if (z.masBaratosCount > 0) {
+            msg += ` <i>(⚠️ ${z.masBaratosCount} más bajo${z.masBaratosCount > 1 ? 's' : ''})</i>`;
+        }
+        msg += `\n`;
+
+        if (own) {
+            msg += `  🏠 <b>Propia:</b> 🔴 ${priceFmt(pickEffectivePrice(own, 'super', serviceType))} | 🟢 ${priceFmt(pickEffectivePrice(own, 'regular', serviceType))} | 🛢️ ${priceFmt(pickEffectivePrice(own, 'diesel', serviceType))}\n`;
+        }
+
+        const sortedComp = [...z.competidores].sort((a, b) => Number(b.isCheaper) - Number(a.isCheaper));
+        const previewComp = sortedComp.slice(0, 3);
+        previewComp.forEach(c => {
+            const icon = c.isCheaper ? '🔻' : '🏁';
+            const shortName = c.estacion.length > 26 ? c.estacion.slice(0, 26) + '…' : c.estacion;
+            msg += `  ${icon} ${escapeHtml(shortName)}: 🔴 ${priceFmt(pickEffectivePrice(c, 'super', serviceType))} | 🟢 ${priceFmt(pickEffectivePrice(c, 'regular', serviceType))} | 🛢️ ${priceFmt(pickEffectivePrice(c, 'diesel', serviceType))}\n`;
+        });
+        if (z.competidores.length > 3) {
+            msg += `  <i>└ +${z.competidores.length - 3} competidor(es) más en esta zona</i>\n`;
+        }
+        msg += `\n`;
+    });
+
+    msg += `<i>Selecciona una estación abajo para ver el detalle completo o exportar en PDF Carta.</i>`;
+    return msg;
 };
 
 /**
@@ -1879,6 +2576,7 @@ const formatProfileMessage = (user, effectivePerms = null) => {
 
     msg += `🔑 <b>PERMISOS DE CONSULTA ACTIVOS:</b>\n`;
     msg += `${perms.ventas ? '✅' : '❌'} <b>Ventas de Estaciones</b>\n`;
+    msg += `${(perms.precios_competencia ?? perms.ventas) ? '✅' : '❌'} <b>Precios de Competencia</b>\n`;
     msg += `${perms.saldos_banco ? '✅' : '❌'} <b>Saldo en Bancos</b>\n`;
     msg += `${perms.saldos_chequera ? '✅' : '❌'} <b>Saldo en Chequera</b>\n`;
     msg += `${perms.alertas ? '✅' : '❌'} <b>Alertas en Estaciones</b>\n\n`;
@@ -1935,6 +2633,14 @@ const KNOWN_STATIONS = [
         name: 'Shell 14 Avenida',
         keywords: ['14 avenida', '14 ave', 'catorce avenida', 'shell 14', '015'],
         tiendaKey: '14'
+    },
+    {
+        id: '016',
+        branch_id: 12,
+        saas_branch_id: 12,
+        name: 'Shell Poliedro',
+        keywords: ['poliedro', 'shell poliedro', '016'],
+        tiendaKey: 'poliedro'
     }
 ];
 
@@ -2099,24 +2805,17 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         }
     }
 
-    // 5. Detección de rankings o comparativas
-    const isRanking = /\b(cual|quien|que estacion|estacion que|estaciones que)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
-                      /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized);
-
-    // 6. Detección de tiendas de conveniencia
+    // 5. Detección de tiendas de conveniencia
     const isTiendas = /\b(tienda|tiendas|conveniencia|cortes|corte|e-market|super 7|pedregal)\b/.test(normalized);
 
-    // 7. Detección de auditoría / descuadres
-    const isAlertas = /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
-
-    // 8. Detección de consultas de energía solar / batería
+    // 6. Detección de consultas de energía solar / batería
     const isSolar = /\b(solar|solares|panel|paneles|fotovoltaic[oa]s?|bateria|baterias|inversor|autonomia|kwh|kwp|ahorro solar|energia solar)\b/i.test(normalized);
 
-    // 9. Detección de consultas de horas pico / horario de ventas
+    // 7. Detección de consultas de horas pico / horario de ventas
     const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
                          (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized));
 
-    // 10. Detección de consultas administrativas y financieras de Andelsa / Nova SaaS (sys.sipesv.com)
+    // 8. Detección de consultas administrativas y financieras de Andelsa / Nova SaaS (sys.sipesv.com)
     const isAndelsaMention = /\b(andelsa|planta andelsa|empresa andelsa)\b/i.test(normalized) ||
                              (matchedStation && matchedStation.id === 'ANDELSA');
     const isSysSaasMention = /\b(sys\.sipesv|sistema saas|nova saas|saas)\b/i.test(normalized);
@@ -2132,13 +2831,74 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         /\b(andelsa)\b/i.test(normalized)
     );
 
+    // 9. Detección de Precios de la Competencia (DGEHM) y Marcas Competidoras
+    let matchedCompetitorBrand = null;
+    if (/\b(texaco)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Texaco';
+    } else if (/\b(dlc)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'DLC';
+    } else if (/\b(gasolineras?\s+uno|estacion\s+uno|marca\s+uno|precios?\s+(?:de\s+)?uno|competencia\s+uno|terra\s+uno)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Uno';
+    } else if (!matchedStation && /\b(marca\s+puma|competidores?\s+puma|gasolineras?\s+puma)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Puma';
+    } else if (!matchedStation && /\b(marca\s+shell|competidores?\s+shell|gasolineras?\s+shell)\b/i.test(normalized)) {
+        matchedCompetitorBrand = 'Shell';
+    }
+
+    const hasExplicitCompetenciaWord = /\b(competencia|competidores|competidor|dgehm|precios?\s+competencia|precios?\s+de\s+(?:la\s+)?competencia|precios?\s+del?\s+mercado|comparativo\s+de\s+precios|comparar\s+precios|monitoreo\s+de\s+precios)\b/i.test(normalized);
+    const hasAuditCashWords = /\b(descuadre|descuadres|merma|mermas|faltante|sobrante|cuadrado|cierre|cierres)\b/i.test(normalized);
+    const hasFuelPriceIntent = !isAndelsaRelated && !isSolar && !matchedBank && !hasAuditCashWords && (
+        /\b(precios?|tarifas?|a\s+como\s+esta|a\s+como\s+tienen|cuanto\s+cuesta|cuanto\s+vale)\b/i.test(normalized) ||
+        /\b(mas\s+barat[oa]s?|mas\s+car[oa]s?|menor\s+precio|mayor\s+precio|mejor\s+precio|precios?\s+bajos?)\b/i.test(normalized)
+    );
+    const hasCompetitorBrandIntent = !isAndelsaRelated && !matchedBank && Boolean(matchedCompetitorBrand) &&
+        !/\b(bancos?|chequera|cheques?|saldo)\b/i.test(normalized);
+
+    let isCompetencia = hasExplicitCompetenciaWord || hasFuelPriceIntent || hasCompetitorBrandIntent;
+    const onlyCheaper = /\b(mas\s+barat[oa]s?|menor\s+precio|precios?\s+mas\s+bajos?|abajo\s+de\s+nosotros|debajo\s+de\s+nosotros|mejor\s+precio|solo\s+barat[oa]s?)\b/i.test(normalized);
+    const competenciaServiceType = /\b(servicio\s+completo|completo|full\s+service)\b/i.test(normalized)
+        ? 'SC'
+        : (/\b(autoservicio|auto\s+servicio)\b/i.test(normalized) ? 'AS' : 'ALL');
+
+    // 10. Detección de auditoría / descuadres (excluyendo consultas de diferencia de precios de competencia)
+    const isAlertas = !isCompetencia && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
+
+    // 11. Detección de rankings o comparativas de ventas (excluyendo comparativas de precios)
+    const isRanking = !isCompetencia && (
+        /\b(cual|quien|que estacion|estacion que|estaciones que)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
+        /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized)
+    );
+
     // RESOLUCIÓN DE CONTEXTO CONVERSACIONAL MULTI-TURNO
     if (userContext) {
+        const wantsGlobalScope = /\b(toda\s+la\s+red|todas\s+las\s+estaciones|en\s+general|global|red\s+completa|todas)\b/i.test(normalized);
+        const mentionsExplicitSalesWords = /\b(venta|ventas|vendio|vendieron|galon|galones|galonaje|cierre|cierres|chequera|bancos?|saldo)\b/i.test(normalized);
+
+        // 0. Seguimiento conversacional de Precios de Competencia ("¿Y en Chalchuapa?", "¿Y regular?", "¿Solo los más baratos?")
+        if (
+            userContext.lastTopic === 'competencia' &&
+            !isSolar &&
+            !isHourlyPeak &&
+            !isAndelsaRelated &&
+            !isAlertas &&
+            !isTiendas &&
+            !matchedBank &&
+            !mentionsExplicitSalesWords &&
+            (matchedStation || matchedFuel || matchedCompetitorBrand || onlyCheaper || /\b(servicio\s+completo|autoservicio|resumen|red|todos?)\b/i.test(normalized))
+        ) {
+            isCompetencia = true;
+            if (!matchedStation && userContext.lastStationId && !wantsGlobalScope && (matchedFuel || onlyCheaper || /\b(servicio\s+completo|autoservicio)\b/i.test(normalized))) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+        } else if (isCompetencia && !matchedStation && userContext.lastStationId && /\b(ahi|alli|esa\s+estacion|misma\s+estacion)\b/i.test(normalized)) {
+            matchedStation = findStationById(userContext.lastStationId);
+        }
+
         // a. Pregunta de seguimiento de fecha: "¿Y el día anterior?", "¿Y ayer?", "¿Y anteayer?"
         const isPrevDayFollowUp = /\b(y\s+el\s+dia\s+anterior|el\s+dia\s+anterior|dia\s+anterior|un\s+dia\s+antes|y\s+ayer|y\s+el\s+de\s+ayer|y\s+el\s+dia\s+de\s+ayer)\b/i.test(normalized) || (/^(y\s+)?ayer$/i.test(normalized));
         const isAnteayerFollowUp = /\b(y\s+anteayer|y\s+antier|anteayer|antier)\b/i.test(normalized);
 
-        if (userContext.lastDate && (isPrevDayFollowUp || isAnteayerFollowUp)) {
+        if (!isCompetencia && userContext.lastDate && (isPrevDayFollowUp || isAnteayerFollowUp)) {
             const offset = isAnteayerFollowUp ? -2 : -1;
             targetDate = shiftDate(userContext.lastDate, offset);
             hasExplicitDateOrPeriod = true;
@@ -2152,7 +2912,7 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         }
 
         // b. Pregunta de seguimiento de estación: "¿Y en Costa del Sol?", "¿Y Miraflores?"
-        if (matchedStation && !hasExplicitDateOrPeriod) {
+        if (!isCompetencia && matchedStation && !hasExplicitDateOrPeriod) {
             if (userContext.lastDate) {
                 targetDate = userContext.lastDate;
             }
@@ -2168,7 +2928,7 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         }
 
         // c. Pregunta de seguimiento de combustible: "¿Y de diésel cuánto fue?", "¿Y regular?", "¿Y super?"
-        if (matchedFuel && !matchedStation && userContext.lastStationId) {
+        if (!isCompetencia && matchedFuel && !matchedStation && userContext.lastStationId) {
             matchedStation = findStationById(userContext.lastStationId);
             if (!hasExplicitDateOrPeriod && userContext.lastDate) {
                 targetDate = userContext.lastDate;
@@ -2209,6 +2969,10 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         matchedStation,
         matchedFuel,
         matchedBank,
+        matchedCompetitorBrand,
+        isCompetencia,
+        onlyCheaper,
+        competenciaServiceType,
         isRanking,
         isTiendas,
         isAlertas,
@@ -2828,6 +3592,10 @@ const formatIntelligentGuidanceMessage = () => {
     msg += `   <i>"Venta total de regular"</i>\n`;
     msg += `• 🏆 <b>Rankings y comparativas:</b>\n`;
     msg += `   <i>"¿Cuál estación vendió más ayer?"</i>\n`;
+    msg += `• 📊 <b>Precios de la competencia (DGEHM):</b>\n`;
+    msg += `   <i>"Revisar los precios de la competencia"</i>\n`;
+    msg += `   <i>"¿Quién tiene más barato el diésel?"</i>\n`;
+    msg += `   <i>"Precios de competencia en Miraflores"</i>\n`;
     msg += `• 🛒 <b>Tiendas de conveniencia:</b>\n`;
     msg += `   <i>"¿Cuánto vendieron las tiendas?"</i>\n`;
     msg += `   <i>"Ventas de E-Market"</i>\n`;
@@ -3637,6 +4405,38 @@ const buildAndSendTopicPdf = async (chatId, topicKey = 'ventas', options = {}) =
         return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
     }
 
+    if (cleanTopic.includes('competencia') || cleanTopic.includes('precio') || cleanTopic.includes('dgehm')) {
+        const compData = await getPreciosCompetenciaData();
+        const rows = compData?.rows || [];
+        const cheaperCount = (compData?.competidoresMasBaratos || []).length;
+        const today = getDateStr(0);
+
+        const pdfBuffer = await generateExecutiveReportPdf({
+            title: 'REPORTE DE PRECIOS DE LA COMPETENCIA (DGEHM)',
+            subtitle: 'Monitoreo Comparativo de Precios por Zona • Modalidad Autoservicio y Servicio Completo',
+            dateStr: toDisplayDate(today),
+            kpis: [
+                { label: 'Estaciones Monitoreadas', value: String(compData?.totalMonitoreadas || 0) },
+                { label: 'Más Baratos vs SIPE', value: String(cheaperCount) },
+                { label: 'Prom. Súper / Regular', value: `${priceFmt(compData?.promedios?.super_a)} / ${priceFmt(compData?.promedios?.regular_a)}` },
+                { label: 'Promedio Diésel', value: priceFmt(compData?.promedios?.diesel_a) }
+            ],
+            columns: ['Zona SIPE', 'Estación / Competidor', 'Tipo', 'Súper AS', 'Regular AS', 'Diésel AS'],
+            rows: rows.map(r => [
+                r.zona || 'Zona',
+                r.estacion || 'Estación',
+                r.es_propia === 1 ? 'PROPIA (SIPE)' : 'COMPETIDOR',
+                priceFmt(pickEffectivePrice(r, 'super', 'AS')),
+                priceFmt(pickEffectivePrice(r, 'regular', 'AS')),
+                priceFmt(pickEffectivePrice(r, 'diesel', 'AS'))
+            ]),
+            summaryText: `Comparativo oficial en tamaño Carta (Letter) de precios de combustibles frente a la competencia monitoreada en DGEHM al ${toDisplayDate(today)}. Competidores con algún precio inferior al nuestro: ${cheaperCount}.`
+        });
+        const filename = `Reporte_Precios_Competencia_${today}.pdf`;
+        const caption = `📄 <b>Reporte Ejecutivo de Precios de Competencia (Tamaño Carta)</b>\n📊 Monitoreadas: <b>${compData?.totalMonitoreadas || 0}</b> | ⚠️ Más bajos: <b>${cheaperCount}</b>`;
+        return await sendTelegramDocument(chatId, pdfBuffer, filename, caption);
+    }
+
     // Por defecto: Reporte Consolidado de Ventas de Estaciones y Tiendas
     const data = await getConsolidadoVentas(targetDate);
     const estaciones = data?.estaciones || [];
@@ -3684,6 +4484,54 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         const fullText = (contextOptions.voicePrefix || '') + text;
         return sendTelegramResponseWithFeedback(cId, fullText, meta);
     };
+
+    // 0.0 Consulta de Precios de la Competencia (DGEHM)
+    if (parsed.isCompetencia) {
+        const canViewCompetencia = Boolean(
+            effectivePerms?.precios_competencia ?? (effectivePerms?.ventas || effectivePerms?.alertas)
+        );
+        if (!canViewCompetencia) {
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Permiso denegado (precios competencia)', 0);
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar precios de la competencia.', keyboard);
+            return true;
+        }
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const compData = await getPreciosCompetenciaData();
+            const targetStation = (parsed.matchedStation && parsed.matchedStation.id !== 'ANDELSA') ? parsed.matchedStation : null;
+            const msg = formatPreciosCompetenciaMessage(compData, {
+                station: targetStation,
+                fuel: parsed.matchedFuel,
+                brand: parsed.matchedCompetitorBrand,
+                onlyCheaper: parsed.onlyCheaper,
+                serviceType: parsed.competenciaServiceType
+            });
+            await logTelegramQuery(
+                user.telegram_user_id,
+                rawText,
+                `Precios Competencia${targetStation ? ` (${targetStation.name})` : ''}${parsed.matchedFuel ? ` [${parsed.matchedFuel.key}]` : ''}`,
+                1
+            );
+            setUserConversationContext(user?.telegram_user_id, {
+                lastTopic: 'competencia',
+                lastStationId: targetStation?.id || null,
+                lastStationName: targetStation?.name || null,
+                lastProduct: parsed.matchedFuel?.key || null,
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, {
+                user,
+                query: rawText,
+                reply_markup: getCompetenciaInlineMarkup(targetStation?.id || null)
+            });
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de precios de competencia:', err);
+            await sendTelegramMessage(chatId, '❌ Ocurrió un error al consultar los precios de la competencia: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
 
     // 0.1 Consulta de Energía Solar y Baterías (Paneles, Ahorro, Estado de Batería, Autonomía)
     if (parsed.isSolar) {
@@ -4310,12 +5158,16 @@ const formatHelpMessage = () => {
     msg += `⛽ <b>/ventas</b> - Ventas de ayer (o escribe <i>/ventas YYYY-MM-DD</i> para otra fecha)\n`;
     msg += `⛽ <b>Ventas de Hoy</b> - Consultar ventas del día actual\n`;
     msg += `⛽ <b>Ventas de Ayer</b> - Consultar ventas cerradas de ayer\n`;
+    msg += `📊 <b>/competencia</b> - Comparativo de precios de la competencia (DGEHM)\n`;
     msg += `🏦 <b>/bancos</b> - Saldos consolidados en cuentas de bancos\n`;
     msg += `🧾 <b>/chequera</b> - Saldos disponibles en cuentas de cheques\n`;
     msg += `🚨 <b>/alertas</b> - Descuadres de pista, cortes y gastos de tiendas\n`;
+    msg += `📄 <b>/pdf</b> - Exportar reporte ejecutivo tamaño Carta (ventas, competencia, bancos)\n`;
     msg += `ℹ️ <b>/perfil</b> o <b>/id</b> - Ver tu ID y permisos asignados\n`;
     msg += `❓ <b>/ayuda</b> - Ver esta guía de comandos\n\n`;
     msg += `💡 <b>¡También puedes hacerme preguntas específicas en texto libre!</b>\n`;
+    msg += `• <i>"Revisar los precios de la competencia"</i>\n`;
+    msg += `• <i>"¿Quién tiene más barato el diésel?"</i>\n`;
     msg += `• <i>"¿Cuánto diesel vendió Costa del Sol?"</i>\n`;
     msg += `• <i>"Ventas de Miraflores"</i>\n`;
     msg += `• <i>"¿Cuál estación vendió más ayer?"</i>\n`;
@@ -4795,6 +5647,8 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             pdfTopic = 'bancos';
         } else if (/\b(chequera|chequeras|cheques)\b/i.test(normForPdf)) {
             pdfTopic = 'chequeras';
+        } else if (/\b(competencia|competidores|precios?|dgehm)\b/i.test(normForPdf)) {
+            pdfTopic = 'competencia';
         } else if (/\b(solar|solares|paneles|bateria|baterias|fotovoltaic)\b/i.test(normForPdf)) {
             pdfTopic = 'solar';
         } else if (/\b(andelsa|saas|nova)\b/i.test(normForPdf)) {
@@ -4805,6 +5659,11 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             pdfTopic = userCtx.lastTopic;
         }
 
+        const canCompetenciaPdf = Boolean(effectivePerms.precios_competencia ?? (effectivePerms.ventas || effectivePerms.alertas));
+        if ((pdfTopic.includes('competencia') || pdfTopic.includes('precio') || pdfTopic.includes('dgehm')) && !canCompetenciaPdf) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de precios de competencia.', keyboard);
+            return;
+        }
         if (pdfTopic.includes('banco') && !effectivePerms.saldos_banco) {
             await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de bancos.', keyboard);
             return;
@@ -4850,6 +5709,39 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         }
     } catch (aiErr) {
         console.warn('[TelegramBot] Agente conversacional no disponible:', aiErr.message);
+    }
+
+    // 2.5 CONSULTA: PRECIOS DE LA COMPETENCIA
+    if (cleanLower.includes('competencia') || cleanLower === 'precios' || cleanLower === 'dgehm') {
+        const canCompetencia = Boolean(effectivePerms.precios_competencia ?? (effectivePerms.ventas || effectivePerms.alertas));
+        if (!canCompetencia) {
+            await logTelegramQuery(user.telegram_user_id, 'competencia', 'Permiso denegado', 0);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar precios de la competencia.', keyboard);
+            return;
+        }
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const compData = await getPreciosCompetenciaData();
+            await logTelegramQuery(user.telegram_user_id, 'competencia', `Monitoreadas: ${compData.totalMonitoreadas}`, 1);
+            setUserConversationContext(user.telegram_user_id, {
+                lastStationId: null,
+                lastStationName: null,
+                lastProduct: null,
+                lastTopic: 'competencia',
+                query: rawText
+            });
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatPreciosCompetenciaMessage(compData), {
+                user,
+                query: 'Precios de la Competencia',
+                responseSummary: `Monitoreadas: ${compData.totalMonitoreadas}`,
+                reply_markup: getCompetenciaInlineMarkup()
+            });
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de precios de competencia:', err);
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Ocurrió un error al consultar precios de la competencia: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
     }
 
     // 3. CONSULTA: SALDO EN BANCO
@@ -5707,6 +6599,15 @@ module.exports = {
     getConsolidadoVentas,
     getSaldosBancosData,
     getSaldosChequeraData,
+    getPreciosCompetenciaData,
+    formatPreciosCompetenciaMessage,
+    getCompetenciaInlineMarkup,
+    extractCompetitorBrand,
+    priceFmt,
+    calcPriceDiff,
+    KNOWN_COMPETITOR_BRANDS,
+    COMPETENCIA_STATION_NAMES,
+    getMainReplyKeyboard,
     createFeedbackEntry,
     getFeedbackInlineMarkup,
     sendTelegramResponseWithFeedback,

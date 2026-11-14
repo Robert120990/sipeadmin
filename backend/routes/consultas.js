@@ -5452,6 +5452,7 @@ router.generarAnalisisDescuadre = generarAnalisisDescuadre;
 router.getTurnosPorEmpresa = getTurnosPorEmpresa;
 router.mapCierreRowConExplicacion = mapCierreRowConExplicacion;
 router.getConsolidadoVentasData = getConsolidadoVentasData;
+router.getPreciosEstacionData = getPreciosEstacionData;
 
 module.exports = router;
 

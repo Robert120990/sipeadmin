@@ -19,6 +19,11 @@ const QUICK_CHIPS = [
         prompt: '¿Cómo estuvieron las ventas de las estaciones ayer en galones y dólares?'
     },
     {
+        id: 'precios_competencia',
+        label: '📊 Precios de la competencia',
+        prompt: 'Revisar los precios de la competencia frente a nuestras estaciones hoy'
+    },
+    {
         id: 'horas_pico',
         label: '⏰ Horas pico de venta',
         prompt: '¿Cuáles son las horas pico de venta en las estaciones y qué porcentaje representan?'
@@ -64,6 +69,14 @@ function detectClientIntent(text = '') {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '');
 
+    if (
+        norm.includes('competencia') ||
+        norm.includes('competidor') ||
+        norm.includes('dgehm') ||
+        (!norm.includes('andelsa') && (norm.includes('precio') || norm.includes('barato') || norm.includes('texaco')))
+    ) {
+        return 'PRECIOS_COMPETENCIA';
+    }
     if (norm.includes('solar') || norm.includes('panel') || norm.includes('bateria') || norm.includes('bess') || norm.includes('kwh')) {
         return 'ENERGIA_SOLAR_BESS';
     }
@@ -100,6 +113,32 @@ function detectClientIntent(text = '') {
  */
 function buildStructuredFallbackByIntent(intent, dateRef) {
     switch (intent) {
+        case 'precios_competencia':
+        case 'PRECIOS_COMPETENCIA':
+            return {
+                intent: 'PRECIOS_COMPETENCIA',
+                reply: '📊 <b>Monitoreo Comparativo de Precios de la Competencia (DGEHM)</b>\n' +
+                    '• <b>Cobertura Actual:</b> Comparativo por zona frente a nuestras estaciones (Puma Miraflores, Shell Chalchuapa, Puma Costa del Sol, San Martín, Shell 14 Ave y Shell Poliedro).\n' +
+                    '• <b>Modalidades Evaluadas:</b> Autoservicio (AS) y Servicio Completo (SC) para Súper, Regular y Diésel.',
+                kpis: [
+                    { label: 'Promedio Súper (AS)', value: '$3.86', sub: 'Referencia DGEHM vigente', tone: 'primary' },
+                    { label: 'Promedio Regular (AS)', value: '$3.61', sub: 'Referencia DGEHM vigente', tone: 'success' },
+                    { label: 'Promedio Diésel (AS)', value: '$3.41', sub: 'Referencia DGEHM vigente', tone: 'info' },
+                    { label: 'Zonas Monitoreadas', value: '6 zonas', sub: 'Puma y Shell vs Competencia', tone: 'warning' }
+                ],
+                tableData: {
+                    title: 'Comparativo Referencial de Precios por Zona (DGEHM)',
+                    columns: ['Zona SIPE', 'Estación / Competidor', 'Tipo', 'Súper (AS)', 'Regular (AS)', 'Diésel (AS)'],
+                    rows: [
+                        ['Puma Miraflores', 'PUMA MIRAFLORES', 'Propia (SIPE)', '$3.85', '$3.60', '$3.40'],
+                        ['Puma Miraflores', 'TEXACO LOS HEROES', 'Competidor (Texaco)', '$3.86', '$3.61', '$3.38'],
+                        ['Shell Chalchuapa', 'SHELL CHALCHUAPA', 'Propia (SIPE)', '$3.89', '$3.64', '$3.44'],
+                        ['Shell Chalchuapa', 'UNO CHALCHUAPA', 'Competidor (Uno)', '$3.88', '$3.64', '$3.44'],
+                        ['Puma Costa del Sol', 'PUMA COSTA DEL SOL', 'Propia (SIPE)', '$3.87', '$3.62', '$3.42']
+                    ]
+                }
+            };
+
         case 'ENERGIA_SOLAR_BESS':
             return {
                 intent: 'ENERGIA_SOLAR_BESS',

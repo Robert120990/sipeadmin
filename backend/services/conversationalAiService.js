@@ -152,9 +152,11 @@ const buildLiveProjectContext = async (targetDate = null) => {
             { id: '002', nombre: 'Puma Miraflores', alias: ['miraflores', 'puma miraflores', 'e-market miraflores'] },
             { id: '006', nombre: 'Shell Chalchuapa', alias: ['chalchuapa', 'shell chalchuapa', 'santa ana'] },
             { id: '014', nombre: 'Puma La Loma (San Martín)', alias: ['la loma', 'san martin', 'san martín', 'loma'] },
-            { id: '015', nombre: 'Shell 14 Avenida', alias: ['14 avenida', '14 ave', 'catorce avenida', 'shell 14'] }
+            { id: '015', nombre: 'Shell 14 Avenida', alias: ['14 avenida', '14 ave', 'catorce avenida', 'shell 14'] },
+            { id: '016', nombre: 'Shell Poliedro', alias: ['poliedro', 'shell poliedro'] }
         ],
         ventas_ayer: null,
+        precios_competencia: null,
         bancos: null,
         chequeras: null,
         tanques_autonomia: null,
@@ -281,6 +283,49 @@ const buildLiveProjectContext = async (targetDate = null) => {
         console.warn('[ConversationalAI] No se pudo cargar horas_pico:', e.message);
     }
 
+    // 7. Precios de la Competencia (DGEHM)
+    try {
+        const { getPreciosCompetenciaData } = require('./telegramBotService');
+        const compData = await getPreciosCompetenciaData();
+        if (compData && compData.totalMonitoreadas > 0) {
+            context.precios_competencia = {
+                ultima_validacion: compData.ultimaValidacion || compData.modificacionReciente,
+                total_monitoreadas: compData.totalMonitoreadas,
+                promedios_autoservicio: {
+                    super: compData.promedios?.super_a,
+                    regular: compData.promedios?.regular_a,
+                    diesel: compData.promedios?.diesel_a
+                },
+                competidores_mas_baratos: (compData.competidoresMasBaratos || []).slice(0, 15).map(c => ({
+                    zona: c.zona,
+                    competidor: c.estacion,
+                    marca: c.marca,
+                    diferencias: c.cheaperFuels
+                })),
+                zonas: (compData.zonas || []).map(z => ({
+                    id_estacion: z.id_estacion,
+                    zona: z.zona,
+                    propia: z.propia ? {
+                        estacion: z.propia.estacion,
+                        super_a: z.propia.super_a,
+                        regular_a: z.propia.regular_a,
+                        diesel_a: z.propia.diesel_a
+                    } : null,
+                    competidores: (z.competidores || []).map(c => ({
+                        estacion: c.estacion,
+                        marca: c.marca,
+                        super_a: c.super_a,
+                        regular_a: c.regular_a,
+                        diesel_a: c.diesel_a,
+                        mas_barato: c.isCheaper
+                    }))
+                }))
+            };
+        }
+    } catch (e) {
+        console.warn('[ConversationalAI] No se pudo cargar precios_competencia:', e.message);
+    }
+
     return context;
 };
 
@@ -301,6 +346,7 @@ const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms }) 
         // Aplicar restricciones de seguridad según los permisos efectivos del usuario
         if (effectivePerms) {
             if (!effectivePerms.ventas) delete liveContext.ventas_ayer;
+            if (!effectivePerms.precios_competencia && !effectivePerms.ventas && !effectivePerms.alertas) delete liveContext.precios_competencia;
             if (!effectivePerms.saldos_banco) delete liveContext.bancos;
             if (!effectivePerms.saldos_chequera) delete liveContext.chequeras;
             if (!effectivePerms.alertas) delete liveContext.alertas;
@@ -327,6 +373,7 @@ REGLAS DE DATOS:
 - Si te preguntan por un combustible específico (Diesel, Regular, Súper, Ion Diesel) o una estación (Costa del Sol, Miraflores, Chalchuapa, San Martín o 14 Ave), da el dato exacto con unidades (galones) e importe en dólares ($).
 - PANELES SOLARES Y BATERÍAS: En la red existen 2 ubicaciones con paneles solares: Puma Miraflores (45.0 kWp paneles + sistema de almacenamiento en batería BESS de 60.0 kWh con ~9.3 horas de autonomía para cargas críticas) y Puma Costa del Sol (35.0 kWp paneles on-grid sin baterías). Total instalado en la red: 80.0 kWp. Las demás 3 estaciones no poseen paneles solares ni baterías. Si preguntan por ahorro o estado, proporciona los kWh generados, ahorro en dólares y estado de carga de la batería (SoC %).
 - HORAS PICO DE VENTA: Identifica los momentos de mayor volumen del día (típicamente pico de tarde 17:00-19:00 hrs y mañana 07:00-09:00 hrs). Menciona la hora pico principal, monto de venta y porcentaje sobre el total del día.
+- PRECIOS DE LA COMPETENCIA (DGEHM): Usa \`precios_competencia\` para comparar nuestras estaciones frente a competidores cercanos por zona (Texaco, Uno, DLC, Puma, Shell), indicando el precio en dólares por galón ($X.XX) y los centavos de diferencia frente a SIPE.
 - RANGOS Y MESES: Si preguntan por ventas por rango de fechas o mes completo (ej. octubre), contextualiza con los datos del período.
 - Formatea en HTML para Telegram: usa <b>negrita</b> para destacar cifras y nombres, <code>código</code> para galonajes exactos y listas con viñetas limpias.
 - Usa emojis con criterio gerencial (⛽, 🛢️, 🟢, 🔴, ⚡, ☀️, 🔋, ⏰, 🏦, 🛒, 🚨, 💵, 🏆, 🥇).
