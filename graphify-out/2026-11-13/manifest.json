@@ -18,9 +18,9 @@
     "semantic_hash": "7beccc830c416d1a5d5a99d5fa6988b0"
   },
   "backend/db.js": {
-    "mtime": 1793284800.3908513,
-    "seen": 1793285787.6527047,
-    "ast_hash": "de7d43f5b851c7d5911bcc870edb071b",
+    "mtime": 1794618275.6445372,
+    "seen": 1794618755.2905447,
+    "ast_hash": "a28be02892574602a5438b33c6b2284d",
     "semantic_hash": ""
   },
   "backend/middleware/auth.js": {
@@ -66,9 +66,9 @@
     "semantic_hash": "cfa6cd6595f7f3e45450283a6825e5e9"
   },
   "backend/package.json": {
-    "mtime": 1792884304.3817036,
-    "seen": 1792884397.0716672,
-    "ast_hash": "673508769014ebdb3735e1eb37da9d66",
+    "mtime": 1794617134.54529,
+    "seen": 1794617441.5500395,
+    "ast_hash": "9ab40dd0c6fc7bc59e175af5ff13ee0e",
     "semantic_hash": ""
   },
   "backend/routes/ai.js": {
@@ -126,9 +126,9 @@
     "semantic_hash": ""
   },
   "backend/routes/consultas.js": {
-    "mtime": 1794613966.2355556,
-    "seen": 1794615241.559077,
-    "ast_hash": "6c01e483496b63e162f38a373cc93832",
+    "mtime": 1794618393.3126113,
+    "seen": 1794618755.2905447,
+    "ast_hash": "99155ab9957e4d8b66528959ea26be68",
     "semantic_hash": ""
   },
   "backend/routes/finanzas.js": {
@@ -216,9 +216,9 @@
     "semantic_hash": "95bc5f979ecea73b9feb01f8bf87ee87"
   },
   "backend/server.js": {
-    "mtime": 1793285244.800732,
-    "seen": 1793285787.6537268,
-    "ast_hash": "fc38e0c4bb471a53705e17c17fcc1863",
+    "mtime": 1794618291.4321005,
+    "seen": 1794618755.2905447,
+    "ast_hash": "d474e2a5c74e5eb314e33c75fa1446fd",
     "semantic_hash": ""
   },
   "backend/services/birthdayNotifier.js": {
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1794615195.8988214,
-    "seen": 1794615241.559077,
-    "ast_hash": "97da8202505a08faec36ebd94bc2736f",
+    "mtime": 1794618734.4167209,
+    "seen": 1794618755.2905447,
+    "ast_hash": "a8803338808cc13c8d98584fa64002a6",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1794602441.5175507,
-    "seen": 1794615241.559077,
-    "ast_hash": "7667cdfd2a3519476c80d4eeaca301ed",
+    "mtime": 1794617426.9674566,
+    "seen": 1794617441.5500395,
+    "ast_hash": "d927f760907a49a78578021b865efded",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -534,16 +534,16 @@
     "semantic_hash": "0247c08dcb575d8cf94859c79a8a3e3e"
   },
   "frontend/src/config/navigation.js": {
-    "mtime": 1793285578.9899096,
-    "seen": 1793285787.6537268,
-    "ast_hash": "bcdc8e16ad1636a465bc261deb6404f1",
+    "mtime": 1794617088.5449831,
+    "seen": 1794617441.5500395,
+    "ast_hash": "25992cef6e4e9dada3b7be8131641e5f",
     "semantic_hash": ""
   },
   "frontend/src/context/NotificationContext.jsx": {
-    "mtime": 1789949211.056549,
-    "seen": 1791822880.7085679,
-    "ast_hash": "66ee0697ecc7666dcf9cfb2ebf6ebf4a",
-    "semantic_hash": "66ee0697ecc7666dcf9cfb2ebf6ebf4a"
+    "mtime": 1794616991.3397255,
+    "seen": 1794617441.5500395,
+    "ast_hash": "fa83abca83d871dd49976728a93460c0",
+    "semantic_hash": ""
   },
   "frontend/src/data/dgehm_estaciones.json": {
     "mtime": 1788549681.1065214,
@@ -750,15 +750,15 @@
     "semantic_hash": "1088d63d992d35fd46867954e9977fe4"
   },
   "frontend/src/pages/Dashboard.jsx": {
-    "mtime": 1791817624.9889686,
-    "seen": 1791822880.7085679,
-    "ast_hash": "aa01878571f43d6fe2903747fc0609d7",
-    "semantic_hash": "aa01878571f43d6fe2903747fc0609d7"
+    "mtime": 1794617096.0860293,
+    "seen": 1794617441.5500395,
+    "ast_hash": "7ee99cfb7546269402f596d06ae46c7a",
+    "semantic_hash": ""
   },
   "frontend/src/pages/DashboardLayout.jsx": {
-    "mtime": 1793285583.4615936,
-    "seen": 1793285787.6537268,
-    "ast_hash": "2015347927c1b6d9d348ea2fa82cdd49",
+    "mtime": 1794616961.3244898,
+    "seen": 1794617441.5500395,
+    "ast_hash": "9552a7510fecf68a5e74d428bf317c31",
     "semantic_hash": ""
   },
   "frontend/src/pages/DiferenciasCombustible.jsx": {
@@ -846,10 +846,10 @@
     "semantic_hash": "63a5201c2066b110e657e613fb3b0b48"
   },
   "frontend/src/pages/Login.jsx": {
-    "mtime": 1789924529.4580872,
-    "seen": 1791822880.7085679,
-    "ast_hash": "d3a68917259557730bec128a2d7dee79",
-    "semantic_hash": "d3a68917259557730bec128a2d7dee79"
+    "mtime": 1794616959.2263808,
+    "seen": 1794617441.5500395,
+    "ast_hash": "c3195231c1b845f9f7c897641610b76d",
+    "semantic_hash": ""
   },
   "frontend/src/pages/Lubricantes.jsx": {
     "mtime": 1790453262.1643739,
@@ -876,10 +876,10 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/Permissions.jsx": {
-    "mtime": 1789949211.0629208,
-    "seen": 1791822880.7085679,
-    "ast_hash": "051b08ffa8bf35049ef37f1d8b5895ef",
-    "semantic_hash": "051b08ffa8bf35049ef37f1d8b5895ef"
+    "mtime": 1794617092.7188194,
+    "seen": 1794617441.5500395,
+    "ast_hash": "f57aa17c66b6d98728197cf4ea52f8a4",
+    "semantic_hash": ""
   },
   "frontend/src/pages/PlanillasRRHH.jsx": {
     "mtime": 1790867300.917842,
@@ -954,9 +954,9 @@
     "semantic_hash": ""
   },
   "frontend/src/services/socket.js": {
-    "mtime": 1792116311.9234085,
-    "seen": 1792116550.1589253,
-    "ast_hash": "9c3f68a20007ffb558c096ac8a150491",
+    "mtime": 1794616955.1963985,
+    "seen": 1794617441.5500395,
+    "ast_hash": "2e9922b0a2457260ce2e38cc5dd95522",
     "semantic_hash": ""
   },
   "frontend/src/utils/auth.js": {
@@ -1020,16 +1020,16 @@
     "semantic_hash": ""
   },
   "frontend/vite.config.js": {
-    "mtime": 1789949211.0664985,
-    "seen": 1791822880.7085679,
-    "ast_hash": "6a6ac5f38bb35c838601c656bd3b4826",
-    "semantic_hash": "6a6ac5f38bb35c838601c656bd3b4826"
+    "mtime": 1794616998.6616087,
+    "seen": 1794617441.563013,
+    "ast_hash": "9e23b07fc4770903b1269632b2a93670",
+    "semantic_hash": ""
   },
   "package.json": {
-    "mtime": 1789924527.2458754,
-    "seen": 1791822880.7085679,
-    "ast_hash": "3d3b1fb634efac8444dc30f010a48524",
-    "semantic_hash": "3d3b1fb634efac8444dc30f010a48524"
+    "mtime": 1794617323.5319781,
+    "seen": 1794617441.563013,
+    "ast_hash": "7f0e1848ef626faf56e88e8c7e603583",
+    "semantic_hash": ""
   },
   "vercel.json": {
     "mtime": 1792116631.4640648,
@@ -1068,9 +1068,9 @@
     "semantic_hash": ""
   },
   ".github/workflows/ci.yml": {
-    "mtime": 1791036939.93124,
-    "seen": 1791824268.1699405,
-    "ast_hash": "92946531e3dbd3e4d32b2c5d515f816d",
+    "mtime": 1794617325.7265658,
+    "seen": 1794617441.563013,
+    "ast_hash": "ebcc45a212c5819e84e2608f76d4d606",
     "semantic_hash": ""
   },
   ".github/workflows/npm-publish-github-packages.yml": {
@@ -1080,9 +1080,9 @@
     "semantic_hash": ""
   },
   "AGENTS.md": {
-    "mtime": 1791846465.688283,
-    "seen": 1791846527.0250647,
-    "ast_hash": "a91a61291229565d2911de4b107befd6",
+    "mtime": 1794617147.4317455,
+    "seen": 1794617441.563013,
+    "ast_hash": "c518e6797b38c72f25e9a609c9d477f9",
     "semantic_hash": ""
   },
   "PLAN_ESTRATEGICO_INTEGRACION_IA.md": {
@@ -1122,9 +1122,9 @@
     "semantic_hash": ""
   },
   "pnpm-workspace.yaml": {
-    "mtime": 1789924527.2468903,
-    "seen": 1791824268.1699405,
-    "ast_hash": "6eb38e48a1ab249033cc0362779eea6c",
+    "mtime": 1794617321.6227388,
+    "seen": 1794617441.563013,
+    "ast_hash": "fa4836832f4ad2fdb21d1f81a2db31be",
     "semantic_hash": ""
   },
   "frontend/public/favicon.svg": {
@@ -1170,9 +1170,9 @@
     "semantic_hash": ""
   },
   "backend/services/conversationalAiService.js": {
-    "mtime": 1794614674.1270063,
-    "seen": 1794615241.559077,
-    "ast_hash": "30f78fac551989fd5c869afd3d05398a",
+    "mtime": 1794618699.7405856,
+    "seen": 1794618755.2905447,
+    "ast_hash": "b3826eb12e3394e2353b2393d46a9385",
     "semantic_hash": ""
   },
   "backend/test/conversationalAi.test.js": {
@@ -1230,9 +1230,9 @@
     "semantic_hash": ""
   },
   "backend/services/telegramAuditorService.js": {
-    "mtime": 1792881971.9763727,
-    "seen": 1792882144.410899,
-    "ast_hash": "c5a57fc70ba084217e74f987475ca348",
+    "mtime": 1794618691.5859232,
+    "seen": 1794618755.2905447,
+    "ast_hash": "889dd891080aa17a2929fd3292b9a457",
     "semantic_hash": ""
   },
   "backend/test/telegramAuditor.test.js": {
@@ -1320,21 +1320,21 @@
     "semantic_hash": ""
   },
   "backend/routes/tickets.js": {
-    "mtime": 1792884243.5649686,
-    "seen": 1792884397.0716672,
-    "ast_hash": "53bfd7e3540a5a55076caeab6a5fcca5",
+    "mtime": 1794616685.9923801,
+    "seen": 1794617441.5500395,
+    "ast_hash": "bebc206d25a3875577219e9907e6ecef",
     "semantic_hash": ""
   },
   "backend/services/ticketService.js": {
-    "mtime": 1792884245.6637435,
-    "seen": 1792884397.0716672,
-    "ast_hash": "9a21b3687821ec7ab578be26cd6beb1f",
+    "mtime": 1794616752.963271,
+    "seen": 1794617441.5500395,
+    "ast_hash": "a8f33857772c47ffc539b240e9d1e37b",
     "semantic_hash": ""
   },
   "backend/test/supportTickets.test.js": {
-    "mtime": 1792465824.9021716,
-    "seen": 1792507912.4130576,
-    "ast_hash": "d6a2f058b5e8613eb1fbeae6ef8d17e1",
+    "mtime": 1794617263.2427711,
+    "seen": 1794617441.5500395,
+    "ast_hash": "1c7919e503c12cf6c47472574f8e37ff",
     "semantic_hash": ""
   },
   "frontend/src/components/CommandPalette.jsx": {
@@ -1404,9 +1404,9 @@
     "semantic_hash": ""
   },
   "frontend/src/context/TicketContext.jsx": {
-    "mtime": 1792452733.3520117,
-    "seen": 1792453416.2319262,
-    "ast_hash": "6acd2924ce4d8e730373563eb6f4617f",
+    "mtime": 1794616996.8776207,
+    "seen": 1794617441.5500395,
+    "ast_hash": "c52a99248023ea42f7bcc36d1a9a44df",
     "semantic_hash": ""
   },
   "frontend/src/pages/SupportTickets.jsx": {
@@ -1440,9 +1440,9 @@
     "semantic_hash": ""
   },
   "backend/services/businessGrowthAgyService.js": {
-    "mtime": 1793285716.8136451,
-    "seen": 1793285787.6537268,
-    "ast_hash": "2a2fb4f8506f6451131d45750bcc9c50",
+    "mtime": 1794616792.0996456,
+    "seen": 1794617441.5500395,
+    "ast_hash": "e345d9c9ae4bcf04ddfea480974f7b28",
     "semantic_hash": ""
   },
   "backend/test/finanzasCrecimiento.test.js": {
@@ -1461,6 +1461,72 @@
     "mtime": 1794614856.1612153,
     "seen": 1794615241.559077,
     "ast_hash": "f2fa69eaa6ae7d39479a5dbd744bfa35",
+    "semantic_hash": ""
+  },
+  "backend/routes/consultasCierresRoutes.js": {
+    "mtime": 1794618393.3115172,
+    "seen": 1794618755.2905447,
+    "ast_hash": "55ca99bda544cdb8d54cde158e4994c6",
+    "semantic_hash": ""
+  },
+  "backend/routes/consultasCompetenciaRoutes.js": {
+    "mtime": 1794618393.3120728,
+    "seen": 1794618755.2905447,
+    "ast_hash": "de2d28f715de34fc9de78f183ccac208",
+    "semantic_hash": ""
+  },
+  "backend/services/consultasCatalog.js": {
+    "mtime": 1794618393.3099382,
+    "seen": 1794618755.2905447,
+    "ast_hash": "c00093c4cfbb6061884cce2399c7e084",
+    "semantic_hash": ""
+  },
+  "backend/services/consultasVentasResumenService.js": {
+    "mtime": 1794618393.310476,
+    "seen": 1794618755.2905447,
+    "ast_hash": "d05f09a9f3542a3c7761e4d740c027d4",
+    "semantic_hash": ""
+  },
+  "backend/services/dbBootstrapSeeds.js": {
+    "mtime": 1794618271.4046845,
+    "seen": 1794618755.2905447,
+    "ast_hash": "607e37d950dec3495cf27c687010ae24",
+    "semantic_hash": ""
+  },
+  "backend/services/telegramDataService.js": {
+    "mtime": 1794618669.7571185,
+    "seen": 1794618755.2905447,
+    "ast_hash": "5d4ac457a5b31d5f4cf09d8da1e517a5",
+    "semantic_hash": ""
+  },
+  "backend/services/telegramFormatters.js": {
+    "mtime": 1794618669.7571185,
+    "seen": 1794618755.2905447,
+    "ast_hash": "0e9e78384e6fb721a502e55e9f2fb18b",
+    "semantic_hash": ""
+  },
+  "backend/services/telegramGeminiService.js": {
+    "mtime": 1794618669.7571185,
+    "seen": 1794618755.2905447,
+    "ast_hash": "31e77c751f0a93da1336cd9198b38124",
+    "semantic_hash": ""
+  },
+  "backend/services/telegramPdfService.js": {
+    "mtime": 1794618669.7571185,
+    "seen": 1794618755.2905447,
+    "ast_hash": "41ac5163d0f5eb322f663b64f948ceb5",
+    "semantic_hash": ""
+  },
+  "backend/services/telegramTextAndDates.js": {
+    "mtime": 1794618669.7571185,
+    "seen": 1794618755.2905447,
+    "ast_hash": "11a674a5c996c767b7369c0685f27fb6",
+    "semantic_hash": ""
+  },
+  "backend/services/telegramTransportService.js": {
+    "mtime": 1794618669.7571185,
+    "seen": 1794618755.2905447,
+    "ast_hash": "167d3a1018b352dfb17f952f4a2923a9",
     "semantic_hash": ""
   }
 }
