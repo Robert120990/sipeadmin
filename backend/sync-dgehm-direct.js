@@ -28,17 +28,52 @@ const writeLog = (msg) => {
     }
 };
 
-async function syncDGEHM(io = null) {
-    writeLog('=== INICIANDO SINCRONIZACIÓN DIRECTA DGEHM -> BD ===');
-    writeLog('1. Conectando al portal oficial de DGEHM...');
-    
-    const agent = new https.Agent({ rejectUnauthorized: false });
+const cleanNum = (val) => {
+    if (val === null || val === undefined) return 0;
+    const s = String(val);
+    const cleaned = s.replace(/[^0-9.-]/g, '');
+    const n = Number(cleaned);
+    return isNaN(n) ? 0 : n;
+};
+
+const formatIsoToDgehmDate = (isoStr) => {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return String(isoStr);
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    let hours = d.getHours();
+    const ampm = hours >= 12 ? 'p.m.' : 'a.m.';
+    hours = hours % 12 || 12;
+    const hh = String(hours).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const sec = String(d.getSeconds()).padStart(2, '0');
+    return `${dd}/${mm}/${yyyy} ${hh}:${min}:${sec} ${ampm}`;
+};
+
+const parseCsvLine = (line) => {
+    const cols = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') inQuotes = !inQuotes;
+        else if (ch === ',' && !inQuotes) { cols.push(cur.trim()); cur = ''; }
+        else cur += ch;
+    }
+    cols.push(cur.trim());
+    return cols;
+};
+
+async function fetchPrimaryDgehm() {
+    const agent = new https.Agent({ rejectUnauthorized: false, family: 4 });
     const url = 'https://sinapp.dgehm.gob.sv/DRHM/estadisticas.aspx?uid=2';
-    
+
     const res1 = await axios.get(url, {
         httpsAgent: agent,
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        timeout: 30000
+        timeout: 10000
     });
 
     const rawCookies = res1.headers['set-cookie'];
@@ -47,14 +82,12 @@ async function syncDGEHM(io = null) {
     const match = htmlBody.match(/"ExportUrlBase":"([^"]+)"/);
     if (!match) {
         if (htmlBody.includes('No es posible conectar con el servidor remoto') || htmlBody.includes('192.168.1.6')) {
-            throw new Error('El portal oficial de la DGEHM tiene caído su servidor interno de reportes (192.168.1.6:80 rechazó la conexión)');
+            throw new Error('El portal oficial DGEHM presenta caída interna en su servidor de reportes (192.168.1.6:80)');
         }
-        throw new Error('No se encontró el ExportUrlBase en la página de DGEHM');
+        throw new Error('No se encontró ExportUrlBase en la página de DGEHM');
     }
 
     const exportUrl = 'https://sinapp.dgehm.gob.sv' + match[1].replace(/\\u0026/g, '&') + 'CSV';
-    writeLog('2. Descargando reporte oficial en formato CSV...');
-    
     const res2 = await axios.get(exportUrl, {
         httpsAgent: agent,
         headers: {
@@ -62,106 +95,183 @@ async function syncDGEHM(io = null) {
             'Cookie': cookies,
             'Referer': url
         },
-        timeout: 45000
+        timeout: 30000
     });
 
     const csvText = String(res2.data || '');
     const lines = csvText.split(/\r?\n/).filter(l => l.trim() !== '');
-    writeLog(`3. Reporte descargado exitosamente: ${lines.length} líneas.`);
-
-    const parseLine = (line) => {
-        const cols = [];
-        let cur = '';
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') inQuotes = !inQuotes;
-            else if (ch === ',' && !inQuotes) { cols.push(cur.trim()); cur = ''; }
-            else cur += ch;
-        }
-        cols.push(cur.trim());
-        return cols;
-    };
+    if (lines.length <= 1) {
+        throw new Error('El reporte CSV de DGEHM vino vacío');
+    }
 
     const parsedRows = [];
     for (let i = 1; i < lines.length; i++) {
-        const cols = parseLine(lines[i]);
+        const cols = parseCsvLine(lines[i]);
         if (cols.length < 14) continue;
         parsedRows.push({
             estacion: cols[2],
             modificacion: cols[3],
-            super_c: cols[4],
-            regular_c: cols[5],
-            ion_c: cols[7],
-            diesel_c: cols[8],
-            super_a: cols[9],
-            regular_a: cols[10],
-            ion_a: cols[12],
-            diesel_a: cols[13]
+            super_c: cleanNum(cols[4]),
+            regular_c: cleanNum(cols[5]),
+            ion_c: cleanNum(cols[7]),
+            diesel_c: cleanNum(cols[8]),
+            super_a: cleanNum(cols[9]),
+            regular_a: cleanNum(cols[10]),
+            ion_a: cleanNum(cols[12]),
+            diesel_a: cleanNum(cols[13])
         });
     }
 
-    writeLog(`4. Estaciones parseadas de DGEHM: ${parsedRows.length}`);
-    const localDb = await getDb();
-    const [mappedStations] = await localDb.query('SELECT competencia FROM web_estaciones_competencia');
+    return { rows: parsedRows, source: 'DGEHM_OFICIAL' };
+}
 
-    const norm = str => (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
-    const mappedMap = new Map();
-    mappedStations.forEach(m => {
-        mappedMap.set(norm(m.competencia), m.competencia);
+async function fetchMirrorGasolinaSv() {
+    const agent = new https.Agent({ family: 4 });
+    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
+    const allItems = [];
+
+    const first = await axios.get('https://gasolinasv.com/api/gasolineras?page=0&size=100', {
+        httpsAgent: agent,
+        headers,
+        timeout: 12000
     });
+    const firstContent = Array.isArray(first.data?.content) ? first.data.content : [];
+    allItems.push(...firstContent);
+    const totalPages = Math.min(20, parseInt(first.data?.totalPages, 10) || 1);
+
+    for (let p = 1; p < totalPages; p++) {
+        const resPage = await axios.get(`https://gasolinasv.com/api/gasolineras?page=${p}&size=100`, {
+            httpsAgent: agent,
+            headers,
+            timeout: 12000
+        });
+        if (Array.isArray(resPage.data?.content)) {
+            allItems.push(...resPage.data.content);
+        }
+    }
+
+    if (allItems.length === 0) {
+        throw new Error('La API espejo no devolvió estaciones');
+    }
+
+    const parsedRows = allItems.map(item => {
+        const up = item.ultimoPrecio || {};
+        return {
+            estacion: item.estacion || '',
+            modificacion: formatIsoToDgehmDate(up.fechaReporte),
+            super_c: cleanNum(up.especialSc),
+            regular_c: cleanNum(up.regularSc),
+            ion_c: cleanNum(up.ionDieselSc),
+            diesel_c: cleanNum(up.dieselLSSc ?? up.dieselSc),
+            super_a: cleanNum(up.especialAuto),
+            regular_a: cleanNum(up.regularAuto),
+            ion_a: cleanNum(up.ionDieselAuto),
+            diesel_a: cleanNum(up.dieselLSAuto ?? up.dieselAuto)
+        };
+    }).filter(r => r.estacion);
+
+    return { rows: parsedRows, source: 'DGEHM_MIRROR_API' };
+}
+
+async function fetchAllFuelPricesWithFallback(logger = writeLog) {
+    try {
+        logger('1. Conectando al portal primario oficial DGEHM...');
+        return await fetchPrimaryDgehm();
+    } catch (primaryErr) {
+        logger(`⚠️ Portal primario DGEHM no disponible (${primaryErr.message}). Activando espejo oficial SINAPP (API)...`);
+        return await fetchMirrorGasolinaSv();
+    }
+}
+
+const normExact = str => (str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9 ]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+
+const normFuzzy = str => normExact(str)
+    .replace(/\b(ESTACION DE SERVICIO|E S|GASOLINERA|DE|LA|EL|LOS|LAS)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+function matchStationsToCatalog(parsedRows, mappedStations, existingSnapshotRows = []) {
+    const existingByNorm = new Map();
+    for (const ex of existingSnapshotRows) {
+        existingByNorm.set(normExact(ex.estacion), ex);
+    }
+
+    const sourceExactMap = new Map();
+    const sourceFuzzyMap = new Map();
+    for (const row of parsedRows) {
+        const ne = normExact(row.estacion);
+        const nf = normFuzzy(row.estacion);
+        if (ne && !sourceExactMap.has(ne)) sourceExactMap.set(ne, row);
+        if (nf && !sourceFuzzyMap.has(nf)) sourceFuzzyMap.set(nf, row);
+    }
 
     const matchedRows = [];
-    const seenStations = new Set();
-    parsedRows.forEach(row => {
-        const nName = norm(row.estacion);
-        if (mappedMap.has(nName)) {
-            const dbName = mappedMap.get(nName);
-            if (!seenStations.has(dbName)) {
-                seenStations.add(dbName);
-                matchedRows.push({
-                    estacion: dbName,
-                    modificacion: row.modificacion,
-                    super_c: row.super_c,
-                    regular_c: row.regular_c,
-                    ion_c: row.ion_c,
-                    diesel_c: row.diesel_c,
-                    super_a: row.super_a,
-                    regular_a: row.regular_a,
-                    ion_a: row.ion_a,
-                    diesel_a: row.diesel_a
-                });
-            }
-        }
-    });
+    const seenDbNames = new Set();
 
-    writeLog(`5. Estaciones coincidentes en catálogo local: ${matchedRows.length} de ${mappedStations.length}`);
+    for (const m of mappedStations) {
+        const dbName = (m.competencia || '').trim();
+        if (!dbName || seenDbNames.has(dbName)) continue;
+
+        const ne = normExact(dbName);
+        const nf = normFuzzy(dbName);
+        const src = sourceExactMap.get(ne) || (nf ? sourceFuzzyMap.get(nf) : null);
+        if (!src) continue;
+
+        seenDbNames.add(dbName);
+        const prev = existingByNorm.get(ne);
+        const sameMod = prev && normExact(prev.modificacion) === normExact(src.modificacion);
+
+        matchedRows.push({
+            estacion: dbName,
+            modificacion: src.modificacion,
+            super_c: cleanNum(src.super_c),
+            regular_c: cleanNum(src.regular_c),
+            ion_c: cleanNum(src.ion_c) || (sameMod ? cleanNum(prev.ion_c) : 0),
+            diesel_c: cleanNum(src.diesel_c),
+            super_a: cleanNum(src.super_a),
+            regular_a: cleanNum(src.regular_a),
+            ion_a: cleanNum(src.ion_a) || (sameMod ? cleanNum(prev.ion_a) : 0),
+            diesel_a: cleanNum(src.diesel_a)
+        });
+    }
+
+    return matchedRows;
+}
+
+async function syncDGEHM(io = null) {
+    writeLog('=== INICIANDO SINCRONIZACIÓN DGEHM -> BD ===');
+    const { rows: parsedRows, source } = await fetchAllFuelPricesWithFallback(writeLog);
+    writeLog(`2. Estaciones obtenidas (${source}): ${parsedRows.length}`);
+
+    const localDb = await getDb();
+    const [mappedStations] = await localDb.query('SELECT competencia FROM web_estaciones_competencia');
+    const [existingSnap] = await localDb.query('SELECT * FROM web_precios_competencia').catch(() => [[]]);
+
+    const matchedRows = matchStationsToCatalog(parsedRows, mappedStations, existingSnap);
+    writeLog(`3. Estaciones coincidentes en catálogo local: ${matchedRows.length} de ${mappedStations.length}`);
     if (matchedRows.length === 0) {
         throw new Error('No se encontraron coincidencias de nombres entre DGEHM y la base de datos');
     }
-
-    const cleanNum = (val) => {
-        const s = String(val || '');
-        const cleaned = s.replace(/[^0-9.-]/g, '');
-        const n = Number(cleaned);
-        return isNaN(n) ? 0 : n;
-    };
 
     const today = new Date().toISOString().split('T')[0];
     const conn = await localDb.getConnection();
     await conn.beginTransaction();
     try {
-        // 1. Update snapshot
         await conn.query('DELETE FROM web_precios_competencia');
         const insertSql = 'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?';
         const values = matchedRows.map(r => [
             r.estacion, r.modificacion,
-            cleanNum(r.super_c), cleanNum(r.regular_c), cleanNum(r.ion_c), cleanNum(r.diesel_c),
-            cleanNum(r.super_a), cleanNum(r.regular_a), cleanNum(r.ion_a), cleanNum(r.diesel_a)
+            r.super_c, r.regular_c, r.ion_c, r.diesel_c,
+            r.super_a, r.regular_a, r.ion_a, r.diesel_a
         ]);
         await conn.query(insertSql, [values]);
 
-        // 2. Update historical table
         for (const r of matchedRows) {
             await conn.query(`
                 INSERT INTO web_precios_competencia_historial 
@@ -180,25 +290,36 @@ async function syncDGEHM(io = null) {
                     created_at = CURRENT_TIMESTAMP
             `, [
                 r.estacion, r.modificacion, today,
-                cleanNum(r.super_c), cleanNum(r.regular_c), cleanNum(r.ion_c), cleanNum(r.diesel_c),
-                cleanNum(r.super_a), cleanNum(r.regular_a), cleanNum(r.ion_a), cleanNum(r.diesel_a)
+                r.super_c, r.regular_c, r.ion_c, r.diesel_c,
+                r.super_a, r.regular_a, r.ion_a, r.diesel_a
             ]);
         }
 
         await conn.commit();
-        writeLog(`✅ ¡ÉXITO! Se actualizaron correctamente ${matchedRows.length} estaciones en snapshot e historial.`);
+        writeLog(`✅ ¡ÉXITO! Se actualizaron correctamente ${matchedRows.length} estaciones (${source}).`);
         if (io) {
             try {
                 io.emit('precios_competencia_updated', {
                     timestamp: new Date().toISOString(),
                     count: matchedRows.length,
-                    total: mappedStations.length
+                    total: mappedStations.length,
+                    totalConfigured: mappedStations.length,
+                    totalDGEHM: parsedRows.length,
+                    source
                 });
             } catch (ioErr) {
                 writeLog(`⚠️ Error emitiendo evento socket: ${ioErr.message}`);
             }
         }
-        return { success: true, count: matchedRows.length, total: mappedStations.length, timestamp: new Date().toISOString() };
+        return {
+            success: true,
+            source,
+            count: matchedRows.length,
+            total: mappedStations.length,
+            totalConfigured: mappedStations.length,
+            totalDGEHM: parsedRows.length,
+            timestamp: new Date().toISOString()
+        };
     } catch (err) {
         await conn.rollback();
         throw err;
@@ -215,5 +336,8 @@ if (require.main === module) {
             process.exit(1);
         });
 }
+
+syncDGEHM.fetchAllFuelPricesWithFallback = fetchAllFuelPricesWithFallback;
+syncDGEHM.matchStationsToCatalog = matchStationsToCatalog;
 
 module.exports = syncDGEHM;

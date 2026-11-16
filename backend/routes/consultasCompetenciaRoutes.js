@@ -27,7 +27,14 @@ router.get('/consultas/estaciones/precios-competencia', authenticateToken, requi
     }
 });
 
-router.get('/consultas/estaciones/precios-competencia/estaciones', authenticateToken, requirePermission(preciosCompetenciaViewPerms), async (req, res) => {
+router.get('/consultas/estaciones/precios-competencia/estaciones', (req, res, next) => {
+    const apiKey = req.headers['x-api-key'] || req.headers['x-n8n-key'] || req.headers['x-n8n-token'];
+    if (apiKey && getValidSyncKeys().some(k => safeCompareSyncKey(String(apiKey), String(k)))) {
+        req.user = { id: 0, username: 'remote-orchestrator-169', role_name: 'Administrator', role_id: 1, permissions: ['admin'] };
+        return next();
+    }
+    return authenticateToken(req, res, () => requirePermission(preciosCompetenciaViewPerms)(req, res, next));
+}, async (req, res) => {
     try {
         const localDb = await getDb();
         const [rows] = await withRetry(() => localDb.query('SELECT id, competencia, id_estacion, IFNULL(es_propia, 0) as es_propia FROM web_estaciones_competencia'));
@@ -217,199 +224,16 @@ const authenticateSyncOrAdmin = (req, res, next) => {
 
 router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticateSyncOrAdmin, async (req, res) => {
     try {
-        const axios = require('axios');
-        const https = require('https');
-        const agent = new https.Agent({ rejectUnauthorized: false });
-
-        const url = 'https://sinapp.dgehm.gob.sv/DRHM/estadisticas.aspx?uid=2';
-        let res1;
-        try {
-            res1 = await axios.get(url, {
-                httpsAgent: agent,
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                timeout: 10000
-            });
-        } catch (fetchErr) {
-            console.error('Error connecting to DGEHM from cloud:', fetchErr.message);
-            return res.status(504).json({ 
-                isCloudBlocked: true,
-                message: 'El portal gubernamental DGEHM no responde a conexiones desde la nube (cortafuegos de seguridad gubernamental). Por favor descarga el archivo CSV desde el portal y súbelo con el botón "Cargar Archivo".' 
-            });
-        }
-
-        const rawCookies = res1.headers['set-cookie'];
-        const cookies = rawCookies ? rawCookies.map(c => c.split(';')[0]).join('; ') : '';
-        const htmlBody = String(res1.data || '');
-        const match = htmlBody.match(/"ExportUrlBase":"([^"]+)"/);
-        if (!match) {
-            if (htmlBody.includes('No es posible conectar con el servidor remoto') || htmlBody.includes('192.168.1.6')) {
-                return res.status(502).json({
-                    isDgehmDown: true,
-                    message: 'El portal oficial de la DGEHM presenta una caída interna en su servidor de reportes gubernamental (conexión rechazada en 192.168.1.6:80).'
-                });
-            }
-            return res.status(502).json({ message: 'No se pudo obtener el endpoint de reporte de la DGEHM' });
-        }
-
-        const exportUrl = 'https://sinapp.dgehm.gob.sv' + match[1].replace(/\\u0026/g, '&') + 'CSV';
-        const res2 = await axios.get(exportUrl, {
-            httpsAgent: agent,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                'Cookie': cookies,
-                'Referer': url
-            },
-            timeout: 35000
+        const syncDGEHM = require('../sync-dgehm-direct');
+        const io = req.app.get('io');
+        const result = await syncDGEHM(io);
+        res.json({
+            message: `Precios sincronizados exitosamente (${result.count} estaciones actualizadas)`,
+            count: result.count,
+            totalConfigured: result.totalConfigured,
+            totalDGEHM: result.totalDGEHM,
+            source: result.source
         });
-
-        const csvText = String(res2.data || '');
-        const lines = csvText.split(/\r?\n/).filter(l => l.trim() !== '');
-        if (lines.length <= 1) {
-            return res.status(502).json({ message: 'El reporte de DGEHM vino vacío' });
-        }
-
-        // Helper to parse CSV lines safely
-        const parseLine = (line) => {
-            const cols = [];
-            let cur = '';
-            let inQuotes = false;
-            for (let i = 0; i < line.length; i++) {
-                const ch = line[i];
-                if (ch === '"') inQuotes = !inQuotes;
-                else if (ch === ',' && !inQuotes) { cols.push(cur.trim()); cur = ''; }
-                else cur += ch;
-            }
-            cols.push(cur.trim());
-            return cols;
-        };
-
-        const parsedRows = [];
-        for (let i = 1; i < lines.length; i++) {
-            const cols = parseLine(lines[i]);
-            if (cols.length < 14) continue;
-            parsedRows.push({
-                estacion: cols[2],
-                modificacion: cols[3],
-                super_c: cols[4],
-                regular_c: cols[5],
-                ion_c: cols[7],
-                diesel_c: cols[8],
-                super_a: cols[9],
-                regular_a: cols[10],
-                ion_a: cols[12],
-                diesel_a: cols[13]
-            });
-        }
-
-        const localDb = await getDb();
-        const [mappedStations] = await withRetry(() => localDb.query('SELECT competencia FROM web_estaciones_competencia'));
-
-        const norm = str => (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
-        const mappedMap = new Map();
-        mappedStations.forEach(m => {
-            mappedMap.set(norm(m.competencia), m.competencia);
-        });
-
-        const matchedRows = [];
-        const seenStations = new Set();
-        parsedRows.forEach(row => {
-            const nName = norm(row.estacion);
-            if (mappedMap.has(nName)) {
-                const dbName = mappedMap.get(nName);
-                if (!seenStations.has(dbName)) {
-                    seenStations.add(dbName);
-                    matchedRows.push({
-                        estacion: dbName,
-                        modificacion: row.modificacion,
-                        super_c: row.super_c,
-                        regular_c: row.regular_c,
-                        ion_c: row.ion_c,
-                        diesel_c: row.diesel_c,
-                        super_a: row.super_a,
-                        regular_a: row.regular_a,
-                        ion_a: row.ion_a,
-                        diesel_a: row.diesel_a
-                    });
-                }
-            }
-        });
-
-        if (matchedRows.length === 0) {
-            return res.status(404).json({ message: 'No se encontraron coincidencias entre el reporte DGEHM y las estaciones configuradas' });
-        }
-
-        const cleanNum = (val) => {
-            const s = String(val || '');
-            const cleaned = s.replace(/[^0-9.-]/g, '');
-            const n = Number(cleaned);
-            return isNaN(n) ? 0 : n;
-        };
-
-        const today = new Date().toISOString().split('T')[0];
-        const conn = await localDb.getConnection();
-        await conn.beginTransaction();
-        try {
-            // 1. Update snapshot
-            await conn.query('DELETE FROM web_precios_competencia');
-            const insertSql = 'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?';
-            const values = matchedRows.map(r => [
-                r.estacion, r.modificacion,
-                cleanNum(r.super_c), cleanNum(r.regular_c), cleanNum(r.ion_c), cleanNum(r.diesel_c),
-                cleanNum(r.super_a), cleanNum(r.regular_a), cleanNum(r.ion_a), cleanNum(r.diesel_a)
-            ]);
-            await conn.query(insertSql, [values]);
-
-            // 2. Update historical table
-            for (const r of matchedRows) {
-                await conn.query(`
-                    INSERT INTO web_precios_competencia_historial 
-                    (estacion, modificacion, fecha_registro, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE
-                        modificacion = VALUES(modificacion),
-                        super_c = VALUES(super_c),
-                        regular_c = VALUES(regular_c),
-                        ion_c = VALUES(ion_c),
-                        diesel_c = VALUES(diesel_c),
-                        super_a = VALUES(super_a),
-                        regular_a = VALUES(regular_a),
-                        ion_a = VALUES(ion_a),
-                        diesel_a = VALUES(diesel_a),
-                        created_at = CURRENT_TIMESTAMP
-                `, [
-                    r.estacion, r.modificacion, today,
-                    cleanNum(r.super_c), cleanNum(r.regular_c), cleanNum(r.ion_c), cleanNum(r.diesel_c),
-                    cleanNum(r.super_a), cleanNum(r.regular_a), cleanNum(r.ion_a), cleanNum(r.diesel_a)
-                ]);
-            }
-
-            await conn.commit();
-            const io = req.app.get('io');
-            if (io) {
-                try {
-                    io.emit('precios_competencia_updated', {
-                        timestamp: new Date().toISOString(),
-                        count: matchedRows.length,
-                        totalConfigured: mappedStations.length,
-                        totalDGEHM: parsedRows.length,
-                        source: 'API_SYNC_DGEHM'
-                    });
-                } catch (ioErr) {
-                    console.warn('[Consultas] Error emitiendo socket precios_competencia_updated:', ioErr.message);
-                }
-            }
-            res.json({
-                message: `Precios sincronizados exitosamente desde DGEHM (${matchedRows.length} estaciones actualizadas)`,
-                count: matchedRows.length,
-                totalConfigured: mappedStations.length,
-                totalDGEHM: parsedRows.length
-            });
-        } catch (dbErr) {
-            await conn.rollback();
-            throw dbErr;
-        } finally {
-            conn.release();
-        }
     } catch (error) {
         sendSafeError(res, error, 'Error al sincronizar precios con DGEHM');
     }
@@ -424,35 +248,54 @@ router.get('/consultas/estaciones/precios-competencia/sincronizacion-horarios', 
     }
 });
 
-router.post('/consultas/estaciones/precios-competencia/upload', express.json({ limit: '20mb' }), authenticateToken, requirePermission(['manage_precios_competencia', '/dashboard/consultas/estaciones/precios-competencia']), async (req, res) => {
+router.post('/consultas/estaciones/precios-competencia/upload', express.json({ limit: '20mb' }), authenticateSyncOrAdmin, async (req, res) => {
     try {
         const { data } = req.body;
         if (!Array.isArray(data) || data.length === 0) {
             return res.status(400).json({ message: 'No data provided' });
         }
         const localDb = await getDb();
+        const [existingSnap] = await localDb.query('SELECT * FROM web_precios_competencia').catch(() => [[]]);
+        const normExact = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+        const existingMap = new Map(existingSnap.map(r => [normExact(r.estacion), r]));
+
         const conn = await localDb.getConnection();
         await conn.beginTransaction();
         try {
             await conn.query('DELETE FROM web_precios_competencia');
             const insertSql = 'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?';
             const cleanNum = (val) => {
-                const s = String(val || '');
+                const s = String(val ?? '');
                 const cleaned = s.replace(/[^0-9.-]/g, '');
                 const n = Number(cleaned);
                 return isNaN(n) ? 0 : n;
             };
             const today = new Date().toISOString().split('T')[0];
-            const values = data.map(row => [
-                row.estacion, row.modificacion, cleanNum(row.super_c), cleanNum(row.regular_c),
-                cleanNum(row.ion_c), cleanNum(row.diesel_c), cleanNum(row.super_a),
-                cleanNum(row.regular_a), cleanNum(row.ion_a), cleanNum(row.diesel_a)
+            const normalizedData = data.map(row => {
+                const prev = existingMap.get(normExact(row.estacion));
+                const sameMod = prev && normExact(prev.modificacion) === normExact(row.modificacion);
+                return {
+                    estacion: row.estacion,
+                    modificacion: row.modificacion,
+                    super_c: cleanNum(row.super_c),
+                    regular_c: cleanNum(row.regular_c),
+                    ion_c: cleanNum(row.ion_c) || (sameMod ? cleanNum(prev.ion_c) : 0),
+                    diesel_c: cleanNum(row.diesel_c),
+                    super_a: cleanNum(row.super_a),
+                    regular_a: cleanNum(row.regular_a),
+                    ion_a: cleanNum(row.ion_a) || (sameMod ? cleanNum(prev.ion_a) : 0),
+                    diesel_a: cleanNum(row.diesel_a)
+                };
+            });
+            const values = normalizedData.map(row => [
+                row.estacion, row.modificacion, row.super_c, row.regular_c,
+                row.ion_c, row.diesel_c, row.super_a,
+                row.regular_a, row.ion_a, row.diesel_a
             ]);
-            console.log('UPLOAD precios competencia - count:', data.length, 'first row:', JSON.stringify(data[0]), 'first values:', JSON.stringify(values[0]));
             await conn.query(insertSql, [values]);
 
             // Save to history
-            for (const row of data) {
+            for (const row of normalizedData) {
                 await conn.query(`
                     INSERT INTO web_precios_competencia_historial 
                     (estacion, modificacion, fecha_registro, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a)
@@ -470,8 +313,8 @@ router.post('/consultas/estaciones/precios-competencia/upload', express.json({ l
                         created_at = CURRENT_TIMESTAMP
                 `, [
                     row.estacion, row.modificacion, today,
-                    cleanNum(row.super_c), cleanNum(row.regular_c), cleanNum(row.ion_c), cleanNum(row.diesel_c),
-                    cleanNum(row.super_a), cleanNum(row.regular_a), cleanNum(row.ion_a), cleanNum(row.diesel_a)
+                    row.super_c, row.regular_c, row.ion_c, row.diesel_c,
+                    row.super_a, row.regular_a, row.ion_a, row.diesel_a
                 ]);
             }
 

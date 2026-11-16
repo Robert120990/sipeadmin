@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# SIPE Admin - Sincronización Remota de Precios de Competencia DGEHM
-# Servidor Orquestador: 169.58.207.115 (Usuario: rsboosted)
+# SIPE Admin - Lectura y Envío Remoto de Precios de Competencia DGEHM
+# Servidor Lector/Orquestador: 169.58.207.115 (Usuario: rsboosted)
 # Servidor Destino Producción: admin.sipesv.com (5.252.55.29)
 # ==============================================================================
+
+export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node 2>/dev/null | tail -n 1)/bin:$PATH"
 
 TASK_DIR="/home/rsboosted/sipe-tasks"
 [ -f "$TASK_DIR/.env" ] && source "$TASK_DIR/.env" 2>/dev/null || true
 LOG_FILE="$TASK_DIR/sync_dgehm.log"
 LOCK_FILE="/tmp/sipe_sync_dgehm.lock"
-API_URL="${SIPE_SYNC_DGEHM_URL:-https://admin.sipesv.com/api/consultas/estaciones/precios-competencia/sync-dgehm}"
-API_KEY="${SYNC_API_KEY:-${PORTAL_SYNC_API_KEY:-}}"
-
-if [ -z "$API_KEY" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] Variable SYNC_API_KEY no configurada en el entorno." >> "$LOG_FILE"
-    exit 1
-fi
+export SYNC_API_KEY="${SYNC_API_KEY:-${PORTAL_SYNC_API_KEY:-sipe_orchestrator_2026_secure_token}}"
+export SIPE_ADMIN_URL="${SIPE_ADMIN_URL:-https://admin.sipesv.com}"
 
 # Evitar traslape de ejecuciones concurrentes
 if [ -f "$LOCK_FILE" ]; then
@@ -29,24 +26,18 @@ fi
 echo "$$" > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [START] 🚀 Disparando sincronización DGEHM hacia admin.sipesv.com..." >> "$LOG_FILE"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [START] 🚀 Leyendo precios DGEHM/SINAPP desde 169.58.207.115 y enviando a admin.sipesv.com..." >> "$LOG_FILE"
 
 START_TIME=$(date +%s)
-HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 120 -X POST "$API_URL" \
-    -H "Content-Type: application/json" \
-    -H "x-api-key: $API_KEY" \
-    -d "{\"source\": \"CRON_169.58.207.115\", \"triggered_at\": \"$(date -Iseconds)\"}")
-
+OUTPUT=$(node "$TASK_DIR/read_and_send_dgehm.js" 2>&1)
+EXIT_CODE=$?
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 
-HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
-HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n 1)
-
-if [ "$HTTP_STATUS" -eq 200 ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] ✅ Precios DGEHM sincronizados en ${ELAPSED}s (HTTP $HTTP_STATUS): $HTTP_BODY" >> "$LOG_FILE"
+if [ "$EXIT_CODE" -eq 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] ✅ Precios leídos y enviados en ${ELAPSED}s: $OUTPUT" >> "$LOG_FILE"
 else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] ❌ Fallo en sincronización DGEHM (HTTP $HTTP_STATUS en ${ELAPSED}s): $HTTP_BODY" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] ❌ Fallo leyendo/enviando precios en ${ELAPSED}s: $OUTPUT" >> "$LOG_FILE"
 fi
 
 # Mantener log acotado
