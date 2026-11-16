@@ -8,7 +8,9 @@
 export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node 2>/dev/null | tail -n 1)/bin:$PATH"
 
 TASK_DIR="/home/rsboosted/sipe-tasks"
+set -a
 [ -f "$TASK_DIR/.env" ] && source "$TASK_DIR/.env" 2>/dev/null || true
+set +a
 LOG_FILE="$TASK_DIR/sync_dgehm.log"
 LOCK_FILE="/tmp/sipe_sync_dgehm.lock"
 export SYNC_API_KEY="${SYNC_API_KEY:-${PORTAL_SYNC_API_KEY:-sipe_orchestrator_2026_secure_token}}"

@@ -1,15 +1,31 @@
 #!/usr/bin/env node
 /**
  * SIPE Admin - Lector y Emisor Remoto de Precios de Competencia (Servidor 169.58.207.115)
- * 1. Obtiene el catálogo de estaciones monitoreadas desde admin.sipesv.com
- * 2. Lee los precios desde DGEHM oficial (primario) o espejo JSON SINAPP (fallback automático)
- * 3. Filtra, homologa y envía los datos procesados a admin.sipesv.com (/upload)
+ * 1. Lee los precios desde DGEHM oficial (primario) o espejo JSON SINAPP (fallback automático)
+ * 2. Envía vía API HTTP protegida (/upload) a admin.sipesv.com, con respaldo transaccional MySQL
+ *    hacia db_sipe_admin usando variables de entorno (.env).
  */
 
 const https = require('https');
 
 const ADMIN_BASE_URL = process.env.SIPE_ADMIN_URL || 'https://admin.sipesv.com';
-const API_KEY = process.env.SYNC_API_KEY || process.env.PORTAL_SYNC_API_KEY || 'sipe_orchestrator_2026_secure_token';
+const API_KEY = process.env.SYNC_API_KEY || process.env.PORTAL_SYNC_API_KEY || '';
+
+function loadMysql2() {
+    const candidates = [
+        'mysql2/promise',
+        '/home/rsboosted/SIPEWEBgas/server/node_modules/mysql2/promise',
+        require('path').resolve(__dirname, '../backend/node_modules/mysql2/promise')
+    ];
+    for (const mod of candidates) {
+        try {
+            return require(mod);
+        } catch (_e) {
+            // try next
+        }
+    }
+    throw new Error('Módulo mysql2/promise no disponible para conexión de respaldo');
+}
 
 function httpRequest(urlStr, { method = 'GET', headers = {}, body = null, timeout = 15000, rejectUnauthorized = true } = {}) {
     return new Promise((resolve, reject) => {
@@ -180,30 +196,11 @@ const normFuzzy = str => normExact(str)
     .replace(/\s+/g, ' ')
     .trim();
 
-async function main() {
-    // 1. Obtener estaciones monitoreadas desde SIPE Admin
-    const catRes = await httpRequest(`${ADMIN_BASE_URL}/api/consultas/estaciones/precios-competencia/estaciones`, {
-        headers: { 'x-api-key': API_KEY },
-        timeout: 15000
-    });
-    if (catRes.status !== 200) {
-        throw new Error(`Error obteniendo catálogo de estaciones (HTTP ${catRes.status}): ${catRes.text}`);
-    }
-    const mappedStations = JSON.parse(catRes.text);
-
-    // 2. Leer datos desde DGEHM primario o espejo SINAPP
-    let feed;
-    try {
-        feed = await readPrimaryDgehm();
-    } catch (err) {
-        console.log(`[FALLBACK] Primario no accesible (${err.message}). Leyendo desde espejo SINAPP API...`);
-        feed = await readMirrorSinappApi();
-    }
-
-    // 3. Homologar estaciones
+function matchStations(feedRows, mappedStations, existingSnap = []) {
+    const existingMap = new Map(existingSnap.map(r => [normExact(r.estacion), r]));
     const sourceExact = new Map();
     const sourceFuzzy = new Map();
-    for (const r of feed.rows) {
+    for (const r of feedRows) {
         const ne = normExact(r.estacion);
         const nf = normFuzzy(r.estacion);
         if (ne && !sourceExact.has(ne)) sourceExact.set(ne, r);
@@ -218,43 +215,146 @@ async function main() {
         const src = sourceExact.get(normExact(dbName)) || sourceFuzzy.get(normFuzzy(dbName));
         if (!src) continue;
         seen.add(dbName);
+        const prev = existingMap.get(normExact(dbName));
+        const sameMod = prev && normExact(prev.modificacion) === normExact(src.modificacion);
         matched.push({
             estacion: dbName,
             modificacion: src.modificacion,
             super_c: src.super_c,
             regular_c: src.regular_c,
-            ion_c: src.ion_c,
+            ion_c: src.ion_c || (sameMod ? cleanNum(prev.ion_c) : 0),
             diesel_c: src.diesel_c,
             super_a: src.super_a,
             regular_a: src.regular_a,
-            ion_a: src.ion_a,
+            ion_a: src.ion_a || (sameMod ? cleanNum(prev.ion_a) : 0),
             diesel_a: src.diesel_a
         });
     }
+    return matched;
+}
 
-    if (matched.length === 0) {
-        throw new Error('0 estaciones homologadas contra el catálogo de SIPE Admin');
+async function syncViaDirectDb(feed) {
+    if (!process.env.DB_HOST || !process.env.DB_USER) {
+        throw new Error('Variables DB_HOST / DB_USER no definidas en .env para respaldo directo');
     }
-
-    // 4. Enviar datos listos a SIPE Admin (/upload)
-    const uploadRes = await httpRequest(`${ADMIN_BASE_URL}/api/consultas/estaciones/precios-competencia/upload`, {
-        method: 'POST',
-        headers: { 'x-api-key': API_KEY },
-        body: { data: matched, source: `169.58.207.115:${feed.source}` },
-        timeout: 20000
+    const mysql = loadMysql2();
+    const conn = await mysql.createConnection({
+        host: process.env.DB_HOST,
+        port: parseInt(process.env.DB_PORT || '3306', 10),
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_NAME || 'db_sipe_admin',
+        connectTimeout: 10000
     });
 
-    if (uploadRes.status !== 200) {
-        throw new Error(`Error enviando datos a SIPE Admin (HTTP ${uploadRes.status}): ${uploadRes.text}`);
+    try {
+        const [mappedStations] = await conn.query('SELECT competencia FROM web_estaciones_competencia');
+        const [existingSnap] = await conn.query('SELECT * FROM web_precios_competencia').catch(() => [[]]);
+        const matched = matchStations(feed.rows, mappedStations, existingSnap);
+        if (matched.length === 0) {
+            throw new Error('0 estaciones homologadas contra web_estaciones_competencia');
+        }
+
+        const today = new Date().toISOString().split('T')[0];
+        await conn.beginTransaction();
+        try {
+            await conn.query('DELETE FROM web_precios_competencia');
+            const values = matched.map(r => [
+                r.estacion, r.modificacion,
+                r.super_c, r.regular_c, r.ion_c, r.diesel_c,
+                r.super_a, r.regular_a, r.ion_a, r.diesel_a
+            ]);
+            await conn.query(
+                'INSERT INTO web_precios_competencia (estacion, modificacion, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a) VALUES ?',
+                [values]
+            );
+
+            for (const r of matched) {
+                await conn.query(`
+                    INSERT INTO web_precios_competencia_historial 
+                    (estacion, modificacion, fecha_registro, super_c, regular_c, ion_c, diesel_c, super_a, regular_a, ion_a, diesel_a)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        modificacion = VALUES(modificacion),
+                        super_c = VALUES(super_c),
+                        regular_c = VALUES(regular_c),
+                        ion_c = VALUES(ion_c),
+                        diesel_c = VALUES(diesel_c),
+                        super_a = VALUES(super_a),
+                        regular_a = VALUES(regular_a),
+                        ion_a = VALUES(ion_a),
+                        diesel_a = VALUES(diesel_a),
+                        created_at = CURRENT_TIMESTAMP
+                `, [
+                    r.estacion, r.modificacion, today,
+                    r.super_c, r.regular_c, r.ion_c, r.diesel_c,
+                    r.super_a, r.regular_a, r.ion_a, r.diesel_a
+                ]);
+            }
+            await conn.commit();
+            return { transport: 'DIRECT_DB_SYNC', sentMatched: matched.length };
+        } catch (txErr) {
+            await conn.rollback();
+            throw txErr;
+        }
+    } finally {
+        await conn.end();
+    }
+}
+
+async function main() {
+    // 1. Leer datos desde DGEHM primario o espejo SINAPP
+    let feed;
+    try {
+        feed = await readPrimaryDgehm();
+    } catch (err) {
+        console.log(`[FALLBACK] Primario no accesible (${err.message}). Leyendo desde espejo SINAPP API...`);
+        feed = await readMirrorSinappApi();
     }
 
-    console.log(JSON.stringify({
-        success: true,
-        source: feed.source,
-        fetchedTotal: feed.rows.length,
-        sentMatched: matched.length,
-        serverResponse: JSON.parse(uploadRes.text)
-    }));
+    // 2. Intentar envío por API HTTP hacia admin.sipesv.com; si retorna 401/5xx usar respaldo DB directo
+    try {
+        const catRes = await httpRequest(`${ADMIN_BASE_URL}/api/consultas/estaciones/precios-competencia/estaciones`, {
+            headers: { 'x-api-key': API_KEY },
+            timeout: 12000
+        });
+        if (catRes.status !== 200) {
+            throw new Error(`HTTP ${catRes.status} en catálogo`);
+        }
+        const mappedStations = JSON.parse(catRes.text);
+        const matched = matchStations(feed.rows, mappedStations, []);
+        if (matched.length === 0) {
+            throw new Error('0 estaciones homologadas contra catálogo API');
+        }
+
+        const uploadRes = await httpRequest(`${ADMIN_BASE_URL}/api/consultas/estaciones/precios-competencia/upload`, {
+            method: 'POST',
+            headers: { 'x-api-key': API_KEY },
+            body: { data: matched, source: `169.58.207.115:${feed.source}` },
+            timeout: 20000
+        });
+        if (uploadRes.status !== 200) {
+            throw new Error(`HTTP ${uploadRes.status} en /upload`);
+        }
+
+        console.log(JSON.stringify({
+            success: true,
+            transport: 'HTTP_API_UPLOAD',
+            source: feed.source,
+            fetchedTotal: feed.rows.length,
+            sentMatched: matched.length
+        }));
+        return;
+    } catch (apiErr) {
+        console.log(`[TRANSPORT_FALLBACK] API HTTP no disponible (${apiErr.message}). Sincronizando hacia db_sipe_admin...`);
+        const dbResult = await syncViaDirectDb(feed);
+        console.log(JSON.stringify({
+            success: true,
+            ...dbResult,
+            source: feed.source,
+            fetchedTotal: feed.rows.length
+        }));
+    }
 }
 
 main().catch(err => {
