@@ -40,9 +40,33 @@ const cleanNum = (val) => {
 };
 
 /**
- * Scrape current fuel prices from DGEHM official portal.
+ * Fetch current fuel prices from GasolinaSV REST API (mirror of SINAPP/DGEHM),
+ * falling back to Puppeteer DGEHM ReportViewer scraping if needed.
  */
 const fetchDgehmPrices = async () => {
+    try {
+        const { fetchAllFuelPricesWithFallback } = require('../sync-dgehm-direct');
+        const { rows } = await fetchAllFuelPricesWithFallback((msg) => console.log(`[DGEHM Service] ${msg}`));
+        if (Array.isArray(rows) && rows.length > 0) {
+            return rows.map(r => ({
+                zona: r.zona || '',
+                departamento: r.departamento || '',
+                estacion: r.estacion,
+                modificacion: r.modificacion,
+                super_c: cleanNum(r.super_c),
+                regular_c: cleanNum(r.regular_c),
+                ion_c: cleanNum(r.ion_c),
+                diesel_c: cleanNum(r.diesel_c),
+                super_a: cleanNum(r.super_a),
+                regular_a: cleanNum(r.regular_a),
+                ion_a: cleanNum(r.ion_a),
+                diesel_a: cleanNum(r.diesel_a)
+            }));
+        }
+    } catch (apiErr) {
+        console.warn('[DGEHM Service] API fetch fallback to Puppeteer:', apiErr.message);
+    }
+
     let browser = null;
     const downloadDir = path.resolve(__dirname, '../tmp_dgehm_downloads');
     if (!fs.existsSync(downloadDir)) {

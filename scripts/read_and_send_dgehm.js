@@ -180,7 +180,7 @@ async function readMirrorSinappApi() {
         };
     }).filter(r => r.estacion);
 
-    return { source: 'DGEHM_MIRROR_API', rows };
+    return { source: 'GASOLINASV_API', rows };
 }
 
 const normExact = str => (str || '')
@@ -195,6 +195,15 @@ const normFuzzy = str => normExact(str)
     .replace(/\b(ESTACION DE SERVICIO|E S|GASOLINERA|DE|LA|EL|LOS|LAS)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+const STATION_ALIASES = {
+    'PUMA PARADOR DE DON PACUN': 'PUMA PARADOR DON PACUN',
+    'PUMA IZALCO': 'PUMA PEREGRINO IZALCO',
+    'TEXACO GASOLINERA TAZUMAL': 'E S TAZUMAL',
+    'ALBA TAZUMAL': 'E S TAZUMAL',
+    'TEXACO PANAMERICANA': 'TEXACO ILOPANGO',
+    'UNO ILOPANGO': 'UNO SAN BARTOLO'
+};
 
 function matchStations(feedRows, mappedStations, existingSnap = []) {
     const existingMap = new Map(existingSnap.map(r => [normExact(r.estacion), r]));
@@ -212,7 +221,11 @@ function matchStations(feedRows, mappedStations, existingSnap = []) {
     for (const m of mappedStations) {
         const dbName = (m.competencia || '').trim();
         if (!dbName || seen.has(dbName)) continue;
-        const src = sourceExact.get(normExact(dbName)) || sourceFuzzy.get(normFuzzy(dbName));
+        const ne = normExact(dbName);
+        const aliasTarget = STATION_ALIASES[ne] || null;
+        const src = sourceExact.get(ne)
+            || (aliasTarget ? sourceExact.get(aliasTarget) : null)
+            || sourceFuzzy.get(normFuzzy(dbName));
         if (!src) continue;
         seen.add(dbName);
         const prev = existingMap.get(normExact(dbName));
@@ -303,13 +316,13 @@ async function syncViaDirectDb(feed) {
 }
 
 async function main() {
-    // 1. Leer datos desde DGEHM primario o espejo SINAPP
+    // 1. Leer datos desde GasolinaSV API (primario rápido) o DGEHM oficial (respaldo)
     let feed;
     try {
-        feed = await readPrimaryDgehm();
-    } catch (err) {
-        console.log(`[FALLBACK] Primario no accesible (${err.message}). Leyendo desde espejo SINAPP API...`);
         feed = await readMirrorSinappApi();
+    } catch (err) {
+        console.log(`[FALLBACK] GasolinaSV API no disponible (${err.message}). Intentando portal DGEHM...`);
+        feed = await readPrimaryDgehm();
     }
 
     // 2. Intentar envío por API HTTP hacia admin.sipesv.com; si retorna 401/5xx usar respaldo DB directo

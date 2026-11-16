@@ -170,16 +170,16 @@ async function fetchMirrorGasolinaSv() {
         };
     }).filter(r => r.estacion);
 
-    return { rows: parsedRows, source: 'DGEHM_MIRROR_API' };
+    return { rows: parsedRows, source: 'GASOLINASV_API' };
 }
 
 async function fetchAllFuelPricesWithFallback(logger = writeLog) {
     try {
-        logger('1. Conectando al portal primario oficial DGEHM...');
-        return await fetchPrimaryDgehm();
-    } catch (primaryErr) {
-        logger(`⚠️ Portal primario DGEHM no disponible (${primaryErr.message}). Activando espejo oficial SINAPP (API)...`);
+        logger('1. Consultando API integrada de GasolinaSV (datos SINAPP/DGEHM)...');
         return await fetchMirrorGasolinaSv();
+    } catch (mirrorErr) {
+        logger(`⚠️ GasolinaSV no disponible (${mirrorErr.message}). Intentando portal primario DGEHM...`);
+        return await fetchPrimaryDgehm();
     }
 }
 
@@ -195,6 +195,15 @@ const normFuzzy = str => normExact(str)
     .replace(/\b(ESTACION DE SERVICIO|E S|GASOLINERA|DE|LA|EL|LOS|LAS)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+const STATION_ALIASES = {
+    'PUMA PARADOR DE DON PACUN': 'PUMA PARADOR DON PACUN',
+    'PUMA IZALCO': 'PUMA PEREGRINO IZALCO',
+    'TEXACO GASOLINERA TAZUMAL': 'E S TAZUMAL',
+    'ALBA TAZUMAL': 'E S TAZUMAL',
+    'TEXACO PANAMERICANA': 'TEXACO ILOPANGO',
+    'UNO ILOPANGO': 'UNO SAN BARTOLO'
+};
 
 function matchStationsToCatalog(parsedRows, mappedStations, existingSnapshotRows = []) {
     const existingByNorm = new Map();
@@ -219,8 +228,11 @@ function matchStationsToCatalog(parsedRows, mappedStations, existingSnapshotRows
         if (!dbName || seenDbNames.has(dbName)) continue;
 
         const ne = normExact(dbName);
+        const aliasTarget = STATION_ALIASES[ne] || null;
         const nf = normFuzzy(dbName);
-        const src = sourceExactMap.get(ne) || (nf ? sourceFuzzyMap.get(nf) : null);
+        const src = sourceExactMap.get(ne)
+            || (aliasTarget ? sourceExactMap.get(aliasTarget) : null)
+            || (nf ? sourceFuzzyMap.get(nf) : null);
         if (!src) continue;
 
         seenDbNames.add(dbName);

@@ -177,13 +177,13 @@ const ConsultasPreciosCompetencia = () => {
         try {
             setSyncing(true);
             const res = await api.post('/consultas/estaciones/precios-competencia/sync-dgehm');
-            const { message, count, totalConfigured, totalDgehm } = res.data;
+            const { message, count, totalConfigured, totalDgehm, totalDGEHM } = res.data;
             addToast(message || `Sincronización exitosa: ${count} de ${totalConfigured} estaciones actualizadas.`, 'success');
             setLastSyncInfo({
                 date: new Date().toLocaleString(),
                 count,
                 totalConfigured,
-                totalDgehm
+                totalDgehm: totalDGEHM || totalDgehm
             });
             await fetchCurrentData();
             if (activeTab === 'historial') fetchHistorial();
@@ -722,7 +722,7 @@ const ConsultasPreciosCompetencia = () => {
                         </span>
                     </div>
                     <p style={{ color: 'var(--text-muted)', marginTop: '0.25rem', marginBottom: 0 }}>
-                        Monitoreo de precios oficiales DGEHM, gestión de estaciones vinculadas, historial y análisis de mercado.
+                        Monitoreo de precios oficiales DGEHM / GasolinaSV, gestión de estaciones vinculadas, historial y análisis de mercado.
                     </p>
                 </div>
 
