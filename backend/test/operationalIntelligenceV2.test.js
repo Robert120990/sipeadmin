@@ -31,7 +31,7 @@ describe('Frentes 1–4: Inteligencia Operativa V2, EBITDA Real, Auditoría en T
         dbModule.withRetry = async (fn) => fn();
         dbModule.getAccountingDb = async () => ({
             query: async (sql) => {
-                if (sql.includes('FROM branches WHERE id != 7')) {
+                if (sql.includes('FROM branches WHERE id !=')) {
                     return [[
                         { id_empresa: 1, titulo: 'Texaco Nejapa' },
                         { id_empresa: 2, titulo: 'Puma San Miguelito' }
@@ -194,7 +194,7 @@ describe('Frentes 1–4: Inteligencia Operativa V2, EBITDA Real, Auditoría en T
 
         dbModule.getAccountingDb = async () => ({
             query: async (sql) => {
-                if (sql.includes('FROM branches WHERE id != 7')) {
+                if (sql.includes('FROM branches WHERE id !=')) {
                     return [[{ id_empresa: 1, titulo: 'Texaco Nejapa' }]];
                 }
                 if (sql.includes('venta_dolares')) {

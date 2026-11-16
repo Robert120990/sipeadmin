@@ -39,15 +39,15 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
     const numDias = Math.max(1, Math.round((tFin - tInicio) / (1000 * 60 * 60 * 24)) + 1);
     const factorDias = numDias / 30;
 
-    // 1. Estaciones activas con infraestructura de tanques (excluyendo branch_id 7 histórico migrado a 12)
+    // 1. Estaciones activas con infraestructura de tanques (Inversiones LIL branch_id 7 para Shell Poliedro, excluyendo branch_id 12)
     const [stations] = await withRetry(() => accountingDb.query(
-        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id != 7 AND id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
+        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id != 12 AND id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
     ));
 
     // 2. Ventas y galonaje de combustible por estación (solo turnos cerrados)
     const sqlCombustibles = `
         SELECT 
-            CASE WHEN b.id = 7 THEN 12 ELSE b.id END as id_empresa,
+            b.id as id_empresa,
             COALESCE(SUM(r.diferencia), 0.0) as total_galones,
             COALESCE(SUM(r.monto), 0.0) as venta_dolares,
             COALESCE(SUM(CASE WHEN (r.codigo_producto LIKE '%DIESEL%' AND r.codigo_producto NOT LIKE '%ION%') OR p.tipo_combustible = 3 THEN r.diferencia ELSE 0 END), 0.0) as galones_diesel,
@@ -58,7 +58,7 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         JOIN gas_station_closeouts c ON b.id = c.branch_id
         JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
         LEFT JOIN products p ON r.product_id = p.id
-        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        WHERE c.estado = 'cerrado' AND b.id != 12 AND c.fecha_turno BETWEEN ? AND ?
         GROUP BY id_empresa
         ORDER BY id_empresa
     `;
@@ -218,10 +218,10 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
     const lubricantesMap = {};
     try {
         const sqlLubricantes = `
-            SELECT CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa, COALESCE(SUM(l.total), 0.0) as total_lubricantes
+            SELECT c.branch_id as id_empresa, COALESCE(SUM(l.total), 0.0) as total_lubricantes
             FROM gas_station_closeouts c
             JOIN gas_station_closeout_lubricant_readings l ON c.id = l.closeout_id
-            WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
             GROUP BY id_empresa
         `;
         const [lubricantesRows] = await withRetry(() => accountingDb.query(sqlLubricantes, [dInicio, dFin]));
@@ -234,10 +234,10 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
 
     // 8. Gastos operativos registrados en turnos cerrados
     const sqlGastos = `
-        SELECT CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa, COALESCE(SUM(e.valor), 0.0) as total_gastos
+        SELECT c.branch_id as id_empresa, COALESCE(SUM(e.valor), 0.0) as total_gastos
         FROM gas_station_closeouts c
         JOIN gas_station_closeout_expenses e ON c.id = e.closeout_id
-        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
         GROUP BY id_empresa
     `;
     const [gastosRows] = await withRetry(() => accountingDb.query(sqlGastos, [dInicio, dFin]));

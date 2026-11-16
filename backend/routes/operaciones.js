@@ -176,18 +176,18 @@ router.get('/dashboard/vencimientos', authenticateToken, requirePermission(venci
 
 // --- Pedidos de Combustible ---
 const OFFICIAL_ESTACIONES = [
-    { id_empresa: '002', branch_id: 4, saas_branch_id: 4, titulo: 'Puma Miraflores', orden: 1 },
-    { id_empresa: '006', branch_id: 3, saas_branch_id: 3, titulo: 'Shell Chalchuapa', orden: 2 },
-    { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
-    { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
-    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 },
-    { id_empresa: '016', branch_id: 12, legacy_branch_id: 7, saas_branch_id: 12, titulo: 'Shell Poliedro', orden: 6 }
+    { id_empresa: '002', branch_id: 4, saas_branch_id: 4, company_id: 8, titulo: 'Puma Miraflores', orden: 1 },
+    { id_empresa: '006', branch_id: 3, saas_branch_id: 3, company_id: 2, titulo: 'Shell Chalchuapa', orden: 2 },
+    { id_empresa: '008', branch_id: 8, saas_branch_id: 8, company_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
+    { id_empresa: '014', branch_id: 1, saas_branch_id: 1, company_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
+    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, company_id: 1, titulo: 'Shell 14 Avenida', orden: 5 },
+    { id_empresa: '016', branch_id: 7, saas_branch_id: 7, company_id: 1, titulo: 'Shell Poliedro', orden: 6 }
 ];
 
 const POLIEDRO_RESERVA_FALLBACK = { S: 175, R: 320, D: 210, I: 210 };
 
 const getCleanStationName = (id, defaultTitulo) => {
-    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === String(id) || String(s.branch_id) === String(id) || String(s.legacy_branch_id) === String(id));
+    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === String(id) || String(s.branch_id) === String(id));
     if (matched) return matched.titulo;
     const upper = String(defaultTitulo || '').toUpperCase();
     if (upper.includes('POLIEDRO')) return 'Shell Poliedro';
@@ -229,6 +229,13 @@ router.get('/operaciones/estaciones', authenticateToken, requirePermission(pedid
 
 router.get('/operaciones/fecha-servidor', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
+        const accountingDb = await getAccountingDb().catch(() => null);
+        if (accountingDb) {
+            const [saasRows] = await accountingDb.query("SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as fecha_servidor FROM gas_station_closeouts WHERE estado = 'cerrado' AND branch_id != 12");
+            if (saasRows[0]?.fecha_servidor) {
+                return res.json({ fecha_servidor: saasRows[0].fecha_servidor });
+            }
+        }
         const externalDb = await getExternalDb();
         const [rows] = await externalDb.query("SELECT MAX(fecha) as fecha_servidor FROM lecturas_tanque");
         res.json({ fecha_servidor: rows[0]?.fecha_servidor || null });
@@ -239,8 +246,9 @@ router.get('/operaciones/fecha-servidor', authenticateToken, requirePermission(p
 
 router.get('/operaciones/fecha-servidor-global', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
-        const externalDb = await getExternalDb();
-        const [rows] = await externalDb.query("SELECT CURDATE() as fecha_actual, DATE_SUB(CURDATE(), INTERVAL 1 DAY) as fecha_ayer");
+        const accountingDb = await getAccountingDb().catch(() => null);
+        const dbConn = accountingDb || await getExternalDb();
+        const [rows] = await dbConn.query("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') as fecha_actual, DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') as fecha_ayer");
         let fechaActual = rows[0]?.fecha_actual;
         let fechaAyer = rows[0]?.fecha_ayer;
         if (fechaActual instanceof Date) { fechaActual = fechaActual.toISOString().split('T')[0]; }
@@ -254,11 +262,12 @@ router.get('/operaciones/fecha-servidor-global', authenticateToken, requirePermi
 async function resolveStationBranchId(accountingDb, id_empresa) {
     if (!id_empresa) return null;
     const cleanId = String(id_empresa).trim();
-    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === cleanId || String(s.branch_id) === cleanId || String(s.legacy_branch_id) === cleanId);
+    if (cleanId === '016' || cleanId === '7' || cleanId === '12') return 7; // Inversiones LIL - Shell Poliedro
+    const matched = OFFICIAL_ESTACIONES.find(s => s.id_empresa === cleanId || String(s.branch_id) === cleanId);
     if (matched) return matched.branch_id;
     if (!accountingDb) return null;
     try {
-        const [settings] = await accountingDb.query('SELECT branch_id FROM gas_station_settings WHERE setting_key = ? AND setting_value = ? LIMIT 1', ['rrs_id_empresa', cleanId]);
+        const [settings] = await accountingDb.query('SELECT branch_id FROM gas_station_settings WHERE setting_key = ? AND setting_value = ? AND branch_id != 12 ORDER BY company_id ASC LIMIT 1', ['rrs_id_empresa', cleanId]);
         if (settings.length) return settings[0].branch_id;
         const parsed = parseInt(cleanId, 10);
         if (!isNaN(parsed)) {
@@ -272,23 +281,21 @@ async function resolveStationBranchId(accountingDb, id_empresa) {
 }
 
 async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
-    // 1. Prioridad: nuevo sistema SaaS (accountingDb)
+    // 1. Prioridad: nuevo sistema SaaS (accountingDb - Inversiones LIL branch_id=7 para Shell Poliedro)
     if (accountingDb) {
         try {
             const branchId = await resolveStationBranchId(accountingDb, id_empresa);
             if (branchId) {
-                const branchIds = (branchId === 12 || branchId === 7) ? [12, 7] : [branchId];
                 const [closeoutRows] = await accountingDb.query(`
-                    SELECT id, branch_id, fecha_turno, numero_turno 
+                    SELECT id, branch_id, DATE_FORMAT(fecha_turno, '%Y-%m-%d') as fecha_turno, numero_turno 
                     FROM gas_station_closeouts 
-                    WHERE branch_id IN (?) AND fecha_turno <= ? AND estado = 'cerrado'
+                    WHERE branch_id = ? AND estado = 'cerrado'
                     ORDER BY fecha_turno DESC, numero_turno DESC 
                     LIMIT 1
-                `, [branchIds, fecha]);
+                `, [branchId]);
 
                 if (closeoutRows.length) {
                     const closeout = closeoutRows[0];
-                    const effectiveBranchId = closeout.branch_id || branchId;
                     const [tanks] = await accountingDb.query(`
                         SELECT 
                             t.codigo as id_tanque,
@@ -306,12 +313,12 @@ async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
                         LEFT JOIN gas_station_closeout_tank_readings tr ON t.id = tr.tank_id AND tr.closeout_id = ?
                         WHERE t.branch_id = ?
                         ORDER BY t.codigo
-                    `, [closeout.id, effectiveBranchId]);
+                    `, [closeout.id, branchId]);
 
                     if (tanks && tanks.length > 0) {
                         const normalizedTanks = tanks.map(t => {
                             const rVal = Number(t.reserva || 0);
-                            if (rVal === 0 && (effectiveBranchId === 12 || effectiveBranchId === 7)) {
+                            if (rVal === 0 && branchId === 7) {
                                 return { ...t, reserva: POLIEDRO_RESERVA_FALLBACK[t.tipo_combustible] || 0 };
                             }
                             return t;
@@ -319,7 +326,7 @@ async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
                         const effectiveDate = closeout.fecha_turno instanceof Date 
                             ? closeout.fecha_turno.toISOString().split('T')[0] 
                             : String(closeout.fecha_turno || fecha).split('T')[0];
-                        return { fecha: effectiveDate, inventario: normalizedTanks };
+                        return { fecha: effectiveDate, turno: closeout.numero_turno, inventario: normalizedTanks };
                     }
                 }
             }
@@ -410,35 +417,45 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
         try {
             const branchId = await resolveStationBranchId(accountingDb, id_empresa);
             if (branchId) {
-                const cleanDate = fecha.includes('T') ? fecha.split('T')[0] : fecha;
-                const cHasta = new Date(cleanDate + 'T12:00:00');
-                const cDesde = new Date(cleanDate + 'T12:00:00');
+                const [maxRows] = await accountingDb.query(
+                    "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as max_fecha FROM gas_station_closeouts WHERE branch_id = ? AND estado = 'cerrado'",
+                    [branchId]
+                );
+                const rawRef = maxRows[0]?.max_fecha || (fecha.includes('T') ? fecha.split('T')[0] : fecha);
+                const cHasta = new Date(rawRef + 'T12:00:00');
+                const cDesde = new Date(rawRef + 'T12:00:00');
                 cDesde.setDate(cDesde.getDate() - 6);
                 const dateDesde = cDesde.toISOString().split('T')[0];
                 const dateHasta = cHasta.toISOString().split('T')[0];
 
-                const branchIds = (branchId === 12 || branchId === 7) ? [12, 7] : [branchId];
                 const [rows] = await accountingDb.query(`
                     SELECT 
-                        CASE 
-                            WHEN r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
-                            WHEN r.descripcion_producto LIKE '%SUPER%' THEN 'S'
-                            WHEN r.descripcion_producto LIKE '%ION%' THEN 'I'
-                            ELSE 'D'
-                        END as tipo_combustible,
-                        SUM(r.diferencia) / 7 as promedio
-                    FROM gas_station_closeouts c
-                    JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
-                    WHERE c.branch_id IN (?) 
-                      AND c.fecha_turno BETWEEN ? AND ? 
-                      AND c.estado = 'cerrado'
+                        tipo_combustible,
+                        SUM(diferencia) / GREATEST(1, COUNT(DISTINCT fecha_turno)) as promedio
+                    FROM (
+                        SELECT 
+                            c.fecha_turno,
+                            r.diferencia,
+                            CASE 
+                                WHEN p.tipo_combustible = 1 OR r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
+                                WHEN p.tipo_combustible = 2 OR r.descripcion_producto LIKE '%SUPER%' OR r.descripcion_producto LIKE '%V-POWER%' THEN 'S'
+                                WHEN p.tipo_combustible = 4 OR r.descripcion_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ULSD%' THEN 'I'
+                                ELSE 'D'
+                            END as tipo_combustible
+                        FROM gas_station_closeouts c
+                        JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
+                        LEFT JOIN products p ON r.product_id = p.id
+                        WHERE c.branch_id = ? 
+                          AND c.fecha_turno BETWEEN ? AND ? 
+                          AND c.estado = 'cerrado'
+                    ) sub
                     GROUP BY tipo_combustible
-                `, [branchIds, dateDesde, dateHasta]);
+                `, [branchId, dateDesde, dateHasta]);
 
                 let totalProm = 0;
                 (rows || []).forEach(r => {
                     if (['D', 'R', 'S', 'I'].includes(r.tipo_combustible)) {
-                        agg[r.tipo_combustible] = Number(r.promedio || 0);
+                        agg[r.tipo_combustible] += Number(r.promedio || 0);
                         totalProm += Number(r.promedio || 0);
                     }
                 });

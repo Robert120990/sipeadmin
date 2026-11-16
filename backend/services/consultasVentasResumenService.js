@@ -52,7 +52,7 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                 JOIN gas_station_closeouts c ON b.id = c.branch_id
                 JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
                 LEFT JOIN products p ON r.product_id = p.id
-                WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+                WHERE c.estado = 'cerrado' AND b.id != 12 AND c.fecha_turno BETWEEN ? AND ?
                 GROUP BY b.id, b.nombre
                 ORDER BY b.id
             `;
@@ -488,7 +488,7 @@ const getResumenRangoVentasData = async (externalDb, startDate, endDate, account
                 JOIN gas_station_closeouts c ON b.id = c.branch_id
                 JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
                 LEFT JOIN products p ON r.product_id = p.id
-                WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+                WHERE c.estado = 'cerrado' AND b.id != 12 AND c.fecha_turno BETWEEN ? AND ?
                 GROUP BY b.id, b.nombre
                 ORDER BY b.id
             `;
@@ -952,7 +952,7 @@ const getComparativoAnualData = async (externalDb, anioPrincipalParam, anioCompa
                         FROM gas_station_closeouts c
                         JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
                         LEFT JOIN products p ON r.product_id = p.id
-                        WHERE c.estado = 'cerrado' AND YEAR(c.fecha_turno) = ?
+                        WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND YEAR(c.fecha_turno) = ?
                         GROUP BY anio, mes, c.branch_id
                         ORDER BY anio, mes, c.branch_id
                     `;

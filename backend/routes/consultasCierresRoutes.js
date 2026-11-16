@@ -435,7 +435,7 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
         }
         const cleanId = String(id_empresa).padStart(3, '0');
         const saasBranchId = saasBranchMap[cleanId] || saasBranchMap[id_empresa];
-        const saasBranchIds = saasBranchId === 12 ? [12, 7] : [saasBranchId];
+        const saasBranchIds = [saasBranchId];
         let saasHasClosedShifts = false;
         let accountingDb = null;
         if (saasBranchId) {

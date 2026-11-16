@@ -48,8 +48,8 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
         if (accountingDb) {
             const [remRows] = await withRetry(() => accountingDb.query(`
                 SELECT
-                    CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
-                    CASE WHEN c.branch_id = 7 THEN 'Shell Poliedro' ELSE b.nombre END as estacion,
+                    c.branch_id as id_empresa,
+                    b.nombre as estacion,
                     c.fecha_turno as fecha,
                     COALESCE(SUM(rem.total_remesa), 0.0) as remesas_pista_usd,
                     COALESCE(SUM(pos.total_tarjeta), 0.0) as tarjetas_pista_usd
@@ -65,7 +65,7 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
                     FROM gas_station_closeout_tarjetas
                     GROUP BY closeout_id
                 ) pos ON c.id = pos.closeout_id
-                WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+                WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
                 GROUP BY id_empresa, estacion, c.fecha_turno
                 ORDER BY c.fecha_turno DESC, id_empresa ASC
             `, [dInicio, dFin]));
@@ -75,8 +75,8 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
             try {
                 const [valesRows] = await withRetry(() => accountingDb.query(`
                     SELECT
-                        CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
-                        CASE WHEN c.branch_id = 7 THEN 'Shell Poliedro' ELSE b.nombre END as estacion,
+                        c.branch_id as id_empresa,
+                        b.nombre as estacion,
                         c.fecha_turno as fecha_turno,
                         COALESCE(cu.nombre, CONCAT('Cliente #', COALESCE(cr.cliente_id, 0))) as cliente,
                         COUNT(*) as cantidad_vales,
@@ -92,6 +92,7 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
                        AND sh.fecha_emision >= c.fecha_turno
                        AND sh.estado = 'emitido'
                     WHERE c.estado = 'cerrado'
+                      AND c.branch_id != 12
                       AND c.fecha_turno BETWEEN ? AND DATE_SUB(CURDATE(), INTERVAL 3 DAY)
                       AND sh.id IS NULL
                       AND cr.monto > 0

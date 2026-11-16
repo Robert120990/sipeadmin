@@ -822,11 +822,15 @@ export default function PedidosCombustible() {
         try {
             const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${fechaConsulta}`);
             setInventario(resT.data.inventario || []);
+            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : fechaConsulta;
+            if (effectiveDate && effectiveDate !== fechaConsulta) {
+                setFechaConsulta(effectiveDate);
+            }
 
-            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${fechaConsulta}`);
+            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${effectiveDate}`);
             setPromedios(resP.data || { D: 0, R: 0, S: 0, I: 0 });
 
-            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${fechaConsulta}`);
+            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${effectiveDate}`);
             setProgramados(resProg.data || []);
         } catch (error) {
             addToast("Error al obtener datos operativos", "error");
@@ -914,11 +918,12 @@ export default function PedidosCombustible() {
         try {
             const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${fechaConsulta}`);
             setInventario2(resT.data.inventario || []);
+            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : fechaConsulta;
 
-            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${fechaConsulta}`);
+            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${effectiveDate}`);
             setPromedios2(resP.data || { D: 0, R: 0, S: 0, I: 0 });
 
-            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${fechaConsulta}`);
+            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${effectiveDate}`);
             setProgramados2(resProg.data || []);
         } catch (error) {
             console.error("Error al obtener datos operativos de estación secundaria:", error);

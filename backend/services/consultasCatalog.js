@@ -69,7 +69,7 @@ const getCleanStationName = (id, defaultTitulo) => {
     if (id === '008' && (upper.includes('COSTA') || upper === '008')) return 'Puma Costa del Sol';
     if (id === '014' && (upper.includes('SAN MARTIN') || upper.includes('LA LOMA') || upper === '014')) return 'Puma La Loma (San Martín)';
     if (id === '015' && (upper.includes('14') || upper === '015')) return 'Shell 14 Avenida';
-    if ((id === '016' || id === '7' || id === '12') && (upper.includes('POLIEDRO') || upper === '016' || upper === '7' || upper === '12')) return 'Shell Poliedro';
+    if ((id === '016' || id === '7') && (upper.includes('POLIEDRO') || upper === '016' || upper === '7')) return 'Shell Poliedro';
     if (upper.includes('POLIEDRO')) return 'Shell Poliedro';
     return defaultTitulo;
 };
@@ -86,16 +86,15 @@ const getCleanTiendaName = (id, defaultTitulo) => {
 };
 
 const saasBranchMap = {
-    '014': 1, // San Martin -> Puma San Martin II
+    '014': 1, // San Martin -> Puma San Martin II (Inversiones LIL)
     '006': 3, // Chalchuapa -> Shell Chalchuapa
     '009': 6, // El Pedregal -> Super El Pedregal
     '002': 4, // Miraflores -> Puma Miraflores
     '008': 8, // Costa del Sol -> Puma Costa del Sol
     'E-1': 8, // Costa del Sol alias
-    '015': 2, // Shell 14 Avenida
-    '016': 12, // Shell Poliedro (nuevo branch_id = 12)
-    '7': 12,   // Shell Poliedro alias histórico
-    '12': 12   // Shell Poliedro alias directo
+    '015': 2, // Shell 14 Avenida (Inversiones LIL)
+    '016': 7, // Shell Poliedro (Inversiones LIL, company_id = 1, branch_id = 7)
+    '7': 7    // Shell Poliedro alias directo (Inversiones LIL)
 };
 
 const branchToEmpId = {
@@ -105,19 +104,18 @@ const branchToEmpId = {
     4: '002',
     8: '008',
     6: '009',
-    7: '016',
-    12: '016'
+    7: '016'
 };
 
-const normalizeSaasBranchId = (bId) => (Number(bId) === 7 ? 12 : Number(bId));
+const normalizeSaasBranchId = (bId) => Number(bId);
 
 const OFFICIAL_ESTACIONES = [
-    { id_empresa: '002', branch_id: 4, saas_branch_id: 4, titulo: 'Puma Miraflores', orden: 1 },
-    { id_empresa: '006', branch_id: 3, saas_branch_id: 3, titulo: 'Shell Chalchuapa', orden: 2 },
-    { id_empresa: '008', branch_id: 8, saas_branch_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
-    { id_empresa: '014', branch_id: 1, saas_branch_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
-    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, titulo: 'Shell 14 Avenida', orden: 5 },
-    { id_empresa: '016', branch_id: 12, legacy_branch_id: 7, saas_branch_id: 12, titulo: 'Shell Poliedro', orden: 6 }
+    { id_empresa: '002', branch_id: 4, saas_branch_id: 4, company_id: 8, titulo: 'Puma Miraflores', orden: 1 },
+    { id_empresa: '006', branch_id: 3, saas_branch_id: 3, company_id: 2, titulo: 'Shell Chalchuapa', orden: 2 },
+    { id_empresa: '008', branch_id: 8, saas_branch_id: 8, company_id: 8, titulo: 'Puma Costa del Sol', orden: 3 },
+    { id_empresa: '014', branch_id: 1, saas_branch_id: 1, company_id: 1, titulo: 'Puma La Loma (San Martín)', orden: 4 },
+    { id_empresa: '015', branch_id: 2, saas_branch_id: 2, company_id: 1, titulo: 'Shell 14 Avenida', orden: 5 },
+    { id_empresa: '016', branch_id: 7, saas_branch_id: 7, company_id: 1, titulo: 'Shell Poliedro', orden: 6 }
 ];
 
 // Tokens y conceptos genéricos para auditoría de movimientos sin descripción suficiente

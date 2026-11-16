@@ -22,14 +22,14 @@ const resolveStationEmpCode = (rawId) => {
 const getTanquesAutonomia = async () => {
     const accountingDb = await getAccountingDb();
 
-    // 1. Obtener lista de estaciones con tanques (excluyendo branch_id 7 histórico migrado a 12)
+    // 1. Obtener lista de estaciones con tanques (usando branch_id 7 de Inversiones LIL para Shell Poliedro y excluyendo branch_id 12)
     const [stations] = await withRetry(() => accountingDb.query(
-        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id != 7 AND id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
+        "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id != 12 AND id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
     ));
 
     // 2. Obtener la última fecha registrada de cierres de estación cerrados
     const [maxFechaRows] = await withRetry(() => accountingDb.query(
-        "SELECT MAX(fecha_turno) as last_date FROM gas_station_closeouts WHERE estado = 'cerrado'"
+        "SELECT MAX(fecha_turno) as last_date FROM gas_station_closeouts WHERE estado = 'cerrado' AND branch_id != 12"
     ));
     let lastDate = maxFechaRows[0]?.last_date;
     if (lastDate instanceof Date) {
@@ -73,17 +73,18 @@ const getTanquesAutonomia = async () => {
             ) m ON tr.tank_id = m.tank_id AND tr.closeout_id = m.max_closeout_id
         ) lr ON t.id = lr.tank_id
         LEFT JOIN gas_station_closeouts c ON lr.closeout_id = c.id
-        WHERE t.branch_id != 7
+        WHERE t.branch_id != 12
         ORDER BY b.nombre, t.codigo
     `;
     const [tankRows] = await withRetry(() => accountingDb.query(tankQuery));
 
     // 4. Calcular el consumo promedio diario de los últimos 7 días considerando solo turnos cerrados
     const consumptionQuery = `
-        SELECT id_empresa, tipo_combustible, SUM(diferencia) as total_7d
+        SELECT id_empresa, tipo_combustible, SUM(diferencia) as total_7d, COUNT(DISTINCT fecha_turno) as dias_activos
         FROM (
             SELECT 
-                CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
+                c.branch_id as id_empresa,
+                c.fecha_turno,
                 CASE 
                     WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
                     WHEN r.codigo_producto LIKE '%DIESEL%' OR r.descripcion_producto LIKE '%DIESEL%' OR p.tipo_combustible = 3 THEN 'D'
@@ -95,7 +96,7 @@ const getTanquesAutonomia = async () => {
             FROM gas_station_closeouts c
             JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
             LEFT JOIN products p ON r.product_id = p.id
-            WHERE c.estado = 'cerrado' AND c.fecha_turno >= DATE_SUB(?, INTERVAL 7 DAY)
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno >= DATE_SUB(?, INTERVAL 7 DAY)
         ) sub
         GROUP BY id_empresa, tipo_combustible
     `;
@@ -104,7 +105,8 @@ const getTanquesAutonomia = async () => {
     const consumptionMap = {};
     consumptionRows.forEach(r => {
         const key = `${r.id_empresa}_${r.tipo_combustible}`;
-        consumptionMap[key] = (Number(r.total_7d || 0) / 7);
+        const divDays = Number(r.dias_activos) > 0 ? Number(r.dias_activos) : 7;
+        consumptionMap[key] = (Number(r.total_7d || 0) / divDays);
     });
 
     // 5. Cruzar con pedidos activos/en tránsito o retenidos en portal_pedidos (db_sipe_admin)
@@ -413,8 +415,8 @@ const getAuditoriaMermas = async (desde, hasta) => {
 
     // Ventas acumuladas de cierres
     const sqlVentas = `
-        SELECT CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
-               CASE WHEN c.branch_id = 7 THEN 'Shell EL Poliedro' ELSE b.nombre END as estacion,
+        SELECT c.branch_id as id_empresa,
+               b.nombre as estacion,
                CASE 
                    WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
                    WHEN r.codigo_producto LIKE '%DIESEL%' OR r.descripcion_producto LIKE '%DIESEL%' OR p.tipo_combustible = 3 THEN 'D'
@@ -427,7 +429,7 @@ const getAuditoriaMermas = async (desde, hasta) => {
         JOIN branches b ON c.branch_id = b.id
         JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
         LEFT JOIN products p ON r.product_id = p.id
-        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
         GROUP BY id_empresa, estacion, tipo
         ORDER BY id_empresa, tipo
     `;
@@ -436,8 +438,8 @@ const getAuditoriaMermas = async (desde, hasta) => {
     // Movimientos físicos de tanques (inicial, recargas, final)
     const sqlMovs = `
         SELECT 
-            CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
-            CASE WHEN c.branch_id = 7 THEN 'Shell EL Poliedro' ELSE b.nombre END as estacion,
+            c.branch_id as id_empresa,
+            b.nombre as estacion,
             CASE 
                 WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
                 WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
@@ -452,7 +454,7 @@ const getAuditoriaMermas = async (desde, hasta) => {
         JOIN branches b ON c.branch_id = b.id
         JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
         JOIN gas_station_tanks t ON tr.tank_id = t.id
-        WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+        WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
         GROUP BY id_empresa, estacion, tipo_combustible
         ORDER BY id_empresa, tipo_combustible
     `;
@@ -533,8 +535,8 @@ const getAuditoriaMermas = async (desde, hasta) => {
     try {
         const [dailyVentas] = await withRetry(() => accountingDb.query(`
             SELECT
-                CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
-                CASE WHEN c.branch_id = 7 THEN 'Shell EL Poliedro' ELSE b.nombre END as estacion,
+                c.branch_id as id_empresa,
+                b.nombre as estacion,
                 c.fecha_turno as fecha,
                 CASE 
                     WHEN r.codigo_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ION%' OR p.tipo_combustible = 4 THEN 'I'
@@ -548,14 +550,14 @@ const getAuditoriaMermas = async (desde, hasta) => {
             JOIN branches b ON c.branch_id = b.id
             JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
             LEFT JOIN products p ON r.product_id = p.id
-            WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
             GROUP BY id_empresa, estacion, c.fecha_turno, tipo
             ORDER BY id_empresa, tipo, c.fecha_turno ASC
         `, [dInicio, dFin]));
 
         const [dailyMovs] = await withRetry(() => accountingDb.query(`
             SELECT
-                CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as id_empresa,
+                c.branch_id as id_empresa,
                 c.fecha_turno as fecha,
                 CASE 
                     WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
@@ -570,7 +572,7 @@ const getAuditoriaMermas = async (desde, hasta) => {
             FROM gas_station_closeouts c
             JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
             JOIN gas_station_tanks t ON tr.tank_id = t.id
-            WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
             GROUP BY id_empresa, c.fecha_turno, tipo
             ORDER BY id_empresa, tipo, c.fecha_turno ASC
         `, [dInicio, dFin]));
