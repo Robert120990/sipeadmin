@@ -292,7 +292,8 @@ const syncDgehmWithDatabase = async (targetDb = null) => {
                     super_a = VALUES(super_a),
                     regular_a = VALUES(regular_a),
                     ion_a = VALUES(ion_a),
-                    diesel_a = VALUES(diesel_a)
+                    diesel_a = VALUES(diesel_a),
+                    created_at = CURRENT_TIMESTAMP
             `, [
                 r.estacion, r.modificacion, today,
                 r.super_c, r.regular_c, r.ion_c, r.diesel_c,

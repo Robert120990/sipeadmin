@@ -7,7 +7,7 @@ echo ======================================================================
 echo.
 echo Conectando al portal oficial DGEHM y actualizando base de datos...
 echo.
-cd /d "C:\Proyectos IA\OFICINA SIPE\backend"
+cd /d "%~dp0backend"
 node sync-dgehm-direct.js
 echo.
 echo ======================================================================

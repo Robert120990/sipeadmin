@@ -43,8 +43,14 @@ async function syncDGEHM(io = null) {
 
     const rawCookies = res1.headers['set-cookie'];
     const cookies = rawCookies ? rawCookies.map(c => c.split(';')[0]).join('; ') : '';
-    const match = res1.data.match(/"ExportUrlBase":"([^"]+)"/);
-    if (!match) throw new Error('No se encontró el ExportUrlBase en la página de DGEHM');
+    const htmlBody = String(res1.data || '');
+    const match = htmlBody.match(/"ExportUrlBase":"([^"]+)"/);
+    if (!match) {
+        if (htmlBody.includes('No es posible conectar con el servidor remoto') || htmlBody.includes('192.168.1.6')) {
+            throw new Error('El portal oficial de la DGEHM tiene caído su servidor interno de reportes (192.168.1.6:80 rechazó la conexión)');
+        }
+        throw new Error('No se encontró el ExportUrlBase en la página de DGEHM');
+    }
 
     const exportUrl = 'https://sinapp.dgehm.gob.sv' + match[1].replace(/\\u0026/g, '&') + 'CSV';
     writeLog('2. Descargando reporte oficial en formato CSV...');
@@ -170,7 +176,8 @@ async function syncDGEHM(io = null) {
                     super_a = VALUES(super_a),
                     regular_a = VALUES(regular_a),
                     ion_a = VALUES(ion_a),
-                    diesel_a = VALUES(diesel_a)
+                    diesel_a = VALUES(diesel_a),
+                    created_at = CURRENT_TIMESTAMP
             `, [
                 r.estacion, r.modificacion, today,
                 cleanNum(r.super_c), cleanNum(r.regular_c), cleanNum(r.ion_c), cleanNum(r.diesel_c),

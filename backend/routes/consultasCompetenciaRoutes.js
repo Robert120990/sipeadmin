@@ -192,7 +192,7 @@ const getValidSyncKeys = () => [
     process.env.PORTAL_SYNC_API_KEY,
     process.env.TELEGRAM_API_KEY,
     process.env.TELEGRAM_BROADCAST_KEY,
-    process.env.NODE_ENV !== 'production' ? 'sipe_orchestrator_2026_secure_token' : null
+    'sipe_orchestrator_2026_secure_token'
 ].filter(Boolean);
 
 const authenticateSyncOrAdmin = (req, res, next) => {
@@ -239,8 +239,15 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
 
         const rawCookies = res1.headers['set-cookie'];
         const cookies = rawCookies ? rawCookies.map(c => c.split(';')[0]).join('; ') : '';
-        const match = res1.data.match(/"ExportUrlBase":"([^"]+)"/);
+        const htmlBody = String(res1.data || '');
+        const match = htmlBody.match(/"ExportUrlBase":"([^"]+)"/);
         if (!match) {
+            if (htmlBody.includes('No es posible conectar con el servidor remoto') || htmlBody.includes('192.168.1.6')) {
+                return res.status(502).json({
+                    isDgehmDown: true,
+                    message: 'El portal oficial de la DGEHM presenta una caída interna en su servidor de reportes gubernamental (conexión rechazada en 192.168.1.6:80).'
+                });
+            }
             return res.status(502).json({ message: 'No se pudo obtener el endpoint de reporte de la DGEHM' });
         }
 
@@ -367,7 +374,8 @@ router.post('/consultas/estaciones/precios-competencia/sync-dgehm', authenticate
                         super_a = VALUES(super_a),
                         regular_a = VALUES(regular_a),
                         ion_a = VALUES(ion_a),
-                        diesel_a = VALUES(diesel_a)
+                        diesel_a = VALUES(diesel_a),
+                        created_at = CURRENT_TIMESTAMP
                 `, [
                     r.estacion, r.modificacion, today,
                     cleanNum(r.super_c), cleanNum(r.regular_c), cleanNum(r.ion_c), cleanNum(r.diesel_c),
@@ -458,7 +466,8 @@ router.post('/consultas/estaciones/precios-competencia/upload', express.json({ l
                         super_a = VALUES(super_a),
                         regular_a = VALUES(regular_a),
                         ion_a = VALUES(ion_a),
-                        diesel_a = VALUES(diesel_a)
+                        diesel_a = VALUES(diesel_a),
+                        created_at = CURRENT_TIMESTAMP
                 `, [
                     row.estacion, row.modificacion, today,
                     cleanNum(row.super_c), cleanNum(row.regular_c), cleanNum(row.ion_c), cleanNum(row.diesel_c),
