@@ -14,7 +14,8 @@ const AGY_STATUS_META = {
 };
 
 const DEFAULT_MODELS = [
-    { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Máxima Velocidad e Inteligencia)' },
+    { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Recomendado · Carbon High)' },
+    { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Argon High)' },
     { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
     { id: 'gemini-3-flash', label: 'gemini-3-flash (Ultra Rápido)' }
 ];
@@ -24,7 +25,8 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
     const [ticket, setTicket] = useState(null);
     const [loading, setLoading] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [selectedModel, setSelectedModel] = useState('gemini-4-argon-high');
+    const [selectedModel, setSelectedModel] = useState('gemini-4-carbon-high');
+    const [availableModels, setAvailableModels] = useState(DEFAULT_MODELS);
     const [aiNotes, setAiNotes] = useState('');
     const [feedbackComment, setFeedbackComment] = useState('');
     const [activeView, setActiveView] = useState('plan');
@@ -36,7 +38,7 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
         ssh_password: '',
         project_path: '/var/www/sipeadmin',
         agy_command: 'agy',
-        default_model: 'gemini-4-argon-high',
+        default_model: 'gemini-4-carbon-high',
         execution_mode: 'auto'
     });
 
@@ -49,10 +51,14 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
                 api.get('/tickets/agy-settings').catch(() => ({ data: { data: {} } }))
             ]);
             const t = tRes.data?.data || tRes.data;
+            const cfg = cfgRes.data?.data || {};
+            const resolvedDefault = cfg.default_model || 'gemini-4-carbon-high';
+            if (Array.isArray(cfg.available_models) && cfg.available_models.length > 0) {
+                setAvailableModels(cfg.available_models);
+            }
             setTicket(t);
             setAiNotes(t?.ai_notes || '');
-            if (t?.agy_model) setSelectedModel(t.agy_model);
-            const cfg = cfgRes.data?.data || {};
+            setSelectedModel(t?.agy_model || resolvedDefault);
             setCfgForm((prev) => ({
                 ...prev,
                 ssh_host: cfg.ssh_host || 'localhost',
@@ -60,7 +66,7 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
                 ssh_user: cfg.ssh_user || 'root',
                 project_path: cfg.project_path || '/var/www/sipeadmin',
                 agy_command: cfg.agy_command || 'agy',
-                default_model: cfg.default_model || 'gemini-4-argon-high'
+                default_model: resolvedDefault
             }));
         } catch (_) {
             addToast('No se pudo cargar el flujo AGY del ticket', 'error');
@@ -230,7 +236,7 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
                                 <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#818cf8', textTransform: 'uppercase' }}>
                                     Parámetros de Conexión a Consola AGY
                                 </span>
-                                <div className="form-grid form-grid-3" style={{ gap: '0.6rem' }}>
+                                <div className="form-grid form-grid-2" style={{ gap: '0.6rem' }}>
                                     <div>
                                         <label style={{ display: 'block', fontSize: '0.68rem', color: '#94a3b8', marginBottom: '0.2rem' }}>Host</label>
                                         <input type="text" value={cfgForm.ssh_host} onChange={(e) => setCfgForm({ ...cfgForm, ssh_host: e.target.value })} className="form-input" style={{ height: '34px', fontSize: '0.78rem' }} />
@@ -242,6 +248,19 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
                                     <div>
                                         <label style={{ display: 'block', fontSize: '0.68rem', color: '#94a3b8', marginBottom: '0.2rem' }}>Ruta Proyecto</label>
                                         <input type="text" value={cfgForm.project_path} onChange={(e) => setCfgForm({ ...cfgForm, project_path: e.target.value })} className="form-input" style={{ height: '34px', fontSize: '0.78rem' }} />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.68rem', color: '#94a3b8', marginBottom: '0.2rem' }}>Modelo Predeterminado (Telegram / AGY)</label>
+                                        <select
+                                            value={cfgForm.default_model}
+                                            onChange={(e) => setCfgForm({ ...cfgForm, default_model: e.target.value })}
+                                            className="form-input"
+                                            style={{ width: '100%', height: '34px', fontSize: '0.78rem' }}
+                                        >
+                                            {availableModels.map((m) => (
+                                                <option key={m.id} value={m.id}>{m.label}</option>
+                                            ))}
+                                        </select>
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem' }}>
@@ -263,7 +282,7 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
                                         className="form-input"
                                         style={{ width: '100%', height: '36px', fontSize: '0.8rem' }}
                                     >
-                                        {DEFAULT_MODELS.map((m) => (
+                                        {availableModels.map((m) => (
                                             <option key={m.id} value={m.id}>{m.label}</option>
                                         ))}
                                     </select>

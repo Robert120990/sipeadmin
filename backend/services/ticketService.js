@@ -40,13 +40,217 @@ const ensureUploadsDir = () => {
     }
 };
 
+const DEFAULT_AGY_MODEL = 'gemini-4-carbon-high';
+const AVAILABLE_AGY_MODELS = [
+    { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Recomendado · Carbon High)' },
+    { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Argon High)' },
+    { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
+    { id: 'gemini-3-flash', label: 'gemini-3-flash (Ultra Rápido)' }
+];
+
 const schemaInitializedPools = new WeakSet();
 const poolTicketColsMap = new WeakMap();
+const lastReconcileByPool = new WeakMap();
 
 const hasTicketCol = (pool, colName) => {
     const colSet = pool ? poolTicketColsMap.get(pool) : null;
     if (!colSet || colSet.size === 0) return true;
     return colSet.has(colName);
+};
+
+/**
+ * Sincroniza artefactos vinculados (ai_agent_tasks, finanzas_conversaciones, notificaciones previas)
+ * cuando un ticket o trabajo en Consola AGY ya fue finalizado.
+ */
+const syncCompletedTicketArtifacts = async (pool, ticket) => {
+    if (!ticket || !ticket.id) return;
+    const code = String(ticket.ticket_code || ticket.code || '').trim();
+
+    if (pool && code) {
+        try {
+            await pool.query(
+                `UPDATE ai_agent_tasks
+                 SET status = 'completada',
+                     progress = 100,
+                     current_step = ?,
+                     completed_at = COALESCE(completed_at, NOW()),
+                     error_message = NULL
+                 WHERE status IN ('en_proceso', 'pendiente', 'analizando')
+                   AND (
+                       title LIKE ?
+                       OR title LIKE ?
+                       OR (JSON_VALID(output_metadata) AND JSON_UNQUOTE(JSON_EXTRACT(output_metadata, '$.ticket_id')) = ?)
+                   )`,
+                [
+                    ticket.status === 'cerrado'
+                        ? 'Ticket cerrado · Trabajo finalizado.'
+                        : 'Mejora/corrección aplicada · Ticket resuelto.',
+                    `%[Ticket #${code}]%`,
+                    `%${code}%`,
+                    String(ticket.id)
+                ]
+            );
+        } catch (_) {
+            // La tabla ai_agent_tasks es opcional según el esquema activo
+        }
+    }
+
+    try {
+        const localDb = getDb();
+        if (localDb) {
+            await localDb.query(
+                `UPDATE finanzas_conversaciones
+                 SET estado_agy = 'completado', updated_at = CURRENT_TIMESTAMP
+                 WHERE (ticket_id = ? OR (? != '' AND ticket_code = ?))
+                   AND estado_agy IN ('planificando', 'esperando_aprobacion', 'ejecutando')`,
+                [Number(ticket.id), code, code]
+            ).catch(() => {});
+
+            if (code) {
+                await localDb.query(
+                    `UPDATE notifications
+                     SET is_read = 1
+                     WHERE is_read = 0
+                       AND type IN ('ticket_pending', 'ticket_created')
+                       AND (
+                           (JSON_VALID(data) AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.ticket_id')) = ?)
+                           OR title LIKE ?
+                       )`,
+                    [String(ticket.id), `%#${code}%`]
+                ).catch(() => {});
+            }
+        }
+    } catch (_) {
+        // Silencioso en entornos aislados
+    }
+};
+
+/**
+ * Reconcilia trabajos/tickets finalizados en Consola AGY o Telegram que hayan quedado
+ * rezagados en estado 'en_proceso' o 'abierto', así como tareas agénticas (ai_agent_tasks)
+ * y modelo predeterminado 'gemini-4-carbon-high' en tickets aún pendientes de planificar.
+ */
+const reconcileCompletedTicketJobs = async (pool, { force = false } = {}) => {
+    if (!pool) return;
+    const now = Date.now();
+    const lastRun = lastReconcileByPool.get(pool) || 0;
+    if (!force && now - lastRun < 10000) return;
+    lastReconcileByPool.set(pool, now);
+
+    if (hasTicketCol(pool, 'agy_status')) {
+        try {
+            const [completedRows] = await pool.query(
+                `SELECT id, ticket_code, status, agy_status, agy_approved_by, resolution_notes
+                 FROM support_tickets
+                 WHERE agy_status = 'completado' AND status IN ('abierto', 'en_proceso')
+                 LIMIT 50`
+            );
+            const stuckCompleted = (completedRows || []).filter(
+                (r) => r && r.agy_status === 'completado' && (r.status === 'abierto' || r.status === 'en_proceso')
+            );
+            for (const row of stuckCompleted) {
+                const solverName = row.agy_approved_by
+                    ? (String(row.agy_approved_by).includes('(AGY)') ? row.agy_approved_by : `${row.agy_approved_by} (AGY)`)
+                    : 'Consola AGY';
+                const notes = (row.resolution_notes && String(row.resolution_notes).trim())
+                    ? row.resolution_notes
+                    : 'Solución ejecutada satisfactoriamente en Consola AGY.';
+                try {
+                    await pool.query(
+                        `UPDATE support_tickets
+                         SET status = 'resuelto',
+                             include_in_ai_prompt = 0,
+                             resolution_notes = ?,
+                             resolved_version = NULL,
+                             resolved_by_name = COALESCE(NULLIF(resolved_by_name, ''), ?),
+                             resolved_at = COALESCE(resolved_at, agy_updated_at, NOW())
+                         WHERE id = ?`,
+                        [notes, solverName, row.id]
+                    );
+                } catch (_) {
+                    await pool.query(
+                        `UPDATE support_tickets
+                         SET status = 'resuelto',
+                             resolution_notes = ?,
+                             resolved_version = NULL,
+                             resolved_by_name = ?,
+                             resolved_at = NOW(),
+                             creator_notified_at = NULL
+                         WHERE id = ?`,
+                        [notes, solverName, row.id]
+                    ).catch(() => {});
+                }
+                await syncCompletedTicketArtifacts(pool, { ...row, status: 'resuelto' });
+            }
+        } catch (_) {
+            // Ignorar si esquema parcial no soporta la consulta
+        }
+    }
+
+    if (hasTicketCol(pool, 'include_in_ai_prompt')) {
+        try {
+            const [staleAiRows] = await pool.query(
+                `SELECT id, ticket_code, status, include_in_ai_prompt
+                 FROM support_tickets
+                 WHERE status IN ('resuelto', 'cerrado') AND include_in_ai_prompt = 1
+                 LIMIT 50`
+            );
+            const toClean = (staleAiRows || []).filter(
+                (r) => r && (r.status === 'resuelto' || r.status === 'cerrado') && Number(r.include_in_ai_prompt) === 1
+            );
+            for (const row of toClean) {
+                await pool.query('UPDATE support_tickets SET include_in_ai_prompt = 0 WHERE id = ?', [row.id]).catch(() => {});
+                await syncCompletedTicketArtifacts(pool, row);
+            }
+        } catch (_) { /* ignore */ }
+    }
+
+    // Reconciliar tareas agénticas (ai_agent_tasks) cuyos tickets ya están resueltos o cerrados
+    try {
+        await pool.query(
+            `UPDATE ai_agent_tasks t
+             INNER JOIN support_tickets st
+                 ON st.ticket_code IS NOT NULL
+                AND st.ticket_code != ''
+                AND (
+                    t.title LIKE CONCAT('%[Ticket #', st.ticket_code, ']%')
+                    OR t.title LIKE CONCAT('%', st.ticket_code, '%')
+                    OR (JSON_VALID(t.output_metadata) AND JSON_UNQUOTE(JSON_EXTRACT(t.output_metadata, '$.ticket_id')) = CAST(st.id AS CHAR))
+                )
+             SET t.status = 'completada',
+                 t.progress = 100,
+                 t.current_step = CASE
+                     WHEN st.status = 'cerrado' THEN 'Ticket cerrado · Trabajo finalizado.'
+                     ELSE 'Mejora/corrección aplicada · Ticket resuelto.'
+                 END,
+                 t.completed_at = COALESCE(t.completed_at, st.resolved_at, NOW()),
+                 t.error_message = NULL
+             WHERE t.status IN ('en_proceso', 'pendiente', 'analizando')
+               AND (st.status IN ('resuelto', 'cerrado') OR st.agy_status = 'completado')`
+        );
+    } catch (_) {
+        // Tabla ai_agent_tasks no presente en este pool
+    }
+
+    // Asegurar que tickets nuevos/idle generados desde cualquier canal utilicen gemini-4-carbon-high en lugar del legado argon-high
+    if (hasTicketCol(pool, 'agy_model') && hasTicketCol(pool, 'agy_status')) {
+        try {
+            const [legacyModelRows] = await pool.query(
+                `SELECT id, agy_model, agy_status, status
+                 FROM support_tickets
+                 WHERE (agy_model IS NULL OR agy_model = '' OR agy_model = 'gemini-4-argon-high')
+                   AND agy_status = 'idle'
+                   AND status IN ('abierto', 'en_proceso')
+                 LIMIT 50`
+            );
+            const toUpgrade = (legacyModelRows || []).filter(
+                (r) => r && r.agy_status === 'idle' && (!r.agy_model || r.agy_model === 'gemini-4-argon-high')
+            );
+            for (const row of toUpgrade) {
+                await pool.query('UPDATE support_tickets SET agy_model = ? WHERE id = ?', [DEFAULT_AGY_MODEL, row.id]).catch(() => {});
+            }
+        } catch (_) { /* ignore */ }
+    }
 };
 
 const ensureTicketSchema = async (pool) => {
@@ -81,7 +285,7 @@ const ensureTicketSchema = async (pool) => {
                 agent_platform VARCHAR(40) NOT NULL DEFAULT 'antigravity',
                 ai_bundled_at DATETIME NULL,
                 agy_status VARCHAR(40) NOT NULL DEFAULT 'idle',
-                agy_model VARCHAR(80) NULL DEFAULT 'gemini-4-argon-high',
+                agy_model VARCHAR(80) NULL DEFAULT 'gemini-4-carbon-high',
                 agy_plan_markdown LONGTEXT NULL,
                 agy_execution_log LONGTEXT NULL,
                 agy_approved_by VARCHAR(120) NULL,
@@ -96,6 +300,7 @@ const ensureTicketSchema = async (pool) => {
                 creator_notified_at DATETIME NULL,
                 telegram_message_id VARCHAR(64) NULL,
                 telegram_chat_id VARCHAR(64) NULL,
+                telegram_messages_json JSON NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 INDEX idx_support_tickets_company_status (company_id, status),
@@ -119,7 +324,7 @@ const ensureTicketSchema = async (pool) => {
             ['agent_platform', "VARCHAR(40) NOT NULL DEFAULT 'antigravity'"],
             ['ai_bundled_at', 'DATETIME NULL'],
             ['agy_status', "VARCHAR(40) NOT NULL DEFAULT 'idle'"],
-            ['agy_model', "VARCHAR(80) NULL DEFAULT 'gemini-4-argon-high'"],
+            ['agy_model', "VARCHAR(80) NULL DEFAULT 'gemini-4-carbon-high'"],
             ['agy_plan_markdown', 'LONGTEXT NULL'],
             ['agy_execution_log', 'LONGTEXT NULL'],
             ['agy_approved_by', 'VARCHAR(120) NULL'],
@@ -127,7 +332,8 @@ const ensureTicketSchema = async (pool) => {
             ['agy_telegram_msg_id', 'VARCHAR(64) NULL'],
             ['agy_updated_at', 'DATETIME NULL'],
             ['resolved_version', 'VARCHAR(50) NULL'],
-            ['resolved_by', 'INT NULL']
+            ['resolved_by', 'INT NULL'],
+            ['telegram_messages_json', 'JSON NULL']
         ];
 
         for (const [colName, colDef] of extraColumns) {
@@ -139,6 +345,12 @@ const ensureTicketSchema = async (pool) => {
             } catch (_) {
                 // Ignore if already exists or restricted
             }
+        }
+
+        try {
+            await pool.query("ALTER TABLE support_tickets MODIFY COLUMN agy_model VARCHAR(100) NULL DEFAULT 'gemini-4-carbon-high'");
+        } catch (_) {
+            // Ignore if ALTER restricted
         }
 
         try {
@@ -199,12 +411,27 @@ const ensureTicketSchema = async (pool) => {
                 ssh_key_path VARCHAR(255) NULL,
                 project_path VARCHAR(255) NOT NULL DEFAULT '/var/www/sipeadmin',
                 agy_command VARCHAR(120) NOT NULL DEFAULT 'agy',
-                default_model VARCHAR(80) NOT NULL DEFAULT 'gemini-4-argon-high',
+                default_model VARCHAR(80) NOT NULL DEFAULT 'gemini-4-carbon-high',
                 available_models_json TEXT NULL,
                 execution_mode VARCHAR(30) NOT NULL DEFAULT 'auto',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
+
+        try {
+            await pool.query("ALTER TABLE agy_server_settings MODIFY COLUMN default_model VARCHAR(100) NOT NULL DEFAULT 'gemini-4-carbon-high'");
+        } catch (_) { /* ignore */ }
+
+        try {
+            await pool.query(
+                `UPDATE agy_server_settings
+                 SET default_model = ?
+                 WHERE default_model = 'gemini-4-argon-high' OR default_model IS NULL OR default_model = ''`,
+                [DEFAULT_AGY_MODEL]
+            );
+        } catch (_) { /* ignore */ }
+
+        await reconcileCompletedTicketJobs(pool, { force: true });
 
         schemaInitializedPools.add(pool);
     } catch (err) {
@@ -536,6 +763,56 @@ const sendTelegramSupportAlert = async (htmlText, options = {}) => {
     }
 };
 
+const removeTelegramButtonsForTicket = async (pool, ticketId) => {
+    if (!pool || !ticketId || !hasTicketCol(pool, 'telegram_messages_json')) return;
+    try {
+        const [rows] = await pool.query('SELECT telegram_messages_json FROM support_tickets WHERE id = ? LIMIT 1', [ticketId]);
+        const raw = rows?.[0]?.telegram_messages_json;
+        const list = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []);
+        if (!Array.isArray(list) || list.length === 0) return;
+
+        let botToken = null;
+        try {
+            const [saasCfg] = await pool.query('SELECT bot_token, is_active FROM telegram_settings WHERE id = 1 LIMIT 1');
+            if (saasCfg?.[0]?.bot_token && saasCfg[0].is_active !== 0) botToken = saasCfg[0].bot_token;
+        } catch (_) { /* ignore */ }
+        if (!botToken) {
+            try {
+                const localDb = getDb();
+                const [cfgRows] = await localDb.query('SELECT bot_token FROM telegram_config WHERE id = 1 LIMIT 1');
+                botToken = cfgRows?.[0]?.bot_token || process.env.TELEGRAM_BOT_TOKEN;
+            } catch (_) {
+                botToken = process.env.TELEGRAM_BOT_TOKEN;
+            }
+        }
+        if (!botToken) return;
+
+        for (const item of list) {
+            if (!item?.chatId || !item?.messageId) continue;
+            const payload = JSON.stringify({
+                chat_id: item.chatId,
+                message_id: item.messageId,
+                reply_markup: { inline_keyboard: [] }
+            });
+            const req = https.request({
+                hostname: 'api.telegram.org',
+                path: `/bot${botToken}/editMessageReplyMarkup`,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(payload)
+                },
+                timeout: 6000
+            });
+            req.on('error', () => {});
+            req.write(payload);
+            req.end();
+        }
+    } catch (_) {
+        // Silencioso si el mensaje ya fue editado o en entornos sin red
+    }
+};
+
 const toApiUploadUrl = (url) => {
     if (!url || typeof url !== 'string') return url;
     return url.startsWith('/uploads/') ? `/api${url}` : url;
@@ -567,8 +844,18 @@ const enrichTicketRow = (r) => {
         }
     }
 
+    const effectiveStatus = (r.agy_status === 'completado' && (r.status === 'abierto' || r.status === 'en_proceso'))
+        ? 'resuelto'
+        : r.status;
+    const effectiveModel = (!r.agy_model || ((!r.agy_status || r.agy_status === 'idle') && r.agy_model === 'gemini-4-argon-high'))
+        ? DEFAULT_AGY_MODEL
+        : r.agy_model;
+
     return {
         ...r,
+        status: effectiveStatus,
+        agy_model: effectiveModel,
+        include_in_ai_prompt: (effectiveStatus === 'resuelto' || effectiveStatus === 'cerrado') ? 0 : r.include_in_ai_prompt,
         code: r.ticket_code,
         creator_name: r.user_name,
         creator_username: r.user_name,
@@ -828,6 +1115,7 @@ const getTickets = async ({
     limit = 20
 }) => {
     const { pool, isSharedSaas } = await getTicketPool();
+    await reconcileCompletedTicketJobs(pool);
     const where = ['1=1'];
     const params = [];
 
@@ -930,6 +1218,7 @@ const getTickets = async ({
 
 const getTicketStats = async ({ userId = null, userName = null, username = null, canManage = false }) => {
     const { pool } = await getTicketPool();
+    await reconcileCompletedTicketJobs(pool);
     const where = ['1=1'];
     const params = [];
 
@@ -987,7 +1276,7 @@ const getTicketStats = async ({ userId = null, userName = null, username = null,
 
 const updateTicketStatus = async (
     id,
-    { status, resolutionNotes = null, resolvedVersion = null, actorId = null, actorName = 'Soporte Técnico', source = 'web', io = null }
+    { status, resolutionNotes = null, resolvedVersion = null, actorId = null, actorName = 'Soporte Técnico', source = 'web', io = null, skipTelegramStatusAlert = false }
 ) => {
     const { pool } = await getTicketPool();
     const current = await getTicketById(id);
@@ -996,6 +1285,7 @@ const updateTicketStatus = async (
     const validStatuses = ['abierto', 'en_proceso', 'resuelto', 'cerrado'];
     const nextStatus = validStatuses.includes(status) ? status : current.status;
     const isResolving = nextStatus === 'resuelto';
+    const isFinishing = isResolving || nextStatus === 'cerrado';
     const finalNotes = resolutionNotes !== null ? resolutionNotes : current.resolution_notes;
     const finalVersion = resolvedVersion !== null ? resolvedVersion : current.resolved_version;
 
@@ -1041,6 +1331,16 @@ const updateTicketStatus = async (
         await pool.query(`UPDATE support_tickets SET status = ? WHERE id = ?`, [nextStatus, id]);
     }
 
+    if (isFinishing) {
+        if (Number(current.include_in_ai_prompt) === 1 && hasTicketCol(pool, 'include_in_ai_prompt')) {
+            await pool.query('UPDATE support_tickets SET include_in_ai_prompt = 0 WHERE id = ?', [id]).catch(() => {});
+        }
+        if (hasTicketCol(pool, 'agy_status') && ['planificando', 'esperando_aprobacion', 'ejecutando'].includes(String(current.agy_status || ''))) {
+            await pool.query("UPDATE support_tickets SET agy_status = 'completado', agy_updated_at = NOW() WHERE id = ?", [id]).catch(() => {});
+        }
+        await removeTelegramButtonsForTicket(pool, id);
+    }
+
     const statusLabelMap = {
         abierto: 'Abierto (Pendiente)',
         en_proceso: 'En Proceso (Pendiente de Solución)',
@@ -1069,6 +1369,10 @@ const updateTicketStatus = async (
     }
 
     const updated = await getTicketById(id);
+
+    if (isFinishing) {
+        await syncCompletedTicketArtifacts(pool, updated);
+    }
 
     // Actualizar caché de vigilancia para evitar notificación duplicada en el poller
     knownTicketStateCache.set(Number(updated.id), {
@@ -1123,13 +1427,15 @@ const updateTicketStatus = async (
         }
     }
 
-    sendTelegramSupportAlert(
-        `${isResolving ? '✅' : '🔄'} <b>ACTUALIZACIÓN DE TICKET (${updated.ticket_code})</b>\n` +
-        `📌 <b>Asunto:</b> ${updated.subject}\n` +
-        `📊 <b>Nuevo Estado:</b> ${statusLabelMap[nextStatus] || nextStatus}\n` +
-        `👨‍💻 <b>Por:</b> ${actorName}\n` +
-        (isResolving && finalNotes ? `🛠️ <b>Solución:</b> ${finalNotes}` : '')
-    );
+    if (!skipTelegramStatusAlert) {
+        sendTelegramSupportAlert(
+            `${isResolving ? '✅' : '🔄'} <b>ACTUALIZACIÓN DE TICKET (${updated.ticket_code})</b>\n` +
+            `📌 <b>Asunto:</b> ${updated.subject}\n` +
+            `📊 <b>Nuevo Estado:</b> ${statusLabelMap[nextStatus] || nextStatus}\n` +
+            `👨‍💻 <b>Por:</b> ${actorName}\n` +
+            (isResolving && finalNotes ? `🛠️ <b>Solución:</b> ${finalNotes}` : '')
+        );
+    }
 
     return updated;
 };
@@ -1470,19 +1776,19 @@ const getAgySettings = async () => {
         ssh_user: 'root',
         project_path: '/var/www/sipeadmin',
         agy_command: 'agy',
-        default_model: 'gemini-4-argon-high',
+        default_model: DEFAULT_AGY_MODEL,
         execution_mode: 'auto'
     };
     const { ssh_password, ...safeCfg } = cfg;
+    const normalizedDefault = (!safeCfg.default_model || safeCfg.default_model === 'gemini-4-argon-high')
+        ? DEFAULT_AGY_MODEL
+        : safeCfg.default_model;
     return {
         ...safeCfg,
+        default_model: normalizedDefault,
         ssh_password: '',
         has_ssh_password: Boolean(ssh_password),
-        available_models: [
-            { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Máxima Velocidad e Inteligencia)' },
-            { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
-            { id: 'gemini-3-flash', label: 'gemini-3-flash (Ultra Rápido)' }
-        ]
+        available_models: AVAILABLE_AGY_MODELS
     };
 };
 
@@ -1507,22 +1813,23 @@ const saveAgySettings = async (payload = {}) => {
             payload.ssh_password || null,
             payload.project_path || '/var/www/sipeadmin',
             payload.agy_command || 'agy',
-            payload.default_model || 'gemini-4-argon-high',
+            payload.default_model || DEFAULT_AGY_MODEL,
             payload.execution_mode || 'auto'
         ]
     );
     return getAgySettings();
 };
 
-const approveAndGeneratePlan = async (id, { model = 'gemini-4-argon-high', aiNotes = '', feedbackComment = '', actorName = 'Administrador', io = null }) => {
+const approveAndGeneratePlan = async (id, { model = DEFAULT_AGY_MODEL, aiNotes = '', feedbackComment = '', actorName = 'Administrador', io = null }) => {
     const { pool } = await getTicketPool();
     const ticket = await getTicketById(id);
     if (!ticket) throw new Error('Ticket no encontrado');
 
+    const chosenModel = String(model || DEFAULT_AGY_MODEL).trim();
     const nextVersion = Number(ticket.agy_plan_version || 0) + 1;
     const planMd = [
         `# 📋 PLAN DE EJECUCIÓN AGY v${nextVersion} — ${ticket.ticket_code}`,
-        `- **Modelo:** ${model}`,
+        `- **Modelo:** ${chosenModel}`,
         `- **Asunto:** ${ticket.subject}`,
         `- **Módulo / Ruta:** ${ticket.module_name || 'SIPE Admin'} (${ticket.page_url || '/dashboard'})`,
         aiNotes ? `- **Directriz Técnica:** ${aiNotes}` : null,
@@ -1545,7 +1852,7 @@ const approveAndGeneratePlan = async (id, { model = 'gemini-4-argon-high', aiNot
              agy_plan_version = ?,
              agy_updated_at = NOW()
          WHERE id = ?`,
-        [aiNotes, model, planMd, actorName, nextVersion, id]
+        [aiNotes, chosenModel, planMd, actorName, nextVersion, id]
     );
 
     const updated = await getTicketById(id);
@@ -1554,7 +1861,7 @@ const approveAndGeneratePlan = async (id, { model = 'gemini-4-argon-high', aiNot
     sendTelegramSupportAlert(
         `🤖 <b>PLAN DE EJECUCIÓN AGY (v${nextVersion}) — #${updated.ticket_code}</b>\n` +
         `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
-        `🖥️ <b>Entorno:</b> <code>Consola AGY</code>  |  🧠 <b>Modelo:</b> <code>${model}</code>\n` +
+        `🖥️ <b>Entorno:</b> <code>Consola AGY</code>  |  🧠 <b>Modelo:</b> <code>${chosenModel}</code>\n` +
         `📌 <b>Asunto:</b> ${updated.subject}\n` +
         `📂 <b>Módulo / Ruta:</b> ${updated.module_name || 'SIPE Admin'} (<code>${updated.page_url || '/dashboard'}</code>)\n\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1567,26 +1874,59 @@ const approveAndGeneratePlan = async (id, { model = 'gemini-4-argon-high', aiNot
     return updated;
 };
 
-const executeApprovedPlan = async (id, { actorName = 'Administrador', io = null } = {}) => {
+const executeApprovedPlan = async (id, { actorId = null, actorName = 'Administrador', resolutionNotes = null, resolvedVersion = null, io = null } = {}) => {
     const { pool } = await getTicketPool();
-    const logLine = `[${new Date().toISOString()}] Plan aprobado y enviado a ejecución por ${actorName}.`;
-    await pool.query(
-        `UPDATE support_tickets
-         SET agy_status = 'completado',
-             agy_execution_log = CONCAT(COALESCE(agy_execution_log, ''), '\n', ?),
-             agy_updated_at = NOW()
-         WHERE id = ?`,
-        [logLine, id]
-    );
-    const updated = await getTicketById(id);
-    if (io) emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
+    const current = await getTicketById(id);
+    if (!current) throw new Error('Ticket no encontrado');
+
+    const usedModel = current.agy_model || DEFAULT_AGY_MODEL;
+    const planVer = current.agy_plan_version || 1;
+    const logLine = `[${new Date().toISOString()}] Plan v${planVer} (${usedModel}) aprobado y ejecutado por ${actorName}.`;
+    const finalResolutionNotes = (resolutionNotes && String(resolutionNotes).trim())
+        ? String(resolutionNotes).trim()
+        : `Solución ejecutada mediante Plan AGY v${planVer} (${usedModel}).`;
+
+    try {
+        await pool.query(
+            `UPDATE support_tickets
+             SET agy_status = 'completado',
+                 include_in_ai_prompt = 0,
+                 agy_approved_by = ?,
+                 agy_execution_log = CONCAT(COALESCE(agy_execution_log, ''), '\n', ?),
+                 agy_updated_at = NOW()
+             WHERE id = ?`,
+            [actorName, logLine, id]
+        );
+    } catch (_) {
+        await pool.query(
+            `UPDATE support_tickets
+             SET agy_status = 'completado',
+                 agy_execution_log = CONCAT(COALESCE(agy_execution_log, ''), '\n', ?),
+                 agy_updated_at = NOW()
+             WHERE id = ?`,
+            [logLine, id]
+        );
+    }
+
+    const updated = await updateTicketStatus(id, {
+        status: 'resuelto',
+        resolutionNotes: finalResolutionNotes,
+        resolvedVersion,
+        actorId,
+        actorName: String(actorName).includes('(AGY)') ? actorName : `${actorName} (AGY)`,
+        source: 'web',
+        io,
+        skipTelegramStatusAlert: true
+    });
 
     sendTelegramSupportAlert(
-        `✅ <b>PLAN AGY APROBADO — #${updated.ticket_code}</b>\n` +
+        `✅ <b>PLAN AGY EJECUTADO Y TICKET RESUELTO — #${updated.ticket_code}</b>\n` +
         `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
+        `🧠 <b>Modelo:</b> <code>${usedModel}</code>\n` +
         `📌 <b>Asunto:</b> ${updated.subject}\n` +
-        `👤 <b>Aprobado por:</b> ${actorName}`,
-        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, updated.status) }
+        `👤 <b>Aprobado por:</b> ${actorName}\n` +
+        `🛠️ <b>Estado:</b> Resuelto`,
+        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, 'resuelto') }
     );
 
     return updated;
@@ -1629,6 +1969,7 @@ let watcherBootstrapped = false;
 const syncRealtimeTicketUpdates = async (io) => {
     try {
         const { pool } = await getTicketPool();
+        await reconcileCompletedTicketJobs(pool);
         const [rows] = await pool.query(
             `SELECT *
              FROM support_tickets
@@ -1665,6 +2006,9 @@ const syncRealtimeTicketUpdates = async (io) => {
             if (prev.status !== currState.status) {
                 knownTicketStateCache.set(id, currState);
                 const fullTicket = await getTicketById(id);
+                if (currState.status === 'resuelto' || currState.status === 'cerrado') {
+                    await syncCompletedTicketArtifacts(pool, fullTicket || r);
+                }
                 const targetAdminUserId = await resolveTargetAdminUserId(fullTicket || r);
 
                 if (targetAdminUserId) {
@@ -1738,10 +2082,14 @@ const initTicketRealtimeWatcher = (io) => {
 };
 
 module.exports = {
+    DEFAULT_AGY_MODEL,
+    AVAILABLE_AGY_MODELS,
     UPLOADS_DIR,
     SIBLING_SAAS_UPLOADS,
     getTicketPool,
     ensureTicketSchema,
+    reconcileCompletedTicketJobs,
+    syncCompletedTicketArtifacts,
     saveBase64Screenshot,
     createTicket,
     getTickets,

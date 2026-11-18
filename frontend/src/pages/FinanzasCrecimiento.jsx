@@ -160,7 +160,7 @@ export default function FinanzasCrecimiento() {
     const [mensajes, setMensajes] = useState([]);
     const [chatMode, setChatMode] = useState('consultoria_financiera');
     const [targetProject, setTargetProject] = useState('sipeadmin');
-    const [selectedModel, setSelectedModel] = useState('gemini-4-argon-high');
+    const [selectedModel, setSelectedModel] = useState('gemini-4-carbon-high');
     const [autoLearnEnabled, setAutoLearnEnabled] = useState(true);
     const [chatInput, setChatInput] = useState('');
     const [sendingChat, setSendingChat] = useState(false);
@@ -1095,6 +1095,7 @@ export default function FinanzasCrecimiento() {
                                     style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.65rem', width: 'auto' }}
                                 >
                                     {(agyStatus?.available_models?.length > 0 ? agyStatus.available_models : [
+                                        { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high' },
                                         { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high' },
                                         { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro' },
                                         { id: 'gemini-3-flash', label: 'gemini-3-flash' }
@@ -1810,7 +1811,8 @@ export default function FinanzasCrecimiento() {
                             onChange={(e) => setSelectedModel(e.target.value)}
                             style={{ height: '38px', fontSize: '0.825rem' }}
                         >
-                            <option value="gemini-4-argon-high">gemini-4-argon-high (Recomendado)</option>
+                            <option value="gemini-4-carbon-high">gemini-4-carbon-high (Recomendado · Carbon High)</option>
+                            <option value="gemini-4-argon-high">gemini-4-argon-high (Argon High)</option>
                             <option value="gemini-3.1-pro">gemini-3.1-pro (Razonamiento Profundo)</option>
                             <option value="gemini-3-flash">gemini-3-flash (Ultra Rápido)</option>
                         </select>

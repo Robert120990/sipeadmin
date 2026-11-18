@@ -239,7 +239,7 @@ export default function SupportTickets() {
                             }}
                         >
                             <Bot size={15} color="#818cf8" />
-                            <span>Empaquetar Prompt IA</span>
+                            <span>Solucionador IA</span>
                             <span style={{ padding: '0.08rem 0.45rem', borderRadius: '999px', fontSize: '0.68rem', fontWeight: 800, background: 'rgba(99,102,241,0.3)', color: '#c7d2fe' }}>
                                 {aiSelectedCount}
                             </span>
@@ -325,10 +325,14 @@ export default function SupportTickets() {
                             </tr>
                         ) : (
                             tickets.map((t) => {
-                                const st = STATUS_CONFIG[t.status] || STATUS_CONFIG.abierto;
+                                const effectiveStatus = (t.agy_status === 'completado' && (t.status === 'abierto' || t.status === 'en_proceso'))
+                                    ? 'resuelto'
+                                    : t.status;
+                                const isFinished = effectiveStatus === 'resuelto' || effectiveStatus === 'cerrado' || t.agy_status === 'completado';
+                                const st = STATUS_CONFIG[effectiveStatus] || STATUS_CONFIG.abierto;
                                 const StIcon = st.icon;
                                 const prio = PRIORITY_STYLES[t.priority] || PRIORITY_STYLES.media;
-                                const inAi = Boolean(t.include_in_ai_prompt);
+                                const inAi = !isFinished && Boolean(t.include_in_ai_prompt);
 
                                 return (
                                     <tr
@@ -428,7 +432,7 @@ export default function SupportTickets() {
 
                                         <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
                                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                                                {canManageTickets && (
+                                                {canManageTickets && !isFinished && (
                                                     <>
                                                         <button
                                                             type="button"

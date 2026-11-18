@@ -660,4 +660,370 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
             dbModule.getDb = origGetDb;
         }
     });
+
+    it('Tickets por Telegram/AGY deben usar gemini-4-carbon-high por defecto y trabajos finalizados deben pasar de en_proceso a resuelto/completada', async () => {
+        const ticketService = require('../services/ticketService');
+        const dbModule = require('../db');
+        const origGetAccountingDb = dbModule.getAccountingDb;
+        const origGetDb = dbModule.getDb;
+
+        assert.strictEqual(ticketService.DEFAULT_AGY_MODEL, 'gemini-4-carbon-high');
+
+        const tickets = [
+            {
+                id: 901,
+                ticket_code: 'ADM-0901',
+                company_id: 1,
+                user_id: 7,
+                admin_user_id: 7,
+                user_name: 'Raul Admin',
+                subject: 'Ticket finalizado en AGY pero rezagado en_proceso',
+                description: 'Validar reconciliación automática',
+                status: 'en_proceso',
+                priority: 'alta',
+                type: 'mejora',
+                source_system: 'admin.sipesv.com',
+                include_in_ai_prompt: 1,
+                agy_status: 'completado',
+                agy_model: 'gemini-4-argon-high',
+                agy_approved_by: 'Raul (Telegram)',
+                resolution_notes: null,
+                resolved_at: null
+            },
+            {
+                id: 902,
+                ticket_code: 'ADM-0902',
+                company_id: 1,
+                user_id: 7,
+                admin_user_id: 7,
+                user_name: 'Raul Admin',
+                subject: 'Nuevo ticket desde Telegram pendiente de planificar',
+                description: 'Debe actualizar modelo a gemini-4-carbon-high y al ejecutarse quedar resuelto',
+                status: 'abierto',
+                priority: 'media',
+                type: 'requerimiento',
+                source_system: 'admin.sipesv.com',
+                include_in_ai_prompt: 0,
+                agy_status: 'idle',
+                agy_model: 'gemini-4-argon-high',
+                agy_plan_version: 0,
+                resolution_notes: null,
+                resolved_at: null
+            }
+        ];
+
+        const aiAgentTasks = [
+            {
+                id: 51,
+                title: '[Ticket #ADM-0901] Ticket finalizado en AGY pero rezagado en_proceso',
+                status: 'en_proceso',
+                progress: 50,
+                current_step: 'Prompt + Logs listos',
+                completed_at: null
+            },
+            {
+                id: 52,
+                title: '[Ticket #ADM-0902] Nuevo ticket desde Telegram pendiente de planificar',
+                status: 'en_proceso',
+                progress: 50,
+                current_step: 'Ejecutando...',
+                completed_at: null
+            }
+        ];
+
+        const growthConversations = [
+            { id: 301, ticket_id: 901, ticket_code: 'ADM-0901', estado_agy: 'ejecutando' }
+        ];
+
+        const localNotifications = [
+            { id: 1, user_id: 7, type: 'ticket_pending', title: '⏳ Ticket #ADM-0902: En Proceso', is_read: 0 }
+        ];
+
+        const settingsRow = {
+            id: 1,
+            ssh_host: 'localhost',
+            ssh_port: 22,
+            ssh_user: 'root',
+            project_path: '/var/www/sipeadmin',
+            agy_command: 'agy',
+            default_model: 'gemini-4-argon-high',
+            execution_mode: 'auto'
+        };
+
+        const mockSaasPool = {
+            async query(sql, params = []) {
+                const q = String(sql).replace(/\s+/g, ' ').trim();
+                if (q === 'SELECT 1') return [[{ 1: 1 }]];
+                if (q.startsWith('CREATE TABLE') || q.startsWith('ALTER TABLE')) return [{ affectedRows: 0 }];
+                if (q.startsWith('SHOW COLUMNS FROM support_tickets')) {
+                    const cols = [
+                        'id', 'ticket_code', 'company_id', 'user_id', 'admin_user_id', 'user_name',
+                        'status', 'priority', 'type', 'subject', 'description', 'source_system',
+                        'include_in_ai_prompt', 'ai_notes', 'agy_status', 'agy_model', 'agy_plan_markdown',
+                        'agy_plan_version', 'agy_execution_log', 'agy_approved_by', 'agy_updated_at',
+                        'resolution_notes', 'resolved_version', 'resolved_by', 'resolved_by_name',
+                        'resolved_at', 'creator_notified_at', 'telegram_messages_json'
+                    ].map((Field) => ({ Field }));
+                    return [params[0] ? cols.filter((c) => c.Field === params[0]) : cols];
+                }
+                if (q.startsWith('SHOW COLUMNS FROM support_ticket_messages')) {
+                    return [[{ Field: 'id' }, { Field: 'ticket_id' }, { Field: 'sender_user_id' }]];
+                }
+                if (q.startsWith('UPDATE agy_server_settings')) {
+                    settingsRow.default_model = params[0];
+                    return [{ affectedRows: 1 }];
+                }
+                if (q.startsWith('SELECT * FROM agy_server_settings')) {
+                    return [[settingsRow]];
+                }
+                if (q.includes("WHERE agy_status = 'completado' AND status IN ('abierto', 'en_proceso')")) {
+                    return [tickets.filter((t) => t.agy_status === 'completado' && (t.status === 'abierto' || t.status === 'en_proceso'))];
+                }
+                if (q.includes("WHERE status IN ('resuelto', 'cerrado') AND include_in_ai_prompt = 1")) {
+                    return [tickets.filter((t) => (t.status === 'resuelto' || t.status === 'cerrado') && t.include_in_ai_prompt === 1)];
+                }
+                if (q.includes("AND agy_status = 'idle' AND status IN ('abierto', 'en_proceso')")) {
+                    return [tickets.filter((t) => t.agy_status === 'idle' && (!t.agy_model || t.agy_model === 'gemini-4-argon-high'))];
+                }
+                if (q.startsWith('UPDATE ai_agent_tasks t INNER JOIN support_tickets st')) {
+                    for (const task of aiAgentTasks) {
+                        const linked = tickets.find((st) => task.title.includes(st.ticket_code));
+                        if (linked && (linked.status === 'resuelto' || linked.status === 'cerrado' || linked.agy_status === 'completado')) {
+                            task.status = 'completada';
+                            task.progress = 100;
+                            task.completed_at = new Date().toISOString();
+                        }
+                    }
+                    return [{ affectedRows: 1 }];
+                }
+                if (q.startsWith('UPDATE ai_agent_tasks SET status =')) {
+                    const codePattern = String(params[2] || '').replace(/%/g, '');
+                    for (const task of aiAgentTasks) {
+                        if (codePattern && task.title.includes(codePattern)) {
+                            task.status = 'completada';
+                            task.progress = 100;
+                            task.current_step = params[0];
+                            task.completed_at = new Date().toISOString();
+                        }
+                    }
+                    return [{ affectedRows: 1 }];
+                }
+                if (q.includes('FROM support_tickets t') && q.includes('WHERE t.id = ?')) {
+                    const found = tickets.find((t) => t.id === Number(params[0]));
+                    return [found ? [{ ...found }] : []];
+                }
+                if (q.startsWith('SELECT * FROM support_ticket_messages')) {
+                    return [[]];
+                }
+                if (q.startsWith('INSERT INTO support_ticket_messages')) {
+                    return [{ insertId: 1, affectedRows: 1 }];
+                }
+                if (q.startsWith('UPDATE support_tickets')) {
+                    const id = Number(params[params.length - 1]);
+                    const target = tickets.find((t) => t.id === id);
+                    if (target) {
+                        if (q === 'UPDATE support_tickets SET agy_model = ? WHERE id = ?') {
+                            target.agy_model = params[0];
+                        } else if (q === 'UPDATE support_tickets SET include_in_ai_prompt = 0 WHERE id = ?') {
+                            target.include_in_ai_prompt = 0;
+                        } else if (q.includes("agy_status = 'esperando_aprobacion'")) {
+                            if (target.status === 'abierto') target.status = 'en_proceso';
+                            target.agy_status = 'esperando_aprobacion';
+                            target.agy_model = params[1];
+                            target.agy_plan_markdown = params[2];
+                            target.agy_approved_by = params[3];
+                            target.agy_plan_version = params[4];
+                        } else if (q.includes("SET agy_status = 'completado'")) {
+                            target.agy_status = 'completado';
+                            target.include_in_ai_prompt = 0;
+                        } else if (q.includes("SET status = 'resuelto'")) {
+                            target.status = 'resuelto';
+                            target.include_in_ai_prompt = 0;
+                            target.resolution_notes = params[0];
+                            target.resolved_at = new Date().toISOString();
+                        }
+                    }
+                    return [{ affectedRows: target ? 1 : 0 }];
+                }
+                return [[]];
+            }
+        };
+
+        const mockLocalDb = {
+            async query(sql, params = []) {
+                const q = String(sql).replace(/\s+/g, ' ').trim();
+                if (q.startsWith('UPDATE finanzas_conversaciones')) {
+                    const tid = Number(params[0]);
+                    for (const c of growthConversations) {
+                        if (c.ticket_id === tid) c.estado_agy = 'completado';
+                    }
+                    return [{ affectedRows: 1 }];
+                }
+                if (q.startsWith('UPDATE notifications SET is_read = 1')) {
+                    const codeLike = String(params[1] || '').replace(/%/g, '');
+                    for (const n of localNotifications) {
+                        if (codeLike && n.title.includes(codeLike)) n.is_read = 1;
+                    }
+                    return [{ affectedRows: 1 }];
+                }
+                if (q.startsWith('INSERT INTO notifications')) {
+                    localNotifications.push({ id: localNotifications.length + 1, user_id: params[0], type: params[1], title: params[2], is_read: 0 });
+                    return [{ insertId: localNotifications.length, affectedRows: 1 }];
+                }
+                return [[]];
+            }
+        };
+
+        dbModule.getAccountingDb = async () => mockSaasPool;
+        dbModule.getDb = () => mockLocalDb;
+
+        try {
+            // 1. Al inicializar esquema y consultar ajustes, migra de argon-high a carbon-high y reconcilia trabajos finalizados
+            const agyCfg = await ticketService.getAgySettings();
+            assert.strictEqual(agyCfg.default_model, 'gemini-4-carbon-high');
+            assert.strictEqual(agyCfg.available_models[0].id, 'gemini-4-carbon-high');
+
+            // El ticket 901 que tenía agy_status='completado' y status='en_proceso' debe haber pasado a 'resuelto'
+            assert.strictEqual(tickets[0].status, 'resuelto');
+            assert.strictEqual(tickets[0].include_in_ai_prompt, 0);
+            assert.strictEqual(aiAgentTasks[0].status, 'completada');
+            assert.strictEqual(aiAgentTasks[0].progress, 100);
+            assert.strictEqual(growthConversations[0].estado_agy, 'completado');
+
+            // El ticket 902 idle con argon-high debe haberse actualizado a gemini-4-carbon-high
+            assert.strictEqual(tickets[1].agy_model, 'gemini-4-carbon-high');
+
+            // 2. Planificar y ejecutar el ticket 902 con modelo por defecto (gemini-4-carbon-high)
+            const planned = await ticketService.approveAndGeneratePlan(902, {
+                actorName: 'Raul (Telegram)'
+            });
+            assert.strictEqual(planned.agy_model, 'gemini-4-carbon-high');
+            assert.strictEqual(planned.status, 'en_proceso');
+            assert.strictEqual(planned.agy_status, 'esperando_aprobacion');
+
+            const executed = await ticketService.executeApprovedPlan(902, {
+                actorId: 7,
+                actorName: 'Raul (Telegram)'
+            });
+            assert.strictEqual(executed.agy_status, 'completado');
+            assert.strictEqual(executed.status, 'resuelto', 'Al finalizar plan AGY, el ticket NO debe quedar en_proceso sino resuelto');
+            assert.strictEqual(executed.include_in_ai_prompt, 0);
+            assert.strictEqual(aiAgentTasks[1].status, 'completada', 'La tarea agéntica vinculada debe pasar a completada (100%)');
+            assert.strictEqual(localNotifications[0].is_read, 1, 'La notificación previa de En Proceso debe marcarse como leída');
+        } finally {
+            dbModule.getAccountingDb = origGetAccountingDb;
+            dbModule.getDb = origGetDb;
+        }
+    });
+
+    it('ticketTelegramAgyService y applyFlexibleTextEdit manejan comandos /ticket ADM-0012, callbacks y edición tolerante sin falso positivo', async () => {
+        const ticketTelegramAgyService = require('../services/ticketTelegramAgyService');
+        const growthAgyService = require('../services/businessGrowthAgyService');
+        const dbModule = require('../db');
+        const origGetAccountingDb = dbModule.getAccountingDb;
+        const origGetDb = dbModule.getDb;
+
+        // 1. Validar edición tolerante a indentación/espacios finales
+        const sampleFile = 'const a = 1;\n    const label = "Anterior";   \nconst b = 2;\n';
+        const patched = growthAgyService.applyFlexibleTextEdit(
+            sampleFile,
+            '  const label = "Anterior";\nconst b = 2;',
+            '    const label = "Actualizado";\nconst b = 2;'
+        );
+        assert.ok(patched.includes('"Actualizado"'), 'applyFlexibleTextEdit debe aplicar el cambio aunque difiera sangría en la búsqueda');
+
+        // 2. Validar /ticket ADM-0012 y callback ticket_resolve en Telegram
+        const ticket12 = {
+            id: 12,
+            ticket_code: 'ADM-0012',
+            company_id: 1,
+            user_id: 7,
+            admin_user_id: 7,
+            user_name: 'Raul Admin',
+            subject: 'Ajuste pendiente en ADM-0012',
+            description: 'Validar flujo completo desde bot de Telegram',
+            module_name: 'Operaciones',
+            page_url: '/dashboard/operaciones/pedidos',
+            status: 'en_proceso',
+            priority: 'alta',
+            type: 'mejora',
+            source_system: 'admin.sipesv.com',
+            agy_status: 'esperando_aprobacion',
+            agy_model: 'gemini-4-carbon-high',
+            agy_plan_markdown: '🎯 Diagnóstico: Ajuste requerido.'
+        };
+
+        const mockPool = {
+            async query(sql, params = []) {
+                const q = String(sql).replace(/\s+/g, ' ').trim();
+                if (q === 'SELECT 1') return [[{ 1: 1 }]];
+                if (q.startsWith('CREATE TABLE') || q.startsWith('ALTER TABLE')) return [{ affectedRows: 0 }];
+                if (q.startsWith('SHOW COLUMNS FROM support_tickets')) {
+                    return [[
+                        { Field: 'id' }, { Field: 'ticket_code' }, { Field: 'status' },
+                        { Field: 'agy_status' }, { Field: 'agy_model' }, { Field: 'include_in_ai_prompt' }
+                    ]];
+                }
+                if (q.startsWith('SELECT id FROM support_tickets WHERE ticket_code = ?')) {
+                    return [params[0] === 'ADM-0012' ? [{ id: 12 }] : []];
+                }
+                if (q.includes('FROM support_tickets t') && q.includes('WHERE t.id = ?')) {
+                    return [Number(params[0]) === 12 ? [{ ...ticket12 }] : []];
+                }
+                if (q.startsWith('UPDATE support_tickets') && q.includes("SET status = 'resuelto'")) {
+                    ticket12.status = 'resuelto';
+                    ticket12.agy_status = 'completado';
+                    ticket12.resolution_notes = params[0];
+                    return [{ affectedRows: 1 }];
+                }
+                return [[]];
+            }
+        };
+
+        dbModule.getAccountingDb = async () => mockPool;
+        dbModule.getDb = () => ({ async query() { return [[]]; } });
+
+        const sentMessages = [];
+        const answeredCallbacks = [];
+        const tgHelpers = {
+            async sendTelegramMessage(chatId, html, replyMarkup) {
+                sentMessages.push({ chatId, html, replyMarkup });
+            },
+            async answerCallbackQuery(id, text) {
+                answeredCallbacks.push({ id, text });
+            },
+            async editMessageReplyMarkup() {},
+            async sendChatAction() {},
+            escapeHtml: (s) => String(s || '')
+        };
+
+        try {
+            const handledCmd = await ticketTelegramAgyService.handleTicketTextCommand(
+                555,
+                '/ticket adm-12',
+                { telegram_user_id: '555', first_name: 'Raul', activo: 1, permiso_alertas: 1 },
+                { linkedUser: { id: 1, role_id: 1, role: 'Administrator' }, alertas: true },
+                tgHelpers
+            );
+            assert.strictEqual(handledCmd, true);
+            assert.strictEqual(sentMessages.length, 1);
+            assert.ok(sentMessages[0].html.includes('ADM-0012'));
+            assert.ok(sentMessages[0].html.includes('gemini-4-carbon-high'));
+
+            const handledCb = await ticketTelegramAgyService.handleTicketCallback(
+                { id: 'cb1', data: 'ticket_resolve:12', from: { id: 555, first_name: 'Raul' }, message: { chat: { id: 555 }, message_id: 10 } },
+                tgHelpers,
+                {
+                    tgUser: { telegram_user_id: '555', activo: 1, permiso_alertas: 1 },
+                    effPerms: { linkedUser: { id: 1, role_id: 1, role: 'Administrator' }, alertas: true }
+                }
+            );
+            assert.strictEqual(handledCb, true);
+            assert.strictEqual(ticket12.status, 'resuelto');
+            assert.ok(answeredCallbacks.some((c) => c.text.includes('Resuelto')));
+        } finally {
+            dbModule.getAccountingDb = origGetAccountingDb;
+            dbModule.getDb = origGetDb;
+        }
+    });
 });

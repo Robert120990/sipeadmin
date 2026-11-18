@@ -406,6 +406,40 @@ const handleCallbackQuery = async (cq) => {
         return;
     }
 
+    // Callbacks interactivos para Tickets de Soporte y Consola AGY (Carbon High)
+    if (data.startsWith('agy_') || data.startsWith('ticket_')) {
+        try {
+            let tgUser = null;
+            let effPerms = {};
+            const db = getDb();
+            if (db && cq.from) {
+                tgUser = await resolveTelegramUser(cq.from);
+                if (tgUser && !tgUser.activo) {
+                    await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                    return;
+                }
+                if (tgUser) {
+                    effPerms = await getUserEffectivePermissions(tgUser);
+                    if (effPerms.inactiveInSipe) {
+                        await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                        return;
+                    }
+                }
+            }
+            const ticketTelegramAgyService = require('./ticketTelegramAgyService');
+            const handled = await ticketTelegramAgyService.handleTicketCallback(
+                cq,
+                { sendTelegramMessage, answerCallbackQuery, editMessageReplyMarkup, sendChatAction, escapeHtml },
+                { tgUser, effPerms }
+            );
+            if (handled) return;
+        } catch (ticketCbErr) {
+            console.error('[TelegramBot] Error en callback de Ticket/AGY:', ticketCbErr.message);
+            await answerCallbackQuery(cq.id, '⚠️ Error procesando acción del ticket.');
+            return;
+        }
+    }
+
     // Verificar autorización del usuario antes de ejecutar callbacks de datos sensibles
     if (
         data.startsWith('andelsa_') ||
@@ -1931,6 +1965,21 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
 
         await sendTelegramMessage(chatId, voicePrefix + ackJustMsg, keyboard);
         return;
+    }
+
+    // B.2 Interceptar comandos técnicos y respuestas pendientes de Tickets / Consola AGY
+    try {
+        const ticketTelegramAgyService = require('./ticketTelegramAgyService');
+        const handledTicketCmd = await ticketTelegramAgyService.handleTicketTextCommand(
+            chatId,
+            rawText,
+            user,
+            effectivePerms,
+            { sendTelegramMessage, answerCallbackQuery, editMessageReplyMarkup, sendChatAction, escapeHtml }
+        );
+        if (handledTicketCmd) return;
+    } catch (tCmdErr) {
+        console.error('[TelegramBot] Error en comando de Ticket/AGY:', tCmdErr.message);
     }
 
     // C. Detección en lenguaje natural de insatisfacción directa (ej. 'no contestaste bien', 'no me sirvio', 'esta mal')

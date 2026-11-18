@@ -389,7 +389,7 @@ async function ensureCrecimientoSchema(customDb = null) {
             titulo VARCHAR(220) NOT NULL,
             modo VARCHAR(40) NOT NULL DEFAULT 'consultoria_financiera',
             proyecto_destino VARCHAR(30) NOT NULL DEFAULT 'sipeadmin',
-            modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-argon-high',
+            modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-carbon-high',
             empresa_id INT NULL,
             ticket_id INT NULL,
             ticket_code VARCHAR(32) NULL,
@@ -606,7 +606,7 @@ async function buildEnterpriseGrowthSnapshot(customDb = null, { empresaId = null
 
     // Bancos y chequeras
     try {
-        const { getSaldosBancosData, getSaldosChequeraData } = require('./telegramBotService');
+        const { getSaldosBancosData, getSaldosChequeraData } = require('./telegramDataService');
         const [bancosData, cheqData] = await Promise.all([
             getSaldosBancosData().catch(() => null),
             getSaldosChequeraData().catch(() => null)
@@ -966,10 +966,11 @@ function findSmartRepoFiles(projectInfo, queryText = '') {
     return Array.from(found).slice(0, 6);
 }
 
-function readSafeRepoSnippets(projectInfo, relFiles = [], maxCharsPerFile = 5500) {
+function readSafeRepoSnippets(projectInfo, relFiles = [], maxCharsPerFile = 85000, queryHint = '') {
     if (!projectInfo?.existsLocally) return [];
     const rootResolved = path.resolve(projectInfo.projectPath);
     const snippets = [];
+    const hintTerms = String(queryHint || '').toLowerCase().split(/[^a-z0-9_]+/).filter((w) => w.length >= 4);
 
     for (const rel of relFiles.slice(0, 5)) {
         if (!rel || rel.includes('.env')) continue;
@@ -979,14 +980,59 @@ function readSafeRepoSnippets(projectInfo, relFiles = [], maxCharsPerFile = 5500
             const stat = fs.statSync(abs);
             if (!stat.isFile()) continue;
             const raw = fs.readFileSync(abs, 'utf8');
+            const totalLines = raw.split('\n').length;
+            let excerpt = raw;
+            if (raw.length > maxCharsPerFile) {
+                const head = raw.slice(0, Math.floor(maxCharsPerFile * 0.45));
+                let focusIdx = -1;
+                for (const t of hintTerms) {
+                    const idx = raw.toLowerCase().indexOf(t, head.length);
+                    if (idx !== -1) { focusIdx = idx; break; }
+                }
+                const midStart = focusIdx !== -1
+                    ? Math.max(head.length, focusIdx - 6000)
+                    : Math.max(head.length, raw.length - Math.floor(maxCharsPerFile * 0.5));
+                const tail = raw.slice(midStart, midStart + Math.floor(maxCharsPerFile * 0.5));
+                excerpt = `${head}\n/* ... [sección intermedia omitida] ... */\n${tail}`;
+            }
             snippets.push({
                 file: rel,
-                totalLines: raw.split('\n').length,
-                excerpt: raw.slice(0, maxCharsPerFile)
+                totalLines,
+                excerpt
             });
         } catch { /* ignore */ }
     }
     return snippets;
+}
+
+function applyFlexibleTextEdit(currentText, searchBlock, replaceBlock) {
+    if (!searchBlock || currentText === undefined) return currentText;
+    if (currentText.includes(searchBlock)) return currentText.replace(searchBlock, replaceBlock);
+    const crlfSearch = String(searchBlock).replace(/\r?\n/g, '\r\n');
+    if (currentText.includes(crlfSearch)) {
+        return currentText.replace(crlfSearch, String(replaceBlock).replace(/\r?\n/g, '\r\n'));
+    }
+    const eol = currentText.includes('\r\n') ? '\r\n' : '\n';
+    const srcLines = currentText.split(/\r?\n/);
+    const searchLines = String(searchBlock).split(/\r?\n/).filter((l, idx, arr) => !(idx === arr.length - 1 && l === ''));
+    if (searchLines.length >= 2) {
+        const norm = (s) => s.trim();
+        for (let i = 0; i <= srcLines.length - searchLines.length; i++) {
+            let match = true;
+            for (let j = 0; j < searchLines.length; j++) {
+                if (norm(srcLines[i + j]) !== norm(searchLines[j])) { match = false; break; }
+            }
+            if (match) {
+                const updatedLines = [
+                    ...srcLines.slice(0, i),
+                    ...String(replaceBlock).split(/\r?\n/),
+                    ...srcLines.slice(i + searchLines.length)
+                ];
+                return updatedLines.join(eol);
+            }
+        }
+    }
+    return currentText;
 }
 
 async function resolveAiClient() {
@@ -1054,13 +1100,14 @@ function detectLocalAgyBinary(agyCommand = 'agy') {
 /**
  * Ejecuta una consulta/plan o instrucción en el binario local `agy` usando archivo temporal seguro (sin inyección shell)
  */
-function runLocalAgyCliWithTempPrompt({ agyBinPath, projectPath, model, promptText, isPlanPhase = true, timeoutMs = 65000 }) {
+function runLocalAgyCliWithTempPrompt({ agyBinPath, projectPath, model, promptText, isPlanPhase = true, timeoutMs = 150000 }) {
     return new Promise((resolve) => {
         if (!agyBinPath || !fs.existsSync(projectPath)) {
             return resolve({ executed: false, output: '' });
         }
 
-        const safeModel = String(model || 'gemini-4-argon-high').replace(/[^a-zA-Z0-9._-]/g, '');
+        const safeModel = String(model || 'gemini-4-carbon-high').replace(/[^a-zA-Z0-9._-]/g, '');
+        const endMarker = isPlanPhase ? '[[FIN_PLAN_AGY]]' : '[[FIN_EJECUCION_AGY]]';
         try {
             const cfgDir = path.join(os.homedir(), '.gemini', 'antigravity-cli');
             fs.mkdirSync(cfgDir, { recursive: true });
@@ -1072,14 +1119,22 @@ function runLocalAgyCliWithTempPrompt({ agyBinPath, projectPath, model, promptTe
         } catch { /* ignore */ }
 
         const flatPrompt = String(promptText || '').replace(/\r?\n+/g, ' ').trim();
-        const child = spawn(agyBinPath, ['--dangerously-skip-permissions'], {
-            cwd: projectPath,
-            env: { ...process.env, TERM: 'xterm-256color' },
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
+        const useLinuxPty = process.platform !== 'win32' && fs.existsSync('/usr/bin/script');
+        const child = useLinuxPty
+            ? spawn('/usr/bin/script', ['-q', '-c', `"${agyBinPath}" --dangerously-skip-permissions`, '/dev/null'], {
+                cwd: projectPath,
+                env: { ...process.env, TERM: 'xterm-256color' },
+                stdio: ['pipe', 'pipe', 'pipe']
+            })
+            : spawn(agyBinPath, ['--dangerously-skip-permissions'], {
+                cwd: projectPath,
+                env: { ...process.env, TERM: 'xterm-256color' },
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
 
         let output = '';
         let finished = false;
+        let exitSent = false;
         const finish = (timedOut = false) => {
             if (finished) return;
             finished = true;
@@ -1089,8 +1144,16 @@ function runLocalAgyCliWithTempPrompt({ agyBinPath, projectPath, model, promptTe
 
         const timer = setTimeout(() => finish(true), timeoutMs);
 
-        child.stdout.on('data', (d) => { output += d.toString('utf8'); });
-        child.stderr.on('data', (d) => { output += d.toString('utf8'); });
+        const checkEarlyCompletion = () => {
+            if (!exitSent && output.includes(endMarker)) {
+                exitSent = true;
+                try { child.stdin.write('/exit\n'); } catch { /* ignore */ }
+                setTimeout(() => finish(false), 1500);
+            }
+        };
+
+        child.stdout.on('data', (d) => { output += d.toString('utf8'); checkEarlyCompletion(); });
+        child.stderr.on('data', (d) => { output += d.toString('utf8'); checkEarlyCompletion(); });
         child.on('error', () => { clearTimeout(timer); finish(false); });
         child.on('close', () => { clearTimeout(timer); finish(false); });
 
@@ -1099,12 +1162,12 @@ function runLocalAgyCliWithTempPrompt({ agyBinPath, projectPath, model, promptTe
                 const cmdLine = isPlanPhase ? `/plan ${flatPrompt}\n` : `${flatPrompt}\n`;
                 child.stdin.write(cmdLine);
             } catch { /* ignore */ }
-        }, 1200);
+        }, 1500);
 
         if (!isPlanPhase) {
-            [8000, 16000, 24000].forEach((ms) => {
+            [12000, 28000, 48000, 72000, 96000].forEach((ms) => {
                 setTimeout(() => {
-                    if (!finished) {
+                    if (!finished && !exitSent) {
                         try { child.stdin.write('y\n'); } catch { /* ignore */ }
                     }
                 }, ms);
@@ -1112,10 +1175,11 @@ function runLocalAgyCliWithTempPrompt({ agyBinPath, projectPath, model, promptTe
         }
 
         setTimeout(() => {
-            if (!finished) {
+            if (!finished && !exitSent) {
+                exitSent = true;
                 try { child.stdin.write('/exit\n'); } catch { /* ignore */ }
             }
-        }, isPlanPhase ? 35000 : 45000);
+        }, isPlanPhase ? 75000 : 130000);
     });
 }
 
@@ -1174,7 +1238,7 @@ async function processGrowthConversationTurn(customDb = null, {
     titulo = null,
     modo = 'consultoria_financiera',
     proyectoDestino = 'sipeadmin',
-    modeloIa = 'gemini-4-argon-high',
+    modeloIa = 'gemini-4-carbon-high',
     empresaId = null,
     mensaje = '',
     autoLearn = true,
@@ -1422,7 +1486,7 @@ Nota: Solo incluye elementos en "conocimientos_nuevos" cuando la conversación c
  */
 async function generateAgyServerPlan(customDb = null, conversacionId, {
     instruction = '',
-    model = 'gemini-4-argon-high',
+    model = 'gemini-4-carbon-high',
     proyectoDestino = null,
     syncTicket = true,
     user = null,
@@ -1452,7 +1516,7 @@ async function generateAgyServerPlan(customDb = null, conversacionId, {
 
     const chosenProjectKey = proyectoDestino || conv.proyecto_destino || 'sipeadmin';
     const targetRepo = resolveTargetRepo(chosenProjectKey === 'sipesaas' ? 'sipesaas' : 'sipeadmin', agySettings);
-    const chosenModel = String(model || conv.modelo_ia || agySettings.default_model || 'gemini-4-argon-high').trim();
+    const chosenModel = String(model || conv.modelo_ia || agySettings.default_model || 'gemini-4-carbon-high').trim();
     const nextVersion = Number(conv.plan_version || 0) + 1;
     const actorName = user?.nombre || user?.username || 'Administrador';
 
@@ -1675,7 +1739,7 @@ async function executeAgyServerPlan(customDb = null, conversacionId, {
 
     const targetRepo = resolveTargetRepo(conv.proyecto_destino === 'sipesaas' ? 'sipesaas' : 'sipeadmin', agySettings);
     const actorName = user?.nombre || user?.username || 'Administrador';
-    const chosenModel = conv.modelo_ia || agySettings.default_model || 'gemini-4-argon-high';
+    const chosenModel = conv.modelo_ia || agySettings.default_model || 'gemini-4-carbon-high';
     let parsedFiles = [];
     try {
         parsedFiles = Array.isArray(conv.archivos_relacionados)
@@ -1711,7 +1775,7 @@ async function executeAgyServerPlan(customDb = null, conversacionId, {
         // Capturar archivos sucios previos para identificar únicamente los nuevos modificados por AGY
         const preDirty = new Set();
         try {
-            const st = execFileSync('git', ['status', '--porcelain'], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }).toString();
+            const st = execFileSync('git', ['-c', 'safe.directory=*', 'status', '--porcelain'], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }).toString();
             st.split('\n').filter(Boolean).forEach((line) => {
                 const f = line.trim().split(/\s+/).pop();
                 if (f) preDirty.add(f.replace(/\\/g, '/'));
@@ -1733,13 +1797,13 @@ async function executeAgyServerPlan(customDb = null, conversacionId, {
                 model: chosenModel,
                 promptText: execPrompt,
                 isPlanPhase: false,
-                timeoutMs: 75000
+                timeoutMs: 150000
             });
             if (cliExec.executed) {
                 stepLogs.push('Consola CLI AGY ejecutada en el servidor.');
             }
             try {
-                const postSt = execFileSync('git', ['status', '--porcelain'], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }).toString();
+                const postSt = execFileSync('git', ['-c', 'safe.directory=*', 'status', '--porcelain'], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }).toString();
                 postSt.split('\n').filter(Boolean).forEach((line) => {
                     const f = line.trim().split(/\s+/).pop()?.replace(/\\/g, '/');
                     if (f && !preDirty.has(f) && !f.includes('.env') && !f.endsWith('lock.json') && !f.endsWith('lock.yaml')) {
@@ -1752,7 +1816,7 @@ async function executeAgyServerPlan(customDb = null, conversacionId, {
         // 2. Si CLI no modificó archivos, aplicar motor de edición quirúrgica Gemini sobre los archivos objetivo
         if (modifiedFiles.length === 0) {
             const aiClient = await resolveAiClient();
-            const snippets = readSafeRepoSnippets(targetRepo, parsedFiles, 16000);
+            const snippets = readSafeRepoSnippets(targetRepo, parsedFiles, 85000, `${directInstruction || conv.titulo} ${conv.plan_markdown || ''}`);
             if (aiClient && snippets.length > 0) {
                 try {
                     const systemInstruction = `Eres el motor quirúrgico de código de AGY en el servidor SIPE.
@@ -1777,7 +1841,9 @@ REGLAS:
                     });
 
                     if (aiPatch?.text) {
-                        const parsed = JSON.parse(aiPatch.text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+                        const rawJson = aiPatch.text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+                        const jsonMatch = rawJson.match(/\{[\s\S]*\}/);
+                        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawJson);
                         for (const edit of (Array.isArray(parsed.edits) ? parsed.edits : [])) {
                             if (!edit.file || !edit.search || edit.replace === undefined) continue;
                             const cleanRel = path.normalize(String(edit.file)).replace(/^(\.\.(\/|\\|$))+/, '');
@@ -1788,13 +1854,7 @@ REGLAS:
                             if (!absFile.startsWith(rootResolved) || !fs.existsSync(absFile)) continue;
 
                             const currentText = fs.readFileSync(absFile, 'utf8');
-                            const crlfSearch = String(edit.search).replace(/\r?\n/g, '\r\n');
-                            let nextText = currentText;
-                            if (currentText.includes(edit.search)) {
-                                nextText = currentText.replace(edit.search, edit.replace);
-                            } else if (currentText.includes(crlfSearch)) {
-                                nextText = currentText.replace(crlfSearch, String(edit.replace).replace(/\r?\n/g, '\r\n'));
-                            }
+                            const nextText = applyFlexibleTextEdit(currentText, String(edit.search), String(edit.replace));
 
                             if (nextText !== currentText) {
                                 fs.writeFileSync(absFile, nextText, 'utf8');
@@ -1819,14 +1879,14 @@ REGLAS:
 
             if (autoCommitPush) {
                 try {
-                    execFileSync('git', ['add', '--', ...modifiedFiles], { cwd: rootResolved, timeout: 12000, stdio: 'pipe' });
+                    execFileSync('git', ['-c', 'safe.directory=*', 'add', '--', ...modifiedFiles], { cwd: rootResolved, timeout: 12000, stdio: 'pipe' });
                     const cleanTitle = String(conv.titulo || 'mejora desde consola agy').replace(/["`$\\]/g, '').slice(0, 68);
                     execFileSync(
                         'git',
-                        ['-c', 'user.name=AGY Server Bot', '-c', 'user.email=agy@sipesv.com', 'commit', '-m', `feat(agy): ${cleanTitle}`],
+                        ['-c', 'safe.directory=*', '-c', 'user.name=AGY Server Bot', '-c', 'user.email=agy@sipesv.com', 'commit', '-m', `feat(agy): ${cleanTitle}`],
                         { cwd: rootResolved, timeout: 15000, stdio: 'pipe' }
                     );
-                    const hash = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim();
+                    const hash = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--short', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim();
                     stepLogs.push(`Commit atómico registrado en servidor (${hash}).`);
                 } catch (gErr) {
                     stepLogs.push(`Aviso Git local: ${String(gErr.message || '').slice(0, 120)}`);
@@ -1835,14 +1895,19 @@ REGLAS:
         }
     }
 
-    // 4. Sincronizar estado con ticket si existe
-    if (conv.ticket_id && ticketSvc && injectedDb === undefined) {
+    const finalState = modifiedFiles.length > 0 || injectedDb !== undefined ? 'completado' : 'esperando_aprobacion';
+
+    // 4. Sincronizar estado con ticket únicamente cuando el trabajo haya finalizado realmente
+    if (finalState === 'completado' && conv.ticket_id && ticketSvc && injectedDb === undefined) {
         try {
-            await ticketSvc.executeApprovedPlan(conv.ticket_id, { actorName, io });
+            await ticketSvc.executeApprovedPlan(conv.ticket_id, {
+                actorId: user?.id || null,
+                actorName,
+                resolutionNotes: stepLogs.join(' ') || `Modificación aplicada en ${targetRepo.label} sobre ${modifiedFiles.join(', ')}.`,
+                io
+            });
         } catch { /* ignore */ }
     }
-
-    const finalState = modifiedFiles.length > 0 || injectedDb !== undefined ? 'completado' : 'esperando_aprobacion';
     const summaryMarkdown = modifiedFiles.length > 0
         ? [
             `✅ **Plan AGY v${conv.plan_version || 1} ejecutado exitosamente en ${targetRepo.label}**`,
@@ -1948,10 +2013,11 @@ async function getAgyServerStatus() {
         ssh_host: 'localhost',
         project_path: '/var/www/sipeadmin',
         agy_command: 'agy',
-        default_model: 'gemini-4-argon-high',
+        default_model: 'gemini-4-carbon-high',
         execution_mode: 'auto',
         available_models: [
-            { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Máxima Velocidad e Inteligencia)' },
+            { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Recomendado · Carbon High)' },
+            { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Argon High)' },
             { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
             { id: 'gemini-3-flash', label: 'gemini-3-flash (Ultra Rápido)' }
         ]
@@ -1970,7 +2036,7 @@ async function getAgyServerStatus() {
     const graphify = loadGraphifyGraph()?.summary || { available: false };
 
     return {
-        default_model: agySettings.default_model || 'gemini-4-argon-high',
+        default_model: agySettings.default_model || 'gemini-4-carbon-high',
         execution_mode: agySettings.execution_mode || 'auto',
         available_models: agySettings.available_models || [],
         cli_binary_detected: Boolean(agyBin),
@@ -2002,5 +2068,11 @@ module.exports = {
     rejectAgyServerPlan,
     getAgyServerStatus,
     resolveTargetRepo,
-    findSmartRepoFiles
+    findSmartRepoFiles,
+    readSafeRepoSnippets,
+    applyFlexibleTextEdit,
+    detectLocalAgyBinary,
+    runLocalAgyCliWithTempPrompt,
+    resolveAiClient,
+    generateGeminiContentWithFallback
 };

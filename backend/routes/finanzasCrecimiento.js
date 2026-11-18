@@ -299,7 +299,7 @@ router.post('/conversaciones/mensaje', authenticateToken, requirePermission(crec
             titulo: req.body?.titulo || null,
             modo: req.body?.modo || 'consultoria_financiera',
             proyectoDestino: req.body?.proyecto_destino || 'sipeadmin',
-            modeloIa: req.body?.modelo_ia || 'gemini-4-argon-high',
+            modeloIa: req.body?.modelo_ia || 'gemini-4-carbon-high',
             empresaId: req.body?.empresa_id || null,
             mensaje: req.body?.mensaje || '',
             autoLearn: req.body?.auto_learn !== false,
@@ -336,7 +336,7 @@ router.post('/conversaciones/:id/agy-plan', authenticateToken, requirePermission
         const db = growthService.resolveDb();
         const result = await growthService.generateAgyServerPlan(db, req.params.id, {
             instruction: req.body?.instruction || '',
-            model: req.body?.model || 'gemini-4-argon-high',
+            model: req.body?.model || 'gemini-4-carbon-high',
             proyectoDestino: req.body?.proyecto_destino || null,
             syncTicket: req.body?.sync_ticket !== false,
             user: req.user,

@@ -220,7 +220,7 @@ export default function TicketAiBundleModal({ open, onClose, selectedIds = [], o
                         <div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.45rem' }}>
                                 <h2 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800 }}>
-                                    Empaquetador Inteligente de Tickets &amp; Logs para IA
+                                    Solucionador IA
                                 </h2>
                                 <span style={{ padding: '0.1rem 0.5rem', borderRadius: '999px', fontSize: '0.68rem', fontWeight: 800, background: 'rgba(99,102,241,0.25)', color: '#c7d2fe' }}>
                                     {items.length} ticket(s)

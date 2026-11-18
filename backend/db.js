@@ -1279,7 +1279,7 @@ const initDB = async () => {
                     agent_platform VARCHAR(40) NOT NULL DEFAULT 'antigravity',
                     ai_bundled_at DATETIME NULL,
                     agy_status VARCHAR(40) NOT NULL DEFAULT 'idle',
-                    agy_model VARCHAR(80) NULL DEFAULT 'gemini-4-argon-high',
+                    agy_model VARCHAR(80) NULL DEFAULT 'gemini-4-carbon-high',
                     agy_plan_markdown LONGTEXT NULL,
                     agy_execution_log LONGTEXT NULL,
                     agy_approved_by VARCHAR(120) NULL,
@@ -1328,12 +1328,29 @@ const initDB = async () => {
                     ssh_key_path VARCHAR(255) NULL,
                     project_path VARCHAR(255) NOT NULL DEFAULT '/var/www/sipeadmin',
                     agy_command VARCHAR(120) NOT NULL DEFAULT 'agy',
-                    default_model VARCHAR(80) NOT NULL DEFAULT 'gemini-4-argon-high',
+                    default_model VARCHAR(80) NOT NULL DEFAULT 'gemini-4-carbon-high',
                     available_models_json TEXT NULL,
                     execution_mode VARCHAR(30) NOT NULL DEFAULT 'auto',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
+
+            // Migrar modelo predeterminado AGY a gemini-4-carbon-high y reconciliar tickets finalizados
+            try {
+                await pool.query("ALTER TABLE support_tickets MODIFY COLUMN agy_model VARCHAR(100) NULL DEFAULT 'gemini-4-carbon-high'");
+            } catch (_) { /* ignore */ }
+            try {
+                await pool.query("ALTER TABLE agy_server_settings MODIFY COLUMN default_model VARCHAR(100) NOT NULL DEFAULT 'gemini-4-carbon-high'");
+            } catch (_) { /* ignore */ }
+            try {
+                await pool.query("UPDATE agy_server_settings SET default_model = 'gemini-4-carbon-high' WHERE default_model = 'gemini-4-argon-high' OR default_model IS NULL OR default_model = ''");
+            } catch (_) { /* ignore */ }
+            try {
+                await pool.query("UPDATE support_tickets SET agy_model = 'gemini-4-carbon-high' WHERE (agy_model IS NULL OR agy_model = '' OR agy_model = 'gemini-4-argon-high') AND status IN ('abierto', 'en_proceso') AND COALESCE(agy_status, 'idle') != 'completado'");
+            } catch (_) { /* ignore */ }
+            try {
+                await pool.query("UPDATE support_tickets SET status = 'resuelto', include_in_ai_prompt = 0, resolved_at = COALESCE(resolved_at, agy_updated_at, NOW()) WHERE agy_status = 'completado' AND status IN ('abierto', 'en_proceso')");
+            } catch (_) { /* ignore */ }
 
             const ticketPerms = [
                 ['/dashboard/seguridad/tickets', 'Acceso a Centro de Soporte y Tickets'],
@@ -1398,7 +1415,7 @@ const initDB = async () => {
                     titulo VARCHAR(220) NOT NULL,
                     modo VARCHAR(40) NOT NULL DEFAULT 'consultoria_financiera',
                     proyecto_destino VARCHAR(30) NOT NULL DEFAULT 'sipeadmin',
-                    modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-argon-high',
+                    modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-carbon-high',
                     empresa_id INT NULL,
                     ticket_id INT NULL,
                     ticket_code VARCHAR(32) NULL,
@@ -1414,6 +1431,10 @@ const initDB = async () => {
                     INDEX idx_fin_conv_user (created_by, updated_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
+
+            try {
+                await pool.query("ALTER TABLE finanzas_conversaciones MODIFY COLUMN modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-carbon-high'");
+            } catch (_) { /* ignore */ }
 
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS finanzas_conversacion_mensajes (
