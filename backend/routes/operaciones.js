@@ -928,6 +928,183 @@ router.post('/operaciones/pedidos/confirmar', authenticateToken, requirePermissi
 });
 
 // --- RECORDATORIOS / PAGOS ---
+function normalizeAccountDigits(val) {
+    return String(val || '').replace(/[^0-9]/g, '');
+}
+
+function inferBankNameFromText(rawText = '') {
+    const upper = String(rawText || '').toUpperCase();
+    if (upper.includes('AMERICA CENTRAL') || /\bBAC\b/.test(upper)) return 'AMERICA CENTRAL';
+    if (upper.includes('DAVIVIENDA') || /\bDAVI\b/.test(upper)) return 'DAVIVIENDA';
+    if (upper.includes('PROMERICA') || /\bPROM\b/.test(upper)) return 'PROMERICA';
+    if (upper.includes('AGRICOLA') || upper.includes('AGRÍCOLA') || /\bBCO AGRICOLA\b/.test(upper)) return 'AGRICOLA';
+    if (upper.includes('HIPOTECARIO') || upper.includes('HIPOTECARIIO') || /\bBH\b/.test(upper)) return 'HIPOTECARIO';
+    if (upper.includes('CUSCATLAN') || upper.includes('CUSCATLÁN')) return 'CUSCATLAN';
+    if (upper.includes('AZUL')) return 'BANCO AZUL';
+    if (upper.includes('ATLANTIDA') || upper.includes('ATLÁNTIDA')) return 'ATLANTIDA';
+    if (upper.includes('SCOTIABANK')) return 'SCOTIABANK';
+    if (upper.includes('CITIBANK') || upper.includes('BANCO CITY') || /\bCITI\b/.test(upper)) return 'CITIBANK';
+    if (upper.includes('BANCOVI')) return 'BANCOVI';
+    if (upper.includes('ABANK')) return 'ABANK';
+    if (upper.includes('CONSTELACION')) return 'CONSTELACION';
+    if (/\bBFA\b/.test(upper) || upper.includes('FOMENTO AGROPECUARIO')) return 'BFA';
+    return 'BANCO';
+}
+
+function compactBankCode(bancoNombre = '') {
+    const upper = String(bancoNombre || '').toUpperCase();
+    if (upper.includes('AMERICA CENTRAL') || upper === 'BAC') return 'BAC';
+    if (upper.includes('DAVIVIENDA')) return 'DAVI';
+    if (upper.includes('PROMERICA')) return 'PROM';
+    if (upper.includes('AGRICOLA')) return 'AGRICOLA';
+    if (upper.includes('HIPOTECARIO')) return 'BH';
+    if (upper.includes('CUSCATLAN')) return 'CUSCATLAN';
+    if (upper.includes('AZUL')) return 'AZUL';
+    if (upper.includes('ATLANTIDA')) return 'ATLANTIDA';
+    if (upper.includes('CITIBANK')) return 'CITI';
+    return upper.slice(0, 10) || 'BANCO';
+}
+
+function buildCompactPresetValue(bancoNombre, nombreCuenta, numeroCuenta) {
+    const cleanBanco = String(bancoNombre || 'BANCO').trim();
+    const cleanNombre = String(nombreCuenta || '').replace(/\s+/g, ' ').trim();
+    const cleanNumero = String(numeroCuenta || '').trim();
+    const standard = cleanNumero
+        ? `[${cleanBanco}] ${cleanNombre} - (${cleanNumero})`
+        : `[${cleanBanco}] ${cleanNombre}`;
+    if (standard.length <= 50) return standard;
+
+    const shortBank = compactBankCode(cleanBanco);
+    if (!cleanNumero) {
+        return `[${shortBank}] ${cleanNombre}`.slice(0, 50).trim();
+    }
+    const suffix = ` - (${cleanNumero})`;
+    const prefix = `[${shortBank}] `;
+    const maxNameLen = Math.max(6, 50 - prefix.length - suffix.length);
+    const trimmedName = cleanNombre.slice(0, maxNameLen).trim();
+    return `${prefix}${trimmedName}${suffix}`.slice(0, 50);
+}
+
+function inferUbicacionTags(account = {}) {
+    const blob = `${account.empresa_nombre || ''} ${account.nombre || ''} ${account.banco_nombre || ''}`.toUpperCase();
+    const tags = new Set();
+    if (blob.includes('ANDELSA')) tags.add('ANDELSA');
+    if (blob.includes('MIRAFLORES')) tags.add('ESTACION MIRAFLORES');
+    if (blob.includes('CHALCHUAPA') || blob.includes('CHALCHUPA')) tags.add('ESTACION CHALCHUAPA');
+    if (blob.includes('SAN MARTIN') || blob.includes('LOMA') || blob.includes('LIL')) tags.add('ESTACION SAN MARTIN');
+    if (blob.includes('DESVIO') || blob.includes('CDH')) tags.add('ESTACION DESVIO');
+    if (blob.includes('COSTA DEL SOL') || /\bCDS\b/.test(blob)) tags.add('ENERGY GAS COSTA DEL SOL');
+    if (blob.includes('SUPER') || blob.includes('PEDREGAL') || blob.includes('CERRO VERDE')) tags.add('SUPER EL PEDREGAL');
+    if (blob.includes('14 AVENIDA') || blob.includes('ZURITA')) tags.add('SHELL 14 AVENIDA');
+    if (blob.includes('RAUL') || blob.includes('CORINA') || blob.includes('RABIDA') || blob.includes('CMR')) {
+        tags.add('OFICINA CENTRAL');
+        tags.add('PERSONAL');
+    }
+    return Array.from(tags);
+}
+
+router.get('/operaciones/recordatorios/presets-pago', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        const cuentasMap = new Map();
+
+        try {
+            const [adminCuentas] = await db.query(`
+                SELECT c.id, c.empresa_id, c.numero, c.nombre,
+                       COALESCE(b.descripcion, 'BANCO') AS banco_nombre,
+                       COALESCE(e.nombre, '') AS empresa_nombre
+                FROM cuentas_bancarias c
+                LEFT JOIN bancos b ON c.banco_id = b.id
+                LEFT JOIN empresas e ON c.empresa_id = e.id
+                WHERE c.activa = 1
+                ORDER BY b.descripcion ASC, c.numero ASC
+            `);
+
+            for (const row of (adminCuentas || [])) {
+                const numero = String(row.numero || '').trim();
+                const nombre = String(row.nombre || '').replace(/\s+/g, ' ').trim();
+                const bancoNombre = String(row.banco_nombre || inferBankNameFromText(nombre)).trim();
+                const empresaNombre = String(row.empresa_nombre || '').trim();
+                const key = normalizeAccountDigits(numero) || `adm-${row.id}`;
+                const displayNombre = empresaNombre && !nombre.toUpperCase().includes('ANDELSA') && empresaNombre.toUpperCase().includes('ANDELSA')
+                    ? `ANDELSA - ${nombre}`
+                    : nombre;
+                const item = {
+                    id: `cta-${row.id}`,
+                    banco_nombre: bancoNombre,
+                    nombre: displayNombre,
+                    numero,
+                    empresa_nombre: empresaNombre,
+                    preset_value: buildCompactPresetValue(bancoNombre, displayNombre, numero)
+                };
+                item.ubicacion_tags = inferUbicacionTags(item);
+                cuentasMap.set(key, item);
+            }
+        } catch (errAdmin) {
+            console.warn('[Recordatorios] Aviso cargando cuentas_bancarias:', errAdmin.message);
+        }
+
+        try {
+            const accountingDb = await getAccountingDb().catch(() => null);
+            if (accountingDb) {
+                const [coaRows] = await accountingDb.query(`
+                    SELECT ca.id, ca.company_id, ca.code, ca.name,
+                           COALESCE(co.nombre, '') AS company_name
+                    FROM chart_of_accounts ca
+                    LEFT JOIN companies co ON ca.company_id = co.id
+                    WHERE ca.code LIKE '110103%' AND LENGTH(ca.code) >= 9
+                    ORDER BY ca.company_id ASC, ca.code ASC
+                `);
+                for (const row of (coaRows || [])) {
+                    const rawName = String(row.name || '').replace(/\s+/g, ' ').trim();
+                    if (!rawName || /^DEPOSITOS\b/i.test(rawName)) continue;
+                    const numMatch = rawName.match(/([0-9][0-9-]{4,}[0-9])/);
+                    const numero = numMatch ? numMatch[1].trim() : '';
+                    const digits = normalizeAccountDigits(numero);
+                    if (digits && cuentasMap.has(digits)) continue;
+
+                    const bancoNombre = inferBankNameFromText(rawName);
+                    const companyName = String(row.company_name || '').replace(/\s+/g, ' ').trim();
+                    const shortCompany = companyName.toUpperCase().includes('ANDELSA')
+                        ? 'ANDELSA'
+                        : companyName.toUpperCase().includes('LIL')
+                            ? 'INVERSIONES LIL'
+                            : companyName;
+                    const cleanedLabel = rawName
+                        .replace(/([#Nº]|CTA\.?\s*CTE\.?|CTA\.?\s*AHO\.?|CTA)\s*[#Nº]*\s*[0-9][0-9-]{4,}[0-9]/gi, '')
+                        .replace(new RegExp(numero.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const displayNombre = shortCompany && !cleanedLabel.toUpperCase().includes(shortCompany.toUpperCase())
+                        ? `${shortCompany} - ${cleanedLabel || bancoNombre}`
+                        : (cleanedLabel || shortCompany || bancoNombre);
+
+                    const key = digits || `saas-${row.id}`;
+                    const item = {
+                        id: `coa-${row.id}`,
+                        banco_nombre: bancoNombre,
+                        nombre: displayNombre,
+                        numero,
+                        empresa_nombre: companyName,
+                        preset_value: buildCompactPresetValue(bancoNombre, displayNombre, numero)
+                    };
+                    item.ubicacion_tags = inferUbicacionTags(item);
+                    cuentasMap.set(key, item);
+                }
+            }
+        } catch (errCoa) {
+            console.warn('[Recordatorios] Aviso cargando cuentas contables SaaS:', errCoa.message);
+        }
+
+        res.json({
+            cuentas: Array.from(cuentasMap.values()),
+            metodos_base: ['TRANSFERENCIA', 'CHEQUE', 'EFECTIVO', 'TARJETA DE CREDITO', 'DEBITO AUTOMATICO']
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar presets de pago');
+    }
+});
+
 router.get('/operaciones/recordatorios/ubicaciones', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
@@ -946,7 +1123,7 @@ router.get('/operaciones/recordatorios', authenticateToken, requirePermission(re
         if (estado === 'P') statusFilter = "a.estado = 'P'";
         else if (estado === 'C') statusFilter = "a.estado = 'C'";
         let query = `
-            SELECT c.descripcion as ubicacion, b.descripcion, a.vencimiento as vence, b.forma_pago as observacion, 
+            SELECT c.descripcion as ubicacion, b.id_ubicacion, b.descripcion, a.vencimiento as vence, b.forma_pago as observacion, 
                    a.forma_pago, b.monto, IF(a.estado = 'P','PENDIENTE','CANCELADO') as estado, a.fecha_cancelacion, a.id, b.id as id_recordatorio
             FROM web_rc_recordatorios_vencimientos a 
             INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id 
@@ -1048,6 +1225,8 @@ function calculateRecurringDate(iniciarStr, n, repetirDesc) {
 router.post('/operaciones/recordatorios', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
     try {
         const { id, descripcion, id_ubicacion, iniciar, activo, monto, repetir, repetir_desc, forma_pago, pagado, fecPago, formaPago2 } = req.body;
+        const safeFormaPago = String(forma_pago || '').trim().slice(0, 50);
+        const safeFormaPago2 = String(formaPago2 || '').trim().slice(0, 50);
         const externalDb = await getExternalDb();
         const connection = await externalDb.getConnection();
         await connection.beginTransaction();
@@ -1055,10 +1234,10 @@ router.post('/operaciones/recordatorios', authenticateToken, requirePermission([
             let recordatorioId = id;
             if (id) {
                 await connection.query(`UPDATE web_rc_recordatorios SET descripcion=?, id_ubicacion=?, iniciar=?, monto=?, repetir=?, repetir_desc=?, activo=?, forma_pago=? WHERE id=?`, 
-                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, forma_pago, id]);
+                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, safeFormaPago, id]);
             } else {
                 const [result] = await connection.query(`INSERT INTO web_rc_recordatorios (descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo, forma_pago) VALUES (?,?,?,?,?,?,?,?)`, 
-                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, forma_pago]);
+                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, safeFormaPago]);
                 recordatorioId = result.insertId;
             }
             await connection.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?", [recordatorioId]);
@@ -1067,7 +1246,7 @@ router.post('/operaciones/recordatorios', authenticateToken, requirePermission([
                 let isPagado = false;
                 if (repetir_desc === 'VEZ') { if (pagado) isPagado = true; }
                 if (isPagado) {
-                    await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, formaPago2]);
+                    await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, safeFormaPago2]);
                 } else {
                     await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'P', NULL, '')", [recordatorioId, formattedDate]);
                 }
@@ -1082,10 +1261,34 @@ router.put('/operaciones/recordatorios/pagar/:id', authenticateToken, requirePer
     try {
         const { id } = req.params;
         const { forma_pago, fecha_cancelacion } = req.body;
+        const safeFormaPago = String(forma_pago || '').trim().slice(0, 50);
         const externalDb = await getExternalDb();
-        await externalDb.query("UPDATE web_rc_recordatorios_vencimientos SET estado = 'C', fecha_cancelacion = ?, forma_pago = ? WHERE id = ?", [fecha_cancelacion, forma_pago, id]);
+        await externalDb.query("UPDATE web_rc_recordatorios_vencimientos SET estado = 'C', fecha_cancelacion = ?, forma_pago = ? WHERE id = ?", [fecha_cancelacion, safeFormaPago, id]);
         res.json({ success: true, message: 'Pago Realizado!' });
     } catch (error) { sendSafeError(res, error, 'Error al registrar pago'); }
+});
+
+router.patch('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { forma_pago, fecha_cancelacion } = req.body;
+        const safeFormaPago = String(forma_pago || '').trim().slice(0, 50);
+        const externalDb = await getExternalDb();
+        if (fecha_cancelacion) {
+            await externalDb.query(
+                'UPDATE web_rc_recordatorios_vencimientos SET forma_pago = ?, fecha_cancelacion = ? WHERE id = ?',
+                [safeFormaPago, fecha_cancelacion, id]
+            );
+        } else {
+            await externalDb.query(
+                'UPDATE web_rc_recordatorios_vencimientos SET forma_pago = ? WHERE id = ?',
+                [safeFormaPago, id]
+            );
+        }
+        res.json({ success: true, message: 'Forma de pago actualizada', forma_pago: safeFormaPago });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar forma de pago');
+    }
 });
 
 router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
@@ -1969,8 +2172,14 @@ router.get('/ventas/horas-pico-rango', authenticateToken, requirePermission(hora
 router.parsePedidosPagination = parsePedidosPagination;
 router.calculateHasMore = calculateHasMore;
 router.buildEstacionFilterClause = buildEstacionFilterClause;
+router.buildCompactPresetValue = buildCompactPresetValue;
+router.inferBankNameFromText = inferBankNameFromText;
+router.inferUbicacionTags = inferUbicacionTags;
 
 module.exports = router;
 module.exports.parsePedidosPagination = parsePedidosPagination;
 module.exports.calculateHasMore = calculateHasMore;
 module.exports.buildEstacionFilterClause = buildEstacionFilterClause;
+module.exports.buildCompactPresetValue = buildCompactPresetValue;
+module.exports.inferBankNameFromText = inferBankNameFromText;
+module.exports.inferUbicacionTags = inferUbicacionTags;

@@ -1,6 +1,13 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
-const { parsePedidosPagination, calculateHasMore, buildEstacionFilterClause } = require('../routes/operaciones');
+const {
+    parsePedidosPagination,
+    calculateHasMore,
+    buildEstacionFilterClause,
+    buildCompactPresetValue,
+    inferBankNameFromText,
+    inferUbicacionTags
+} = require('../routes/operaciones');
 const { normalizeEstacion, getPortalCredentials, savePortalCredentials } = require('../services/energyLatamService');
 
 describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
@@ -142,6 +149,30 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
                 () => savePortalCredentials({ user: 'test@example.com', password: '' }),
                 /contraseña del portal es requerida/
             );
+        });
+    });
+
+    describe('Recordatorios - Presets automáticos de pago (ADM-0012)', () => {
+        it('debe inferir BAC / AMERICA CENTRAL y etiquetas de ubicación para ANDELSA', () => {
+            assert.strictEqual(inferBankNameFromText('BAC CTA CTE 201002367'), 'AMERICA CENTRAL');
+            assert.strictEqual(inferBankNameFromText('BANCO DAVIVIENDA CTA CTE 002510128744'), 'DAVIVIENDA');
+            const tags = inferUbicacionTags({
+                empresa_nombre: 'ANDELSA, S.A. DE C.V.',
+                nombre: 'ANDELSA - BAC CTA CTE',
+                banco_nombre: 'AMERICA CENTRAL'
+            });
+            assert.ok(tags.includes('ANDELSA'));
+        });
+
+        it('debe generar preset_value menor o igual a 50 caracteres preservando banco y número de cuenta', () => {
+            const preset = buildCompactPresetValue(
+                'AMERICA CENTRAL',
+                'ANDELSA S.A. DE C.V. - BAC CUENTA CORRIENTE PRINCIPAL',
+                '201002367'
+            );
+            assert.ok(preset.length <= 50, `Longitud excedida: ${preset.length}`);
+            assert.ok(preset.includes('201002367'));
+            assert.ok(preset.includes('ANDELSA'));
         });
     });
 });
