@@ -177,6 +177,14 @@ export default function ControlRecordatorios() {
     const [showColumnFilters, setShowColumnFilters] = useState(true);
     const [columnFilters, setColumnFilters] = useState(EMPTY_COL_FILTERS);
     const [sortConfig, setSortConfig] = useState({ key: 'vence', direction: 'asc' });
+    const [parentSortConfig, setParentSortConfig] = useState({ key: 'id', direction: 'desc' });
+
+    // Inline editing state directly inside the table ("en esa misma pantalla")
+    const [inlineEditId, setInlineEditId] = useState(null);
+    const [inlineFormaValue, setInlineFormaValue] = useState('');
+    const [inlineSavingId, setInlineSavingId] = useState(null);
+    const [inlineObsEditId, setInlineObsEditId] = useState(null);
+    const [inlineObsValue, setInlineObsValue] = useState('');
 
     // UI State
     const [loading, setLoading] = useState(false);
@@ -316,18 +324,33 @@ export default function ControlRecordatorios() {
     const handleSort = (key) => {
         setSortConfig(prev => {
             if (prev.key !== key) return { key, direction: 'asc' };
-            if (prev.direction === 'asc') return { key, direction: 'desc' };
-            return { key: 'vence', direction: 'asc' };
+            return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
         });
     };
 
     const renderSortIcon = (key) => {
         if (sortConfig.key !== key) {
-            return <ArrowUpDown size={12} style={{ opacity: 0.35, flexShrink: 0 }} />;
+            return <ArrowUpDown size={12} style={{ opacity: 0.45, flexShrink: 0 }} />;
         }
         return sortConfig.direction === 'asc'
-            ? <ArrowUp size={12} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-            : <ArrowDown size={12} style={{ color: 'var(--primary)', flexShrink: 0 }} />;
+            ? <ArrowUp size={12} style={{ color: '#818cf8', flexShrink: 0 }} />
+            : <ArrowDown size={12} style={{ color: '#818cf8', flexShrink: 0 }} />;
+    };
+
+    const handleParentSort = (key) => {
+        setParentSortConfig(prev => {
+            if (prev.key !== key) return { key, direction: 'asc' };
+            return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+        });
+    };
+
+    const renderParentSortIcon = (key) => {
+        if (parentSortConfig.key !== key) {
+            return <ArrowUpDown size={11} style={{ opacity: 0.4, flexShrink: 0 }} />;
+        }
+        return parentSortConfig.direction === 'asc'
+            ? <ArrowUp size={11} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+            : <ArrowDown size={11} style={{ color: 'var(--primary)', flexShrink: 0 }} />;
     };
 
     const uniqueUbicacionesInTable = useMemo(() => {
@@ -604,8 +627,78 @@ export default function ControlRecordatorios() {
 
             return descMatch && dateMatch && ubicMatch && montoMatch && obsMatch && cuotasMatch && repDescMatch && activoMatch;
         });
-        return result.slice(0, 100);
-    }, [parentsList, debouncedFilters]);
+
+        const { key, direction } = parentSortConfig;
+        const dir = direction === 'desc' ? -1 : 1;
+        const sorted = [...result].sort((a, b) => {
+            if (key === 'id' || key === 'monto' || key === 'cuotas') {
+                return (Number(a[key] || 0) - Number(b[key] || 0)) * dir;
+            }
+            if (key === 'fecha_inicio') {
+                const da = String(a.fecha_inicio || '').slice(0, 10);
+                const db = String(b.fecha_inicio || '').slice(0, 10);
+                return da.localeCompare(db) * dir;
+            }
+            return String(a[key] || '').localeCompare(String(b[key] || ''), 'es', { numeric: true, sensitivity: 'base' }) * dir;
+        });
+        return sorted.slice(0, 100);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [parentsList, debouncedFilters, parentSortConfig]);
+
+    const startInlineEdit = (rec) => {
+        const defaultSuggested = getAccountsForUbicacion(cuentasBancarias, rec.ubicacion);
+        const existingForma = String(rec.forma_pago || '').trim();
+        const fallbackObs = String(rec.observacion || '').trim();
+        const prefilled = existingForma
+            || (findSmartPresetMatches(fallbackObs, cuentasBancarias, rec.ubicacion)[0]
+                ? buildPresetValueFromAccount(findSmartPresetMatches(fallbackObs, cuentasBancarias, rec.ubicacion)[0])
+                : (defaultSuggested.length === 1 ? buildPresetValueFromAccount(defaultSuggested[0]) : ''));
+        setInlineEditId(rec.id);
+        setInlineFormaValue(prefilled);
+    };
+
+    const saveInlineFormaPago = async (rec, customVal = undefined) => {
+        if (!rec || !rec.id) return;
+        const rawToSave = customVal !== undefined ? customVal : inlineFormaValue;
+        const finalForma = resolveFinalFormaPago(rawToSave, rec.ubicacion);
+        setInlineSavingId(rec.id);
+        try {
+            await api.patch(`/operaciones/recordatorios/vencimiento/${rec.id}`, {
+                forma_pago: finalForma
+            });
+            setRecordatorios(prev => prev.map(item =>
+                item.id === rec.id ? { ...item, forma_pago: finalForma } : item
+            ));
+            setInlineEditId(null);
+            addToast('Método de pago actualizado en tabla', 'success');
+        } catch (error) {
+            addToast('Error al actualizar método de pago', 'error');
+        } finally {
+            setInlineSavingId(null);
+        }
+    };
+
+    const saveInlineObservacion = async (rec, customVal = undefined) => {
+        if (!rec || !rec.id) return;
+        const rawToSave = customVal !== undefined ? customVal : inlineObsValue;
+        const finalObs = resolveFinalFormaPago(rawToSave, rec.ubicacion);
+        setInlineSavingId(`obs-${rec.id}`);
+        try {
+            await api.patch(`/operaciones/recordatorios/vencimiento/${rec.id}`, {
+                observacion: finalObs,
+                id_recordatorio: rec.id_recordatorio
+            });
+            setRecordatorios(prev => prev.map(item =>
+                item.id_recordatorio === rec.id_recordatorio ? { ...item, observacion: finalObs } : item
+            ));
+            setInlineObsEditId(null);
+            addToast('Observación / método sugerido actualizado', 'success');
+        } catch (error) {
+            addToast('Error al actualizar observación', 'error');
+        } finally {
+            setInlineSavingId(null);
+        }
+    };
 
     const handleDelete = async (rec) => {
         if (rec.estado === 'CANCELADO') {
@@ -957,30 +1050,36 @@ export default function ControlRecordatorios() {
                                     { key: 'vence', label: 'VENCE', width: '98px' },
                                     { key: 'observacion', label: 'OBSERVACIÓN' },
                                     { key: 'monto', label: 'MONTO', width: '102px' },
-                                    { key: 'forma_pago', label: 'FORMA PAGO', width: '185px' },
+                                    { key: 'forma_pago', label: 'MÉTODO / FORMA PAGO', width: '235px' },
                                     { key: 'estado', label: 'ESTADO', width: '96px' },
                                     { key: 'fecha_cancelacion', label: 'FEC. PAGO', width: '98px' }
-                                ].map(col => (
-                                    <th
-                                        key={col.key}
-                                        onClick={() => handleSort(col.key)}
-                                        title={`Ordenar por ${col.label}`}
-                                        style={{
-                                            padding: '0.45rem 0.5rem',
-                                            fontSize: '0.74rem',
-                                            textTransform: 'uppercase',
-                                            letterSpacing: '0.03em',
-                                            width: col.width,
-                                            cursor: 'pointer',
-                                            userSelect: 'none'
-                                        }}
-                                    >
-                                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                                            <span>{col.label}</span>
-                                            {renderSortIcon(col.key)}
-                                        </div>
-                                    </th>
-                                ))}
+                                ].map(col => {
+                                    const isSorted = sortConfig.key === col.key;
+                                    return (
+                                        <th
+                                            key={col.key}
+                                            onClick={() => handleSort(col.key)}
+                                            title={`Clic para ordenar por ${col.label} (${isSorted && sortConfig.direction === 'asc' ? 'Descendente' : 'Ascendente'})`}
+                                            style={{
+                                                padding: '0.45rem 0.5rem',
+                                                fontSize: '0.74rem',
+                                                textTransform: 'uppercase',
+                                                letterSpacing: '0.03em',
+                                                width: col.width,
+                                                cursor: 'pointer',
+                                                userSelect: 'none',
+                                                backgroundColor: isSorted ? 'rgba(99, 102, 241, 0.16)' : 'transparent',
+                                                color: isSorted ? '#a5b4fc' : undefined,
+                                                transition: 'background-color 0.15s ease'
+                                            }}
+                                        >
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                <span>{col.label}</span>
+                                                {renderSortIcon(col.key)}
+                                            </div>
+                                        </th>
+                                    );
+                                })}
                                 <th style={{ textAlign: 'center', padding: '0.45rem 0.5rem', fontSize: '0.74rem', letterSpacing: '0.03em', width: '102px' }}>
                                     ACCIONES
                                 </th>
@@ -1117,37 +1216,209 @@ export default function ControlRecordatorios() {
                                         {formatDate(r.vence)}
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                        {r.observacion || '—'}
+                                        {inlineObsEditId === r.id ? (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                <input
+                                                    type="text"
+                                                    maxLength={50}
+                                                    autoFocus
+                                                    className="form-control"
+                                                    style={{ height: '27px', fontSize: '0.74rem', padding: '0.15rem 0.4rem', minWidth: '120px' }}
+                                                    value={inlineObsValue}
+                                                    placeholder="Observación / cuenta..."
+                                                    onChange={e => setInlineObsValue(e.target.value)}
+                                                    onKeyDown={e => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            saveInlineObservacion(r);
+                                                        } else if (e.key === 'Escape') {
+                                                            setInlineObsEditId(null);
+                                                        }
+                                                    }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    className="btn-primary"
+                                                    disabled={inlineSavingId === `obs-${r.id}`}
+                                                    onClick={() => saveInlineObservacion(r)}
+                                                    style={{ padding: '0.2rem 0.35rem', height: '27px' }}
+                                                    title="Guardar observación"
+                                                >
+                                                    <Save size={12} />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary"
+                                                    onClick={() => setInlineObsEditId(null)}
+                                                    style={{ padding: '0.2rem 0.35rem', height: '27px' }}
+                                                    title="Cancelar"
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div
+                                                onClick={() => {
+                                                    setInlineObsEditId(r.id);
+                                                    setInlineObsValue(r.observacion || '');
+                                                }}
+                                                title="Clic para editar observación / método sugerido en esta fila"
+                                                style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.15rem 0.35rem', borderRadius: '4px', border: '1px dashed transparent' }}
+                                            >
+                                                <span>{r.observacion || '—'}</span>
+                                                <Edit size={11} style={{ opacity: 0.45, flexShrink: 0 }} />
+                                            </div>
+                                        )}
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--primary)' }}>
                                         {mc(r.monto)}
                                     </td>
-                                    <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem' }}>
-                                        <button
-                                            type="button"
-                                            onClick={() => openPagoOrEditModal(r, 'edit_forma')}
-                                            title="Clic para editar Forma de Pago o aplicar preset de cuenta bancaria"
-                                            style={{
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                gap: '0.35rem',
-                                                maxWidth: '100%',
-                                                padding: '0.2rem 0.5rem',
-                                                borderRadius: '6px',
-                                                border: r.forma_pago ? '1px solid rgba(99, 102, 241, 0.3)' : '1px dashed rgba(148, 163, 184, 0.35)',
-                                                backgroundColor: r.forma_pago ? 'rgba(99, 102, 241, 0.1)' : 'rgba(255, 255, 255, 0.02)',
-                                                color: r.forma_pago ? 'var(--text)' : 'var(--text-muted)',
-                                                fontSize: '0.75rem',
-                                                cursor: 'pointer',
-                                                textAlign: 'left'
-                                            }}
-                                        >
-                                            <CreditCard size={12} style={{ flexShrink: 0, color: r.forma_pago ? 'var(--primary)' : 'var(--text-muted)' }} />
-                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '145px' }}>
-                                                {r.forma_pago || 'Asignar / Editar...'}
-                                            </span>
-                                            <Edit size={11} style={{ flexShrink: 0, opacity: 0.65 }} />
-                                        </button>
+                                    <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', position: 'relative' }}>
+                                        {inlineEditId === r.id ? (() => {
+                                            const rowUbicPresets = getAccountsForUbicacion(cuentasBancarias, r.ubicacion);
+                                            const rowSmartMatches = findSmartPresetMatches(inlineFormaValue, cuentasBancarias, r.ubicacion);
+                                            const suggestions = rowSmartMatches.length > 0 ? rowSmartMatches : rowUbicPresets.slice(0, 4);
+                                            return (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: '215px' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                        <input
+                                                            type="text"
+                                                            maxLength={50}
+                                                            autoFocus
+                                                            className="form-control"
+                                                            style={{ height: '28px', fontSize: '0.75rem', padding: '0.15rem 0.45rem', flex: 1 }}
+                                                            placeholder="Ej. bac andelsa, Cheque..."
+                                                            value={inlineFormaValue}
+                                                            onChange={e => setInlineFormaValue(e.target.value)}
+                                                            onKeyDown={e => {
+                                                                if (e.key === 'Enter') {
+                                                                    e.preventDefault();
+                                                                    saveInlineFormaPago(r);
+                                                                } else if (e.key === 'Escape') {
+                                                                    setInlineEditId(null);
+                                                                } else if (e.key === 'Tab' && rowSmartMatches.length === 1) {
+                                                                    e.preventDefault();
+                                                                    setInlineFormaValue(buildPresetValueFromAccount(rowSmartMatches[0]));
+                                                                }
+                                                            }}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            className="btn-primary"
+                                                            disabled={inlineSavingId === r.id}
+                                                            onClick={() => saveInlineFormaPago(r)}
+                                                            style={{ padding: '0.2rem 0.4rem', height: '28px', display: 'inline-flex', alignItems: 'center' }}
+                                                            title="Guardar método de pago (Enter)"
+                                                        >
+                                                            <Save size={12} />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="btn-secondary"
+                                                            onClick={() => setInlineEditId(null)}
+                                                            style={{ padding: '0.2rem 0.35rem', height: '28px', display: 'inline-flex', alignItems: 'center' }}
+                                                            title="Cancelar (Esc)"
+                                                        >
+                                                            <X size={12} />
+                                                        </button>
+                                                    </div>
+                                                    <select
+                                                        className="form-control"
+                                                        style={{ height: '26px', fontSize: '0.72rem', padding: '0.1rem 0.35rem' }}
+                                                        value=""
+                                                        onChange={e => {
+                                                            const val = e.target.value;
+                                                            if (!val) return;
+                                                            setInlineFormaValue(val);
+                                                            saveInlineFormaPago(r, val);
+                                                        }}
+                                                    >
+                                                        <option value="">⚡ Seleccionar método o cuenta rápida...</option>
+                                                        <optgroup label="Métodos de Pago">
+                                                            {metodosBase.map(m => (
+                                                                <option key={m} value={m}>{m}</option>
+                                                            ))}
+                                                        </optgroup>
+                                                        {rowUbicPresets.length > 0 && (
+                                                            <optgroup label={`Sugeridas para ${r.ubicacion}`}>
+                                                                {rowUbicPresets.map(c => {
+                                                                    const pv = buildPresetValueFromAccount(c);
+                                                                    return <option key={`sug-${c.id}`} value={pv}>{pv}</option>;
+                                                                })}
+                                                            </optgroup>
+                                                        )}
+                                                        <optgroup label="Todas las Cuentas Bancarias">
+                                                            {cuentasBancarias.map(c => {
+                                                                const pv = buildPresetValueFromAccount(c);
+                                                                return <option key={`all-${c.id}`} value={pv}>{formatCuentaLabel(c)}</option>;
+                                                            })}
+                                                        </optgroup>
+                                                    </select>
+                                                    {suggestions.length > 0 && (
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                                                            {suggestions.slice(0, 3).map(c => {
+                                                                const pv = buildPresetValueFromAccount(c);
+                                                                return (
+                                                                    <button
+                                                                        key={c.id}
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            setInlineFormaValue(pv);
+                                                                            saveInlineFormaPago(r, pv);
+                                                                        }}
+                                                                        style={{
+                                                                            padding: '0.12rem 0.45rem',
+                                                                            borderRadius: '10px',
+                                                                            fontSize: '0.68rem',
+                                                                            border: '1px solid rgba(16, 185, 129, 0.45)',
+                                                                            backgroundColor: 'rgba(16, 185, 129, 0.16)',
+                                                                            color: '#a7f3d0',
+                                                                            cursor: 'pointer',
+                                                                            textAlign: 'left',
+                                                                            maxWidth: '210px',
+                                                                            overflow: 'hidden',
+                                                                            textOverflow: 'ellipsis',
+                                                                            whiteSpace: 'nowrap'
+                                                                        }}
+                                                                        title={`Aplicar ${pv}`}
+                                                                    >
+                                                                        ⚡ {pv}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })() : (
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', maxWidth: '100%' }}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => startInlineEdit(r)}
+                                                    title="Clic para editar Método / Forma de Pago directamente en esta fila"
+                                                    style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.35rem',
+                                                        maxWidth: '100%',
+                                                        padding: '0.22rem 0.5rem',
+                                                        borderRadius: '6px',
+                                                        border: r.forma_pago ? '1px solid rgba(99, 102, 241, 0.35)' : '1px dashed rgba(148, 163, 184, 0.4)',
+                                                        backgroundColor: r.forma_pago ? 'rgba(99, 102, 241, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                                                        color: r.forma_pago ? 'var(--text)' : 'var(--text-muted)',
+                                                        fontSize: '0.75rem',
+                                                        cursor: 'pointer',
+                                                        textAlign: 'left'
+                                                    }}
+                                                >
+                                                    <CreditCard size={12} style={{ flexShrink: 0, color: r.forma_pago ? 'var(--primary)' : 'var(--text-muted)' }} />
+                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '165px' }}>
+                                                        {r.forma_pago || 'Editar método...'}
+                                                    </span>
+                                                    <Edit size={11} style={{ flexShrink: 0, opacity: 0.7 }} />
+                                                </button>
+                                            </div>
+                                        )}
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem' }}>
                                         <span style={{
@@ -1732,39 +2003,65 @@ export default function ControlRecordatorios() {
                     <table className="data-table" style={{ fontSize: '0.8rem', minWidth: '820px' }}>
                         <thead style={{ position: 'sticky', top: 0, zIndex: 10, backgroundColor: 'rgba(30,35,42,1)' }}>
                             <tr>
-                                <th style={{ width: '90px' }}>ID</th>
+                                <th style={{ width: '90px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('id')}>
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                        <span>ID</span>
+                                        {renderParentSortIcon('id')}
+                                    </div>
+                                </th>
                                 <th>
-                                    Descripción
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('descripcion')}>
+                                        <span>Descripción</span>
+                                        {renderParentSortIcon('descripcion')}
+                                    </div>
                                     <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
                                         value={searchFilters.descripcion} onChange={e => setSearchFilters({ ...searchFilters, descripcion: e.target.value })} placeholder="Buscar..." />
                                 </th>
                                 <th>
-                                    Fecha Inicio
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('fecha_inicio')}>
+                                        <span>Fecha Inicio</span>
+                                        {renderParentSortIcon('fecha_inicio')}
+                                    </div>
                                     <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
                                         value={searchFilters.fecha_inicio} onChange={e => setSearchFilters({ ...searchFilters, fecha_inicio: e.target.value })} placeholder="Buscar..." />
                                 </th>
                                 <th>
-                                    Ubicación
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('ubicacion')}>
+                                        <span>Ubicación</span>
+                                        {renderParentSortIcon('ubicacion')}
+                                    </div>
                                     <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
                                         value={searchFilters.ubicacion} onChange={e => setSearchFilters({ ...searchFilters, ubicacion: e.target.value })} placeholder="Buscar..." />
                                 </th>
                                 <th>
-                                    Monto
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('monto')}>
+                                        <span>Monto</span>
+                                        {renderParentSortIcon('monto')}
+                                    </div>
                                     <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
                                         value={searchFilters.monto} onChange={e => setSearchFilters({ ...searchFilters, monto: e.target.value })} placeholder="Buscar..." />
                                 </th>
                                 <th>
-                                    Observación
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('observacion')}>
+                                        <span>Observación</span>
+                                        {renderParentSortIcon('observacion')}
+                                    </div>
                                     <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
                                         value={searchFilters.observacion} onChange={e => setSearchFilters({ ...searchFilters, observacion: e.target.value })} placeholder="Buscar..." />
                                 </th>
                                 <th>
-                                    Cuotas
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('cuotas')}>
+                                        <span>Cuotas</span>
+                                        {renderParentSortIcon('cuotas')}
+                                    </div>
                                     <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
                                         value={searchFilters.cuotas} onChange={e => setSearchFilters({ ...searchFilters, cuotas: e.target.value })} placeholder="Buscar..." />
                                 </th>
                                 <th>
-                                    Repetición
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleParentSort('repetir_desc')}>
+                                        <span>Repetición</span>
+                                        {renderParentSortIcon('repetir_desc')}
+                                    </div>
                                     <input type="text" className="form-control" style={{ padding: '0.2rem', fontSize: '0.75rem', marginTop: '4px' }}
                                         value={searchFilters.repetir_desc} onChange={e => setSearchFilters({ ...searchFilters, repetir_desc: e.target.value })} placeholder="Buscar..." />
                                 </th>

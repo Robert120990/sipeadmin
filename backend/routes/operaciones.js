@@ -1268,24 +1268,48 @@ router.put('/operaciones/recordatorios/pagar/:id', authenticateToken, requirePer
     } catch (error) { sendSafeError(res, error, 'Error al registrar pago'); }
 });
 
-router.patch('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
+router.patch('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
     try {
         const { id } = req.params;
-        const { forma_pago, fecha_cancelacion } = req.body;
-        const safeFormaPago = String(forma_pago || '').trim().slice(0, 50);
+        const { forma_pago, fecha_cancelacion, observacion, id_recordatorio } = req.body;
+        const safeFormaPago = forma_pago !== undefined ? String(forma_pago || '').trim().slice(0, 50) : undefined;
+        const safeObs = observacion !== undefined ? String(observacion || '').trim().slice(0, 50) : undefined;
         const externalDb = await getExternalDb();
-        if (fecha_cancelacion) {
-            await externalDb.query(
-                'UPDATE web_rc_recordatorios_vencimientos SET forma_pago = ?, fecha_cancelacion = ? WHERE id = ?',
-                [safeFormaPago, fecha_cancelacion, id]
-            );
-        } else {
-            await externalDb.query(
-                'UPDATE web_rc_recordatorios_vencimientos SET forma_pago = ? WHERE id = ?',
-                [safeFormaPago, id]
-            );
+
+        if (safeFormaPago !== undefined) {
+            if (fecha_cancelacion) {
+                await externalDb.query(
+                    'UPDATE web_rc_recordatorios_vencimientos SET forma_pago = ?, fecha_cancelacion = ? WHERE id = ?',
+                    [safeFormaPago, fecha_cancelacion, id]
+                );
+            } else {
+                await externalDb.query(
+                    'UPDATE web_rc_recordatorios_vencimientos SET forma_pago = ? WHERE id = ?',
+                    [safeFormaPago, id]
+                );
+            }
         }
-        res.json({ success: true, message: 'Forma de pago actualizada', forma_pago: safeFormaPago });
+
+        if (safeObs !== undefined) {
+            let parentId = id_recordatorio;
+            if (!parentId) {
+                const [vRows] = await externalDb.query('SELECT id_recordatorio FROM web_rc_recordatorios_vencimientos WHERE id = ? LIMIT 1', [id]);
+                parentId = vRows[0]?.id_recordatorio;
+            }
+            if (parentId) {
+                await externalDb.query(
+                    'UPDATE web_rc_recordatorios SET forma_pago = ? WHERE id = ?',
+                    [safeObs, parentId]
+                );
+            }
+        }
+
+        res.json({
+            success: true,
+            message: 'Método de pago actualizado',
+            forma_pago: safeFormaPago,
+            observacion: safeObs
+        });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar forma de pago');
     }
@@ -1905,6 +1929,54 @@ router.post('/operaciones/portal/vincular-pago', authenticateToken, requirePermi
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al vincular pago con pedido');
+    }
+});
+
+// 5b. Actualizar método de pago y/o cuenta bancaria directamente en la tabla (inline)
+router.patch('/operaciones/portal/metodo-pago/:numero_orden', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
+    try {
+        const { numero_orden } = req.params;
+        const { tipo_pago, cuenta_bancaria_id } = req.body;
+        const db = getDb();
+        const [ordRows] = await db.query('SELECT * FROM portal_pedidos WHERE numero_orden = ?', [numero_orden]);
+        if (ordRows.length === 0) return res.status(404).json({ message: 'Pedido no encontrado' });
+        const orden = ordRows[0];
+
+        const nextTipoPago = tipo_pago !== undefined ? (String(tipo_pago || '').trim() || 'Transferencia') : (orden.tipo_pago || 'Transferencia');
+        const nextCuentaId = cuenta_bancaria_id !== undefined ? (cuenta_bancaria_id || null) : orden.cuenta_bancaria_id;
+
+        await db.query(
+            'UPDATE portal_pedidos SET tipo_pago = ?, cuenta_bancaria_id = ? WHERE numero_orden = ?',
+            [nextTipoPago, nextCuentaId, numero_orden]
+        );
+
+        if (orden.movimiento_bancario_id && nextCuentaId) {
+            const [ctaRows] = await db.query('SELECT * FROM cuentas_bancarias WHERE id = ?', [nextCuentaId]);
+            if (ctaRows.length > 0) {
+                const cta = ctaRows[0];
+                const tipoRemesaCode = nextTipoPago.toUpperCase().includes('CHEQ') ? 'CH' : 'TR';
+                const [remesas] = await db.query('SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1', [cta.empresa_id, tipoRemesaCode]);
+                const tipoRemesaId = remesas[0]?.id || null;
+                await db.query(
+                    'UPDATE movimientos_bancarios SET cuenta_bancaria_id = ?, tipo_remesa_id = ? WHERE id = ?',
+                    [cta.id, tipoRemesaId, orden.movimiento_bancario_id]
+                );
+            }
+        }
+
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('portal_pedidos_updated', { numero_orden, tipo_pago: nextTipoPago, cuenta_bancaria_id: nextCuentaId });
+        }
+
+        res.json({
+            success: true,
+            message: 'Método de pago actualizado',
+            tipo_pago: nextTipoPago,
+            cuenta_bancaria_id: nextCuentaId
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar método de pago');
     }
 });
 

@@ -3,7 +3,7 @@ import {
     Truck, CheckCircle, XCircle, RefreshCw, AlertTriangle, ExternalLink,
     CreditCard, DollarSign, FileText, CheckCircle2, Clock, Scale, Eye,
     TrendingUp, TrendingDown, Layers, ChevronRight, Filter, Sliders, CheckSquare, Plus,
-    Activity, ShieldCheck, Key, Copy, Lock, EyeOff, Save
+    Activity, ShieldCheck, Key, Copy, Lock, EyeOff, Save, ArrowUp, ArrowDown, ArrowUpDown
 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -126,12 +126,96 @@ export default function PedidosCombustible() {
     const [isPortalLoading, setIsPortalLoading] = useState(true);
     const [syncingOrderNum, setSyncingOrderNum] = useState(null);
 
-    // Portal Filters
+    // Portal Filters & Column Sorting
     const [filterEstacion, setFilterEstacion] = useState('');
     const [filterEstado, setFilterEstado] = useState('');
     const [filterTipo, setFilterTipo] = useState('');
     const [filterEstadoPago, setFilterEstadoPago] = useState('');
     const [filterSearch, setFilterSearch] = useState('');
+    const [portalSort, setPortalSort] = useState({ key: 'fecha_pedido', direction: 'desc' });
+    const [conciliacionSort, setConciliacionSort] = useState({ key: 'fecha_pago', direction: 'desc' });
+    const [inlineSavingOrderNum, setInlineSavingOrderNum] = useState(null);
+
+    const handlePortalSort = (key) => {
+        setPortalSort(prev => ({
+            key,
+            direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+        }));
+    };
+
+    const handleConciliacionSort = (key) => {
+        setConciliacionSort(prev => ({
+            key,
+            direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+        }));
+    };
+
+    const renderSortIndicator = (cfg, key) => {
+        if (cfg.key !== key) return <ArrowUpDown size={12} style={{ opacity: 0.4, flexShrink: 0 }} />;
+        return cfg.direction === 'asc'
+            ? <ArrowUp size={12} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+            : <ArrowDown size={12} style={{ color: 'var(--primary)', flexShrink: 0 }} />;
+    };
+
+    const sortOrderList = (list, cfg) => {
+        const { key, direction } = cfg;
+        if (!key) return list;
+        const dir = direction === 'desc' ? -1 : 1;
+        return [...list].sort((a, b) => {
+            if (key === 'monto_total' || key === 'monto_pagado') {
+                const va = Number(a[key] || a.monto_total || 0);
+                const vb = Number(b[key] || b.monto_total || 0);
+                return (va - vb) * dir;
+            }
+            if (key === 'fecha_pedido' || key === 'fecha_pago') {
+                const da = String(a[key] || a.fecha_pedido || '').slice(0, 10);
+                const db = String(b[key] || b.fecha_pedido || '').slice(0, 10);
+                return da.localeCompare(db) * dir;
+            }
+            const sa = String(a[key] || '');
+            const sb = String(b[key] || '');
+            return sa.localeCompare(sb, 'es', { numeric: true, sensitivity: 'base' }) * dir;
+        });
+    };
+
+    const sortedPortalOrders = useMemo(() => sortOrderList(portalOrders, portalSort), [portalOrders, portalSort]);
+    const sortedConciliacionOrders = useMemo(() => {
+        const subset = portalOrders.filter(o => o.estado_pago === 'PAGADO' || o.estado_pago === 'PARCIAL' || o.listo_conciliacion);
+        return sortOrderList(subset, conciliacionSort);
+    }, [portalOrders, conciliacionSort]);
+
+    const handleInlinePortalMetodoPago = async (order, nextTipoPago, nextCuentaId = undefined) => {
+        if (!order?.numero_orden) return;
+        setInlineSavingOrderNum(order.numero_orden);
+        try {
+            const payload = {
+                tipo_pago: nextTipoPago !== undefined ? nextTipoPago : (order.tipo_pago || 'Transferencia'),
+                cuenta_bancaria_id: nextCuentaId !== undefined ? nextCuentaId : order.cuenta_bancaria_id
+            };
+            const res = await api.patch(`/operaciones/portal/metodo-pago/${order.numero_orden}`, payload);
+            if (res.data?.success) {
+                const matchedCta = cuentasBancarias.find(c => String(c.corr || c.id) === String(payload.cuenta_bancaria_id));
+                setPortalOrders(prev => prev.map(item => {
+                    if (item.numero_orden !== order.numero_orden) return item;
+                    return {
+                        ...item,
+                        tipo_pago: payload.tipo_pago,
+                        cuenta_bancaria_id: payload.cuenta_bancaria_id,
+                        ...(matchedCta ? {
+                            banco_nombre: matchedCta.banco_nombre || matchedCta.banco || item.banco_nombre,
+                            cuenta_nombre: matchedCta.nombre || item.cuenta_nombre,
+                            cuenta_numero: matchedCta.numero || item.cuenta_numero
+                        } : {})
+                    };
+                }));
+                addToast(`Método de pago actualizado (#${order.numero_orden})`, 'success');
+            }
+        } catch (e) {
+            addToast(e.response?.data?.message || 'Error al actualizar método de pago', 'error');
+        } finally {
+            setInlineSavingOrderNum(null);
+        }
+    };
 
     // Modals
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -1801,19 +1885,41 @@ export default function PedidosCombustible() {
                         <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '1100px' }}>
                             <thead>
                                 <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ORDEN PORTAL</th>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>FECHA SOLICITUD</th>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ESTACIÓN DESTINO</th>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>PRODUCTO / COSTOS</th>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>TOTAL ($)</th>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ESTADO PORTAL</th>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>RAZÓN DEL ESTADO</th>
-                                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>PAGO & CONCILIACIÓN</th>
+                                    {[
+                                        { key: 'numero_orden', label: 'ORDEN PORTAL', align: 'left' },
+                                        { key: 'fecha_pedido', label: 'FECHA SOLICITUD', align: 'left' },
+                                        { key: 'estacion_nombre', label: 'ESTACIÓN DESTINO', align: 'left' },
+                                        { key: 'tipo_producto', label: 'PRODUCTO / COSTOS', align: 'left' },
+                                        { key: 'monto_total', label: 'TOTAL ($)', align: 'right' },
+                                        { key: 'estado', label: 'ESTADO PORTAL', align: 'center' },
+                                        { key: 'razon_estado', label: 'RAZÓN DEL ESTADO', align: 'left' },
+                                        { key: 'estado_pago', label: 'PAGO & MÉTODO', align: 'center' }
+                                    ].map(col => (
+                                        <th
+                                            key={col.key}
+                                            onClick={() => handlePortalSort(col.key)}
+                                            title={`Ordenar por ${col.label}`}
+                                            style={{
+                                                padding: '0.5rem 0.6rem',
+                                                textAlign: col.align,
+                                                fontSize: '0.74rem',
+                                                textTransform: 'uppercase',
+                                                letterSpacing: '0.03em',
+                                                cursor: 'pointer',
+                                                userSelect: 'none'
+                                            }}
+                                        >
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                <span>{col.label}</span>
+                                                {renderSortIndicator(portalSort, col.key)}
+                                            </div>
+                                        </th>
+                                    ))}
                                     <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>ACCIONES</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {portalOrders.map(o => (
+                                {sortedPortalOrders.map(o => (
                                     <tr key={o.id || o.numero_orden} style={{ borderBottom: '1px solid var(--border)' }}>
                                         {/* Orden # */}
                                         <td style={{ padding: '0.5rem 0.6rem' }}>
@@ -1897,11 +2003,35 @@ export default function PedidosCombustible() {
                                         {/* Pago & Conciliación */}
                                         <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center' }}>
                                             {renderPagoBadge(o.estado_pago, o.es_conciliado)}
-                                            {o.cuenta_numero && (
-                                                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                                                    {o.banco_nombre} ({o.cuenta_numero})
-                                                </div>
-                                            )}
+                                            <div style={{ marginTop: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.2rem', alignItems: 'center' }}>
+                                                <select
+                                                    value={o.tipo_pago || 'Transferencia'}
+                                                    disabled={inlineSavingOrderNum === o.numero_orden}
+                                                    onChange={e => handleInlinePortalMetodoPago(o, e.target.value)}
+                                                    title="Cambiar método de pago en esta misma pantalla"
+                                                    style={{
+                                                        height: '24px',
+                                                        fontSize: '0.68rem',
+                                                        padding: '0 0.35rem',
+                                                        borderRadius: '4px',
+                                                        border: '1px solid var(--border)',
+                                                        background: 'var(--bg-color)',
+                                                        color: 'var(--text-color)',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    <option value="Transferencia">Transferencia</option>
+                                                    <option value="Cheque">Cheque</option>
+                                                    <option value="Efectivo">Efectivo</option>
+                                                    <option value="Tarjeta">Tarjeta</option>
+                                                    <option value="Crédito Directo">Crédito Directo</option>
+                                                </select>
+                                                {o.cuenta_numero && (
+                                                    <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+                                                        {o.banco_nombre} ({o.cuenta_numero})
+                                                    </div>
+                                                )}
+                                            </div>
                                         </td>
 
                                         {/* Acciones */}
@@ -2579,40 +2709,107 @@ export default function PedidosCombustible() {
                     </div>
 
                     <div className="card glass table-responsive" style={{ padding: 0 }}>
-                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '950px' }}>
+                        <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', minWidth: '1040px' }}>
                             <thead>
                                 <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>ORDEN PORTAL</th>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>ESTACIÓN</th>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>CUENTA BANCARIA</th>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>DOC / REFERENCIA</th>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>FECHA PAGO</th>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>MONTO PAGADO</th>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>ESTADO CONCILIACIÓN</th>
-                                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>ACCIONES</th>
+                                    {[
+                                        { key: 'numero_orden', label: 'ORDEN PORTAL', align: 'left' },
+                                        { key: 'estacion_nombre', label: 'ESTACIÓN', align: 'left' },
+                                        { key: 'tipo_pago', label: 'MÉTODO DE PAGO', align: 'left' },
+                                        { key: 'banco_nombre', label: 'CUENTA BANCARIA', align: 'left' },
+                                        { key: 'referencia_pago', label: 'DOC / REFERENCIA', align: 'left' },
+                                        { key: 'fecha_pago', label: 'FECHA PAGO', align: 'left' },
+                                        { key: 'monto_pagado', label: 'MONTO PAGADO', align: 'right' },
+                                        { key: 'es_conciliado', label: 'ESTADO CONCILIACIÓN', align: 'center' }
+                                    ].map(col => (
+                                        <th
+                                            key={col.key}
+                                            onClick={() => handleConciliacionSort(col.key)}
+                                            title={`Ordenar por ${col.label}`}
+                                            style={{
+                                                padding: '0.5rem 0.65rem',
+                                                textAlign: col.align,
+                                                fontSize: '0.74rem',
+                                                textTransform: 'uppercase',
+                                                cursor: 'pointer',
+                                                userSelect: 'none'
+                                            }}
+                                        >
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                <span>{col.label}</span>
+                                                {renderSortIndicator(conciliacionSort, col.key)}
+                                            </div>
+                                        </th>
+                                    ))}
+                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>ACCIONES</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {portalOrders.filter(o => o.estado_pago === 'PAGADO' || o.estado_pago === 'PARCIAL' || o.listo_conciliacion).map(o => (
+                                {sortedConciliacionOrders.map(o => (
                                     <tr key={o.id || o.numero_orden} style={{ borderBottom: '1px solid var(--border)' }}>
-                                        <td style={{ padding: '0.5rem 0.75rem', fontWeight: 'bold', color: 'var(--primary)' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontWeight: 'bold', color: 'var(--primary)' }}>
                                             #{o.numero_orden}
                                             {o.factura_numero && <div style={{ fontSize: '0.7rem', color: '#2563eb' }}>Fac: {o.factura_numero}</div>}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.75rem' }}>{o.estacion_nombre}</td>
-                                        <td style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem' }}>
-                                            {o.cuenta_numero ? (
-                                                <span><b>{o.banco_nombre}</b> {o.cuenta_nombre} - ({o.cuenta_numero})</span>
-                                            ) : (
-                                                <span style={{ color: 'var(--text-muted)' }}>Sin cuenta asignada</span>
-                                            )}
+                                        <td style={{ padding: '0.5rem 0.65rem' }}>{o.estacion_nombre}</td>
+                                        <td style={{ padding: '0.5rem 0.65rem' }}>
+                                            <select
+                                                value={o.tipo_pago || 'Transferencia'}
+                                                disabled={inlineSavingOrderNum === o.numero_orden}
+                                                onChange={e => handleInlinePortalMetodoPago(o, e.target.value, o.cuenta_bancaria_id)}
+                                                title="Editar método de pago directamente en esta pantalla"
+                                                style={{
+                                                    height: '30px',
+                                                    fontSize: '0.75rem',
+                                                    padding: '0 0.45rem',
+                                                    borderRadius: '6px',
+                                                    border: '1px solid var(--border)',
+                                                    background: 'var(--bg-color)',
+                                                    color: 'var(--text-color)',
+                                                    cursor: 'pointer',
+                                                    fontWeight: 600
+                                                }}
+                                            >
+                                                <option value="Transferencia">Transferencia</option>
+                                                <option value="Cheque">Cheque</option>
+                                                <option value="Efectivo">Efectivo</option>
+                                                <option value="Tarjeta">Tarjeta</option>
+                                                <option value="Crédito Directo">Crédito Directo</option>
+                                            </select>
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.75rem', fontWeight: 'bold' }}>{o.referencia_pago || o.mov_documento || '-'}</td>
-                                        <td style={{ padding: '0.5rem 0.75rem' }}>{fmtDateArray(o.fecha_pago)}</td>
-                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', fontWeight: 'bold', color: '#10b981' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontSize: '0.75rem' }}>
+                                            <select
+                                                value={o.cuenta_bancaria_id || ''}
+                                                disabled={inlineSavingOrderNum === o.numero_orden || Boolean(o.es_conciliado)}
+                                                onChange={e => handleInlinePortalMetodoPago(o, o.tipo_pago || 'Transferencia', e.target.value)}
+                                                title={o.es_conciliado ? 'Movimiento ya conciliado en banco' : 'Cambiar cuenta bancaria asignada'}
+                                                style={{
+                                                    height: '30px',
+                                                    fontSize: '0.73rem',
+                                                    padding: '0 0.45rem',
+                                                    borderRadius: '6px',
+                                                    border: '1px solid var(--border)',
+                                                    background: 'var(--bg-color)',
+                                                    color: 'var(--text-color)',
+                                                    maxWidth: '245px',
+                                                    width: '100%',
+                                                    cursor: o.es_conciliado ? 'not-allowed' : 'pointer'
+                                                }}
+                                            >
+                                                <option value="">-- Sin cuenta asignada --</option>
+                                                {cuentasBancarias.map(c => (
+                                                    <option key={c.corr || c.id} value={c.corr || c.id}>
+                                                        {formatCuentaLabel(c)}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </td>
+                                        <td style={{ padding: '0.5rem 0.65rem', fontWeight: 'bold' }}>{o.referencia_pago || o.mov_documento || '-'}</td>
+                                        <td style={{ padding: '0.5rem 0.65rem' }}>{fmtDateArray(o.fecha_pago)}</td>
+                                        <td style={{ padding: '0.5rem 0.65rem', textAlign: 'right', fontWeight: 'bold', color: '#10b981' }}>
                                             ${numFmt(o.monto_pagado || o.monto_total)}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', textAlign: 'center' }}>
                                             {o.es_conciliado ? (
                                                 <span className="badge" style={{ background: '#059669', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 'bold' }}>
                                                     <CheckCircle2 size={12} /> CONCILIADO ({fmtDateArray(o.mov_fecha_aplicado)})
@@ -2623,7 +2820,7 @@ export default function PedidosCombustible() {
                                                 </span>
                                             )}
                                         </td>
-                                        <td style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }}>
+                                        <td style={{ padding: '0.5rem 0.65rem', textAlign: 'center' }}>
                                             <div style={{ display: 'inline-flex', gap: '0.35rem' }}>
                                                 <button
                                                     onClick={() => openVincularPago(o)}
@@ -2646,9 +2843,9 @@ export default function PedidosCombustible() {
                                     </tr>
                                 ))}
 
-                                {portalOrders.filter(o => o.estado_pago === 'PAGADO' || o.estado_pago === 'PARCIAL' || o.listo_conciliacion).length === 0 && (
+                                {sortedConciliacionOrders.length === 0 && (
                                     <tr>
-                                        <td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                        <td colSpan="9" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
                                             No hay pagos registrados para órdenes de combustible. Puede vincular un pago desde la pestaña de Órdenes del Portal.
                                         </td>
                                     </tr>
