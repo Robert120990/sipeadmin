@@ -224,19 +224,41 @@ const buildLiveProjectContext = async (targetDate = null) => {
         console.warn('[ConversationalAI] No se pudo cargar bancos:', e.message);
     }
 
-    // 4. Tanques Autonomía (si está disponible)
+    // 4. Tanques Autonomía y Cobertura Logística
     try {
-        const tanques = await getTanquesAutonomia();
-        if (Array.isArray(tanques) && tanques.length > 0) {
-            context.tanques_autonomia = tanques.map(t => ({
+        const tanquesPayload = await getTanquesAutonomia();
+        const tanquesList = Array.isArray(tanquesPayload)
+            ? tanquesPayload
+            : (Array.isArray(tanquesPayload?.tanques) ? tanquesPayload.tanques : []);
+        context.tanques_autonomia = {
+            fecha_corte: tanquesPayload?.fecha_ultimo_cierre || tanquesPayload?.fecha_corte || finalDate,
+            resumen: tanquesPayload?.resumen || { total_tanques: tanquesList.length },
+            tanques: tanquesList.map(t => ({
                 estacion: t.estacion,
-                combustible: t.tipo_combustible,
-                stock_actual: t.stock_actual,
-                capacidad: t.capacidad
-            }));
-        }
+                combustible: t.tipo_combustible || t.combustible,
+                stock_actual_gal: Number(t.stock_actual || 0),
+                capacidad_gal: Number(t.capacidad || 0),
+                ullage_disponible_gal: Number(t.ullage_disponible_gal || Math.max(0, Number(t.capacidad || 0) - Number(t.stock_actual || 0))),
+                horas_autonomia: t.horas_autonomia ?? null,
+                nivel_alerta: t.nivel_alerta || null,
+                cobertura_logistica: t.cobertura_logistica || null,
+                galones_en_ruta: Number(t.galones_en_ruta || 0)
+            }))
+        };
     } catch (e) {
-        // Tanques opcionales
+        context.tanques_autonomia = { fecha_corte: finalDate, resumen: { total_tanques: 0 }, tanques: [] };
+    }
+
+    // 4.1 Pedidos de Combustible Portal Puma
+    try {
+        const { getPedidosPumaData } = require('./telegramDataService');
+        const pedidosPuma = await getPedidosPumaData();
+        context.pedidos_puma = {
+            resumen: pedidosPuma?.resumen || { total_activos: 0, en_transito: 0, retenidos: 0, pendientes: 0 },
+            ordenes_recientes: Array.isArray(pedidosPuma?.pedidos) ? pedidosPuma.pedidos.slice(0, 12) : []
+        };
+    } catch (e) {
+        context.pedidos_puma = { resumen: { total_activos: 0, en_transito: 0, retenidos: 0, pendientes: 0 }, ordenes_recientes: [] };
     }
 
     // 5. Energía Solar y Baterías
@@ -333,7 +355,7 @@ const buildLiveProjectContext = async (targetDate = null) => {
 /**
  * Procesar consulta conversacional con Gemini 2.0 Flash
  */
-const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms }) => {
+const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms, extraSystemNote = null }) => {
     const apiKey = await getGeminiApiKey();
     if (!apiKey) {
         return null; // Fallback al motor semántico determinista
@@ -351,11 +373,15 @@ const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms }) 
             if (!effectivePerms.saldos_banco) delete liveContext.bancos;
             if (!effectivePerms.saldos_chequera) delete liveContext.chequeras;
             if (!effectivePerms.alertas) delete liveContext.alertas;
-            if (!effectivePerms.ventas && !effectivePerms.alertas) delete liveContext.energia_solar;
+            if (!effectivePerms.ventas && !effectivePerms.alertas) {
+                delete liveContext.energia_solar;
+                delete liveContext.tanques_autonomia;
+                delete liveContext.pedidos_puma;
+            }
             if (!effectivePerms.ventas) delete liveContext.horas_pico;
         }
 
-        const history = getFormattedHistory(chatId);
+        const history = chatId ? getFormattedHistory(chatId) : [];
 
         const userName = user?.first_name || user?.telegram_username || 'Director';
 
@@ -364,21 +390,23 @@ Tu interlocutor es ${userName}.
 Tienes acceso en tiempo real a los números y operaciones de la empresa.
 
 TU PERSONALIDAD:
-- Ejecutiva, cálida, profesional, directa y conversacional. Hablas en español salvadoreño formal y claro.
+- Ejecutiva, cálida, precisa, directa y accionable. Hablas en español salvadoreño formal y claro.
 - Eres capaz de sostener una conversación fluida paso a paso. Recuerdas de qué hablaron en los mensajes anteriores.
 - Si te hacen una pregunta de seguimiento (ej. "¿Y de regular?", "¿Y Miraflores?", "¿Cómo quedaron los bancos?"), sabes a qué se refiere el usuario gracias al historial.
-- Si te saludan o te hacen una pregunta abierta, responde cordialmente, llama al usuario por su nombre y ofrécele 2 o 3 datos destacados del día (ej. estación líder en ventas, saldo en bancos o si la pista estuvo cuadrada).
+- Si te saludan o te hacen una pregunta abierta, responde cordialmente, llama al usuario por su nombre y ofrécele 2 o 3 datos destacados reales del contexto (ej. estación líder en ventas, saldo en bancos o estado de tanques).
 
-REGLAS DE DATOS:
-- Usa EXCLUSIVAMENTE los datos del CONTEXTO OPERATIVO REAL que te proporcionamos abajo. NUNCA inventes cifras.
-- Si te preguntan por un combustible específico (Diesel, Regular, Súper, Ion Diesel) o una estación (Costa del Sol, Miraflores, Chalchuapa, San Martín o 14 Ave), da el dato exacto con unidades (galones) e importe en dólares ($).
-- PANELES SOLARES Y BATERÍAS: En la red existen 2 ubicaciones con paneles solares: Puma Miraflores (45.0 kWp paneles + sistema de almacenamiento en batería BESS de 60.0 kWh con ~9.3 horas de autonomía para cargas críticas) y Puma Costa del Sol (35.0 kWp paneles on-grid sin baterías). Total instalado en la red: 80.0 kWp. Las demás 3 estaciones no poseen paneles solares ni baterías. Si preguntan por ahorro o estado, proporciona los kWh generados, ahorro en dólares y estado de carga de la batería (SoC %).
-- HORAS PICO DE VENTA: Identifica los momentos de mayor volumen del día (típicamente pico de tarde 17:00-19:00 hrs y mañana 07:00-09:00 hrs). Menciona la hora pico principal, monto de venta y porcentaje sobre el total del día.
+REGLAS DE DATOS Y PRECISIÓN ESTRICTA:
+- Usa EXCLUSIVAMENTE los datos del CONTEXTO OPERATIVO REAL que te proporcionamos abajo. NUNCA inventes cifras ni supongas datos ausentes.
+- Si un bloque fue omitido del contexto por permisos del usuario, indícalo con cortesía sin decir que el sistema falló.
+- Si preguntan por ventas de "hoy" y aún no hay turnos cerrados para hoy, aclara que los turnos del día están en curso en pista y ofrece de inmediato el dato del último cierre consolidado (\`ventas_ayer\`) y/o el inventario actual en tanques (\`tanques_autonomia\`).
+- Si te preguntan por un combustible específico (Diesel, Regular, Súper, Ion Diesel) o una estación (Costa del Sol, Miraflores, Chalchuapa, San Martín / La Loma, 14 Avenida o Poliedro), da el dato exacto con unidades (galones) e importe en dólares ($).
+- TANQUES Y PEDIDOS PUMA: Usa \`tanques_autonomia\` y \`pedidos_puma\` para informar galones en stock, autonomía en horas (<24h crítico), espacio vacío (ullage) y si ya hay pipa en ruta o pedidos retenidos.
+- PANELES SOLARES Y BATERÍAS: En la red existen 2 ubicaciones con generación fotovoltaica activa: Andelsa (55.0 kWp en paneles + sistema de almacenamiento en batería BESS de 60.0 kWh para respaldo de cargas críticas) y San Martín / La Loma (40.0 kWp en paneles On-Grid sin baterías). Potencia total instalada en la red: 95.0 kWp. Las demás estaciones no poseen paneles solares ni baterías. Usa siempre las cifras exactas de \`energia_solar\`.
+- HORAS PICO DE VENTA: Menciona la hora pico principal, monto de venta y porcentaje sobre el total del día usando \`horas_pico\`.
 - PRECIOS DE LA COMPETENCIA (DGEHM): Usa \`precios_competencia\` para comparar nuestras estaciones frente a competidores cercanos por zona (Texaco, Uno, DLC, Puma, Shell), indicando el precio en dólares por galón ($X.XX) y los centavos de diferencia frente a SIPE.
-- RANGOS Y MESES: Si preguntan por ventas por rango de fechas o mes completo (ej. octubre), contextualiza con los datos del período.
-- Formatea en HTML para Telegram: usa <b>negrita</b> para destacar cifras y nombres, <code>código</code> para galonajes exactos y listas con viñetas limpias.
-- Usa emojis con criterio gerencial (⛽, 🛢️, 🟢, 🔴, ⚡, ☀️, 🔋, ⏰, 🏦, 🛒, 🚨, 💵, 🏆, 🥇).
-
+- Formatea SIEMPRE en HTML limpio compatible con Telegram: usa <b>negrita</b> para destacar cifras y nombres, <code>código</code> para montos/galonajes exactos y viñetas ordenadas. PROHIBIDO usar Markdown (\`**\` o \`###\`).
+- Usa emojis con criterio gerencial (⛽, 🛢️, 🟢, 🔴, ⚡, ☀️, 🔋, ⏰, 🏦, 🛒, 🚨, 💵, 🏆, 🥇, 🚛).
+${extraSystemNote ? `\nINSTRUCCIÓN ESPECIAL DE AUTOCORRECCIÓN:\n${extraSystemNote}\n` : ''}
 CONTEXTO OPERATIVO REAL DE SIPE ADMIN:
 ${JSON.stringify(liveContext)}`;
 
@@ -412,9 +440,11 @@ ${JSON.stringify(liveContext)}`;
         if (!reply) return null;
 
         const cleanReply = reply.trim();
-        // Guardar ambos turnos en la memoria de conversación
-        appendToHistory(chatId, 'user', prompt);
-        appendToHistory(chatId, 'model', cleanReply);
+        // Guardar ambos turnos en la memoria de conversación (solo si hay sesión de chat activa)
+        if (chatId) {
+            appendToHistory(chatId, 'user', prompt);
+            appendToHistory(chatId, 'model', cleanReply);
+        }
 
         return cleanReply;
     } catch (err) {

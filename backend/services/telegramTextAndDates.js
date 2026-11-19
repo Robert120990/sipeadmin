@@ -655,8 +655,16 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     // 5. Detección de tiendas de conveniencia
     const isTiendas = /\b(tienda|tiendas|conveniencia|cortes|corte|e-market|super 7|pedregal)\b/.test(normalized);
 
-    // 6. Detección de consultas de energía solar / batería
-    const isSolar = /\b(solar|solares|panel|paneles|fotovoltaic[oa]s?|bateria|baterias|inversor|autonomia|kwh|kwp|ahorro solar|energia solar)\b/i.test(normalized);
+    // 5.1 Detección explícita de "hoy" para distinguir turnos en curso vs cierres históricos
+    const isExplicitToday = /\b(hoy|el\s+dia\s+de\s+hoy|ahorita|llevamos\s+hoy|vendido\s+hoy)\b/i.test(normalized);
+
+    // 6. Detección de consultas de energía solar / batería (evitando colisión con autonomía de tanques de combustible)
+    const hasExplicitTankNoun = /\b(tanques?|cisternas?|pipas?|ullage)\b/i.test(normalized);
+    const hasFuelTankContext = hasExplicitTankNoun || /\b(combustible|gasolina|diesel|regular|super|ion|galon(?:es|aje)?|descargas?|stock\s+de\s+combustible|nivel\s+de\s+combustible)\b/i.test(normalized);
+    const isSolar = !hasExplicitTankNoun && (
+        /\b(solar|solares|panel|paneles|fotovoltaic[oa]s?|bateria|baterias|bess|inversor|kwh|kwp|ahorro\s+solar|energia\s+solar)\b/i.test(normalized) ||
+        (/\bautonomia\b/i.test(normalized) && !hasFuelTankContext && /\b(electrica|energia|respaldo|apagon|luz|carga)\b/i.test(normalized))
+    );
 
     // 7. Detección de consultas de horas pico / horario de ventas
     const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
@@ -678,6 +686,25 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         /\b(andelsa)\b/i.test(normalized)
     );
 
+    // 8.1 Nuevos Intents Ejecutivos Deterministas: Tanques, Pedidos Puma, Rentabilidad EBITDA, Tránsito/Vales y Chequera
+    let isPedidosPuma = !isAndelsaRelated && (
+        /\b(pedidos?\s+puma|ordenes?\s+puma|portal\s+puma|pedidos?\s+de\s+combustible|pipas?\s+en\s+(?:ruta|transito|camino)|cisternas?\s+en\s+(?:ruta|transito|camino)|pedidos?\s+retenidos?|ordenes?\s+retenidas?|estado\s+de\s+(?:los\s+)?pedidos?|que\s+pedidos?\s+hay|pipas?\s+pendientes?)\b/i.test(normalized)
+    );
+
+    let isTanques = !isAndelsaRelated && !isSolar && !isPedidosPuma && (
+        /\b(tanques?|nivel\s+de\s+combustible|niveles\s+de\s+combustible|inventario\s+de\s+combustible|inventario\s+en\s+tanques?|stock\s+de\s+combustible|stock\s+en\s+tanques?|ullage|espacio\s+vacio|capacidad\s+de\s+descarga|quiebre\s+de\s+stock|falta\s+combustible|urge\s+pedir|emergencia\s+de\s+combustible)\b/i.test(normalized) ||
+        (/\bautonomia\b/i.test(normalized) && !isSolar)
+    );
+
+    let isTransitoVales = !isAndelsaRelated && (
+        /\b(dinero\s+en\s+transito|efectivo\s+en\s+transito|remesas?\s+en\s+transito|remesas?\s+pendientes?|remesas?\s+sin\s+abonar|vales?\s+sin\s+facturar|vales?\s+pendientes?|creditos?\s+sin\s+dte|creditos?\s+sin\s+facturar|vales?\s+vencidos?)\b/i.test(normalized)
+    );
+
+    let isChequera = /\b(chequera|chequeras|cheques?\s+disponibles?|saldo\s+en\s+chequeras?|cuentas?\s+de\s+cheques?)\b/i.test(normalized);
+    const isBancosGlobal = !matchedBank && !isChequera && !isTransitoVales && !isAndelsaRelated && (
+        /\b(saldos?\s+(?:en\s+|de\s+)?bancos?|saldos?\s+bancarios?|cuentas?\s+bancarias?|cuanto\s+(?:dinero\s+)?hay\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|cuanto\s+tenemos\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|disponible\s+en\s+bancos?|total\s+en\s+bancos?|liquidez\s+bancaria)\b/i.test(normalized)
+    );
+
     // 9. Detección de Precios de la Competencia (DGEHM) y Marcas Competidoras
     let matchedCompetitorBrand = null;
     if (/\b(texaco)\b/i.test(normalized)) {
@@ -694,7 +721,7 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
 
     const hasExplicitCompetenciaWord = /\b(competencia|competidores|competidor|dgehm|precios?\s+competencia|precios?\s+de\s+(?:la\s+)?competencia|precios?\s+del?\s+mercado|comparativo\s+de\s+precios|comparar\s+precios|monitoreo\s+de\s+precios)\b/i.test(normalized);
     const hasAuditCashWords = /\b(descuadre|descuadres|merma|mermas|faltante|sobrante|cuadrado|cierre|cierres)\b/i.test(normalized);
-    const hasFuelPriceIntent = !isAndelsaRelated && !isSolar && !matchedBank && !hasAuditCashWords && (
+    const hasFuelPriceIntent = !isAndelsaRelated && !isSolar && !isTanques && !isPedidosPuma && !matchedBank && !hasAuditCashWords && (
         /\b(precios?|tarifas?|a\s+como\s+esta|a\s+como\s+tienen|cuanto\s+cuesta|cuanto\s+vale)\b/i.test(normalized) ||
         /\b(mas\s+barat[oa]s?|mas\s+car[oa]s?|menor\s+precio|mayor\s+precio|mejor\s+precio|precios?\s+bajos?)\b/i.test(normalized)
     );
@@ -707,11 +734,15 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         ? 'SC'
         : (/\b(autoservicio|auto\s+servicio)\b/i.test(normalized) ? 'AS' : 'ALL');
 
-    // 10. Detección de auditoría / descuadres (excluyendo consultas de diferencia de precios de competencia)
-    const isAlertas = !isCompetencia && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
+    let isRentabilidad = !isAndelsaRelated && !isCompetencia && (
+        /\b(rentabilidad|ebitda|margen\s+neto|margen\s+operativo|margen\s+bruto|utilidad\s+operativa|utilidad\s+por\s+estacion|ganancia\s+por\s+estacion|estado\s+de\s+resultados|p&l)\b/i.test(normalized)
+    );
 
-    // 11. Detección de rankings o comparativas de ventas (excluyendo comparativas de precios)
-    const isRanking = !isCompetencia && (
+    // 10. Detección de auditoría / descuadres (excluyendo consultas de diferencia de precios de competencia)
+    const isAlertas = !isCompetencia && !isTransitoVales && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
+
+    // 11. Detección de rankings o comparativas de ventas (excluyendo comparativas de precios, tanques o rentabilidad)
+    const isRanking = !isCompetencia && !isTanques && !isRentabilidad && (
         /\b(cual|quien|que estacion|estacion que|estaciones que)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
         /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized)
     );
@@ -808,11 +839,25 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
                 targetDate = userContext.lastDate;
             }
         }
+
+        // g. Seguimiento de Tanques / Pedidos / Rentabilidad cuando el usuario cambia solo estación o combustible ("¿Y en Miraflores?")
+        if (
+            userContext.lastTopic === 'tanques' &&
+            !isCompetencia && !isSolar && !isHourlyPeak && !isAndelsaRelated && !isAlertas && !isTiendas && !matchedBank &&
+            !/\b(venta|ventas|vendio|vendieron|cierre|cierres|chequera|bancos?|saldo)\b/i.test(normalized) &&
+            (matchedStation || matchedFuel)
+        ) {
+            isTanques = true;
+            if (!matchedStation && userContext.lastStationId) {
+                matchedStation = findStationById(userContext.lastStationId);
+            }
+        }
     }
 
     return {
         normalized,
         targetDate,
+        isExplicitToday,
         matchedStation,
         matchedFuel,
         matchedBank,
@@ -820,6 +865,12 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         isCompetencia,
         onlyCheaper,
         competenciaServiceType,
+        isTanques,
+        isPedidosPuma,
+        isRentabilidad,
+        isTransitoVales,
+        isChequera,
+        isBancosGlobal,
         isRanking,
         isTiendas,
         isAlertas,

@@ -3,6 +3,7 @@ const {
     moneyFmt,
     numFmt,
     toDisplayDate,
+    getDateStr,
     normalizeText,
     SPANISH_MONTH_NAMES
 } = require('./telegramTextAndDates');
@@ -10,7 +11,7 @@ const {
 /**
  * Formatear mensaje de Resumen de Ventas
  */
-const formatVentasMessage = (data, date) => {
+const formatVentasMessage = (data, date, options = {}) => {
     const estaciones = data?.estaciones || [];
     const tiendas = data?.tiendas || [];
 
@@ -33,9 +34,44 @@ const formatVentasMessage = (data, date) => {
     const totalVentaTiendas = tiendas.reduce((acc, t) => acc + Number(t.venta || 0), 0);
     const totalGlobal = totalVentaCombustible + totalVentaTiendas;
 
+    const isTodayEmpty = (totalGalones === 0 && totalGlobal === 0) &&
+        (options.isTodayOpenShift || date === getDateStr(0));
+
     let msg = `⛽ <b>VENTAS DE ESTACIONES Y TIENDAS</b>\n`;
     msg += `📅 <b>Fecha:</b> ${toDisplayDate(date)}\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    if (isTodayEmpty) {
+        msg += `⏳ <b>TURNOS DE HOY EN CURSO (SIN CORTE CERRADO AÚN)</b>\n`;
+        msg += `Los turnos de pista del día <b>${toDisplayDate(date)}</b> continúan abiertos en estación; las cifras definitivas se consolidan automáticamente conforme cada sucursal ejecuta su cierre de turno.\n\n`;
+
+        const ref = options.latestClosedRef;
+        if (ref && ref.data) {
+            const refEst = ref.data.estaciones || [];
+            const refTda = ref.data.tiendas || [];
+            const refGal = refEst.reduce((s, e) => s + Number(e.galonaje || 0), 0);
+            const refComb = refEst.reduce((s, e) => s + Number(e.venta || 0), 0);
+            const refTienda = refTda.reduce((s, t) => s + Number(t.venta || 0), 0);
+            if (refGal > 0 || (refComb + refTienda) > 0) {
+                msg += `📌 <b>REFERENCIA — ÚLTIMO CIERRE CONSOLIDADO (${toDisplayDate(ref.date)}):</b>\n`;
+                msg += `• <b>Galonaje Cerrado:</b> <code>${numFmt(refGal)} gal</code>\n`;
+                msg += `• <b>Venta Combustible:</b> <code>${moneyFmt(refComb)}</code>\n`;
+                msg += `• <b>Venta Tiendas:</b> <code>${moneyFmt(refTienda)}</code>\n`;
+                msg += `• 💰 <b>TOTAL CONSOLIDADO:</b> <b>${moneyFmt(refComb + refTienda)}</b>\n`;
+                if (refEst.length > 0) {
+                    msg += `\n🏪 <b>Estaciones (${toDisplayDate(ref.date)}):</b>\n`;
+                    refEst.slice(0, 6).forEach((e, idx) => {
+                        msg += `${idx + 1}. <b>${escapeHtml(e.empresa || e.titulo || 'Estación')}:</b> ⛽ ${numFmt(e.galonaje || 0)} gal | 💵 ${moneyFmt(e.venta || 0)}\n`;
+                    });
+                }
+                msg += `\n`;
+            }
+        }
+
+        msg += `💡 <i>Tip: Puedes preguntar "nivel de tanques" o "ventas de ayer" en cualquier momento.</i>\n`;
+        msg += `<i>SIPE Admin • Dirección Estratégica</i>`;
+        return msg;
+    }
 
     msg += `📊 <b>RESUMEN CONSOLIDADO:</b>\n`;
     msg += `• <b>Galonaje Total:</b> <code>${numFmt(totalGalones)} gal</code>\n`;
@@ -248,10 +284,27 @@ const formatProfileMessage = (user, effectivePerms = null) => {
 /**
  * Formatear respuesta de estación específica
  */
-const formatSpecificStationMessage = (st, fuel, date, tienda) => {
-    let msg = `⛽ <b>${escapeHtml(st.empresa)}</b>\n`;
+const formatSpecificStationMessage = (st, fuel, date, tienda, options = {}) => {
+    const stationTitle = st?.empresa || st?.name || options.stationName || 'Estación';
+    const isTodayEmpty = (Number(st?.galonaje || 0) === 0 && Number(st?.venta || 0) === 0) &&
+        (options.isTodayOpenShift || date === getDateStr(0));
+
+    let msg = `⛽ <b>${escapeHtml(stationTitle)}</b>\n`;
     msg += `📅 <b>Fecha:</b> ${toDisplayDate(date)}\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    if (isTodayEmpty) {
+        msg += `⏳ <b>Turnos de hoy en curso (sin corte cerrado aún)</b>\n`;
+        msg += `<i>Las ventas de pista del día ${toDisplayDate(date)} se consolidarán al cierre de turno.</i>\n`;
+        const refEst = options.latestClosedRef?.estacion;
+        if (refEst) {
+            msg += `\n📌 <b>Referencia Último Cierre (${toDisplayDate(options.latestClosedRef.date)}):</b>\n`;
+            msg += `• ⛽ <b>Galonaje Cerrado:</b> <code>${numFmt(refEst.galonaje || 0)} gal</code>\n`;
+            msg += `• 💰 <b>Venta en Pista:</b> <b>${moneyFmt(refEst.venta || 0)}</b>\n`;
+        }
+        msg += `\n<i>SIPE Admin • Consulta Específica</i>`;
+        return msg;
+    }
 
     if (fuel) {
         const gal = Number(st[fuel.key] || 0);
@@ -823,6 +876,244 @@ const getAndelsaInlineMarkup = () => {
 };
 
 /**
+ * Formatear mensaje de Inventario de Tanques, Autonomía y Cobertura Logística
+ */
+const formatTanquesAutonomiaMessage = (payload, { station = null, fuel = null } = {}) => {
+    const rawList = Array.isArray(payload) ? payload : (payload?.tanques || []);
+    const fechaCorte = payload?.fecha_corte || getDateStr(0);
+
+    let filtered = rawList;
+    if (station) {
+        const stNorm = normalizeText(station.name || '');
+        filtered = filtered.filter(t => {
+            const tCode = String(t.codigo_estacion || t.id_empresa || '').padStart(3, '0');
+            const tName = normalizeText(t.estacion || '');
+            return tCode === station.id ||
+                tName.includes(stNorm) ||
+                (station.keywords || []).some(kw => tName.includes(normalizeText(kw)));
+        });
+    }
+    if (fuel) {
+        const fKey = normalizeText(fuel.key || fuel.label || '');
+        filtered = filtered.filter(t => {
+            const tFuel = normalizeText(t.tipo_combustible || t.combustible || '');
+            if (fKey === 'diesel') return tFuel.includes('diesel') && !tFuel.includes('ion');
+            return tFuel.includes(fKey);
+        });
+    }
+
+    const scopeLabel = [station?.name, fuel?.label].filter(Boolean).join(' • ') || 'Red Completa';
+    let msg = `🛢️ <b>INVENTARIO DE TANQUES Y AUTONOMÍA</b>\n`;
+    msg += `📍 <b>Alcance:</b> ${escapeHtml(scopeLabel)}\n`;
+    msg += `📅 <b>Corte:</b> ${toDisplayDate(fechaCorte)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    if (filtered.length === 0) {
+        msg += `<i>No se encontraron lecturas de tanques registradas para este filtro.</i>\n`;
+        msg += `\n<i>SIPE Admin • Inteligencia de Combustible</i>`;
+        return msg;
+    }
+
+    const totalStock = filtered.reduce((s, t) => s + Number(t.stock_actual || 0), 0);
+    const totalUllage = filtered.reduce((s, t) => s + Number(t.ullage_disponible_gal || Math.max(0, Number(t.capacidad || 0) - Number(t.stock_actual || 0))), 0);
+    const criticos = filtered.filter(t => Number(t.horas_autonomia || 999) < 24 || t.nivel_alerta === 'critico');
+    const emergenciasReales = filtered.filter(t => t.cobertura_logistica === 'emergencia_real');
+    const enRuta = filtered.filter(t => t.cobertura_logistica === 'cubierto_en_ruta');
+
+    msg += `📊 <b>RESUMEN DE DISPONIBILIDAD:</b>\n`;
+    msg += `• <b>Stock Total:</b> <code>${numFmt(totalStock)} gal</code>\n`;
+    msg += `• <b>Espacio Libre (Ullage):</b> <code>${numFmt(totalUllage)} gal</code>\n`;
+    msg += `• <b>Tanques &lt;24h:</b> <b>${criticos.length}</b>`;
+    if (emergenciasReales.length > 0) msg += ` (🚨 <b>${emergenciasReales.length} sin pedido activo</b>)`;
+    if (enRuta.length > 0) msg += ` | 🚛 <b>${enRuta.length} con pipa en ruta</b>`;
+    msg += `\n\n`;
+
+    const sorted = [...filtered].sort((a, b) => Number(a.horas_autonomia ?? 999) - Number(b.horas_autonomia ?? 999));
+    msg += `⛽ <b>DETALLE DE TANQUES (${Math.min(sorted.length, 14)} de ${sorted.length}):</b>\n`;
+    sorted.slice(0, 14).forEach(t => {
+        const hrs = Number(t.horas_autonomia ?? 0);
+        const icon = hrs > 0 && hrs < 24 ? '🔴' : hrs < 48 ? '🟡' : '🟢';
+        const pct = t.porcentaje_ocupacion !== undefined ? `${Number(t.porcentaje_ocupacion).toFixed(0)}%` : '';
+        let logBadge = '';
+        if (t.cobertura_logistica === 'cubierto_en_ruta') {
+            logBadge = ` • 🚛 En ruta (${numFmt(t.galones_en_ruta || 0)} gal)`;
+        } else if (t.cobertura_logistica === 'retenido_en_riesgo') {
+            logBadge = ` • ⏸️ Pedido retenido`;
+        } else if (t.cobertura_logistica === 'emergencia_real') {
+            logBadge = ` • 🚨 Urge pedir`;
+        }
+        msg += `${icon} <b>${escapeHtml(t.estacion || 'Estación')}</b> — ${escapeHtml(t.tipo_combustible || 'Combustible')}\n`;
+        msg += `   └ Stock: <code>${numFmt(t.stock_actual || 0)} gal</code> ${pct ? `(${pct})` : ''} | Autonomía: <b>${hrs > 0 ? `${hrs.toFixed(1)}h` : 'N/D'}</b>${logBadge}\n`;
+    });
+
+    msg += `\n<i>SIPE Admin • Inteligencia de Combustible</i>`;
+    return msg;
+};
+
+/**
+ * Formatear mensaje de Pedidos de Combustible Portal Puma
+ */
+const formatPedidosPumaMessage = (payload, { station = null, onlyRetained = false } = {}) => {
+    const allPedidos = payload?.pedidos || [];
+    let filtered = allPedidos;
+    if (station) {
+        const stNorm = normalizeText(station.name || '');
+        filtered = filtered.filter(p => {
+            const pName = normalizeText(p.estacion_nombre || '');
+            const pCode = String(p.id_estacion || '').padStart(3, '0');
+            return pCode === station.id ||
+                pName.includes(stNorm) ||
+                (station.keywords || []).some(kw => pName.includes(normalizeText(kw)));
+        });
+    }
+    if (onlyRetained) {
+        filtered = filtered.filter(p => p.es_retenido);
+    }
+
+    const resumen = payload?.resumen || {};
+    let msg = `🚛 <b>PEDIDOS DE COMBUSTIBLE — PORTAL PUMA</b>\n`;
+    if (station) msg += `📍 <b>Estación:</b> ${escapeHtml(station.name)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    msg += `📊 <b>ESTADO LOGÍSTICO DE LA RED:</b>\n`;
+    msg += `• <b>Órdenes Activas:</b> <b>${resumen.total_activos || 0}</b> (<code>${moneyFmt(resumen.monto_activo_usd || 0)}</code>)\n`;
+    msg += `• 🚛 <b>En Tránsito / Despachadas:</b> ${resumen.en_transito || 0}\n`;
+    msg += `• ⏸️ <b>Retenidas / On Hold:</b> <b>${resumen.retenidos || 0}</b>\n`;
+    msg += `• 📋 <b>Pendientes / En Proceso:</b> ${resumen.pendientes || 0}\n`;
+    if (Number(resumen.saldo_facturas_pendiente_usd || 0) > 0) {
+        msg += `• 💳 <b>Saldo Facturas Pendiente:</b> <code>${moneyFmt(resumen.saldo_facturas_pendiente_usd)}</code>\n`;
+    }
+    msg += `\n`;
+
+    if (filtered.length === 0) {
+        msg += onlyRetained
+            ? `✅ <i>No existen pedidos retenidos actualmente.</i>\n`
+            : `<i>No se encontraron pedidos recientes para el criterio consultado.</i>\n`;
+        msg += `\n<i>SIPE Admin • Operaciones Puma</i>`;
+        return msg;
+    }
+
+    msg += `📋 <b>DETALLE DE ÓRDENES (${Math.min(filtered.length, 10)}):</b>\n`;
+    filtered.slice(0, 10).forEach(p => {
+        const icon = p.es_retenido ? '⏸️' : p.es_en_transito ? '🚛' : p.es_activo ? '🟡' : '✅';
+        const fuels = [];
+        if (p.galones_diesel > 0) fuels.push(`D: ${numFmt(p.galones_diesel)}`);
+        if (p.galones_regular > 0) fuels.push(`R: ${numFmt(p.galones_regular)}`);
+        if (p.galones_super > 0) fuels.push(`S: ${numFmt(p.galones_super)}`);
+        if (p.galones_ion > 0) fuels.push(`Ion: ${numFmt(p.galones_ion)}`);
+
+        msg += `${icon} <b>#${escapeHtml(p.numero_orden)}</b> — ${escapeHtml(p.estacion_nombre)}\n`;
+        msg += `   └ Estado: <b>${escapeHtml(p.estado)}</b> | ${fuels.join(' | ') || `${numFmt(p.total_galones)} gal`} | <code>${moneyFmt(p.monto_total)}</code>\n`;
+        if (p.razon_estado) {
+            msg += `   └ ⚠️ <i>Motivo: ${escapeHtml(String(p.razon_estado).slice(0, 90))}</i>\n`;
+        }
+    });
+
+    msg += `\n<i>SIPE Admin • Operaciones y Logística</i>`;
+    return msg;
+};
+
+/**
+ * Formatear mensaje de Rentabilidad Real y EBITDA por Estación
+ */
+const formatRentabilidadEbitdaMessage = (payload, { station = null, periodoLabel = null } = {}) => {
+    const estaciones = payload?.estaciones || [];
+    const res = payload?.resumen_consolidado || {};
+    const per = payload?.periodo || {};
+    const label = periodoLabel || (per.desde && per.hasta ? `${toDisplayDate(per.desde)} al ${toDisplayDate(per.hasta)} (${per.dias || 30}d)` : 'Últimos 30 días');
+
+    let filtered = estaciones;
+    if (station) {
+        const stNorm = normalizeText(station.name || '');
+        filtered = estaciones.filter(e => {
+            const eName = normalizeText(e.estacion || '');
+            const eCode = String(e.codigo_estacion || e.id_empresa || '').padStart(3, '0');
+            return eCode === station.id ||
+                eName.includes(stNorm) ||
+                (station.keywords || []).some(kw => eName.includes(normalizeText(kw)));
+        });
+    }
+
+    let msg = `📈 <b>RENTABILIDAD OPERATIVA Y EBITDA REAL</b>\n`;
+    msg += `📅 <b>Período:</b> ${escapeHtml(label)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    if (!station) {
+        msg += `💰 <b>CONSOLIDADO DE LA RED:</b>\n`;
+        msg += `• <b>Ingresos Totales:</b> <code>${moneyFmt(res.ingresos_totales || 0)}</code>\n`;
+        msg += `• <b>Galonaje Despachado:</b> <code>${numFmt(res.galones_totales || 0)} gal</code>\n`;
+        msg += `• <b>Margen Bruto Total:</b> <code>${moneyFmt(res.margen_bruto_total || 0)}</code>\n`;
+        if (Number(res.flete_total_usd || 0) > 0) {
+            msg += `• <b>Flete Cisternas:</b> -<code>${moneyFmt(res.flete_total_usd)}</code>\n`;
+        }
+        if (Number(res.ahorro_solar_total_usd || 0) > 0) {
+            msg += `• ☀️ <b>Ahorro Solar Integrado:</b> +<code>${moneyFmt(res.ahorro_solar_total_usd)}</code>\n`;
+        }
+        msg += `• 🏆 <b>EBITDA / UTILIDAD OPERATIVA:</b> <b>${moneyFmt(res.utilidad_operativa_total || 0)}</b> (<code>$${Number(res.margen_neto_promedio_galon || 0).toFixed(3)}/gal</code>)\n\n`;
+    }
+
+    if (filtered.length === 0) {
+        msg += `<i>No se encontraron datos de rentabilidad para el criterio solicitado.</i>\n`;
+    } else {
+        msg += `🏪 <b>DESGLOSE POR ESTACIÓN:</b>\n`;
+        filtered.forEach((e, idx) => {
+            const util = Number(e.utilidad_operativa_neta || 0);
+            const badge = util > 0 ? '🟢' : '🔴';
+            const costos = e.desglose_costos_reales || {};
+            msg += `${idx + 1}. ${badge} <b>${escapeHtml(e.estacion || 'Estación')}</b>\n`;
+            msg += `   ├ Venta: <code>${moneyFmt(e.ingresos?.total || 0)}</code> (${numFmt(e.galones?.total || 0)} gal)\n`;
+            msg += `   ├ Margen Bruto: <code>${moneyFmt(e.margenes_brutos?.total || 0)}</code> | Planilla: <code>${moneyFmt(costos.planilla_rrhh_usd || 0)}</code>\n`;
+            msg += `   └ <b>EBITDA Neto:</b> <b>${moneyFmt(util)}</b> (<code>$${Number(e.margen_neto_por_galon || 0).toFixed(3)}/gal</code>)\n`;
+        });
+    }
+
+    msg += `\n<i>SIPE Admin • Inteligencia Financiera</i>`;
+    return msg;
+};
+
+/**
+ * Formatear mensaje de Auditoría de Dinero en Tránsito (>48h) y Vales sin Facturar (>72h)
+ */
+const formatTransitoValesMessage = (payload) => {
+    const res = payload?.resumen || {};
+    const remesas = payload?.remesas_en_transito || payload?.remesas_en_transito_48h || [];
+    const vales = payload?.vales_pendientes_72h || payload?.vales_sin_facturar_72h || [];
+
+    let msg = `🏦 <b>AUDITORÍA DE EFECTIVO EN TRÁNSITO Y VALES</b>\n`;
+    msg += `📅 <b>Ventana Auditada:</b> ${escapeHtml(`${toDisplayDate(payload?.periodo?.desde || '')} al ${toDisplayDate(payload?.periodo?.hasta || '')}`)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    msg += `📊 <b>RESUMEN DE CONCILIACIÓN PISTA ↔ BANCOS:</b>\n`;
+    msg += `• <b>Remesas Pista Cerradas:</b> <code>${moneyFmt(res.remesas_pista_usd || 0)}</code>\n`;
+    msg += `• <b>Abonos Identificados en Banco:</b> <code>${moneyFmt(res.abonos_bancos_identificados_usd || 0)}</code>\n`;
+    msg += `• 🚨 <b>Efectivo en Tránsito (&gt;48h):</b> <b>${moneyFmt(res.efectivo_en_transito_48h_usd || 0)}</b> (${res.partidas_transito_count || 0} partidas)\n`;
+    msg += `• 🧾 <b>Vales sin DTE (&gt;72h):</b> <b>${moneyFmt(res.vales_sin_facturar_72h_usd || 0)}</b> (${res.vales_sin_facturar_count || 0} registros)\n\n`;
+
+    if (remesas.length > 0) {
+        msg += `⏳ <b>TOP REMESAS PENDIENTES DE ABONO (&gt;48h):</b>\n`;
+        remesas.slice(0, 6).forEach(r => {
+            msg += `• 🔴 <b>${escapeHtml(r.estacion)}</b> (${toDisplayDate(r.fecha)} — ${r.dias_transito || 2}d): <code>${moneyFmt(r.diferencia_pendiente_usd || r.remesa_pista_usd || 0)}</code>\n`;
+        });
+        msg += `\n`;
+    }
+
+    if (vales.length > 0) {
+        msg += `🧾 <b>TOP VALES DE CRÉDITO SIN FACTURAR (&gt;72h):</b>\n`;
+        vales.slice(0, 6).forEach(v => {
+            msg += `• 🟡 <b>${escapeHtml(v.cliente)}</b> (${escapeHtml(v.estacion)} • ${v.dias_antiguedad}d): <code>${moneyFmt(v.monto_usd)}</code>\n`;
+        });
+        msg += `\n`;
+    }
+
+    if (remesas.length === 0 && vales.length === 0) {
+        msg += `✅ <b>Conciliación al día:</b> No se detectan remesas retenidas &gt;48h ni vales sin facturar &gt;72h.\n\n`;
+    }
+
+    msg += `<i>SIPE Admin • Control Interno y Tesorería</i>`;
+    return msg;
+};
+
+/**
  * Mensaje de orientación cuando la consulta libre no coincide con una entidad conocida
  */
 const formatIntelligentGuidanceMessage = () => {
@@ -832,21 +1123,23 @@ const formatIntelligentGuidanceMessage = () => {
     msg += `   <i>"¿Cuánto diesel vendió Costa del Sol?"</i>\n`;
     msg += `   <i>"Ventas de Miraflores"</i>\n`;
     msg += `   <i>"¿Cuánto vendió San Martín ayer?"</i>\n`;
-    msg += `• 🛢️ <b>Por combustible global:</b>\n`;
-    msg += `   <i>"¿Cuánto diesel se vendió en total ayer?"</i>\n`;
-    msg += `   <i>"Venta total de regular"</i>\n`;
-    msg += `• 🏆 <b>Rankings y comparativas:</b>\n`;
-    msg += `   <i>"¿Cuál estación vendió más ayer?"</i>\n`;
-    msg += `• 📊 <b>Precios de la competencia (DGEHM):</b>\n`;
+    msg += `• 🛢️ <b>Tanques, Autonomía y Pedidos Puma:</b>\n`;
+    msg += `   <i>"Nivel de tanques y autonomía"</i>\n`;
+    msg += `   <i>"¿Qué pedidos Puma están en ruta o retenidos?"</i>\n`;
+    msg += `• 📈 <b>Rentabilidad EBITDA y Competencia:</b>\n`;
+    msg += `   <i>"Rentabilidad EBITDA por estación"</i>\n`;
     msg += `   <i>"Revisar los precios de la competencia"</i>\n`;
     msg += `   <i>"¿Quién tiene más barato el diésel?"</i>\n`;
     msg += `   <i>"Precios de competencia en Miraflores"</i>\n`;
+    msg += `• 🏆 <b>Rankings y combustible global:</b>\n`;
+    msg += `   <i>"¿Cuál estación vendió más ayer?"</i>\n`;
+    msg += `   <i>"Venta total de regular"</i>\n`;
     msg += `• 🛒 <b>Tiendas de conveniencia:</b>\n`;
     msg += `   <i>"¿Cuánto vendieron las tiendas?"</i>\n`;
     msg += `   <i>"Ventas de E-Market"</i>\n`;
-    msg += `• 🏦 <b>Bancos específicos:</b>\n`;
+    msg += `• 🏦 <b>Bancos, Chequeras y Tránsito:</b>\n`;
     msg += `   <i>"¿Cuánto tenemos en Promerica?"</i>\n`;
-    msg += `   <i>"Saldo de Banco Agrícola"</i>\n`;
+    msg += `   <i>"Dinero en tránsito y vales sin facturar"</i>\n`;
     msg += `• 🚨 <b>Auditoría:</b>\n`;
     msg += `   <i>"¿Hubo algún descuadre ayer?"</i>\n\n`;
     msg += `<i>O pulsa los botones del menú inferior para consultar los resúmenes consolidados.</i>`;
@@ -906,6 +1199,10 @@ module.exports = {
     formatAndelsaCxcMessage,
     formatAndelsaFinanzasResumenMessage,
     getAndelsaInlineMarkup,
+    formatTanquesAutonomiaMessage,
+    formatPedidosPumaMessage,
+    formatRentabilidadEbitdaMessage,
+    formatTransitoValesMessage,
     formatIntelligentGuidanceMessage,
     formatHelpMessage
 };

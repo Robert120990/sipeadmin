@@ -843,6 +843,120 @@ const formatPreciosCompetenciaMessage = (data, options = {}) => {
     return msg;
 };
 
+/**
+ * Consultar pedidos de combustible en Portal Puma (activos, en ruta, retenidos y recientes)
+ */
+const getPedidosPumaData = async () => {
+    const cacheKey = 'operaciones:pedidos_puma';
+    const cached = getCachedQuery(cacheKey);
+    if (cached) return cached;
+
+    const emptyResult = {
+        fecha_consulta: getDateStr(0),
+        resumen: {
+            total_registrados: 0,
+            total_activos: 0,
+            en_transito: 0,
+            retenidos: 0,
+            pendientes: 0,
+            monto_activo_usd: 0,
+            saldo_facturas_pendiente_usd: 0
+        },
+        pedidos: []
+    };
+
+    try {
+        const db = getDb();
+        if (!db) return emptyResult;
+
+        const [rows] = await db.query(`
+            SELECT
+                numero_orden,
+                id_estacion,
+                estacion_nombre,
+                fecha_pedido,
+                fecha_solicitada,
+                estado,
+                estado_original,
+                razon_estado,
+                monto_total,
+                metodo_pago,
+                galones_diesel,
+                galones_regular,
+                galones_super,
+                galones_ion,
+                factura_numero,
+                factura_saldo_pendiente
+            FROM portal_pedidos
+            ORDER BY
+                CASE
+                    WHEN UPPER(COALESCE(estado, '')) REGEXP 'RETENID|HOLD|BLOQUEAD' THEN 1
+                    WHEN UPPER(COALESCE(estado, '')) REGEXP 'TRANSIT|RUTA|DESPACH|CARGAD' THEN 2
+                    WHEN UPPER(COALESCE(estado, '')) REGEXP 'PENDIENT|APROBAD|PROCES|NUEV' THEN 3
+                    ELSE 4
+                END ASC,
+                COALESCE(fecha_solicitada, DATE(fecha_pedido)) DESC,
+                id DESC
+            LIMIT 25
+        `);
+
+        const pedidos = (rows || []).map(r => {
+            const gd = Number(r.galones_diesel || 0);
+            const gr = Number(r.galones_regular || 0);
+            const gs = Number(r.galones_super || 0);
+            const gi = Number(r.galones_ion || 0);
+            const estadoNorm = String(r.estado || 'PENDIENTE').toUpperCase();
+            const isRetenido = /RETENID|HOLD|BLOQUEAD/i.test(estadoNorm);
+            const isEnTransito = /TRANSIT|RUTA|DESPACH|CARGAD/i.test(estadoNorm);
+            const isCerrado = /ENTREGAD|COMPLETAD|CANCELAD|ANULAD|FACTURAD/i.test(estadoNorm) && !isRetenido && !isEnTransito;
+            const isActivo = !isCerrado;
+
+            return {
+                numero_orden: r.numero_orden,
+                id_estacion: r.id_estacion || null,
+                estacion_nombre: r.estacion_nombre || `Estación ${r.id_estacion || ''}`.trim(),
+                fecha_solicitada: r.fecha_solicitada
+                    ? (r.fecha_solicitada instanceof Date ? r.fecha_solicitada.toISOString().split('T')[0] : String(r.fecha_solicitada).slice(0, 10))
+                    : (r.fecha_pedido instanceof Date ? r.fecha_pedido.toISOString().split('T')[0] : null),
+                estado: r.estado || 'PENDIENTE',
+                razon_estado: r.razon_estado || null,
+                monto_total: Number(r.monto_total || 0),
+                metodo_pago: r.metodo_pago || null,
+                galones_diesel: gd,
+                galones_regular: gr,
+                galones_super: gs,
+                galones_ion: gi,
+                total_galones: gd + gr + gs + gi,
+                factura_numero: r.factura_numero || null,
+                factura_saldo_pendiente: Number(r.factura_saldo_pendiente || 0),
+                es_retenido: isRetenido,
+                es_en_transito: isEnTransito,
+                es_activo: isActivo
+            };
+        });
+
+        const resumen = {
+            total_registrados: pedidos.length,
+            total_activos: pedidos.filter(p => p.es_activo).length,
+            en_transito: pedidos.filter(p => p.es_en_transito).length,
+            retenidos: pedidos.filter(p => p.es_retenido).length,
+            pendientes: pedidos.filter(p => p.es_activo && !p.es_en_transito && !p.es_retenido).length,
+            monto_activo_usd: pedidos.filter(p => p.es_activo).reduce((s, p) => s + p.monto_total, 0),
+            saldo_facturas_pendiente_usd: pedidos.reduce((s, p) => s + p.factura_saldo_pendiente, 0)
+        };
+
+        const result = {
+            fecha_consulta: getDateStr(0),
+            resumen,
+            pedidos
+        };
+        setCachedQuery(cacheKey, result, 30000);
+        return result;
+    } catch (_) {
+        return emptyResult;
+    }
+};
+
 module.exports = {
     queryMemoryCache,
     getCachedQuery,
@@ -851,6 +965,7 @@ module.exports = {
     getSaldosBancosData,
     getSaldosChequeraData,
     getConsolidadoVentas,
+    getPedidosPumaData,
     COMPETENCIA_STATION_NAMES,
     KNOWN_COMPETITOR_BRANDS,
     extractCompetitorBrand,

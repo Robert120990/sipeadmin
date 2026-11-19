@@ -5,7 +5,7 @@ import {
     Activity, Power, HelpCircle, Check, Eye,
     UserCheck, ShieldAlert, ShieldCheck, Link2,
     ThumbsUp, ThumbsDown, MessageSquare, Database, Cpu, Radio,
-    Terminal, AlertOctagon, Key, ClipboardPaste
+    Terminal, AlertOctagon, Key, ClipboardPaste, Sparkles
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
@@ -36,8 +36,17 @@ export default function TelegramUsers() {
     // Retroalimentación & Mejora Continua
     const [feedbacks, setFeedbacks] = useState([]);
     const [feedbackStats, setFeedbackStats] = useState({ total: 0, utiles: 0, no_utiles: 0, pendientes: 0, con_comentarios: 0, tasa_satisfaccion: 100 });
+    const [negativeAnalysis, setNegativeAnalysis] = useState({ total_negativas: 0, con_comentario: 0, abiertas: 0, revisadas: 0, autocorregidas: 0, por_categoria: [], items: [] });
     const [loadingFeedback, setLoadingFeedback] = useState(false);
     const [feedbackFilter, setFeedbackFilter] = useState('ALL');
+    const [adHocQuery, setAdHocQuery] = useState('');
+    const [adHocComment, setAdHocComment] = useState('');
+    const [regenModalOpen, setRegenModalOpen] = useState(false);
+    const [selectedFeedbackForRegen, setSelectedFeedbackForRegen] = useState(null);
+    const [regenLoading, setRegenLoading] = useState(false);
+    const [regenSending, setRegenSending] = useState(false);
+    const [regenResult, setRegenResult] = useState(null);
+    const [regenCustomComment, setRegenCustomComment] = useState('');
 
     // Diagnóstico de Salud & Auditoría Forense
     const [healthData, setHealthData] = useState(null);
@@ -185,13 +194,14 @@ export default function TelegramUsers() {
         }
     }, [addToast]);
 
-    // Cargar retroalimentación & sugerencias de mejora
+    // Cargar retroalimentación & sugerencias de mejora + diagnóstico de negativas
     const fetchFeedback = useCallback(async () => {
         setLoadingFeedback(true);
         try {
-            const [statsRes, listRes] = await Promise.all([
+            const [statsRes, listRes, negRes] = await Promise.all([
                 api.get('/telegram/feedback/stats'),
-                api.get('/telegram/feedback', { params: { limit: 100 } })
+                api.get('/telegram/feedback', { params: { limit: 100 } }),
+                api.get('/telegram/feedback/analisis-negativas').catch(() => ({ data: null }))
             ]);
             if (statsRes.data?.ok) {
                 setFeedbackStats(statsRes.data.stats || {});
@@ -199,12 +209,23 @@ export default function TelegramUsers() {
             if (listRes.data?.ok) {
                 setFeedbacks(listRes.data.feedbacks || []);
             }
+            if (negRes?.data?.ok && negRes.data.analisis) {
+                setNegativeAnalysis(negRes.data.analisis);
+            }
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al cargar retroalimentación de Telegram', 'error');
         } finally {
             setLoadingFeedback(false);
         }
     }, [addToast]);
+
+    const negativeDiagById = useMemo(() => {
+        const map = new Map();
+        (negativeAnalysis?.items || []).forEach(item => {
+            if (item?.id) map.set(item.id, item);
+        });
+        return map;
+    }, [negativeAnalysis]);
 
     // Cargar diagnóstico de salud operacional
     const fetchHealthDiagnostics = useCallback(async () => {
@@ -290,6 +311,126 @@ export default function TelegramUsers() {
             fetchFeedback();
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al marcar retroalimentación', 'error');
+        }
+    };
+
+    // Abrir modal de evaluación / regeneración mejorada para un registro de feedback
+    const handleOpenRegenerateModal = async (fb) => {
+        setSelectedFeedbackForRegen(fb);
+        setRegenCustomComment(fb?.comentario_mejora || '');
+        setRegenResult(null);
+        setRegenModalOpen(true);
+        setRegenLoading(true);
+
+        try {
+            const res = await api.post(`/telegram/feedback/${fb.id}/regenerar`, {
+                comentario_mejora: fb?.comentario_mejora || '',
+                enviar_usuario: false,
+                marcar_revisado: false
+            });
+            if (res.data?.ok) {
+                setRegenResult(res.data.resultado);
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al regenerar respuesta mejorada', 'error');
+        } finally {
+            setRegenLoading(false);
+        }
+    };
+
+    // Re-evaluar dentro del modal con comentario/aclaración ajustada
+    const handleRerunRegeneration = async () => {
+        setRegenLoading(true);
+        try {
+            if (selectedFeedbackForRegen?.id) {
+                const res = await api.post(`/telegram/feedback/${selectedFeedbackForRegen.id}/regenerar`, {
+                    comentario_mejora: regenCustomComment,
+                    enviar_usuario: false,
+                    marcar_revisado: false
+                });
+                if (res.data?.ok) setRegenResult(res.data.resultado);
+            } else {
+                const res = await api.post('/telegram/feedback/evaluar-ad-hoc', {
+                    consulta_original: selectedFeedbackForRegen?.consulta_original || adHocQuery,
+                    comentario_mejora: regenCustomComment
+                });
+                if (res.data?.ok) setRegenResult(res.data.resultado);
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al re-evaluar respuesta', 'error');
+        } finally {
+            setRegenLoading(false);
+        }
+    };
+
+    // Ejecutar simulador ad-hoc desde la barra rápida
+    const handleRunAdHocEvaluation = async (e) => {
+        if (e) e.preventDefault();
+        if (!adHocQuery.trim()) {
+            addToast('Escribe una consulta para evaluar cómo responde el motor mejorado', 'warning');
+            return;
+        }
+        const adHocFb = {
+            id: null,
+            consulta_original: adHocQuery.trim(),
+            comentario_mejora: adHocComment.trim(),
+            respuesta_resumen: 'Simulación en vivo (sin respuesta negativa previa)',
+            first_name: 'Simulador Admin'
+        };
+        setSelectedFeedbackForRegen(adHocFb);
+        setRegenCustomComment(adHocComment.trim());
+        setRegenResult(null);
+        setRegenModalOpen(true);
+        setRegenLoading(true);
+
+        try {
+            const res = await api.post('/telegram/feedback/evaluar-ad-hoc', {
+                consulta_original: adHocFb.consulta_original,
+                comentario_mejora: adHocFb.comentario_mejora
+            });
+            if (res.data?.ok) {
+                setRegenResult(res.data.resultado);
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al simular consulta', 'error');
+        } finally {
+            setRegenLoading(false);
+        }
+    };
+
+    // Enviar respuesta regenerada al usuario en Telegram y/o marcar revisado
+    const handleApplyRegeneratedFeedback = async ({ sendToTelegram = false }) => {
+        if (!selectedFeedbackForRegen?.id) return;
+
+        if (sendToTelegram) {
+            const ok = await confirm(
+                `¿Enviar ahora mismo esta respuesta mejorada por Telegram a ${selectedFeedbackForRegen.first_name || selectedFeedbackForRegen.telegram_username || selectedFeedbackForRegen.telegram_user_id} y marcar el caso como revisado?`,
+                { title: 'Enviar Respuesta Mejorada', confirmText: 'Sí, Enviar por Telegram' }
+            );
+            if (!ok) return;
+        }
+
+        setRegenSending(true);
+        try {
+            const res = await api.post(`/telegram/feedback/${selectedFeedbackForRegen.id}/regenerar`, {
+                comentario_mejora: regenCustomComment,
+                enviar_usuario: sendToTelegram,
+                marcar_revisado: true
+            });
+            if (res.data?.ok) {
+                addToast(
+                    sendToTelegram
+                        ? (res.data.enviado_telegram ? 'Respuesta mejorada enviada por Telegram y caso revisado' : 'Caso revisado (no se pudo entregar mensaje en Telegram)')
+                        : 'Caso marcado como revisado con la respuesta validada',
+                    'success'
+                );
+                setRegenModalOpen(false);
+                fetchFeedback();
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al aplicar resolución', 'error');
+        } finally {
+            setRegenSending(false);
         }
     };
 
@@ -1489,8 +1630,8 @@ export default function TelegramUsers() {
                     {renderBotHealthCard()}
 
                     {/* Tarjetas KPI de Satisfacción */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
-                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div className="card glass" style={{ flex: '1 1 200px', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                             <div style={{
                                 width: '42px', height: '42px', borderRadius: '10px',
                                 background: feedbackStats.tasa_satisfaccion >= 80 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
@@ -1507,7 +1648,7 @@ export default function TelegramUsers() {
                             </div>
                         </div>
 
-                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div className="card glass" style={{ flex: '1 1 180px', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                             <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(59, 130, 246, 0.15)', color: '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <Activity size={20} />
                             </div>
@@ -1517,7 +1658,7 @@ export default function TelegramUsers() {
                             </div>
                         </div>
 
-                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div className="card glass" style={{ flex: '1 1 180px', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                             <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(16, 185, 129, 0.15)', color: '#10B981', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <ThumbsUp size={20} />
                             </div>
@@ -1527,7 +1668,7 @@ export default function TelegramUsers() {
                             </div>
                         </div>
 
-                        <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div className="card glass" style={{ flex: '1 1 180px', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                             <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.15)', color: '#EF4444', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <ThumbsDown size={20} />
                             </div>
@@ -1538,6 +1679,95 @@ export default function TelegramUsers() {
                         </div>
                     </div>
 
+                    {/* Diagnóstico Forense de Respuestas Negativas + Simulador Rápido */}
+                    <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                                <Sparkles size={15} color="#8B5CF6" />
+                                <span style={{ fontSize: '0.825rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                    Diagnóstico de Causas Raíz en Respuestas Negativas & Evaluador en Vivo
+                                </span>
+                                {negativeAnalysis.autocorregidas > 0 && (
+                                    <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.12)', color: '#10B981', fontWeight: 600 }}>
+                                        🔄 {negativeAnalysis.autocorregidas} Autocorregidas en Vivo
+                                    </span>
+                                )}
+                            </div>
+                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                NLU Determinista + Agente IA 360° + Autocorrección Activa en 👎
+                            </span>
+                        </div>
+
+                        {negativeAnalysis.por_categoria && negativeAnalysis.por_categoria.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                {negativeAnalysis.por_categoria.map(cat => (
+                                    <div
+                                        key={cat.codigo}
+                                        title={cat.accion_correctiva}
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.4rem',
+                                            padding: '0.25rem 0.6rem',
+                                            borderRadius: '6px',
+                                            fontSize: '0.74rem',
+                                            background: cat.severidad === 'alta' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                                            border: `1px solid ${cat.severidad === 'alta' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`,
+                                            color: 'var(--text-main)'
+                                        }}
+                                    >
+                                        <span style={{ fontWeight: 700, color: cat.severidad === 'alta' ? '#EF4444' : '#F59E0B' }}>
+                                            {cat.cantidad}
+                                        </span>
+                                        <span style={{ fontWeight: 600 }}>{cat.etiqueta}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <form onSubmit={handleRunAdHocEvaluation} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                            <input
+                                type="text"
+                                value={adHocQuery}
+                                onChange={e => setAdHocQuery(e.target.value)}
+                                placeholder="Simular consulta (ej. Autonomía de tanques de diésel, Ventas de hoy, Pedidos Puma retenidos...)"
+                                style={{
+                                    flex: '2 1 260px',
+                                    height: '36px',
+                                    padding: '0 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: 'var(--border-radius)',
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--bg-color)',
+                                    color: 'var(--text-main)'
+                                }}
+                            />
+                            <input
+                                type="text"
+                                value={adHocComment}
+                                onChange={e => setAdHocComment(e.target.value)}
+                                placeholder="Aclaración opcional (ej. solo Costa del Sol)"
+                                style={{
+                                    flex: '1 1 180px',
+                                    height: '36px',
+                                    padding: '0 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: 'var(--border-radius)',
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--bg-color)',
+                                    color: 'var(--text-main)'
+                                }}
+                            />
+                            <button
+                                type="submit"
+                                className="btn-primary"
+                                style={{ height: '36px', padding: '0 1rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap' }}
+                            >
+                                <Sparkles size={14} /> Evaluar Mejor Respuesta
+                            </button>
+                        </form>
+                    </div>
+
                     {/* Tabla de Retroalimentación Forense */}
                     <div className="card glass" style={{ padding: 0, width: '100%', maxWidth: '100%', minWidth: 0 }}>
                         <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border)' }}>
@@ -1546,7 +1776,7 @@ export default function TelegramUsers() {
                                 <select
                                     value={feedbackFilter}
                                     onChange={e => setFeedbackFilter(e.target.value)}
-                                    style={{ height: '30px', fontSize: '0.76rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-main)', padding: '0 0.5rem' }}
+                                    style={{ height: '34px', fontSize: '0.78rem', borderRadius: 'var(--border-radius)', border: '1px solid var(--border)', background: 'var(--bg-color)', color: 'var(--text-main)', padding: '0 0.5rem' }}
                                 >
                                     <option value="ALL">Todas las calificaciones</option>
                                     <option value="NO_UTIL">👎 Por Mejorar / No Útiles</option>
@@ -1558,22 +1788,22 @@ export default function TelegramUsers() {
                                 className="btn-secondary"
                                 onClick={fetchFeedback}
                                 disabled={loadingFeedback}
-                                style={{ height: '30px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                                style={{ height: '34px', fontSize: '0.76rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
                             >
                                 <RefreshCw size={13} className={loadingFeedback ? 'spin' : ''} /> Actualizar
                             </button>
                         </div>
                         <div className="table-responsive" style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '950px', marginTop: 0 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1080px', marginTop: 0 }}>
                             <thead>
                                 <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
-                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Fecha / Hora</th>
-                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Usuario</th>
-                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Pregunta / Consulta</th>
-                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Calificación</th>
-                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>¿Qué Esperaba o Qué Mejorar?</th>
-                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Estado</th>
-                                    <th style={{ padding: '0.5rem 0.65rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Acción</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Fecha / Hora</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Usuario</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Pregunta / Respuesta Previa</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Calificación</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Diagnóstico / Comentario Usuario</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Estado</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1592,80 +1822,138 @@ export default function TelegramUsers() {
                                 ) : (
                                     feedbacks
                                         .filter(fb => feedbackFilter === 'ALL' || fb.calificacion === feedbackFilter)
-                                        .map(fb => (
-                                            <tr key={fb.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.76rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                                                    {new Date(fb.created_at).toLocaleString('es-SV', {
-                                                        day: '2-digit', month: '2-digit', year: 'numeric',
-                                                        hour: '2-digit', minute: '2-digit'
-                                                    })}
-                                                </td>
-                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem' }}>
-                                                    <div style={{ fontWeight: 600 }}>{fb.first_name || fb.telegram_username || 'Usuario'}</div>
-                                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>ID: <code>{fb.telegram_user_id}</code></div>
-                                                </td>
-                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem', maxWidth: '250px' }}>
-                                                    <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>«{fb.consulta_original}»</span>
-                                                </td>
-                                                <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
-                                                    <span style={{
-                                                        fontSize: '0.72rem',
-                                                        padding: '0.2rem 0.5rem',
-                                                        borderRadius: '4px',
-                                                        fontWeight: 700,
-                                                        display: 'inline-flex',
-                                                        alignItems: 'center',
-                                                        gap: '0.3rem',
-                                                        color: fb.calificacion === 'UTIL' ? '#10B981' : fb.calificacion === 'NO_UTIL' ? '#EF4444' : '#F59E0B',
-                                                        background: fb.calificacion === 'UTIL' ? 'rgba(16, 185, 129, 0.12)' : fb.calificacion === 'NO_UTIL' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.12)'
-                                                    }}>
-                                                        {fb.calificacion === 'UTIL' ? '👍 Útil' : fb.calificacion === 'NO_UTIL' ? '👎 Por Mejorar' : '⏳ Pendiente'}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: '0.45rem 0.65rem', fontSize: '0.8rem', maxWidth: '300px' }}>
-                                                    {fb.comentario_mejora ? (
-                                                        <div style={{
-                                                            background: 'rgba(239, 68, 68, 0.06)',
-                                                            borderLeft: '3px solid #EF4444',
-                                                            padding: '0.35rem 0.55rem',
-                                                            borderRadius: '0 4px 4px 0',
-                                                            fontSize: '0.78rem',
-                                                            color: 'var(--text-main)'
+                                        .map(fb => {
+                                            const negDiag = negativeDiagById.get(fb.id);
+                                            const causaLabel = negDiag?.diagnostico_causa?.etiqueta_causa;
+                                            return (
+                                                <tr key={fb.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.76rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                                        {new Date(fb.created_at).toLocaleString('es-SV', {
+                                                            day: '2-digit', month: '2-digit', year: 'numeric',
+                                                            hour: '2-digit', minute: '2-digit'
+                                                        })}
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem' }}>
+                                                        <div style={{ fontWeight: 600 }}>{fb.first_name || fb.telegram_username || 'Usuario'}</div>
+                                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>ID: <code>{fb.telegram_user_id}</code></div>
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', maxWidth: '280px' }}>
+                                                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>«{fb.consulta_original}»</div>
+                                                        {fb.respuesta_resumen && (
+                                                            <div
+                                                                title={fb.respuesta_resumen}
+                                                                style={{
+                                                                    fontSize: '0.72rem',
+                                                                    color: 'var(--text-muted)',
+                                                                    marginTop: '0.2rem',
+                                                                    overflow: 'hidden',
+                                                                    textOverflow: 'ellipsis',
+                                                                    whiteSpace: 'nowrap'
+                                                                }}
+                                                            >
+                                                                🤖 {fb.respuesta_resumen}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                        <span style={{
+                                                            fontSize: '0.72rem',
+                                                            padding: '0.15rem 0.45rem',
+                                                            borderRadius: '4px',
+                                                            fontWeight: 700,
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.3rem',
+                                                            color: fb.calificacion === 'UTIL' ? '#10B981' : fb.calificacion === 'NO_UTIL' ? '#EF4444' : '#F59E0B',
+                                                            background: fb.calificacion === 'UTIL' ? 'rgba(16, 185, 129, 0.12)' : fb.calificacion === 'NO_UTIL' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.12)'
                                                         }}>
-                                                            <strong>💬 Esperaba:</strong> {fb.comentario_mejora}
+                                                            {fb.calificacion === 'UTIL' ? '👍 Útil' : fb.calificacion === 'NO_UTIL' ? '👎 Por Mejorar' : '⏳ Pendiente'}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', maxWidth: '310px' }}>
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                                            {causaLabel && (
+                                                                <span style={{
+                                                                    fontSize: '0.7rem',
+                                                                    fontWeight: 700,
+                                                                    color: '#8B5CF6',
+                                                                    background: 'rgba(139, 92, 246, 0.1)',
+                                                                    padding: '0.12rem 0.4rem',
+                                                                    borderRadius: '4px',
+                                                                    width: 'fit-content'
+                                                                }}>
+                                                                    🔍 {causaLabel}
+                                                                </span>
+                                                            )}
+                                                            {fb.comentario_mejora ? (
+                                                                <div style={{
+                                                                    background: 'rgba(239, 68, 68, 0.06)',
+                                                                    borderLeft: '3px solid #EF4444',
+                                                                    padding: '0.3rem 0.5rem',
+                                                                    borderRadius: '0 4px 4px 0',
+                                                                    fontSize: '0.76rem',
+                                                                    color: 'var(--text-main)'
+                                                                }}>
+                                                                    <strong>💬 Esperaba:</strong> {fb.comentario_mejora}
+                                                                </div>
+                                                            ) : (
+                                                                <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>Sin comentario escrito</span>
+                                                            )}
+                                                            {fb.notas_resolucion && (
+                                                                <span style={{ fontSize: '0.7rem', color: '#10B981', fontWeight: 600 }}>
+                                                                    ✓ {fb.notas_resolucion}
+                                                                </span>
+                                                            )}
                                                         </div>
-                                                    ) : (
-                                                        <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Sin comentario específico</span>
-                                                    )}
-                                                </td>
-                                                <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
-                                                    <span style={{
-                                                        fontSize: '0.72rem',
-                                                        padding: '0.15rem 0.45rem',
-                                                        borderRadius: '4px',
-                                                        fontWeight: 600,
-                                                        color: fb.estado === 'REVISADO' ? '#10B981' : fb.estado === 'COMPLETADO' ? '#3B82F6' : '#F59E0B',
-                                                        background: fb.estado === 'REVISADO' ? 'rgba(16, 185, 129, 0.1)' : fb.estado === 'COMPLETADO' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(245, 158, 11, 0.1)'
-                                                    }}>
-                                                        {fb.estado === 'REVISADO' ? 'Revisado' : fb.estado === 'COMPLETADO' ? 'Registrado' : 'Abierto'}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: '0.45rem 0.65rem', textAlign: 'center' }}>
-                                                    {fb.estado !== 'REVISADO' ? (
-                                                        <button
-                                                            className="btn-secondary"
-                                                            onClick={() => handleMarkFeedbackReviewed(fb)}
-                                                            title="Marcar como revisado en la mejora continua"
-                                                            style={{ height: '26px', fontSize: '0.72rem', padding: '0 0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
-                                                        >
-                                                            <Check size={12} color="#10B981" /> Revisar
-                                                        </button>
-                                                    ) : (
-                                                        <span style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600 }}>✓ Listo</span>
-                                                    )}
-                                                </td>
-                                            </tr>
-                                        ))
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                        <span style={{
+                                                            fontSize: '0.72rem',
+                                                            padding: '0.15rem 0.45rem',
+                                                            borderRadius: '4px',
+                                                            fontWeight: 600,
+                                                            color: fb.estado === 'REVISADO' ? '#10B981' : fb.estado === 'COMPLETADO' ? '#3B82F6' : '#F59E0B',
+                                                            background: fb.estado === 'REVISADO' ? 'rgba(16, 185, 129, 0.1)' : fb.estado === 'COMPLETADO' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(245, 158, 11, 0.1)'
+                                                        }}>
+                                                            {fb.estado === 'REVISADO' ? 'Revisado' : fb.estado === 'COMPLETADO' ? 'Registrado' : 'Abierto'}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                                            <button
+                                                                className="btn-secondary"
+                                                                onClick={() => handleOpenRegenerateModal(fb)}
+                                                                title="Evaluar y regenerar mejor respuesta con el motor actualizado"
+                                                                style={{
+                                                                    height: '28px',
+                                                                    fontSize: '0.72rem',
+                                                                    padding: '0 0.5rem',
+                                                                    display: 'inline-flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '0.25rem',
+                                                                    borderColor: fb.calificacion === 'NO_UTIL' ? 'rgba(139, 92, 246, 0.45)' : undefined,
+                                                                    color: fb.calificacion === 'NO_UTIL' ? '#8B5CF6' : undefined
+                                                                }}
+                                                            >
+                                                                <Sparkles size={12} /> Regenerar
+                                                            </button>
+                                                            {fb.estado !== 'REVISADO' ? (
+                                                                <button
+                                                                    className="btn-secondary"
+                                                                    onClick={() => handleMarkFeedbackReviewed(fb)}
+                                                                    title="Marcar como revisado en la mejora continua"
+                                                                    style={{ height: '28px', fontSize: '0.72rem', padding: '0 0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                                                >
+                                                                    <Check size={12} color="#10B981" /> Revisar
+                                                                </button>
+                                                            ) : (
+                                                                <span style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600 }}>✓ Listo</span>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
                                 )}
                             </tbody>
                         </table>
@@ -2711,6 +2999,166 @@ export default function TelegramUsers() {
                                     </span>
                                 )}
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Modal Comparativo de Evaluación y Regeneración de Mejor Respuesta */}
+            <Modal
+                open={regenModalOpen}
+                onClose={() => !regenSending && setRegenModalOpen(false)}
+                title={selectedFeedbackForRegen?.id ? `Evaluar & Regenerar Respuesta (#${selectedFeedbackForRegen.id})` : 'Simulador de Respuesta Mejorada SIPE 360°'}
+                size="lg"
+                footer={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', width: '100%' }}>
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setRegenModalOpen(false)}
+                            disabled={regenSending}
+                            style={{ height: '36px', fontSize: '0.8rem' }}
+                        >
+                            Cerrar
+                        </button>
+                        {selectedFeedbackForRegen?.id && (
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => handleApplyRegeneratedFeedback({ sendToTelegram: false })}
+                                    disabled={regenLoading || regenSending}
+                                    style={{ height: '36px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                >
+                                    <Check size={14} color="#10B981" /> Solo Marcar Revisado
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn-primary"
+                                    onClick={() => handleApplyRegeneratedFeedback({ sendToTelegram: true })}
+                                    disabled={regenLoading || regenSending || !regenResult?.nueva_respuesta_html}
+                                    style={{ height: '36px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                >
+                                    <Send size={14} /> {regenSending ? 'Enviando...' : 'Enviar Respuesta Corregida por Telegram'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                }
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    {/* Cabecera de Consulta + Ajuste de Aclaración */}
+                    <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--surface-color)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                        <div style={{ fontSize: '0.82rem' }}>
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Pregunta Original: </span>
+                            <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>«{selectedFeedbackForRegen?.consulta_original || adHocQuery}»</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <input
+                                type="text"
+                                value={regenCustomComment}
+                                onChange={e => setRegenCustomComment(e.target.value)}
+                                placeholder="Ajustar aclaración o enfoque deseado (ej. del mes pasado, solo diésel, incluir bancos...)"
+                                style={{
+                                    flex: '1 1 240px',
+                                    height: '36px',
+                                    padding: '0 0.75rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: 'var(--border-radius)',
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--bg-color)',
+                                    color: 'var(--text-main)'
+                                }}
+                            />
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={handleRerunRegeneration}
+                                disabled={regenLoading}
+                                style={{ height: '36px', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                            >
+                                <RefreshCw size={13} className={regenLoading ? 'spin' : ''} /> Re-evaluar
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Diagnóstico de Causa Raíz */}
+                    {regenResult?.diagnostico_causa && (
+                        <div style={{
+                            padding: '0.7rem 0.85rem',
+                            borderRadius: '8px',
+                            background: 'rgba(139, 92, 246, 0.08)',
+                            border: '1px solid rgba(139, 92, 246, 0.28)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.25rem',
+                            fontSize: '0.78rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                <strong style={{ color: '#8B5CF6' }}>
+                                    🔍 Causa Detectada: {regenResult.diagnostico_causa.etiqueta_causa}
+                                </strong>
+                                {regenResult.intent_detectado && (
+                                    <span style={{ fontSize: '0.72rem', padding: '0.12rem 0.45rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.14)', color: '#10B981', fontWeight: 700 }}>
+                                        Ruta Nueva: {regenResult.intent_detectado.etiqueta} ({regenResult.metodo_generacion})
+                                    </span>
+                                )}
+                            </div>
+                            <div style={{ color: 'var(--text-main)' }}>{regenResult.diagnostico_causa.diagnostico}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+                                <strong>Mejora aplicada:</strong> {regenResult.diagnostico_causa.accion_correctiva}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Comparación Lado a Lado (colapsa a 1 columna en móvil con .form-grid-2) */}
+                    <div className="form-grid form-grid-2" style={{ gap: '0.85rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: '#EF4444' }}>
+                                👎 Respuesta Anterior Registrada
+                            </div>
+                            <pre style={{
+                                margin: 0,
+                                padding: '0.75rem',
+                                borderRadius: '8px',
+                                background: 'rgba(239, 68, 68, 0.05)',
+                                border: '1px solid rgba(239, 68, 68, 0.2)',
+                                color: 'var(--text-main)',
+                                fontSize: '0.76rem',
+                                fontFamily: 'inherit',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                minHeight: '180px',
+                                maxHeight: '340px',
+                                overflowY: 'auto'
+                            }}>
+                                {selectedFeedbackForRegen?.respuesta_resumen || regenResult?.respuesta_anterior || 'Sin texto completo en registro histórico'}
+                            </pre>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: '#10B981' }}>
+                                ✨ Nueva Respuesta Generada (Motor Mejorado)
+                            </div>
+                            <pre style={{
+                                margin: 0,
+                                padding: '0.75rem',
+                                borderRadius: '8px',
+                                background: 'rgba(16, 185, 129, 0.06)',
+                                border: '1px solid rgba(16, 185, 129, 0.28)',
+                                color: 'var(--text-main)',
+                                fontSize: '0.78rem',
+                                fontFamily: 'inherit',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                minHeight: '180px',
+                                maxHeight: '340px',
+                                overflowY: 'auto'
+                            }}>
+                                {regenLoading
+                                    ? '⏳ Generando mejor respuesta con datos reales de SIPE...'
+                                    : (regenResult?.nueva_respuesta_texto || 'Pulsa Re-evaluar para generar la respuesta.')}
+                            </pre>
                         </div>
                     </div>
                 </div>

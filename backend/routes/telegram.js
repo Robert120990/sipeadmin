@@ -30,6 +30,10 @@ const {
     getErrors,
     clearErrors
 } = require('../services/telegramAuditorService');
+const {
+    analyzeNegativeFeedbackBatch,
+    generateImprovedResponseForFeedback
+} = require('../services/telegramFeedbackEvaluator');
 
 const telegramPerms = [
     '/dashboard/seguridad/telegram',
@@ -984,6 +988,127 @@ router.patch('/feedback/:id/revisar', authenticateToken, requirePermission(teleg
         res.json({ ok: true, message: 'Retroalimentación marcada como revisada exitosamente' });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar estado de retroalimentación');
+    }
+});
+
+/**
+ * GET /api/telegram/feedback/analisis-negativas
+ * Diagnóstico forense agrupado por causa raíz sobre las respuestas calificadas como NO_UTIL
+ */
+router.get('/feedback/analisis-negativas', authenticateN8nOrAdmin, async (req, res) => {
+    try {
+        const analisis = await analyzeNegativeFeedbackBatch();
+        res.json({ ok: true, analisis });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al analizar respuestas negativas de Telegram');
+    }
+});
+
+/**
+ * POST /api/telegram/feedback/evaluar-ad-hoc
+ * Simulador en vivo para evaluar cómo responde el nuevo motor ante cualquier consulta + aclaración
+ */
+router.post('/feedback/evaluar-ad-hoc', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    const { consulta_original, comentario_mejora, respuesta_resumen } = req.body || {};
+    if (!consulta_original || !String(consulta_original).trim()) {
+        return res.status(400).json({ message: 'La consulta a evaluar es obligatoria' });
+    }
+
+    try {
+        const resultado = await generateImprovedResponseForFeedback({
+            id: null,
+            consulta_original: String(consulta_original).trim(),
+            comentario_mejora: comentario_mejora ? String(comentario_mejora).trim() : '',
+            respuesta_resumen: respuesta_resumen ? String(respuesta_resumen).trim() : ''
+        });
+        res.json({ ok: true, resultado });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al simular evaluación de respuesta');
+    }
+});
+
+/**
+ * POST /api/telegram/feedback/:id/regenerar
+ * Regenera una mejor respuesta para un feedback negativo (y opcionalmente la envía al usuario en Telegram)
+ */
+router.post('/feedback/:id/regenerar', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    const feedbackId = parseInt(req.params.id, 10);
+    if (!feedbackId) {
+        return res.status(400).json({ message: 'ID de feedback inválido' });
+    }
+
+    const {
+        comentario_mejora: overrideComment,
+        enviar_usuario = false,
+        marcar_revisado = false,
+        notas_resolucion: customNotas = null
+    } = req.body || {};
+
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const [rows] = await db.query(
+            `SELECT id, telegram_user_id, telegram_username, first_name, chat_id, mensaje_id,
+                    consulta_original, respuesta_resumen, calificacion, comentario_mejora, estado
+             FROM telegram_feedback
+             WHERE id = ?
+             LIMIT 1`,
+            [feedbackId]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Registro de retroalimentación no encontrado' });
+        }
+
+        const fbRow = {
+            ...rows[0],
+            comentario_mejora: overrideComment !== undefined ? String(overrideComment || '') : (rows[0].comentario_mejora || '')
+        };
+
+        const resultado = await generateImprovedResponseForFeedback(fbRow);
+
+        let enviadoTelegram = false;
+        if (enviar_usuario) {
+            const targetChatId = fbRow.chat_id || fbRow.telegram_user_id;
+            if (targetChatId) {
+                const header =
+                    `✨ <b>Actualización de tu consulta en SIPE Admin</b>\n` +
+                    `💬 <i>«${String(fbRow.consulta_original || '').slice(0, 140).replace(/[<>&]/g, '')}»</i>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+                const sendRes = await sendTelegramMessage(targetChatId, header + resultado.nueva_respuesta_html);
+                enviadoTelegram = Boolean(sendRes);
+            }
+        }
+
+        let marcadoRevisado = false;
+        if (marcar_revisado || enviadoTelegram) {
+            const finalNotas = customNotas ||
+                (enviadoTelegram
+                    ? `Respuesta mejorada regenerada (${resultado.metodo_generacion}) y enviada al usuario en Telegram`
+                    : `Respuesta mejorada validada en panel (${resultado.metodo_generacion})`);
+
+            await db.query(
+                `UPDATE telegram_feedback
+                 SET estado = 'REVISADO',
+                     notas_resolucion = ?,
+                     revisado_por = ?,
+                     revisado_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = ?`,
+                [finalNotas, req.user?.id || null, feedbackId]
+            );
+            marcadoRevisado = true;
+        }
+
+        res.json({
+            ok: true,
+            enviado_telegram: enviadoTelegram,
+            marcado_revisado: marcadoRevisado,
+            resultado
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al regenerar respuesta de Telegram');
     }
 });
 
