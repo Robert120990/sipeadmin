@@ -661,13 +661,13 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
         }
     });
 
-    it('Tickets por Telegram/AGY deben usar gemini-4-carbon-high por defecto y trabajos finalizados deben pasar de en_proceso a resuelto/completada', async () => {
+    it('Tickets por Telegram/AGY deben usar gemini-4-neon-high por defecto y trabajos finalizados deben pasar de en_proceso a resuelto/completada', async () => {
         const ticketService = require('../services/ticketService');
         const dbModule = require('../db');
         const origGetAccountingDb = dbModule.getAccountingDb;
         const origGetDb = dbModule.getDb;
 
-        assert.strictEqual(ticketService.DEFAULT_AGY_MODEL, 'gemini-4-carbon-high');
+        assert.strictEqual(ticketService.DEFAULT_AGY_MODEL, 'gemini-4-neon-high');
 
         const tickets = [
             {
@@ -698,14 +698,14 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
                 admin_user_id: 7,
                 user_name: 'Raul Admin',
                 subject: 'Nuevo ticket desde Telegram pendiente de planificar',
-                description: 'Debe actualizar modelo a gemini-4-carbon-high y al ejecutarse quedar resuelto',
+                description: 'Debe tomar modelo gemini-4-neon-high por defecto y al ejecutarse quedar resuelto',
                 status: 'abierto',
                 priority: 'media',
                 type: 'requerimiento',
                 source_system: 'admin.sipesv.com',
                 include_in_ai_prompt: 0,
                 agy_status: 'idle',
-                agy_model: 'gemini-4-argon-high',
+                agy_model: '',
                 agy_plan_version: 0,
                 resolution_notes: null,
                 resolved_at: null
@@ -746,7 +746,7 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
             ssh_user: 'root',
             project_path: '/var/www/sipeadmin',
             agy_command: 'agy',
-            default_model: 'gemini-4-argon-high',
+            default_model: '',
             execution_mode: 'auto'
         };
 
@@ -770,10 +770,10 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
                     return [[{ Field: 'id' }, { Field: 'ticket_id' }, { Field: 'sender_user_id' }]];
                 }
                 if (q.startsWith('UPDATE agy_server_settings')) {
-                    settingsRow.default_model = params[0];
+                    if (!settingsRow.default_model) settingsRow.default_model = params[0];
                     return [{ affectedRows: 1 }];
                 }
-                if (q.startsWith('SELECT * FROM agy_server_settings')) {
+                if (q.startsWith('SELECT * FROM agy_server_settings') || q.startsWith('SELECT default_model FROM agy_server_settings')) {
                     return [[settingsRow]];
                 }
                 if (q.includes("WHERE agy_status = 'completado' AND status IN ('abierto', 'en_proceso')")) {
@@ -783,7 +783,7 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
                     return [tickets.filter((t) => (t.status === 'resuelto' || t.status === 'cerrado') && t.include_in_ai_prompt === 1)];
                 }
                 if (q.includes("AND agy_status = 'idle' AND status IN ('abierto', 'en_proceso')")) {
-                    return [tickets.filter((t) => t.agy_status === 'idle' && (!t.agy_model || t.agy_model === 'gemini-4-argon-high'))];
+                    return [tickets.filter((t) => t.agy_status === 'idle' && (!t.agy_model || t.agy_model === ''))];
                 }
                 if (q.startsWith('UPDATE ai_agent_tasks t INNER JOIN support_tickets st')) {
                     for (const task of aiAgentTasks) {
@@ -878,10 +878,10 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
         dbModule.getDb = () => mockLocalDb;
 
         try {
-            // 1. Al inicializar esquema y consultar ajustes, migra de argon-high a carbon-high y reconcilia trabajos finalizados
+            // 1. Al inicializar esquema y consultar ajustes, establece gemini-4-neon-high y reconcilia trabajos finalizados
             const agyCfg = await ticketService.getAgySettings();
-            assert.strictEqual(agyCfg.default_model, 'gemini-4-carbon-high');
-            assert.strictEqual(agyCfg.available_models[0].id, 'gemini-4-carbon-high');
+            assert.strictEqual(agyCfg.default_model, 'gemini-4-neon-high');
+            assert.strictEqual(agyCfg.available_models[0].id, 'gemini-4-neon-high');
 
             // El ticket 901 que tenía agy_status='completado' y status='en_proceso' debe haber pasado a 'resuelto'
             assert.strictEqual(tickets[0].status, 'resuelto');
@@ -890,14 +890,14 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
             assert.strictEqual(aiAgentTasks[0].progress, 100);
             assert.strictEqual(growthConversations[0].estado_agy, 'completado');
 
-            // El ticket 902 idle con argon-high debe haberse actualizado a gemini-4-carbon-high
-            assert.strictEqual(tickets[1].agy_model, 'gemini-4-carbon-high');
+            // El ticket 902 idle sin modelo debe haberse actualizado a gemini-4-neon-high
+            assert.strictEqual(tickets[1].agy_model, 'gemini-4-neon-high');
 
-            // 2. Planificar y ejecutar el ticket 902 con modelo por defecto (gemini-4-carbon-high)
+            // 2. Planificar y ejecutar el ticket 902 con modelo por defecto (gemini-4-neon-high)
             const planned = await ticketService.approveAndGeneratePlan(902, {
                 actorName: 'Raul (Telegram)'
             });
-            assert.strictEqual(planned.agy_model, 'gemini-4-carbon-high');
+            assert.strictEqual(planned.agy_model, 'gemini-4-neon-high');
             assert.strictEqual(planned.status, 'en_proceso');
             assert.strictEqual(planned.agy_status, 'esperando_aprobacion');
 
@@ -916,7 +916,7 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
         }
     });
 
-    it('ticketTelegramAgyService y applyFlexibleTextEdit manejan comandos /ticket ADM-0012, callbacks y edición tolerante sin falso positivo', async () => {
+    it('ticketTelegramAgyService maneja /ticket, /modelo, selector inline de modelos y seguridad fail-closed', async () => {
         const ticketTelegramAgyService = require('../services/ticketTelegramAgyService');
         const growthAgyService = require('../services/businessGrowthAgyService');
         const dbModule = require('../db');
@@ -932,7 +932,23 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
         );
         assert.ok(patched.includes('"Actualizado"'), 'applyFlexibleTextEdit debe aplicar el cambio aunque difiera sangría en la búsqueda');
 
-        // 2. Validar /ticket ADM-0012 y callback ticket_resolve en Telegram
+        // 2. Validar contención segura de rutas AGY (sin traversal ni archivos críticos)
+        assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'frontend/src/pages/Ventas.jsx'), true);
+        assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', '../sipeadmin-evil/hack.js'), false);
+        assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'backend/.env'), false);
+        assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'backend/middleware/auth.js'), false);
+        assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'deploy.sh'), false);
+
+        // 3. Validar que permiso_alertas por sí solo NO autoriza gestión de tickets ni AGY
+        assert.strictEqual(
+            ticketTelegramAgyService.isTicketAdminOrManager(
+                { telegram_user_id: '777', activo: 1, permiso_alertas: 1 },
+                { linkedUser: { id: 9, role_id: 4, role_name: 'Operador' }, alertas: true, sipePermissions: [] }
+            ),
+            false
+        );
+
+        const settingsRow = { id: 1, default_model: 'gemini-4-neon-high' };
         const ticket12 = {
             id: 12,
             ticket_code: 'ADM-0012',
@@ -949,7 +965,7 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
             type: 'mejora',
             source_system: 'admin.sipesv.com',
             agy_status: 'esperando_aprobacion',
-            agy_model: 'gemini-4-carbon-high',
+            agy_model: 'gemini-4-neon-high',
             agy_plan_markdown: '🎯 Diagnóstico: Ajuste requerido.'
         };
 
@@ -964,11 +980,22 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
                         { Field: 'agy_status' }, { Field: 'agy_model' }, { Field: 'include_in_ai_prompt' }
                     ]];
                 }
+                if (q.startsWith('SELECT * FROM agy_server_settings') || q.startsWith('SELECT default_model FROM agy_server_settings')) {
+                    return [[settingsRow]];
+                }
+                if (q.startsWith('INSERT INTO agy_server_settings')) {
+                    settingsRow.default_model = params[0];
+                    return [{ affectedRows: 1 }];
+                }
                 if (q.startsWith('SELECT id FROM support_tickets WHERE ticket_code = ?')) {
                     return [params[0] === 'ADM-0012' ? [{ id: 12 }] : []];
                 }
                 if (q.includes('FROM support_tickets t') && q.includes('WHERE t.id = ?')) {
                     return [Number(params[0]) === 12 ? [{ ...ticket12 }] : []];
+                }
+                if (q.startsWith('UPDATE support_tickets SET agy_model = ?')) {
+                    ticket12.agy_model = params[0];
+                    return [{ affectedRows: 1 }];
                 }
                 if (q.startsWith('UPDATE support_tickets') && q.includes("SET status = 'resuelto'")) {
                     ticket12.status = 'resuelto';
@@ -985,6 +1012,7 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
 
         const sentMessages = [];
         const answeredCallbacks = [];
+        const editedMarkups = [];
         const tgHelpers = {
             async sendTelegramMessage(chatId, html, replyMarkup) {
                 sentMessages.push({ chatId, html, replyMarkup });
@@ -992,31 +1020,58 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
             async answerCallbackQuery(id, text) {
                 answeredCallbacks.push({ id, text });
             },
-            async editMessageReplyMarkup() {},
+            async editMessageReplyMarkup(chatId, msgId, markup) {
+                editedMarkups.push({ chatId, msgId, markup });
+            },
             async sendChatAction() {},
             escapeHtml: (s) => String(s || '')
         };
 
-        try {
-            const handledCmd = await ticketTelegramAgyService.handleTicketTextCommand(
-                555,
-                '/ticket adm-12',
-                { telegram_user_id: '555', first_name: 'Raul', activo: 1, permiso_alertas: 1 },
-                { linkedUser: { id: 1, role_id: 1, role: 'Administrator' }, alertas: true },
-                tgHelpers
-            );
-            assert.strictEqual(handledCmd, true);
-            assert.strictEqual(sentMessages.length, 1);
-            assert.ok(sentMessages[0].html.includes('ADM-0012'));
-            assert.ok(sentMessages[0].html.includes('gemini-4-carbon-high'));
+        const adminUser = { telegram_user_id: '555', first_name: 'Raul', activo: 1, permiso_alertas: 1 };
+        const adminPerms = { isAdmin: true, linkedUser: { id: 1, role_id: 1, role_name: 'Administrator' }, sipePermissions: ['manage_support_tickets'] };
 
+        try {
+            // Fail-closed: callback sin tgUser debe rechazarse
+            const rejectedNoUser = await ticketTelegramAgyService.handleTicketCallback(
+                { id: 'cb_unauth', data: 'agy_start_plan:12', from: { id: 999 }, message: { chat: { id: 999 }, message_id: 1 } },
+                tgHelpers,
+                { tgUser: null, effPerms: {} }
+            );
+            assert.strictEqual(rejectedNoUser, true);
+            assert.ok(answeredCallbacks.some((c) => c.id === 'cb_unauth' && c.text.includes('⛔')));
+
+            // /ticket ADM-0012 debe mostrar gemini-4-neon-high y botón Cambiar Modelo
+            const handledCmd = await ticketTelegramAgyService.handleTicketTextCommand(555, '/ticket adm-12', adminUser, adminPerms, tgHelpers);
+            assert.strictEqual(handledCmd, true);
+            assert.ok(sentMessages[0].html.includes('ADM-0012'));
+            assert.ok(sentMessages[0].html.includes('gemini-4-neon-high'));
+            assert.ok(JSON.stringify(sentMessages[0].replyMarkup).includes('agy_model_menu:12'));
+
+            // Cambiar modelo del ticket mediante botón inline a gemini-4-neon-xhigh
+            const cbPick = await ticketTelegramAgyService.handleTicketCallback(
+                { id: 'cb_m1', data: 'agy_sm:12:gemini-4-neon-xhigh', from: { id: 555, first_name: 'Raul' }, message: { chat: { id: 555 }, message_id: 10 } },
+                tgHelpers,
+                { tgUser: adminUser, effPerms: adminPerms }
+            );
+            assert.strictEqual(cbPick, true);
+            assert.strictEqual(ticket12.agy_model, 'gemini-4-neon-xhigh');
+            assert.ok(editedMarkups.some((m) => JSON.stringify(m.markup).includes('Neon XHigh')));
+
+            // Cambiar modelo global con /modelo opus
+            const handledModelCmd = await ticketTelegramAgyService.handleTicketTextCommand(555, '/modelo opus', adminUser, adminPerms, tgHelpers);
+            assert.strictEqual(handledModelCmd, true);
+            assert.strictEqual(settingsRow.default_model, 'claude-opus-5-5-high');
+
+            // Cambiar modelo puntual con /modelo ADM-0012 neon-high
+            const handledTicketModelCmd = await ticketTelegramAgyService.handleTicketTextCommand(555, '/modelo ADM-0012 neon-high', adminUser, adminPerms, tgHelpers);
+            assert.strictEqual(handledTicketModelCmd, true);
+            assert.strictEqual(ticket12.agy_model, 'gemini-4-neon-high');
+
+            // Resolver ticket
             const handledCb = await ticketTelegramAgyService.handleTicketCallback(
                 { id: 'cb1', data: 'ticket_resolve:12', from: { id: 555, first_name: 'Raul' }, message: { chat: { id: 555 }, message_id: 10 } },
                 tgHelpers,
-                {
-                    tgUser: { telegram_user_id: '555', activo: 1, permiso_alertas: 1 },
-                    effPerms: { linkedUser: { id: 1, role_id: 1, role: 'Administrator' }, alertas: true }
-                }
+                { tgUser: adminUser, effPerms: adminPerms }
             );
             assert.strictEqual(handledCb, true);
             assert.strictEqual(ticket12.status, 'resuelto');

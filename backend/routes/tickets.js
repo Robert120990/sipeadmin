@@ -414,7 +414,7 @@ router.post('/:id/agy/plan', authenticateToken, async (req, res) => {
             return res.status(403).json({ message: 'Permisos insuficientes' });
         }
         const updated = await ticketService.approveAndGeneratePlan(req.params.id, {
-            model: req.body?.model || ticketService.DEFAULT_AGY_MODEL || 'gemini-4-carbon-high',
+            model: req.body?.model || ticketService.DEFAULT_AGY_MODEL || 'gemini-4-neon-high',
             aiNotes: req.body?.ai_notes || '',
             feedbackComment: req.body?.feedback_comment || '',
             actorName: getActorName(req.user),
@@ -471,7 +471,7 @@ router.post('/:id/agy/resend-telegram', authenticateToken, async (req, res) => {
         const ticket = await ticketService.getTicketById(req.params.id);
         if (!ticket) return res.status(404).json({ message: 'Ticket no encontrado' });
         await ticketService.approveAndGeneratePlan(req.params.id, {
-            model: ticket.agy_model || ticketService.DEFAULT_AGY_MODEL || 'gemini-4-carbon-high',
+            model: ticket.agy_model || ticketService.DEFAULT_AGY_MODEL || 'gemini-4-neon-high',
             aiNotes: ticket.ai_notes || '',
             actorName: getActorName(req.user),
             io: req.io

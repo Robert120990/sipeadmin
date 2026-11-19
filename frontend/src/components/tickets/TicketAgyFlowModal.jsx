@@ -14,10 +14,13 @@ const AGY_STATUS_META = {
 };
 
 const DEFAULT_MODELS = [
-    { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Recomendado · Carbon High)' },
+    { id: 'gemini-4-neon-high', label: 'gemini-4-neon-high (Recomendado · Neon High)' },
+    { id: 'gemini-4-neon-xhigh', label: 'gemini-4-neon-xhigh (Neon XHigh · Máxima Profundidad)' },
+    { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Carbon High)' },
     { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Argon High)' },
-    { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
-    { id: 'gemini-3-flash', label: 'gemini-3-flash (Ultra Rápido)' }
+    { id: 'claude-opus-5-5-high', label: 'claude-opus-5-5-high (Claude Opus 5.5 High)' },
+    { id: 'claude-sonnet-5-5-high', label: 'claude-sonnet-5-5-high (Claude Sonnet 5.5 High)' },
+    { id: 'gemini-3.8-flash-high', label: 'gemini-3.8-flash-high (Gemini 3.8 Flash · Rápido)' }
 ];
 
 const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
@@ -25,7 +28,7 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
     const [ticket, setTicket] = useState(null);
     const [loading, setLoading] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [selectedModel, setSelectedModel] = useState('gemini-4-carbon-high');
+    const [selectedModel, setSelectedModel] = useState('gemini-4-neon-high');
     const [availableModels, setAvailableModels] = useState(DEFAULT_MODELS);
     const [aiNotes, setAiNotes] = useState('');
     const [feedbackComment, setFeedbackComment] = useState('');
@@ -38,7 +41,7 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
         ssh_password: '',
         project_path: '/var/www/sipeadmin',
         agy_command: 'agy',
-        default_model: 'gemini-4-carbon-high',
+        default_model: 'gemini-4-neon-high',
         execution_mode: 'auto'
     });
 
@@ -52,7 +55,7 @@ const TicketAgyFlowModal = ({ open, ticketId, onClose, onUpdated }) => {
             ]);
             const t = tRes.data?.data || tRes.data;
             const cfg = cfgRes.data?.data || {};
-            const resolvedDefault = cfg.default_model || 'gemini-4-carbon-high';
+            const resolvedDefault = cfg.default_model || 'gemini-4-neon-high';
             if (Array.isArray(cfg.available_models) && cfg.available_models.length > 0) {
                 setAvailableModels(cfg.available_models);
             }

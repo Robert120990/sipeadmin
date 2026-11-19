@@ -160,7 +160,7 @@ export default function FinanzasCrecimiento() {
     const [mensajes, setMensajes] = useState([]);
     const [chatMode, setChatMode] = useState('consultoria_financiera');
     const [targetProject, setTargetProject] = useState('sipeadmin');
-    const [selectedModel, setSelectedModel] = useState('gemini-4-carbon-high');
+    const [selectedModel, setSelectedModel] = useState('gemini-4-neon-high');
     const [autoLearnEnabled, setAutoLearnEnabled] = useState(true);
     const [chatInput, setChatInput] = useState('');
     const [sendingChat, setSendingChat] = useState(false);
@@ -1095,10 +1095,13 @@ export default function FinanzasCrecimiento() {
                                     style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.65rem', width: 'auto' }}
                                 >
                                     {(agyStatus?.available_models?.length > 0 ? agyStatus.available_models : [
+                                        { id: 'gemini-4-neon-high', label: 'gemini-4-neon-high' },
+                                        { id: 'gemini-4-neon-xhigh', label: 'gemini-4-neon-xhigh' },
                                         { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high' },
                                         { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high' },
-                                        { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro' },
-                                        { id: 'gemini-3-flash', label: 'gemini-3-flash' }
+                                        { id: 'claude-opus-5-5-high', label: 'claude-opus-5-5-high' },
+                                        { id: 'claude-sonnet-5-5-high', label: 'claude-sonnet-5-5-high' },
+                                        { id: 'gemini-3.8-flash-high', label: 'gemini-3.8-flash-high' }
                                     ]).map((m) => (
                                         <option key={m.id} value={m.id}>{m.id}</option>
                                     ))}
@@ -1811,10 +1814,13 @@ export default function FinanzasCrecimiento() {
                             onChange={(e) => setSelectedModel(e.target.value)}
                             style={{ height: '38px', fontSize: '0.825rem' }}
                         >
-                            <option value="gemini-4-carbon-high">gemini-4-carbon-high (Recomendado · Carbon High)</option>
+                            <option value="gemini-4-neon-high">gemini-4-neon-high (Recomendado · Neon High)</option>
+                            <option value="gemini-4-neon-xhigh">gemini-4-neon-xhigh (Neon XHigh · Máxima Profundidad)</option>
+                            <option value="gemini-4-carbon-high">gemini-4-carbon-high (Carbon High)</option>
                             <option value="gemini-4-argon-high">gemini-4-argon-high (Argon High)</option>
-                            <option value="gemini-3.1-pro">gemini-3.1-pro (Razonamiento Profundo)</option>
-                            <option value="gemini-3-flash">gemini-3-flash (Ultra Rápido)</option>
+                            <option value="claude-opus-5-5-high">claude-opus-5-5-high (Claude Opus 5.5 High)</option>
+                            <option value="claude-sonnet-5-5-high">claude-sonnet-5-5-high (Claude Sonnet 5.5 High)</option>
+                            <option value="gemini-3.8-flash-high">gemini-3.8-flash-high (Gemini 3.8 Flash · Rápido)</option>
                         </select>
                     </div>
 

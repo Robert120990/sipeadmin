@@ -389,7 +389,7 @@ async function ensureCrecimientoSchema(customDb = null) {
             titulo VARCHAR(220) NOT NULL,
             modo VARCHAR(40) NOT NULL DEFAULT 'consultoria_financiera',
             proyecto_destino VARCHAR(30) NOT NULL DEFAULT 'sipeadmin',
-            modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-carbon-high',
+            modelo_ia VARCHAR(80) NOT NULL DEFAULT 'gemini-4-neon-high',
             empresa_id INT NULL,
             ticket_id INT NULL,
             ticket_code VARCHAR(32) NULL,
@@ -1106,7 +1106,11 @@ function runLocalAgyCliWithTempPrompt({ agyBinPath, projectPath, model, promptTe
             return resolve({ executed: false, output: '' });
         }
 
-        const safeModel = String(model || 'gemini-4-carbon-high').replace(/[^a-zA-Z0-9._-]/g, '');
+        if (process.platform !== 'win32' && !/^\/[a-zA-Z0-9/_.-]+$/.test(String(agyBinPath))) {
+            return resolve({ executed: false, output: '' });
+        }
+
+        const safeModel = String(model || 'gemini-4-neon-high').replace(/[^a-zA-Z0-9._-]/g, '');
         const endMarker = isPlanPhase ? '[[FIN_PLAN_AGY]]' : '[[FIN_EJECUCION_AGY]]';
         try {
             const cfgDir = path.join(os.homedir(), '.gemini', 'antigravity-cli');
@@ -1238,7 +1242,7 @@ async function processGrowthConversationTurn(customDb = null, {
     titulo = null,
     modo = 'consultoria_financiera',
     proyectoDestino = 'sipeadmin',
-    modeloIa = 'gemini-4-carbon-high',
+    modeloIa = 'gemini-4-neon-high',
     empresaId = null,
     mensaje = '',
     autoLearn = true,
@@ -1486,7 +1490,7 @@ Nota: Solo incluye elementos en "conocimientos_nuevos" cuando la conversación c
  */
 async function generateAgyServerPlan(customDb = null, conversacionId, {
     instruction = '',
-    model = 'gemini-4-carbon-high',
+    model = 'gemini-4-neon-high',
     proyectoDestino = null,
     syncTicket = true,
     user = null,
@@ -1516,7 +1520,7 @@ async function generateAgyServerPlan(customDb = null, conversacionId, {
 
     const chosenProjectKey = proyectoDestino || conv.proyecto_destino || 'sipeadmin';
     const targetRepo = resolveTargetRepo(chosenProjectKey === 'sipesaas' ? 'sipesaas' : 'sipeadmin', agySettings);
-    const chosenModel = String(model || conv.modelo_ia || agySettings.default_model || 'gemini-4-carbon-high').trim();
+    const chosenModel = String(model || conv.modelo_ia || agySettings.default_model || 'gemini-4-neon-high').trim();
     const nextVersion = Number(conv.plan_version || 0) + 1;
     const actorName = user?.nombre || user?.username || 'Administrador';
 
@@ -1739,7 +1743,7 @@ async function executeAgyServerPlan(customDb = null, conversacionId, {
 
     const targetRepo = resolveTargetRepo(conv.proyecto_destino === 'sipesaas' ? 'sipesaas' : 'sipeadmin', agySettings);
     const actorName = user?.nombre || user?.username || 'Administrador';
-    const chosenModel = conv.modelo_ia || agySettings.default_model || 'gemini-4-carbon-high';
+    const chosenModel = conv.modelo_ia || agySettings.default_model || 'gemini-4-neon-high';
     let parsedFiles = [];
     try {
         parsedFiles = Array.isArray(conv.archivos_relacionados)
@@ -1846,20 +1850,26 @@ REGLAS:
                         const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawJson);
                         for (const edit of (Array.isArray(parsed.edits) ? parsed.edits : [])) {
                             if (!edit.file || !edit.search || edit.replace === undefined) continue;
-                            const cleanRel = path.normalize(String(edit.file)).replace(/^(\.\.(\/|\\|$))+/, '');
-                            if (cleanRel.includes('.env') || cleanRel.includes('node_modules') || cleanRel.endsWith('lock.json') || cleanRel.endsWith('lock.yaml')) {
+                            const rawRel = String(edit.file).trim().replace(/\\/g, '/');
+                            if (!rawRel || rawRel.startsWith('/') || rawRel.includes('\0')) continue;
+                            const absFile = path.resolve(rootResolved, rawRel);
+                            const relSafe = path.relative(rootResolved, absFile).replace(/\\/g, '/');
+                            if (
+                                !relSafe ||
+                                relSafe.startsWith('..') ||
+                                path.isAbsolute(relSafe) ||
+                                /(^|\/)(\.env(\.|$)|\.git(\/|$)|node_modules(\/|$)|middleware\/auth\.js$|middleware\/bitacora\.js$|server\.js$|deploy\.sh$|webhook-server\.js$|ecosystem\.config\.js$|package(-lock)?\.json$|pnpm-lock\.yaml$)/i.test(relSafe)
+                            ) {
                                 continue;
                             }
-                            const absFile = path.resolve(rootResolved, cleanRel);
-                            if (!absFile.startsWith(rootResolved) || !fs.existsSync(absFile)) continue;
+                            if (!fs.existsSync(absFile)) continue;
 
                             const currentText = fs.readFileSync(absFile, 'utf8');
                             const nextText = applyFlexibleTextEdit(currentText, String(edit.search), String(edit.replace));
 
                             if (nextText !== currentText) {
                                 fs.writeFileSync(absFile, nextText, 'utf8');
-                                const normRel = cleanRel.replace(/\\/g, '/');
-                                if (!modifiedFiles.includes(normRel)) modifiedFiles.push(normRel);
+                                if (!modifiedFiles.includes(relSafe)) modifiedFiles.push(relSafe);
                             }
                         }
                         if (parsed.summary) stepLogs.push(parsed.summary);
@@ -2013,13 +2023,16 @@ async function getAgyServerStatus() {
         ssh_host: 'localhost',
         project_path: '/var/www/sipeadmin',
         agy_command: 'agy',
-        default_model: 'gemini-4-carbon-high',
+        default_model: 'gemini-4-neon-high',
         execution_mode: 'auto',
         available_models: [
-            { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Recomendado · Carbon High)' },
+            { id: 'gemini-4-neon-high', label: 'gemini-4-neon-high (Recomendado · Neon High)' },
+            { id: 'gemini-4-neon-xhigh', label: 'gemini-4-neon-xhigh (Neon XHigh · Máxima Profundidad)' },
+            { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Carbon High)' },
             { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Argon High)' },
-            { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
-            { id: 'gemini-3-flash', label: 'gemini-3-flash (Ultra Rápido)' }
+            { id: 'claude-opus-5-5-high', label: 'claude-opus-5-5-high (Claude Opus 5.5 High)' },
+            { id: 'claude-sonnet-5-5-high', label: 'claude-sonnet-5-5-high (Claude Sonnet 5.5 High)' },
+            { id: 'gemini-3.8-flash-high', label: 'gemini-3.8-flash-high (Gemini 3.8 Flash · Rápido)' }
         ]
     };
 
@@ -2036,7 +2049,7 @@ async function getAgyServerStatus() {
     const graphify = loadGraphifyGraph()?.summary || { available: false };
 
     return {
-        default_model: agySettings.default_model || 'gemini-4-carbon-high',
+        default_model: agySettings.default_model || 'gemini-4-neon-high',
         execution_mode: agySettings.execution_mode || 'auto',
         available_models: agySettings.available_models || [],
         cli_binary_detected: Boolean(agyBin),

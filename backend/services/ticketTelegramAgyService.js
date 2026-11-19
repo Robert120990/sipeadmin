@@ -6,6 +6,44 @@ const growthAgyService = require('./businessGrowthAgyService');
 
 // Map<telegramUserId, { action: 'resolve_note' | 'comment' | 'agy_feedback', ticketId, ticketCode, expiresAt }>
 const pendingTicketReplies = new Map();
+const MAX_PENDING_TICKET_REPLIES = 200;
+
+function prunePendingReplies() {
+    const now = Date.now();
+    for (const [k, v] of pendingTicketReplies.entries()) {
+        if (!v || now > v.expiresAt) pendingTicketReplies.delete(k);
+    }
+    while (pendingTicketReplies.size > MAX_PENDING_TICKET_REPLIES) {
+        const oldestKey = pendingTicketReplies.keys().next().value;
+        if (oldestKey === undefined) break;
+        pendingTicketReplies.delete(oldestKey);
+    }
+}
+
+const PROTECTED_AGY_PATH_PATTERNS = [
+    /(^|\/)\.env(\.|$)/i,
+    /(^|\/)\.git(\/|$)/i,
+    /(^|\/)node_modules(\/|$)/i,
+    /(^|\/)middleware\/auth\.js$/i,
+    /(^|\/)middleware\/bitacora\.js$/i,
+    /(^|\/)server\.js$/i,
+    /(^|\/)deploy\.sh$/i,
+    /(^|\/)webhook-server\.js$/i,
+    /(^|\/)ecosystem\.config\.js$/i,
+    /(^|\/)package(-lock)?\.json$/i,
+    /(^|\/)pnpm-lock\.yaml$/i
+];
+
+function isSafeAgyTargetPath(rootResolved, candidateRelPath) {
+    if (!candidateRelPath || typeof candidateRelPath !== 'string') return false;
+    const trimmed = candidateRelPath.trim().replace(/\\/g, '/');
+    if (!trimmed || trimmed.startsWith('/') || trimmed.includes('\0')) return false;
+    const absFile = path.resolve(rootResolved, trimmed);
+    const rel = path.relative(rootResolved, absFile).replace(/\\/g, '/');
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+    if (PROTECTED_AGY_PATH_PATTERNS.some((rx) => rx.test(rel))) return false;
+    return true;
+}
 
 function escapeHtmlLocal(text = '') {
     return String(text || '')
@@ -17,16 +55,28 @@ function escapeHtmlLocal(text = '') {
 
 function isTicketAdminOrManager(user, effectivePerms = {}) {
     if (!user || !user.activo) return false;
+    if (effectivePerms?.inactiveInSipe) return false;
     const roleName = String(effectivePerms?.linkedUser?.role_name || effectivePerms?.linkedUser?.role || '').toLowerCase();
     const roleId = Number(effectivePerms?.linkedUser?.role_id || 0);
     const perms = Array.isArray(effectivePerms?.sipePermissions) ? effectivePerms.sipePermissions : [];
     return (
+        effectivePerms?.isAdmin === true ||
         roleId === 1 ||
         ['admin', 'administrator', 'administrador', 'super admin', 'superadmin'].includes(roleName) ||
-        perms.includes('manage_support_tickets') ||
-        Boolean(effectivePerms?.alertas) ||
-        Boolean(user.permiso_alertas)
+        perms.includes('manage_support_tickets')
     );
+}
+
+function isAgyCodeAdmin(user, effectivePerms = {}) {
+    return isTicketAdminOrManager(user, effectivePerms);
+}
+
+function resolveEffectiveModelForTicket(ticket = {}, agySettings = {}) {
+    const tModel = String(ticket?.agy_model || '').trim();
+    if (tModel) return tModel;
+    const sModel = String(agySettings?.default_model || '').trim();
+    if (sModel) return sModel;
+    return ticketService.DEFAULT_AGY_MODEL;
 }
 
 async function getTicketByCodeOrId(codeOrId) {
@@ -59,13 +109,15 @@ function resolveRepoKeyForTicket(ticket = {}) {
     return 'sipeadmin';
 }
 
-function buildTicketActionKeyboard(ticketId, status = 'abierto') {
+function buildTicketActionKeyboard(ticketId, status = 'abierto', modelId = ticketService.DEFAULT_AGY_MODEL) {
     if (status === 'resuelto' || status === 'cerrado') {
         return { inline_keyboard: [[{ text: '💬 Enviar Comentario Adicional', callback_data: `ticket_comment:${ticketId}` }]] };
     }
+    const shortModel = ticketService.getModelShortLabel(modelId);
     return {
         inline_keyboard: [
-            [{ text: '🤖 Aprobar y Planificar AGY (Carbon High)', callback_data: `agy_start_plan:${ticketId}` }],
+            [{ text: `🤖 Planificar AGY (${shortModel})`, callback_data: `agy_start_plan:${ticketId}` }],
+            [{ text: `🧠 Cambiar Modelo (${shortModel})`, callback_data: `agy_model_menu:${ticketId}` }],
             [
                 { text: '🛠️ En Proceso', callback_data: `ticket_take:${ticketId}` },
                 { text: '✅ Marcar Resuelto', callback_data: `ticket_resolve:${ticketId}` }
@@ -78,10 +130,12 @@ function buildTicketActionKeyboard(ticketId, status = 'abierto') {
     };
 }
 
-function buildPlanApprovalKeyboard(ticketId) {
+function buildPlanApprovalKeyboard(ticketId, modelId = ticketService.DEFAULT_AGY_MODEL) {
+    const shortModel = ticketService.getModelShortLabel(modelId);
     return {
         inline_keyboard: [
-            [{ text: '✅ Aprobar y Ejecutar Plan', callback_data: `agy_plan_approve:${ticketId}` }],
+            [{ text: `✅ Aprobar y Ejecutar (${shortModel})`, callback_data: `agy_plan_approve:${ticketId}` }],
+            [{ text: `🧠 Cambiar Modelo (${shortModel})`, callback_data: `agy_model_menu:${ticketId}` }],
             [
                 { text: '✏️ Ampliar / Re-planificar', callback_data: `agy_plan_feedback:${ticketId}` },
                 { text: '❌ Denegar Plan', callback_data: `agy_plan_reject:${ticketId}` }
@@ -90,10 +144,12 @@ function buildPlanApprovalKeyboard(ticketId) {
     };
 }
 
-function buildRetryExecutionKeyboard(ticketId) {
+function buildRetryExecutionKeyboard(ticketId, modelId = ticketService.DEFAULT_AGY_MODEL) {
+    const shortModel = ticketService.getModelShortLabel(modelId);
     return {
         inline_keyboard: [
-            [{ text: '🔄 Reintentar Ejecución AGY', callback_data: `agy_plan_approve:${ticketId}` }],
+            [{ text: `🔄 Reintentar AGY (${shortModel})`, callback_data: `agy_plan_approve:${ticketId}` }],
+            [{ text: `🧠 Cambiar Modelo (${shortModel})`, callback_data: `agy_model_menu:${ticketId}` }],
             [
                 { text: '✏️ Ampliar Directriz y Re-planificar', callback_data: `agy_plan_feedback:${ticketId}` },
                 { text: '✅ Marcar Resuelto', callback_data: `ticket_resolve:${ticketId}` }
@@ -102,11 +158,44 @@ function buildRetryExecutionKeyboard(ticketId) {
     };
 }
 
-async function runRealTicketPlanOnServer(ticket, { model = ticketService.DEFAULT_AGY_MODEL, feedbackComment = '', actorName = 'Telegram Admin' } = {}) {
+function buildModelPickerKeyboard(ticketId = 0, currentModel = ticketService.DEFAULT_AGY_MODEL, { scope = 'ticket' } = {}) {
+    const isGlobal = scope === 'global' || !ticketId;
+    const prefix = isGlobal ? 'agy_sdm' : 'agy_sm';
+    const tid = Number(ticketId) || 0;
+    const rows = [];
+    const models = ticketService.AVAILABLE_AGY_MODELS || [];
+
+    for (let i = 0; i < models.length; i += 2) {
+        const pair = models.slice(i, i + 2).map((m) => {
+            const isCurrent = m.id === currentModel;
+            return {
+                text: `${isCurrent ? '✅ ' : '🧠 '}${m.short}`,
+                callback_data: `${prefix}:${tid}:${m.id}`
+            };
+        });
+        rows.push(pair);
+    }
+
+    if (isGlobal && tid > 0) {
+        rows.push([
+            { text: '🎫 Solo este Ticket', callback_data: `agy_model_menu:${tid}` },
+            { text: '⬅️ Volver', callback_data: `agy_back:${tid}` }
+        ]);
+    } else if (!isGlobal && tid > 0) {
+        rows.push([
+            { text: '🌐 Cambiar Default Global', callback_data: `agy_def_menu:${tid}` },
+            { text: '⬅️ Volver', callback_data: `agy_back:${tid}` }
+        ]);
+    }
+
+    return { inline_keyboard: rows };
+}
+
+async function runRealTicketPlanOnServer(ticket, { model = null, feedbackComment = '', actorName = 'Telegram Admin' } = {}) {
     const agySettings = await ticketService.getAgySettings();
     const repoKey = resolveRepoKeyForTicket(ticket);
     const targetRepo = growthAgyService.resolveTargetRepo(repoKey, agySettings);
-    const chosenModel = String(model || agySettings.default_model || ticketService.DEFAULT_AGY_MODEL).trim();
+    const chosenModel = String(model || resolveEffectiveModelForTicket(ticket, agySettings)).trim();
     const nextVersion = Number(ticket.agy_plan_version || 0) + 1;
 
     const combinedNotes = [ticket.ai_notes, feedbackComment ? `[Ampliación v${nextVersion} - ${actorName}]: ${feedbackComment}` : '']
@@ -209,24 +298,38 @@ async function runRealTicketExecutionOnServer(ticket, { actorId = null, actorNam
     const agySettings = await ticketService.getAgySettings();
     const repoKey = resolveRepoKeyForTicket(ticket);
     const targetRepo = growthAgyService.resolveTargetRepo(repoKey, agySettings);
-    const chosenModel = (!ticket.agy_model || ticket.agy_model === 'gemini-4-argon-high')
-        ? (agySettings.default_model || ticketService.DEFAULT_AGY_MODEL)
-        : ticket.agy_model;
+    const chosenModel = resolveEffectiveModelForTicket(ticket, agySettings);
 
     const queryText = [ticket.subject, ticket.description, ticket.module_name, ticket.page_url, ticket.ai_notes, ticket.agy_plan_markdown].filter(Boolean).join('\n');
     const relatedFiles = growthAgyService.findSmartRepoFiles(targetRepo, queryText);
     const rootResolved = path.resolve(targetRepo.projectPath);
     const { pool } = await ticketService.getTicketPool();
 
-    await pool.query(
-        `UPDATE support_tickets
-         SET agy_status = 'ejecutando',
-             agy_model = ?,
-             agy_approved_by = ?,
-             agy_updated_at = NOW()
-         WHERE id = ?`,
-        [chosenModel, actorName, ticket.id]
-    ).catch(() => {});
+    let lockAcquired = true;
+    try {
+        const [lockRes] = await pool.query(
+            `UPDATE support_tickets
+             SET agy_status = 'ejecutando',
+                 agy_model = ?,
+                 agy_approved_by = ?,
+                 agy_updated_at = NOW()
+             WHERE id = ? AND COALESCE(agy_status, '') != 'ejecutando'`,
+            [chosenModel, actorName, ticket.id]
+        );
+        if (lockRes && typeof lockRes.affectedRows === 'number' && lockRes.affectedRows === 0) {
+            lockAcquired = false;
+        }
+    } catch (_) { /* mock/legacy fallback */ }
+
+    if (!lockAcquired) {
+        return {
+            success: false,
+            modifiedFiles: [],
+            summary: '⏳ Este ticket ya tiene una ejecución AGY activa en curso. Espera a que finalice antes de relanzar.',
+            chosenModel,
+            targetRepo
+        };
+    }
 
     if (!targetRepo.existsLocally || !fs.existsSync(rootResolved)) {
         const msg = `⚠️ El repositorio destino (${targetRepo.label}) no está accesible localmente en esta instancia.`;
@@ -311,16 +414,15 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
                     const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawJson);
                     for (const edit of (Array.isArray(parsed.edits) ? parsed.edits : [])) {
                         if (!edit.file || !edit.search || edit.replace === undefined) continue;
-                        const cleanRel = path.normalize(String(edit.file)).replace(/^(\.\.(\/|\\|$))+/, '');
-                        if (cleanRel.includes('.env') || cleanRel.includes('node_modules')) continue;
-                        const absFile = path.resolve(rootResolved, cleanRel);
-                        if (!absFile.startsWith(rootResolved) || !fs.existsSync(absFile)) continue;
+                        if (!isSafeAgyTargetPath(rootResolved, String(edit.file))) continue;
+                        const absFile = path.resolve(rootResolved, String(edit.file));
+                        const relSafe = path.relative(rootResolved, absFile).replace(/\\/g, '/');
+                        if (!fs.existsSync(absFile)) continue;
                         const currentText = fs.readFileSync(absFile, 'utf8');
                         const nextText = growthAgyService.applyFlexibleTextEdit(currentText, String(edit.search), String(edit.replace));
                         if (nextText !== currentText) {
                             fs.writeFileSync(absFile, nextText, 'utf8');
-                            const normRel = cleanRel.replace(/\\/g, '/');
-                            if (!modifiedFiles.includes(normRel)) modifiedFiles.push(normRel);
+                            if (!modifiedFiles.includes(relSafe)) modifiedFiles.push(relSafe);
                         }
                     }
                     if (parsed.summary) stepLogs.push(parsed.summary);
@@ -345,7 +447,7 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
         return { success: false, modifiedFiles: [], summary: warnMsg, ticket: pendingTicket, chosenModel, targetRepo };
     }
 
-    // Compilar frontend para validar integridad antes de publicar
+    // Compilar frontend para validar integridad ANTES de publicar (abortar commit/push si falla)
     const frontendDir = path.join(rootResolved, targetRepo.frontendDir);
     if (fs.existsSync(frontendDir)) {
         try {
@@ -355,7 +457,19 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
             execSync(buildCmd, { cwd: rootResolved, timeout: 150000, stdio: 'pipe' });
             stepLogs.push(`Frontend (${targetRepo.frontendDir}/dist) compilado sin errores.`);
         } catch (bErr) {
-            stepLogs.push(`Aviso compilación: ${String(bErr.message || '').slice(0, 140)}`);
+            const errMsg = `❌ Compilación frontend falló — commit/push cancelado para proteger producción: ${String(bErr.message || '').slice(0, 220)}`;
+            try {
+                execFileSync('git', ['-c', 'safe.directory=*', 'checkout', '--', ...modifiedFiles], { cwd: rootResolved, timeout: 10000, stdio: 'pipe' });
+            } catch (_) { /* ignore rollback error */ }
+            await pool.query(
+                `UPDATE support_tickets
+                 SET agy_status = 'esperando_aprobacion',
+                     agy_execution_log = CONCAT(COALESCE(agy_execution_log, ''), '\n', ?),
+                     agy_updated_at = NOW()
+                 WHERE id = ?`,
+                [errMsg, ticket.id]
+            ).catch(() => {});
+            return { success: false, modifiedFiles: [], summary: errMsg, chosenModel, targetRepo };
         }
     }
 
@@ -410,6 +524,14 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
     };
 }
 
+function buildCurrentKeyboardForTicket(ticket, activeModel) {
+    if (!ticket) return { inline_keyboard: [] };
+    if (ticket.agy_status === 'esperando_aprobacion') {
+        return buildPlanApprovalKeyboard(ticket.id, activeModel);
+    }
+    return buildTicketActionKeyboard(ticket.id, ticket.status, activeModel);
+}
+
 async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {} } = {}) {
     const data = String(cq?.data || '').trim();
     if (!data.startsWith('agy_') && !data.startsWith('ticket_')) return false;
@@ -425,18 +547,132 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
         return true;
     }
 
-    if (tgUser && !isTicketAdminOrManager(tgUser, effPerms)) {
+    // Fail-closed: exigir usuario Telegram activo con permisos explícitos de administración de tickets
+    if (!tgUser || !isTicketAdminOrManager(tgUser, effPerms)) {
         await answerCallbackQuery(cq.id, '⛔ No tienes permisos para gestionar tickets de soporte.');
         return true;
     }
 
-    const [action, rawId] = data.split(':');
+    const parts = data.split(':');
+    const action = parts[0];
+    const rawId = parts[1];
+    const extraArg = parts.slice(2).join(':');
+
+    if (data.startsWith('agy_') && !isAgyCodeAdmin(tgUser, effPerms)) {
+        await answerCallbackQuery(cq.id, '⛔ Solo administradores de soporte pueden operar Consola AGY.');
+        return true;
+    }
+
+    // Selector global de modelo sin ticket asociado (ej. /modelo -> agy_sdm:0:<modelId> o agy_set_def_model:<modelId>)
+    if (action === 'agy_set_def_model' || (action === 'agy_sdm' && (rawId === '0' || !rawId))) {
+        const requestedModel = action === 'agy_set_def_model' ? rawId : extraArg;
+        try {
+            const res = await ticketService.setTicketAgyModel(null, requestedModel, { setAsDefault: true });
+            await answerCallbackQuery(cq.id, `✅ Modelo global: ${res.shortLabel}`);
+            if (chatId && messageId) {
+                await editMessageReplyMarkup(chatId, messageId, buildModelPickerKeyboard(0, res.model, { scope: 'global' })).catch(() => {});
+            }
+            await sendTelegramMessage(
+                chatId,
+                `🌐 <b>Modelo AGY predeterminado actualizado</b>\n` +
+                `🧠 <b>Nuevo default global:</b> <code>${escapeHtmlLocal(res.model)}</code> (${escapeHtmlLocal(res.shortLabel)})\n` +
+                `👤 <b>Actualizado por:</b> ${escapeHtmlLocal(actorName)}`
+            );
+        } catch (err) {
+            await answerCallbackQuery(cq.id, `⚠️ ${err.message}`);
+        }
+        return true;
+    }
+
     const ticketId = parseInt(rawId, 10);
     if (Number.isNaN(ticketId)) return true;
 
     const ticket = await ticketService.getTicketById(ticketId);
     if (!ticket) {
         await answerCallbackQuery(cq.id, '⚠️ Ticket no encontrado.');
+        return true;
+    }
+
+    const agySettings = await ticketService.getAgySettings().catch(() => ({ default_model: ticketService.DEFAULT_AGY_MODEL }));
+    const activeModel = resolveEffectiveModelForTicket(ticket, agySettings);
+    const activeShort = ticketService.getModelShortLabel(activeModel);
+
+    // Abrir selector de modelo para este ticket
+    if (action === 'agy_model_menu') {
+        await answerCallbackQuery(cq.id, `🧠 Elige el modelo AGY para #${ticket.ticket_code}`);
+        const pickerKb = buildModelPickerKeyboard(ticketId, activeModel, { scope: 'ticket' });
+        if (chatId && messageId) {
+            await editMessageReplyMarkup(chatId, messageId, pickerKb).catch(() => {});
+        } else {
+            await sendTelegramMessage(
+                chatId,
+                `🧠 <b>Selecciona el modelo AGY para #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                `Actual: <code>${escapeHtmlLocal(activeModel)}</code>`,
+                pickerKb
+            );
+        }
+        return true;
+    }
+
+    // Abrir selector para cambiar el modelo predeterminado global
+    if (action === 'agy_def_menu' || action === 'agy_def_model_menu') {
+        const globalDefault = agySettings.default_model || ticketService.DEFAULT_AGY_MODEL;
+        await answerCallbackQuery(cq.id, '🌐 Selecciona el nuevo modelo predeterminado global');
+        const pickerKb = buildModelPickerKeyboard(ticketId, globalDefault, { scope: 'global' });
+        if (chatId && messageId) {
+            await editMessageReplyMarkup(chatId, messageId, pickerKb).catch(() => {});
+        }
+        return true;
+    }
+
+    // Cambiar modelo solo para este ticket
+    if (action === 'agy_sm' || action === 'agy_set_model') {
+        try {
+            const res = await ticketService.setTicketAgyModel(ticketId, extraArg, { setAsDefault: false });
+            await answerCallbackQuery(cq.id, `✅ Modelo de #${ticket.ticket_code}: ${res.shortLabel}`);
+            const updatedTicket = res.ticket || { ...ticket, agy_model: res.model };
+            if (chatId && messageId) {
+                await editMessageReplyMarkup(chatId, messageId, buildCurrentKeyboardForTicket(updatedTicket, res.model)).catch(() => {});
+            }
+            await sendTelegramMessage(
+                chatId,
+                `🧠 <b>Modelo AGY actualizado en #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                `✨ <b>Modelo seleccionado:</b> <code>${escapeHtmlLocal(res.model)}</code> (${escapeHtmlLocal(res.shortLabel)})\n` +
+                `<i>Puedes planificar o ejecutar directamente usando los botones del ticket.</i>`
+            );
+        } catch (err) {
+            await answerCallbackQuery(cq.id, `⚠️ ${err.message}`);
+        }
+        return true;
+    }
+
+    // Cambiar modelo global Y aplicarlo a este ticket
+    if (action === 'agy_sdm') {
+        try {
+            const res = await ticketService.setTicketAgyModel(ticketId, extraArg, { setAsDefault: true });
+            await answerCallbackQuery(cq.id, `🌐 Default global y #${ticket.ticket_code}: ${res.shortLabel}`);
+            const updatedTicket = res.ticket || { ...ticket, agy_model: res.model };
+            if (chatId && messageId) {
+                await editMessageReplyMarkup(chatId, messageId, buildCurrentKeyboardForTicket(updatedTicket, res.model)).catch(() => {});
+            }
+            await sendTelegramMessage(
+                chatId,
+                `🌐 <b>Modelo AGY predeterminado global actualizado</b>\n` +
+                `🧠 <b>Nuevo modelo:</b> <code>${escapeHtmlLocal(res.model)}</code> (${escapeHtmlLocal(res.shortLabel)})\n` +
+                `🎫 También aplicado al ticket <b>#${escapeHtmlLocal(ticket.ticket_code)}</b>.`
+            );
+        } catch (err) {
+            await answerCallbackQuery(cq.id, `⚠️ ${err.message}`);
+        }
+        return true;
+    }
+
+    // Volver al teclado del ticket
+    if (action === 'agy_back') {
+        await answerCallbackQuery(cq.id, '⬅️ Menú del ticket');
+        if (chatId && messageId) {
+            await editMessageReplyMarkup(chatId, messageId, buildCurrentKeyboardForTicket(ticket, activeModel)).catch(() => {});
+        }
         return true;
     }
 
@@ -449,7 +685,7 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
             skipTelegramStatusAlert: true
         });
         if (chatId && messageId) {
-            await editMessageReplyMarkup(chatId, messageId, buildTicketActionKeyboard(ticketId, 'en_proceso')).catch(() => {});
+            await editMessageReplyMarkup(chatId, messageId, buildTicketActionKeyboard(ticketId, 'en_proceso', activeModel)).catch(() => {});
         }
         await sendTelegramMessage(
             chatId,
@@ -484,6 +720,7 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
     if (action === 'ticket_resolve_note' || action === 'ticket_comment' || action === 'agy_plan_feedback') {
         await answerCallbackQuery(cq.id, '✍️ Escribe tu mensaje a continuación');
         if (fromId) {
+            prunePendingReplies();
             pendingTicketReplies.set(fromId, {
                 action: action === 'ticket_resolve_note' ? 'resolve_note' : (action === 'ticket_comment' ? 'comment' : 'agy_feedback'),
                 ticketId,
@@ -496,7 +733,7 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
             ? `✍️ <b>Resolver Ticket #${escapeHtmlLocal(ticket.ticket_code)} con nota</b>\nEscribe la solución aplicada para notificar a <b>${escapeHtmlLocal(ticket.user_name)}</b> (o escribe /cancelar):`
             : action === 'ticket_comment'
                 ? `💬 <b>Comentar en Ticket #${escapeHtmlLocal(ticket.ticket_code)}</b>\nEscribe el comentario para <b>${escapeHtmlLocal(ticket.user_name)}</b> (o escribe /cancelar):`
-                : `✏️ <b>Ampliar Directriz AGY en Ticket #${escapeHtmlLocal(ticket.ticket_code)}</b>\nEscribe tus indicaciones técnicas para re-planificar con <code>${escapeHtmlLocal(ticketService.DEFAULT_AGY_MODEL)}</code> (o escribe /cancelar):`;
+                : `✏️ <b>Ampliar Directriz AGY en Ticket #${escapeHtmlLocal(ticket.ticket_code)}</b>\nEscribe tus indicaciones técnicas para re-planificar con <code>${escapeHtmlLocal(activeModel)}</code> (${escapeHtmlLocal(activeShort)}) (o escribe /cancelar):`;
         await sendTelegramMessage(chatId, promptHtml);
         return true;
     }
@@ -506,38 +743,41 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
         await ticketService.rejectPlan(ticketId, { reason: 'Denegado desde Telegram', actorName });
         if (chatId && messageId) {
             await editMessageReplyMarkup(chatId, messageId, {
-                inline_keyboard: [[{ text: '✏️ Ampliar Directriz y Re-planificar', callback_data: `agy_plan_feedback:${ticketId}` }]]
+                inline_keyboard: [
+                    [{ text: '✏️ Ampliar Directriz y Re-planificar', callback_data: `agy_plan_feedback:${ticketId}` }],
+                    [{ text: `🧠 Cambiar Modelo (${activeShort})`, callback_data: `agy_model_menu:${ticketId}` }]
+                ]
             }).catch(() => {});
         }
         return true;
     }
 
     if (action === 'agy_start_plan') {
-        await answerCallbackQuery(cq.id, '🤖 Analizando código y generando Plan AGY (Carbon High)...');
+        await answerCallbackQuery(cq.id, `🤖 Analizando código y generando Plan AGY (${activeShort})...`);
         if (chatId && messageId) {
             await editMessageReplyMarkup(chatId, messageId, {
-                inline_keyboard: [[{ text: '⏳ AGY generando plan con Carbon High...', callback_data: 'agy_noop' }]]
+                inline_keyboard: [[{ text: `⏳ AGY generando plan con ${activeShort}...`, callback_data: 'agy_noop' }]]
             }).catch(() => {});
         }
         await sendTelegramMessage(
             chatId,
             `⏳ <b>Analizando repositorio para Ticket #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
-            `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(ticketService.DEFAULT_AGY_MODEL)}</code>`
+            `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(activeModel)}</code> (${escapeHtmlLocal(activeShort)})`
         );
         setImmediate(async () => {
             try {
-                const res = await runRealTicketPlanOnServer(ticket, { model: ticketService.DEFAULT_AGY_MODEL, actorName });
+                const res = await runRealTicketPlanOnServer(ticket, { model: activeModel, actorName });
                 await sendTelegramMessage(
                     chatId,
                     `🤖 <b>PROPUESTA DE SOLUCIÓN AGY (v${res.nextVersion}) — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
-                    `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(res.chosenModel)}</code>\n` +
+                    `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(res.chosenModel)}</code> (${escapeHtmlLocal(ticketService.getModelShortLabel(res.chosenModel))})\n` +
                     `📌 <b>Asunto:</b> ${escapeHtmlLocal(ticket.subject)}\n` +
                     `📂 <b>Módulo:</b> ${escapeHtmlLocal(ticket.module_name || 'SIPE Admin')} (<code>${escapeHtmlLocal(ticket.page_url || '/dashboard')}</code>)\n\n` +
                     `━━━━━━━━━━━━━━━━━━━━\n` +
                     `${escapeHtmlLocal(res.planMarkdown)}\n` +
                     `━━━━━━━━━━━━━━━━━━━━\n` +
-                    `👇 <b>Revisa y autoriza la ejecución:</b>`,
-                    buildPlanApprovalKeyboard(ticket.id)
+                    `👇 <b>Revisa, cambia el modelo si deseas o autoriza la ejecución:</b>`,
+                    buildPlanApprovalKeyboard(ticket.id, res.chosenModel)
                 );
             } catch (err) {
                 await sendTelegramMessage(chatId, `❌ Error generando Plan AGY para #${escapeHtmlLocal(ticket.ticket_code)}: ${escapeHtmlLocal(err.message)}`);
@@ -547,16 +787,16 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
     }
 
     if (action === 'agy_plan_approve') {
-        await answerCallbackQuery(cq.id, '⚙️ Ejecutando Plan AGY en el servidor...');
+        await answerCallbackQuery(cq.id, `⚙️ Ejecutando Plan AGY (${activeShort}) en el servidor...`);
         if (chatId && messageId) {
             await editMessageReplyMarkup(chatId, messageId, {
-                inline_keyboard: [[{ text: '⚙️ AGY aplicando solución en curso...', callback_data: 'agy_noop' }]]
+                inline_keyboard: [[{ text: `⚙️ AGY (${activeShort}) aplicando solución...`, callback_data: 'agy_noop' }]]
             }).catch(() => {});
         }
         await sendTelegramMessage(
             chatId,
             `⚙️ <b>Ejecutando Plan AGY en #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
-            `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(ticket.agy_model || ticketService.DEFAULT_AGY_MODEL)}</code>\n` +
+            `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(activeModel)}</code> (${escapeHtmlLocal(activeShort)})\n` +
             `<i>Aplicando cambios, verificando compilación y actualizando estado...</i>`
         );
         setImmediate(async () => {
@@ -565,16 +805,17 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
                     actorId: effPerms?.linkedUser?.id || null,
                     actorName
                 });
+                const usedModel = execRes.chosenModel || activeModel;
                 if (!execRes.success) {
                     if (chatId && messageId) {
-                        await editMessageReplyMarkup(chatId, messageId, buildRetryExecutionKeyboard(ticket.id)).catch(() => {});
+                        await editMessageReplyMarkup(chatId, messageId, buildRetryExecutionKeyboard(ticket.id, usedModel)).catch(() => {});
                     }
                     await sendTelegramMessage(
                         chatId,
                         `⚠️ <b>EJECUCIÓN REQUIERE PRECISIÓN ADICIONAL — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n\n` +
                         `${escapeHtmlLocal(execRes.summary)}\n\n` +
-                        `<i>El ticket permanece <b>En Proceso</b> (no se ha marcado como resuelto). Selecciona una acción:</i>`,
-                        buildRetryExecutionKeyboard(ticket.id)
+                        `<i>El ticket permanece <b>En Proceso</b> (no se ha marcado como resuelto). Puedes cambiar de modelo o reintentar:</i>`,
+                        buildRetryExecutionKeyboard(ticket.id, usedModel)
                     );
                     return;
                 }
@@ -584,7 +825,7 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
                 await sendTelegramMessage(
                     chatId,
                     `✅ <b>TAREA FINALIZADA Y TICKET RESUELTO — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
-                    `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(execRes.chosenModel)}</code>\n` +
+                    `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(usedModel)}</code>\n` +
                     `📌 <b>Asunto:</b> ${escapeHtmlLocal(ticket.subject)}\n` +
                     `📦 <b>Archivos actualizados:</b> <code>${escapeHtmlLocal(execRes.modifiedFiles.join(', '))}</code>\n` +
                     `🎉 <i>El ticket pasó automáticamente a <b>Resuelto</b> y se notificó al solicitante.</i>`
@@ -593,7 +834,7 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
                 await sendTelegramMessage(
                     chatId,
                     `⚠️ <b>Error durante la ejecución de #${escapeHtmlLocal(ticket.ticket_code)}:</b> ${escapeHtmlLocal(err.message)}`,
-                    buildRetryExecutionKeyboard(ticket.id)
+                    buildRetryExecutionKeyboard(ticket.id, activeModel)
                 );
             }
         });
@@ -609,6 +850,7 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
     const uidKey = String(user?.telegram_user_id || '');
     const actorName = `${user?.first_name || user?.telegram_username || 'Admin'} (Telegram)`;
 
+    prunePendingReplies();
     const pending = pendingTicketReplies.get(uidKey);
     if (pending) {
         if (Date.now() > pending.expiresAt) {
@@ -619,6 +861,10 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
             return true;
         } else if (!trimmed.startsWith('/')) {
             pendingTicketReplies.delete(uidKey);
+            if (!isTicketAdminOrManager(user, effectivePerms)) {
+                await sendTelegramMessage(chatId, '⛔ Tus permisos de soporte cambiaron; acción cancelada.');
+                return true;
+            }
             if (pending.action === 'resolve_note') {
                 const updated = await ticketService.updateTicketStatus(pending.ticketId, {
                     status: 'resuelto',
@@ -652,11 +898,16 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
             if (pending.action === 'agy_feedback') {
                 const ticket = await ticketService.getTicketById(pending.ticketId);
                 if (ticket) {
-                    await sendTelegramMessage(chatId, `⏳ Re-planificando <b>#${escapeHtmlLocal(ticket.ticket_code)}</b> con <code>${escapeHtmlLocal(ticketService.DEFAULT_AGY_MODEL)}</code>...`);
+                    const agySettings = await ticketService.getAgySettings().catch(() => ({}));
+                    const activeModel = resolveEffectiveModelForTicket(ticket, agySettings);
+                    await sendTelegramMessage(
+                        chatId,
+                        `⏳ Re-planificando <b>#${escapeHtmlLocal(ticket.ticket_code)}</b> con <code>${escapeHtmlLocal(activeModel)}</code>...`
+                    );
                     setImmediate(async () => {
                         try {
                             const res = await runRealTicketPlanOnServer(ticket, {
-                                model: ticketService.DEFAULT_AGY_MODEL,
+                                model: activeModel,
                                 feedbackComment: trimmed,
                                 actorName
                             });
@@ -665,7 +916,7 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
                                 `🤖 <b>PLAN AGY ACTUALIZADO (v${res.nextVersion}) — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
                                 `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(res.chosenModel)}</code>\n\n` +
                                 `${escapeHtmlLocal(res.planMarkdown)}`,
-                                buildPlanApprovalKeyboard(ticket.id)
+                                buildPlanApprovalKeyboard(ticket.id, res.chosenModel)
                             );
                         } catch (err) {
                             await sendTelegramMessage(chatId, `❌ Error al re-planificar: ${escapeHtmlLocal(err.message)}`);
@@ -677,7 +928,7 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
         }
     }
 
-    if (!/^\/(?:tickets|ticket|ver_ticket|agy|ejecutar|reintentar|resolver)\b/i.test(trimmed)) {
+    if (!/^\/(?:tickets|ticket|ver_ticket|agy|ejecutar|reintentar|resolver|modelo|modelos)\b/i.test(trimmed)) {
         return false;
     }
 
@@ -686,7 +937,93 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
         return true;
     }
 
+    // /modelo [TICKET|alias_modelo] [alias_modelo]
+    const modelCmdMatch = trimmed.match(/^\/modelos?(?:\s+(\S+))?(?:\s+(\S+))?$/i);
+    if (modelCmdMatch) {
+        const arg1 = (modelCmdMatch[1] || '').trim();
+        const arg2 = (modelCmdMatch[2] || '').trim();
+        const agySettings = await ticketService.getAgySettings().catch(() => ({ default_model: ticketService.DEFAULT_AGY_MODEL }));
+        const currentDefault = agySettings.default_model || ticketService.DEFAULT_AGY_MODEL;
+
+        if (!arg1) {
+            const listHtml = (ticketService.AVAILABLE_AGY_MODELS || [])
+                .map((m) => `${m.id === currentDefault ? '✅' : '•'} <code>${escapeHtmlLocal(m.id)}</code> — ${escapeHtmlLocal(m.short)}`)
+                .join('\n');
+            await sendTelegramMessage(
+                chatId,
+                `🧠 <b>Selector de Modelo AGY</b>\n` +
+                `🌐 <b>Modelo predeterminado actual:</b> <code>${escapeHtmlLocal(currentDefault)}</code> (${escapeHtmlLocal(ticketService.getModelShortLabel(currentDefault))})\n\n` +
+                `${listHtml}\n\n` +
+                `<i>Toca un botón abajo para cambiar el modelo global, o usa:</i>\n` +
+                `• <code>/modelo neon-high</code> (cambiar default global)\n` +
+                `• <code>/modelo ADM-0012</code> (elegir modelo para un ticket)\n` +
+                `• <code>/modelo ADM-0012 neon-xhigh</code> (asignar directo a un ticket)`,
+                buildModelPickerKeyboard(0, currentDefault, { scope: 'global' })
+            );
+            return true;
+        }
+
+        // Si arg1 parece un código de ticket (ADM-..., TKT-..., #123 o dígitos)
+        if (/^(?:#?(?:ADM|TKT)-?\d+|#?\d+)$/i.test(arg1)) {
+            const ticket = await getTicketByCodeOrId(arg1);
+            if (!ticket) {
+                await sendTelegramMessage(chatId, `⚠️ No se encontró el ticket <code>${escapeHtmlLocal(arg1)}</code>.`);
+                return true;
+            }
+            const tModel = resolveEffectiveModelForTicket(ticket, agySettings);
+            if (!arg2) {
+                await sendTelegramMessage(
+                    chatId,
+                    `🧠 <b>Cambiar Modelo AGY — Ticket #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                    `📌 <b>Asunto:</b> ${escapeHtmlLocal(ticket.subject)}\n` +
+                    `✨ <b>Modelo actual del ticket:</b> <code>${escapeHtmlLocal(tModel)}</code> (${escapeHtmlLocal(ticketService.getModelShortLabel(tModel))})\n\n` +
+                    `<i>Selecciona el modelo con el que deseas planificar/resolver este ticket:</i>`,
+                    buildModelPickerKeyboard(ticket.id, tModel, { scope: 'ticket' })
+                );
+                return true;
+            }
+            const resolved = ticketService.resolveAgyModelId(arg2);
+            if (!resolved) {
+                await sendTelegramMessage(
+                    chatId,
+                    `⚠️ Modelo no reconocido: <code>${escapeHtmlLocal(arg2)}</code>.\nUsa <code>/modelo</code> para ver los modelos disponibles.`
+                );
+                return true;
+            }
+            const setRes = await ticketService.setTicketAgyModel(ticket.id, resolved, { setAsDefault: false });
+            const updatedTicket = setRes.ticket || { ...ticket, agy_model: setRes.model };
+            await sendTelegramMessage(
+                chatId,
+                `✅ <b>Modelo actualizado en #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                `🧠 <b>Nuevo modelo:</b> <code>${escapeHtmlLocal(setRes.model)}</code> (${escapeHtmlLocal(setRes.shortLabel)})`,
+                buildCurrentKeyboardForTicket(updatedTicket, setRes.model)
+            );
+            return true;
+        }
+
+        // Si arg1 es un nombre/alias de modelo -> actualizar default global
+        const resolvedGlobal = ticketService.resolveAgyModelId(arg1);
+        if (!resolvedGlobal) {
+            await sendTelegramMessage(
+                chatId,
+                `⚠️ Modelo o ticket no reconocido: <code>${escapeHtmlLocal(arg1)}</code>.\nUsa <code>/modelo</code> para abrir el selector interactivo.`
+            );
+            return true;
+        }
+        const setRes = await ticketService.setTicketAgyModel(null, resolvedGlobal, { setAsDefault: true });
+        await sendTelegramMessage(
+            chatId,
+            `🌐 <b>Modelo AGY predeterminado actualizado</b>\n` +
+            `🧠 <b>Nuevo default global:</b> <code>${escapeHtmlLocal(setRes.model)}</code> (${escapeHtmlLocal(setRes.shortLabel)})\n` +
+            `<i>Todos los nuevos tickets y ejecuciones sin modelo específico usarán este motor.</i>`,
+            buildModelPickerKeyboard(0, setRes.model, { scope: 'global' })
+        );
+        return true;
+    }
+
     if (/^\/tickets\b/i.test(trimmed)) {
+        const agySettings = await ticketService.getAgySettings().catch(() => ({ default_model: ticketService.DEFAULT_AGY_MODEL }));
+        const currentDefault = agySettings.default_model || ticketService.DEFAULT_AGY_MODEL;
         const listRes = await ticketService.getTickets({ canManage: true, limit: 15 });
         const active = (listRes.items || []).filter((t) => t.status === 'abierto' || t.status === 'en_proceso').slice(0, 10);
         if (active.length === 0) {
@@ -694,15 +1031,17 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
             return true;
         }
         let html = `🎫 <b>Tickets Activos (${active.length})</b>\n` +
-            `🧠 <b>Modelo AGY por defecto:</b> <code>${escapeHtmlLocal(ticketService.DEFAULT_AGY_MODEL)}</code>\n\n`;
+            `🧠 <b>Modelo AGY por defecto:</b> <code>${escapeHtmlLocal(currentDefault)}</code> (${escapeHtmlLocal(ticketService.getModelShortLabel(currentDefault))})\n\n`;
         for (const t of active) {
             const icon = t.status === 'en_proceso' ? '🛠️' : '🆕';
             const agyTag = t.agy_status && t.agy_status !== 'idle' ? ` · AGY: <code>${escapeHtmlLocal(t.agy_status)}</code>` : '';
-            html += `${icon} <b>#${escapeHtmlLocal(t.ticket_code)}</b> (${escapeHtmlLocal(String(t.priority).toUpperCase())}) — ${escapeHtmlLocal(t.subject)}${agyTag}\n`;
+            const mShort = ticketService.getModelShortLabel(resolveEffectiveModelForTicket(t, agySettings));
+            html += `${icon} <b>#${escapeHtmlLocal(t.ticket_code)}</b> (${escapeHtmlLocal(String(t.priority).toUpperCase())}) — ${escapeHtmlLocal(t.subject)}${agyTag} [<code>${escapeHtmlLocal(mShort)}</code>]\n`;
         }
         html += `\n<i>Comandos:</i>\n` +
             `• <code>/ticket ADM-0012</code> (ver detalle y botones)\n` +
-            `• <code>/agy ADM-0012 [directriz]</code> (planificar con Carbon High)\n` +
+            `• <code>/modelo</code> o <code>/modelo ADM-0012</code> (cambiar modelo AGY)\n` +
+            `• <code>/agy ADM-0012 [directriz]</code> (planificar con modelo activo)\n` +
             `• <code>/ejecutar ADM-0012</code> (implementar plan)\n` +
             `• <code>/resolver ADM-0012 Solución</code>`;
         await sendTelegramMessage(chatId, html);
@@ -716,13 +1055,13 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
             await sendTelegramMessage(chatId, `⚠️ No se encontró el ticket <code>${escapeHtmlLocal(viewMatch[1])}</code>.`);
             return true;
         }
-        const kb = ticket.agy_status === 'esperando_aprobacion'
-            ? buildPlanApprovalKeyboard(ticket.id)
-            : buildTicketActionKeyboard(ticket.id, ticket.status);
+        const agySettings = await ticketService.getAgySettings().catch(() => ({}));
+        const activeModel = resolveEffectiveModelForTicket(ticket, agySettings);
+        const kb = buildCurrentKeyboardForTicket(ticket, activeModel);
         const detailHtml =
             `🎫 <b>DETALLE TICKET #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
             `📊 <b>Estado:</b> <code>${escapeHtmlLocal(ticket.status)}</code> | <b>AGY:</b> <code>${escapeHtmlLocal(ticket.agy_status || 'idle')}</code>\n` +
-            `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(ticket.agy_model || ticketService.DEFAULT_AGY_MODEL)}</code>\n` +
+            `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(activeModel)}</code> (${escapeHtmlLocal(ticketService.getModelShortLabel(activeModel))})\n` +
             `📌 <b>Asunto:</b> ${escapeHtmlLocal(ticket.subject)}\n` +
             `📂 <b>Módulo / Ruta:</b> ${escapeHtmlLocal(ticket.module_name || 'SIPE Admin')} (<code>${escapeHtmlLocal(ticket.page_url || '/dashboard')}</code>)\n` +
             `👤 <b>Solicitante:</b> ${escapeHtmlLocal(ticket.user_name)}\n\n` +
@@ -739,15 +1078,17 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
             await sendTelegramMessage(chatId, `⚠️ No se encontró el ticket <code>${escapeHtmlLocal(agyMatch[1])}</code>.`);
             return true;
         }
+        const agySettings = await ticketService.getAgySettings().catch(() => ({}));
+        const activeModel = resolveEffectiveModelForTicket(ticket, agySettings);
         const extra = (agyMatch[2] || '').trim();
         await sendTelegramMessage(
             chatId,
-            `⏳ Generando Plan AGY para <b>#${escapeHtmlLocal(ticket.ticket_code)}</b> con <code>${escapeHtmlLocal(ticketService.DEFAULT_AGY_MODEL)}</code>...`
+            `⏳ Generando Plan AGY para <b>#${escapeHtmlLocal(ticket.ticket_code)}</b> con <code>${escapeHtmlLocal(activeModel)}</code> (${escapeHtmlLocal(ticketService.getModelShortLabel(activeModel))})...`
         );
         setImmediate(async () => {
             try {
                 const res = await runRealTicketPlanOnServer(ticket, {
-                    model: ticketService.DEFAULT_AGY_MODEL,
+                    model: activeModel,
                     feedbackComment: extra,
                     actorName
                 });
@@ -756,7 +1097,7 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
                     `🤖 <b>PROPUESTA DE SOLUCIÓN AGY (v${res.nextVersion}) — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
                     `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(res.chosenModel)}</code>\n\n` +
                     `${escapeHtmlLocal(res.planMarkdown)}`,
-                    buildPlanApprovalKeyboard(ticket.id)
+                    buildPlanApprovalKeyboard(ticket.id, res.chosenModel)
                 );
             } catch (err) {
                 await sendTelegramMessage(chatId, `❌ Error en planificación AGY: ${escapeHtmlLocal(err.message)}`);
@@ -772,9 +1113,11 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
             await sendTelegramMessage(chatId, `⚠️ No se encontró el ticket <code>${escapeHtmlLocal(execMatch[1])}</code>.`);
             return true;
         }
+        const agySettings = await ticketService.getAgySettings().catch(() => ({}));
+        const activeModel = resolveEffectiveModelForTicket(ticket, agySettings);
         await sendTelegramMessage(
             chatId,
-            `⚙️ Ejecutando implementación AGY en <b>#${escapeHtmlLocal(ticket.ticket_code)}</b> con <code>${escapeHtmlLocal(ticket.agy_model || ticketService.DEFAULT_AGY_MODEL)}</code>...`
+            `⚙️ Ejecutando implementación AGY en <b>#${escapeHtmlLocal(ticket.ticket_code)}</b> con <code>${escapeHtmlLocal(activeModel)}</code>...`
         );
         setImmediate(async () => {
             try {
@@ -782,17 +1125,19 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
                     actorId: effectivePerms?.linkedUser?.id || null,
                     actorName
                 });
+                const usedModel = execRes.chosenModel || activeModel;
                 if (!execRes.success) {
                     await sendTelegramMessage(
                         chatId,
                         `⚠️ <b>EJECUCIÓN REQUIERE PRECISIÓN ADICIONAL — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n\n${escapeHtmlLocal(execRes.summary)}`,
-                        buildRetryExecutionKeyboard(ticket.id)
+                        buildRetryExecutionKeyboard(ticket.id, usedModel)
                     );
                     return;
                 }
                 await sendTelegramMessage(
                     chatId,
                     `✅ <b>TAREA FINALIZADA Y TICKET RESUELTO — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                    `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(usedModel)}</code>\n` +
                     `📦 <b>Archivos actualizados:</b> <code>${escapeHtmlLocal(execRes.modifiedFiles.join(', '))}</code>`
                 );
             } catch (err) {
@@ -832,6 +1177,13 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
 
 module.exports = {
     isTicketAdminOrManager,
+    isAgyCodeAdmin,
+    isSafeAgyTargetPath,
+    resolveEffectiveModelForTicket,
+    buildTicketActionKeyboard,
+    buildPlanApprovalKeyboard,
+    buildRetryExecutionKeyboard,
+    buildModelPickerKeyboard,
     getTicketByCodeOrId,
     runRealTicketPlanOnServer,
     runRealTicketExecutionOnServer,

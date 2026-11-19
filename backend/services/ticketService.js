@@ -40,13 +40,59 @@ const ensureUploadsDir = () => {
     }
 };
 
-const DEFAULT_AGY_MODEL = 'gemini-4-carbon-high';
+const DEFAULT_AGY_MODEL = 'gemini-4-neon-high';
 const AVAILABLE_AGY_MODELS = [
-    { id: 'gemini-4-carbon-high', label: 'gemini-4-carbon-high (Recomendado · Carbon High)' },
-    { id: 'gemini-4-argon-high', label: 'gemini-4-argon-high (Argon High)' },
-    { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Razonamiento Profundo)' },
-    { id: 'gemini-3-flash', label: 'gemini-3-flash (Ultra Rápido)' }
+    { id: 'gemini-4-neon-high', short: 'Neon High', label: 'gemini-4-neon-high (Recomendado · Neon High)' },
+    { id: 'gemini-4-neon-xhigh', short: 'Neon XHigh', label: 'gemini-4-neon-xhigh (Neon XHigh · Máxima Profundidad)' },
+    { id: 'gemini-4-carbon-high', short: 'Carbon High', label: 'gemini-4-carbon-high (Carbon High)' },
+    { id: 'gemini-4-argon-high', short: 'Argon High', label: 'gemini-4-argon-high (Argon High)' },
+    { id: 'claude-opus-5-5-high', short: 'Opus 5.5', label: 'claude-opus-5-5-high (Claude Opus 5.5 High)' },
+    { id: 'claude-sonnet-5-5-high', short: 'Sonnet 5.5', label: 'claude-sonnet-5-5-high (Claude Sonnet 5.5 High)' },
+    { id: 'gemini-3.8-flash-high', short: 'Flash High', label: 'gemini-3.8-flash-high (Gemini 3.8 Flash · Rápido)' }
 ];
+
+const getModelShortLabel = (modelId = DEFAULT_AGY_MODEL) => {
+    const clean = String(modelId || DEFAULT_AGY_MODEL).trim();
+    const found = AVAILABLE_AGY_MODELS.find((m) => m.id === clean);
+    return found ? found.short : clean;
+};
+
+const AGY_MODEL_ALIASES = {
+    neon: 'gemini-4-neon-high',
+    'neon-high': 'gemini-4-neon-high',
+    'neonhigh': 'gemini-4-neon-high',
+    'neon-xhigh': 'gemini-4-neon-xhigh',
+    'neonxhigh': 'gemini-4-neon-xhigh',
+    xhigh: 'gemini-4-neon-xhigh',
+    carbon: 'gemini-4-carbon-high',
+    'carbon-high': 'gemini-4-carbon-high',
+    'carbonhigh': 'gemini-4-carbon-high',
+    argon: 'gemini-4-argon-high',
+    'argon-high': 'gemini-4-argon-high',
+    opus: 'claude-opus-5-5-high',
+    'opus-5.5': 'claude-opus-5-5-high',
+    'claude-opus': 'claude-opus-5-5-high',
+    sonnet: 'claude-sonnet-5-5-high',
+    'sonnet-5.5': 'claude-sonnet-5-5-high',
+    'claude-sonnet': 'claude-sonnet-5-5-high',
+    flash: 'gemini-3.8-flash-high',
+    'flash-high': 'gemini-3.8-flash-high'
+};
+
+const resolveAgyModelId = (rawModel = '') => {
+    const clean = String(rawModel || '').trim().toLowerCase();
+    if (!clean) return null;
+    if (AGY_MODEL_ALIASES[clean]) return AGY_MODEL_ALIASES[clean];
+    const exact = AVAILABLE_AGY_MODELS.find((m) => m.id.toLowerCase() === clean);
+    if (exact) return exact.id;
+    if (/^[a-z0-9][a-z0-9._-]{2,79}$/i.test(clean)) return clean;
+    return null;
+};
+
+const escapeTelegramHtml = (val = '') => String(val || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 
 const schemaInitializedPools = new WeakSet();
 const poolTicketColsMap = new WeakMap();
@@ -232,22 +278,27 @@ const reconcileCompletedTicketJobs = async (pool, { force = false } = {}) => {
         // Tabla ai_agent_tasks no presente en este pool
     }
 
-    // Asegurar que tickets nuevos/idle generados desde cualquier canal utilicen gemini-4-carbon-high en lugar del legado argon-high
+    // Asegurar que tickets nuevos/idle sin modelo asignado hereden el modelo predeterminado vigente
     if (hasTicketCol(pool, 'agy_model') && hasTicketCol(pool, 'agy_status')) {
         try {
+            let activeDefault = DEFAULT_AGY_MODEL;
+            try {
+                const [cfgRows] = await pool.query('SELECT default_model FROM agy_server_settings WHERE id = 1 LIMIT 1');
+                if (cfgRows?.[0]?.default_model) activeDefault = String(cfgRows[0].default_model).trim();
+            } catch (_) { /* fallback DEFAULT_AGY_MODEL */ }
             const [legacyModelRows] = await pool.query(
                 `SELECT id, agy_model, agy_status, status
                  FROM support_tickets
-                 WHERE (agy_model IS NULL OR agy_model = '' OR agy_model = 'gemini-4-argon-high')
+                 WHERE (agy_model IS NULL OR agy_model = '')
                    AND agy_status = 'idle'
                    AND status IN ('abierto', 'en_proceso')
                  LIMIT 50`
             );
             const toUpgrade = (legacyModelRows || []).filter(
-                (r) => r && r.agy_status === 'idle' && (!r.agy_model || r.agy_model === 'gemini-4-argon-high')
+                (r) => r && r.agy_status === 'idle' && (!r.agy_model || r.agy_model === '')
             );
             for (const row of toUpgrade) {
-                await pool.query('UPDATE support_tickets SET agy_model = ? WHERE id = ?', [DEFAULT_AGY_MODEL, row.id]).catch(() => {});
+                await pool.query('UPDATE support_tickets SET agy_model = ? WHERE id = ?', [activeDefault, row.id]).catch(() => {});
             }
         } catch (_) { /* ignore */ }
     }
@@ -285,7 +336,7 @@ const ensureTicketSchema = async (pool) => {
                 agent_platform VARCHAR(40) NOT NULL DEFAULT 'antigravity',
                 ai_bundled_at DATETIME NULL,
                 agy_status VARCHAR(40) NOT NULL DEFAULT 'idle',
-                agy_model VARCHAR(80) NULL DEFAULT 'gemini-4-carbon-high',
+                agy_model VARCHAR(80) NULL DEFAULT 'gemini-4-neon-high',
                 agy_plan_markdown LONGTEXT NULL,
                 agy_execution_log LONGTEXT NULL,
                 agy_approved_by VARCHAR(120) NULL,
@@ -324,7 +375,7 @@ const ensureTicketSchema = async (pool) => {
             ['agent_platform', "VARCHAR(40) NOT NULL DEFAULT 'antigravity'"],
             ['ai_bundled_at', 'DATETIME NULL'],
             ['agy_status', "VARCHAR(40) NOT NULL DEFAULT 'idle'"],
-            ['agy_model', "VARCHAR(80) NULL DEFAULT 'gemini-4-carbon-high'"],
+            ['agy_model', "VARCHAR(80) NULL DEFAULT 'gemini-4-neon-high'"],
             ['agy_plan_markdown', 'LONGTEXT NULL'],
             ['agy_execution_log', 'LONGTEXT NULL'],
             ['agy_approved_by', 'VARCHAR(120) NULL'],
@@ -348,7 +399,7 @@ const ensureTicketSchema = async (pool) => {
         }
 
         try {
-            await pool.query("ALTER TABLE support_tickets MODIFY COLUMN agy_model VARCHAR(100) NULL DEFAULT 'gemini-4-carbon-high'");
+            await pool.query("ALTER TABLE support_tickets MODIFY COLUMN agy_model VARCHAR(100) NULL DEFAULT 'gemini-4-neon-high'");
         } catch (_) {
             // Ignore if ALTER restricted
         }
@@ -411,7 +462,7 @@ const ensureTicketSchema = async (pool) => {
                 ssh_key_path VARCHAR(255) NULL,
                 project_path VARCHAR(255) NOT NULL DEFAULT '/var/www/sipeadmin',
                 agy_command VARCHAR(120) NOT NULL DEFAULT 'agy',
-                default_model VARCHAR(80) NOT NULL DEFAULT 'gemini-4-carbon-high',
+                default_model VARCHAR(80) NOT NULL DEFAULT 'gemini-4-neon-high',
                 available_models_json TEXT NULL,
                 execution_mode VARCHAR(30) NOT NULL DEFAULT 'auto',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -419,14 +470,14 @@ const ensureTicketSchema = async (pool) => {
         `);
 
         try {
-            await pool.query("ALTER TABLE agy_server_settings MODIFY COLUMN default_model VARCHAR(100) NOT NULL DEFAULT 'gemini-4-carbon-high'");
+            await pool.query("ALTER TABLE agy_server_settings MODIFY COLUMN default_model VARCHAR(100) NOT NULL DEFAULT 'gemini-4-neon-high'");
         } catch (_) { /* ignore */ }
 
         try {
             await pool.query(
                 `UPDATE agy_server_settings
                  SET default_model = ?
-                 WHERE default_model = 'gemini-4-argon-high' OR default_model IS NULL OR default_model = ''`,
+                 WHERE default_model IS NULL OR default_model = ''`,
                 [DEFAULT_AGY_MODEL]
             );
         } catch (_) { /* ignore */ }
@@ -656,29 +707,35 @@ const createAndEmitAdminNotification = async ({ io, userId, type, title, message
     }
 };
 
-const buildInteractiveTicketKeyboard = (ticketId, status = 'abierto') => {
+const buildInteractiveTicketKeyboard = (ticketId, status = 'abierto', modelId = DEFAULT_AGY_MODEL) => {
     if (!ticketId) return undefined;
     if (status === 'resuelto' || status === 'cerrado') {
         return { inline_keyboard: [[{ text: '💬 Enviar Comentario Adicional', callback_data: `ticket_comment:${ticketId}` }]] };
     }
+    const shortModel = getModelShortLabel(modelId);
     return {
         inline_keyboard: [
-            [{ text: '🤖 Aprobar y Planificar AGY', callback_data: `agy_start_plan:${ticketId}` }],
+            [{ text: `🤖 Planificar AGY (${shortModel})`, callback_data: `agy_start_plan:${ticketId}` }],
+            [{ text: `🧠 Cambiar Modelo (${shortModel})`, callback_data: `agy_model_menu:${ticketId}` }],
             [{ text: '🛠️ En Proceso', callback_data: `ticket_take:${ticketId}` }, { text: '✅ Marcar Resuelto', callback_data: `ticket_resolve:${ticketId}` }],
             [{ text: '✍️ Resolver con Nota', callback_data: `ticket_resolve_note:${ticketId}` }, { text: '💬 Comentar al Usuario', callback_data: `ticket_comment:${ticketId}` }]
         ]
     };
 };
 
-const buildAgyPlanApprovalKeyboard = (ticketId) => ({
-    inline_keyboard: [
-        [{ text: '✅ Aprobar y Ejecutar Plan', callback_data: `agy_plan_approve:${ticketId}` }],
-        [
-            { text: '✏️ Ampliar / Re-planificar', callback_data: `agy_plan_feedback:${ticketId}` },
-            { text: '❌ Denegar Plan', callback_data: `agy_plan_reject:${ticketId}` }
+const buildAgyPlanApprovalKeyboard = (ticketId, modelId = DEFAULT_AGY_MODEL) => {
+    const shortModel = getModelShortLabel(modelId);
+    return {
+        inline_keyboard: [
+            [{ text: `✅ Aprobar y Ejecutar (${shortModel})`, callback_data: `agy_plan_approve:${ticketId}` }],
+            [{ text: `🧠 Cambiar Modelo (${shortModel})`, callback_data: `agy_model_menu:${ticketId}` }],
+            [
+                { text: '✏️ Ampliar / Re-planificar', callback_data: `agy_plan_feedback:${ticketId}` },
+                { text: '❌ Denegar Plan', callback_data: `agy_plan_reject:${ticketId}` }
+            ]
         ]
-    ]
-});
+    };
+};
 
 /**
  * Envía aviso interactivo a Telegram compartiendo el bot y chats técnicos de sys.sipesv.com (db_sistema_saas)
@@ -699,7 +756,7 @@ const sendTelegramSupportAlert = async (htmlText, options = {}) => {
                     botToken = saasCfg[0].bot_token;
                 }
                 const [saasChats] = await ticketPool.query(
-                    `SELECT DISTINCT chat_id FROM telegram_chat_bindings WHERE COALESCE(receive_support_tickets, 1) = 1`
+                    `SELECT DISTINCT chat_id FROM telegram_chat_bindings WHERE receive_support_tickets = 1 AND company_id IS NULL`
                 );
                 for (const c of saasChats || []) {
                     if (c.chat_id) targetChatIds.add(String(c.chat_id));
@@ -719,7 +776,15 @@ const sendTelegramSupportAlert = async (htmlText, options = {}) => {
         if (!botToken) return false;
 
         try {
-            const [tgUsers] = await localDb.query('SELECT telegram_user_id FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1');
+            const [tgUsers] = await localDb.query(
+                `SELECT tu.telegram_user_id
+                 FROM telegram_usuarios tu
+                 INNER JOIN users u ON u.id = tu.user_id
+                 LEFT JOIN roles r ON r.id = u.role_id
+                 WHERE tu.activo = 1
+                   AND u.status = 'active'
+                   AND (u.role_id = 1 OR LOWER(COALESCE(r.name, '')) IN ('admin', 'administrator', 'administrador', 'super admin', 'superadmin'))`
+            );
             for (const u of tgUsers || []) {
                 if (u.telegram_user_id) targetChatIds.add(String(u.telegram_user_id));
             }
@@ -729,7 +794,7 @@ const sendTelegramSupportAlert = async (htmlText, options = {}) => {
             targetChatIds.add(String(process.env.TELEGRAM_SUPPORT_CHAT_ID));
         }
 
-        const replyMarkup = options.replyMarkup || (options.ticketId ? buildInteractiveTicketKeyboard(options.ticketId, options.status || 'abierto') : undefined);
+        const replyMarkup = options.replyMarkup || (options.ticketId ? buildInteractiveTicketKeyboard(options.ticketId, options.status || 'abierto', options.modelId || DEFAULT_AGY_MODEL) : undefined);
         const targets = Array.from(targetChatIds).slice(0, 8);
 
         for (const chatId of targets) {
@@ -847,9 +912,7 @@ const enrichTicketRow = (r) => {
     const effectiveStatus = (r.agy_status === 'completado' && (r.status === 'abierto' || r.status === 'en_proceso'))
         ? 'resuelto'
         : r.status;
-    const effectiveModel = (!r.agy_model || ((!r.agy_status || r.agy_status === 'idle') && r.agy_model === 'gemini-4-argon-high'))
-        ? DEFAULT_AGY_MODEL
-        : r.agy_model;
+    const effectiveModel = r.agy_model ? String(r.agy_model).trim() : DEFAULT_AGY_MODEL;
 
     return {
         ...r,
@@ -1086,16 +1149,24 @@ const createTicket = async ({
         emitTicketSocketEvent(io, 'ticket:created', ticket, ticket);
     }
 
+    let activeDefaultModel = DEFAULT_AGY_MODEL;
+    try {
+        const cfg = await getAgySettings();
+        if (cfg?.default_model) activeDefaultModel = cfg.default_model;
+    } catch (_) { /* ignore */ }
+    const effectiveModel = ticket.agy_model || activeDefaultModel;
+
     sendTelegramSupportAlert(
-        `🎫 <b>NUEVO TICKET DE SOPORTE — #${ticket.ticket_code}</b>\n` +
-        `🌐 <b>Proyecto:</b> <code>admin.sipesv.com</code> (SIPE Admin)\n\n` +
-        `📌 <b>Asunto:</b> ${ticket.subject}\n` +
-        `⚡ <b>Prioridad:</b> ${String(ticket.priority).toUpperCase()}  |  <b>Tipo:</b> ${ticket.type}\n` +
-        `📂 <b>Módulo:</b> ${ticket.module_name || 'SIPE Admin'} (<code>${ticket.page_url || '/dashboard'}</code>)\n` +
-        `👤 <b>Solicitante:</b> ${ticket.user_name}\n\n` +
-        `📝 <b>Descripción:</b>\n${String(ticket.description || '').slice(0, 400)}\n\n` +
-        `<i>Selecciona una acción abajo o usa /agy ${ticket.ticket_code} o /resolver ${ticket.ticket_code} &lt;nota&gt;</i>`,
-        { ticketId: ticket.id, status: ticket.status }
+        `🎫 <b>NUEVO TICKET DE SOPORTE — #${escapeTelegramHtml(ticket.ticket_code)}</b>\n` +
+        `🌐 <b>Proyecto:</b> <code>admin.sipesv.com</code> (SIPE Admin)\n` +
+        `🧠 <b>Modelo AGY:</b> <code>${escapeTelegramHtml(effectiveModel)}</code>\n\n` +
+        `📌 <b>Asunto:</b> ${escapeTelegramHtml(ticket.subject)}\n` +
+        `⚡ <b>Prioridad:</b> ${escapeTelegramHtml(String(ticket.priority).toUpperCase())}  |  <b>Tipo:</b> ${escapeTelegramHtml(ticket.type)}\n` +
+        `📂 <b>Módulo:</b> ${escapeTelegramHtml(ticket.module_name || 'SIPE Admin')} (<code>${escapeTelegramHtml(ticket.page_url || '/dashboard')}</code>)\n` +
+        `👤 <b>Solicitante:</b> ${escapeTelegramHtml(ticket.user_name)}\n\n` +
+        `📝 <b>Descripción:</b>\n${escapeTelegramHtml(String(ticket.description || '').slice(0, 400))}\n\n` +
+        `<i>Selecciona una acción abajo o usa /agy ${escapeTelegramHtml(ticket.ticket_code)}, /modelo ${escapeTelegramHtml(ticket.ticket_code)} o /resolver ${escapeTelegramHtml(ticket.ticket_code)} &lt;nota&gt;</i>`,
+        { ticketId: ticket.id, status: ticket.status, modelId: effectiveModel }
     );
 
     return ticket;
@@ -1429,11 +1500,11 @@ const updateTicketStatus = async (
 
     if (!skipTelegramStatusAlert) {
         sendTelegramSupportAlert(
-            `${isResolving ? '✅' : '🔄'} <b>ACTUALIZACIÓN DE TICKET (${updated.ticket_code})</b>\n` +
-            `📌 <b>Asunto:</b> ${updated.subject}\n` +
-            `📊 <b>Nuevo Estado:</b> ${statusLabelMap[nextStatus] || nextStatus}\n` +
-            `👨‍💻 <b>Por:</b> ${actorName}\n` +
-            (isResolving && finalNotes ? `🛠️ <b>Solución:</b> ${finalNotes}` : '')
+            `${isResolving ? '✅' : '🔄'} <b>ACTUALIZACIÓN DE TICKET (${escapeTelegramHtml(updated.ticket_code)})</b>\n` +
+            `📌 <b>Asunto:</b> ${escapeTelegramHtml(updated.subject)}\n` +
+            `📊 <b>Nuevo Estado:</b> ${escapeTelegramHtml(statusLabelMap[nextStatus] || nextStatus)}\n` +
+            `👨‍💻 <b>Por:</b> ${escapeTelegramHtml(actorName)}\n` +
+            (isResolving && finalNotes ? `🛠️ <b>Solución:</b> ${escapeTelegramHtml(finalNotes)}` : '')
         );
     }
 
@@ -1494,12 +1565,12 @@ const addTicketMessage = async (
 
     if (senderRole === 'user') {
         sendTelegramSupportAlert(
-            `💬 <b>NUEVO COMENTARIO EN TICKET #${updated.ticket_code}</b>\n` +
+            `💬 <b>NUEVO COMENTARIO EN TICKET #${escapeTelegramHtml(updated.ticket_code)}</b>\n` +
             `🌐 <b>Proyecto:</b> <code>admin.sipesv.com</code>\n` +
-            `📌 <b>Asunto:</b> ${updated.subject}\n` +
-            `👤 <b>Usuario:</b> ${senderName}\n\n` +
-            `"${String(message || '').slice(0, 400)}"`,
-            { ticketId: updated.id, status: updated.status }
+            `📌 <b>Asunto:</b> ${escapeTelegramHtml(updated.subject)}\n` +
+            `👤 <b>Usuario:</b> ${escapeTelegramHtml(senderName)}\n\n` +
+            `"${escapeTelegramHtml(String(message || '').slice(0, 400))}"`,
+            { ticketId: updated.id, status: updated.status, modelId: updated.agy_model || DEFAULT_AGY_MODEL }
         );
     }
 
@@ -1780,15 +1851,50 @@ const getAgySettings = async () => {
         execution_mode: 'auto'
     };
     const { ssh_password, ...safeCfg } = cfg;
-    const normalizedDefault = (!safeCfg.default_model || safeCfg.default_model === 'gemini-4-argon-high')
-        ? DEFAULT_AGY_MODEL
-        : safeCfg.default_model;
+    const normalizedDefault = safeCfg.default_model
+        ? String(safeCfg.default_model).trim()
+        : DEFAULT_AGY_MODEL;
     return {
         ...safeCfg,
         default_model: normalizedDefault,
         ssh_password: '',
         has_ssh_password: Boolean(ssh_password),
         available_models: AVAILABLE_AGY_MODELS
+    };
+};
+
+const setTicketAgyModel = async (ticketId, rawModel, { setAsDefault = false } = {}) => {
+    const resolvedModel = resolveAgyModelId(rawModel);
+    if (!resolvedModel) {
+        throw new Error(`Modelo AGY no válido: "${rawModel}".`);
+    }
+    const { pool } = await getTicketPool();
+
+    if (setAsDefault) {
+        await pool.query(
+            `INSERT INTO agy_server_settings (id, default_model)
+             VALUES (1, ?)
+             ON DUPLICATE KEY UPDATE default_model = VALUES(default_model)`,
+            [resolvedModel]
+        );
+    }
+
+    let updatedTicket = null;
+    if (ticketId) {
+        await pool.query(
+            `UPDATE support_tickets
+             SET agy_model = ?, agy_updated_at = NOW()
+             WHERE id = ?`,
+            [resolvedModel, Number(ticketId)]
+        );
+        updatedTicket = await getTicketById(Number(ticketId));
+    }
+
+    return {
+        model: resolvedModel,
+        shortLabel: getModelShortLabel(resolvedModel),
+        setAsDefault: Boolean(setAsDefault),
+        ticket: updatedTicket
     };
 };
 
@@ -1859,16 +1965,16 @@ const approveAndGeneratePlan = async (id, { model = DEFAULT_AGY_MODEL, aiNotes =
     if (io) emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
 
     sendTelegramSupportAlert(
-        `🤖 <b>PLAN DE EJECUCIÓN AGY (v${nextVersion}) — #${updated.ticket_code}</b>\n` +
+        `🤖 <b>PLAN DE EJECUCIÓN AGY (v${nextVersion}) — #${escapeTelegramHtml(updated.ticket_code)}</b>\n` +
         `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
-        `🖥️ <b>Entorno:</b> <code>Consola AGY</code>  |  🧠 <b>Modelo:</b> <code>${chosenModel}</code>\n` +
-        `📌 <b>Asunto:</b> ${updated.subject}\n` +
-        `📂 <b>Módulo / Ruta:</b> ${updated.module_name || 'SIPE Admin'} (<code>${updated.page_url || '/dashboard'}</code>)\n\n` +
+        `🖥️ <b>Entorno:</b> <code>Consola AGY</code>  |  🧠 <b>Modelo:</b> <code>${escapeTelegramHtml(chosenModel)}</code>\n` +
+        `📌 <b>Asunto:</b> ${escapeTelegramHtml(updated.subject)}\n` +
+        `📂 <b>Módulo / Ruta:</b> ${escapeTelegramHtml(updated.module_name || 'SIPE Admin')} (<code>${escapeTelegramHtml(updated.page_url || '/dashboard')}</code>)\n\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `${planMd}\n` +
+        `${escapeTelegramHtml(planMd)}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `👇 <b>Selecciona una decisión para la Consola AGY:</b>`,
-        { replyMarkup: buildAgyPlanApprovalKeyboard(updated.id) }
+        { replyMarkup: buildAgyPlanApprovalKeyboard(updated.id, chosenModel) }
     );
 
     return updated;
@@ -1920,13 +2026,13 @@ const executeApprovedPlan = async (id, { actorId = null, actorName = 'Administra
     });
 
     sendTelegramSupportAlert(
-        `✅ <b>PLAN AGY EJECUTADO Y TICKET RESUELTO — #${updated.ticket_code}</b>\n` +
+        `✅ <b>PLAN AGY EJECUTADO Y TICKET RESUELTO — #${escapeTelegramHtml(updated.ticket_code)}</b>\n` +
         `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
-        `🧠 <b>Modelo:</b> <code>${usedModel}</code>\n` +
-        `📌 <b>Asunto:</b> ${updated.subject}\n` +
-        `👤 <b>Aprobado por:</b> ${actorName}\n` +
+        `🧠 <b>Modelo:</b> <code>${escapeTelegramHtml(usedModel)}</code>\n` +
+        `📌 <b>Asunto:</b> ${escapeTelegramHtml(updated.subject)}\n` +
+        `👤 <b>Aprobado por:</b> ${escapeTelegramHtml(actorName)}\n` +
         `🛠️ <b>Estado:</b> Resuelto`,
-        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, 'resuelto') }
+        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, 'resuelto', usedModel) }
     );
 
     return updated;
@@ -1947,12 +2053,12 @@ const rejectPlan = async (id, { reason = 'Denegado por administrador', actorName
     if (io) emitTicketSocketEvent(io, 'ticket:updated', updated, updated);
 
     sendTelegramSupportAlert(
-        `❌ <b>PLAN AGY DENEGADO — #${updated.ticket_code}</b>\n` +
+        `❌ <b>PLAN AGY DENEGADO — #${escapeTelegramHtml(updated.ticket_code)}</b>\n` +
         `🌐 <b>Proyecto:</b> <code>admin.sipesv.com (SIPE Admin)</code>\n` +
-        `📌 <b>Asunto:</b> ${updated.subject}\n` +
-        `👤 <b>Por:</b> ${actorName}\n` +
-        `📝 <b>Motivo:</b> ${reason}`,
-        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, updated.status) }
+        `📌 <b>Asunto:</b> ${escapeTelegramHtml(updated.subject)}\n` +
+        `👤 <b>Por:</b> ${escapeTelegramHtml(actorName)}\n` +
+        `📝 <b>Motivo:</b> ${escapeTelegramHtml(reason)}`,
+        { replyMarkup: buildInteractiveTicketKeyboard(updated.id, updated.status, updated.agy_model || DEFAULT_AGY_MODEL) }
     );
 
     return updated;
@@ -2084,6 +2190,11 @@ const initTicketRealtimeWatcher = (io) => {
 module.exports = {
     DEFAULT_AGY_MODEL,
     AVAILABLE_AGY_MODELS,
+    getModelShortLabel,
+    resolveAgyModelId,
+    escapeTelegramHtml,
+    buildInteractiveTicketKeyboard,
+    buildAgyPlanApprovalKeyboard,
     UPLOADS_DIR,
     SIBLING_SAAS_UPLOADS,
     getTicketPool,
@@ -2106,6 +2217,7 @@ module.exports = {
     acknowledgeResolution,
     getAgySettings,
     saveAgySettings,
+    setTicketAgyModel,
     approveAndGeneratePlan,
     executeApprovedPlan,
     rejectPlan,
