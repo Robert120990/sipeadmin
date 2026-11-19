@@ -49,6 +49,13 @@ const inferSeverity = (type) => {
     return 'error';
 };
 
+const redactAuditorSecrets = (text = '') => {
+    return String(text || '')
+        .replace(/bot\d+:[A-Za-z0-9_-]{20,}/g, 'bot[REDACTED]')
+        .replace(/\b\d{8,12}:[A-Za-z0-9_-]{30,55}\b/g, '[REDACTED_TELEGRAM_TOKEN]')
+        .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_GEMINI_KEY]');
+};
+
 /**
  * Registra un error o evento forense en el buffer circular
  */
@@ -61,11 +68,11 @@ const recordError = ({ type = 'SYSTEM_ERROR', message, stack, userId, chatId, qu
         timestamp: new Date().toISOString(),
         type: String(type || 'SYSTEM_ERROR').toUpperCase(),
         severity: resolvedSeverity,
-        message: String(message || 'Error no especificado'),
-        stack: stack ? String(stack).slice(0, 1500) : null,
+        message: redactAuditorSecrets(message || 'Error no especificado'),
+        stack: stack ? redactAuditorSecrets(stack).slice(0, 1500) : null,
         userId: userId !== undefined && userId !== null ? String(userId) : null,
         chatId: chatId !== undefined && chatId !== null ? String(chatId) : null,
-        query: query ? String(query).slice(0, 500) : null,
+        query: query ? redactAuditorSecrets(query).slice(0, 500) : null,
         details: details || null
     };
 

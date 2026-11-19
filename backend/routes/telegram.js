@@ -23,8 +23,12 @@ const {
     getGeminiApiKey,
     sanitizeGeminiApiKey,
     ensureTelegramConfigSchema,
-    setRuntimeGeminiApiKey
+    setRuntimeGeminiApiKey,
+    escapeHtml,
+    resolveTelegramUser,
+    getUserEffectivePermissions
 } = require('../services/telegramBotService');
+const { invalidateBotTokenCache } = require('../services/telegramTransportService');
 const {
     getHealthDiagnostics,
     getErrors,
@@ -54,11 +58,12 @@ const safeCompareSecret = (a, b) => {
  * Responde inmediatamente con HTTP 200 y despacha el procesamiento de forma asíncrona.
  */
 router.post('/webhook', (req, res) => {
-    // Verificación de secret token con comparación constante en tiempo
+    // Verificación obligatoria de secret token con comparación constante en tiempo
     const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
     const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    if (process.env.NODE_ENV === 'production' && !expectedSecret) {
-        return res.status(503).json({ error: 'TELEGRAM_WEBHOOK_SECRET no configurado en producción' });
+    const isTestRunner = process.env.NODE_ENV === 'test' || Boolean(process.env.NODE_TEST_CONTEXT);
+    if (!expectedSecret && !isTestRunner) {
+        return res.status(503).json({ error: 'TELEGRAM_WEBHOOK_SECRET no configurado en el servidor' });
     }
     if (expectedSecret && !safeCompareSecret(String(secretHeader || ''), String(expectedSecret))) {
         return res.status(403).json({ error: 'Secret token inválido' });
@@ -101,9 +106,27 @@ router.post('/webhook/set', authenticateToken, requirePermission(telegramPerms),
             });
         }
 
+        const allowedHosts = String(process.env.ALLOWED_WEBHOOK_HOSTS || 'admin.sipesv.com')
+            .split(',')
+            .map((h) => h.trim().toLowerCase())
+            .filter(Boolean);
+        let parsedWebhookUrl;
+        try {
+            parsedWebhookUrl = new URL(targetUrl);
+        } catch {
+            return res.status(400).json({ ok: false, message: 'URL de webhook mal formada.' });
+        }
+        if (parsedWebhookUrl.protocol !== 'https:' || (allowedHosts.length > 0 && !allowedHosts.includes(parsedWebhookUrl.hostname.toLowerCase()))) {
+            return res.status(400).json({
+                ok: false,
+                message: `Host de webhook no autorizado. Dominios permitidos: ${allowedHosts.join(', ')}`
+            });
+        }
+
+        const effectiveSecret = secret_token || process.env.TELEGRAM_WEBHOOK_SECRET;
         const result = await setTelegramWebhook({
             url: targetUrl,
-            secret_token,
+            secret_token: effectiveSecret,
             max_connections,
             drop_pending_updates
         });
@@ -174,7 +197,7 @@ router.post('/test-connection', authenticateToken, requirePermission(telegramPer
         const result = await testTelegramConnection();
         res.json({ ok: true, result });
     } catch (error) {
-        sendSafeError(res, error, 'Error al probar conexión con Telegram: ' + error.message);
+        sendSafeError(res, error, 'Error al probar conexión con Telegram');
     }
 });
 
@@ -338,6 +361,7 @@ router.put('/config', authenticateToken, requirePermission(telegramPerms), async
                 ]);
             }
 
+            invalidateBotTokenCache();
             await restartTelegramBot();
         } else if (cleanGeminiKey) {
             // Solo se actualiza la clave de Gemini (incluimos bot_token='' en INSERT para compatibilidad con MySQL 8.0 strict mode)
@@ -640,7 +664,7 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
         if (activo) {
             sendTelegramMessage(
                 cleanUid,
-                `🎉 ¡<b>Felicidades ${first_name || ''}</b>! Tu cuenta de Telegram ha sido <b>aprobada y autorizada</b> para realizar consultas en <b>SIPE Admin</b>.\n\nEscribe <b>/menu</b> para comenzar a consultar.`
+                `🎉 ¡<b>Felicidades ${escapeHtml(first_name || '')}</b>! Tu cuenta de Telegram ha sido <b>aprobada y autorizada</b> para realizar consultas en <b>SIPE Admin</b>.\n\nEscribe <b>/menu</b> para comenzar a consultar.`
             ).catch(e => console.warn('Aviso de activación no entregado:', e.message));
         }
 
@@ -713,7 +737,7 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
         if (!currentUser.activo && activo) {
             sendTelegramMessage(
                 currentUser.telegram_user_id,
-                `🎉 ¡<b>Hola ${currentUser.first_name || ''}</b>! Tu cuenta de Telegram ha sido <b>activada</b> en <b>SIPE Admin</b>.\n\nEscribe <b>/menu</b> para consultar ventas, saldos o alertas.`
+                `🎉 ¡<b>Hola ${escapeHtml(currentUser.first_name || '')}</b>! Tu cuenta de Telegram ha sido <b>activada</b> en <b>SIPE Admin</b>.\n\nEscribe <b>/menu</b> para consultar ventas, saldos o alertas.`
             ).catch(e => console.warn('Aviso no entregado:', e.message));
         }
 
@@ -856,10 +880,16 @@ router.post('/send-test-message', authenticateToken, requirePermission(telegramP
     }
 
     try {
-        await sendTelegramMessage(telegram_user_id, `🔔 <b>Mensaje de Prueba desde SIPE Admin:</b>\n\n${message}`);
+        const sent = await sendTelegramMessage(
+            telegram_user_id,
+            `🔔 <b>Mensaje de Prueba desde SIPE Admin:</b>\n\n${escapeHtml(String(message))}`
+        );
+        if (!sent) {
+            return res.status(502).json({ ok: false, message: 'No se pudo entregar el mensaje de prueba en Telegram. Verifica el chat ID y el token.' });
+        }
         res.json({ ok: true, message: 'Mensaje de prueba enviado con éxito.' });
     } catch (error) {
-        sendSafeError(res, error, 'Error enviando mensaje de prueba: ' + error.message);
+        sendSafeError(res, error, 'Error enviando mensaje de prueba en Telegram');
     }
 });
 
@@ -949,9 +979,11 @@ router.get('/feedback/stats', authenticateN8nOrAdmin, async (req, res) => {
 router.get('/feedback', authenticateN8nOrAdmin, async (req, res) => {
     try {
         const { limit = 50, offset = 0, estado, calificacion } = req.query;
+        const safeLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+        const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
         const feedbacks = await getFeedbackList({
-            limit: Number(limit) || 50,
-            offset: Number(offset) || 0,
+            limit: safeLimit,
+            offset: safeOffset,
             estado: estado || null,
             calificacion: calificacion || null
         });
@@ -1066,7 +1098,15 @@ router.post('/feedback/:id/regenerar', authenticateToken, requirePermission(tele
             comentario_mejora: overrideComment !== undefined ? String(overrideComment || '') : (rows[0].comentario_mejora || '')
         };
 
-        const resultado = await generateImprovedResponseForFeedback(fbRow);
+        let targetEffectivePerms = null;
+        if (fbRow.telegram_user_id) {
+            const targetTgUser = await resolveTelegramUser({ id: fbRow.telegram_user_id, first_name: fbRow.first_name }).catch(() => null);
+            if (targetTgUser) {
+                targetEffectivePerms = await getUserEffectivePermissions(targetTgUser).catch(() => null);
+            }
+        }
+
+        const resultado = await generateImprovedResponseForFeedback(fbRow, targetEffectivePerms ? { effectivePerms: targetEffectivePerms } : {});
 
         let enviadoTelegram = false;
         if (enviar_usuario) {
@@ -1132,7 +1172,8 @@ router.get('/audit/health', authenticateN8nOrAdmin, async (req, res) => {
 router.get('/audit/errors', authenticateN8nOrAdmin, async (req, res) => {
     try {
         const { limit = 50, type } = req.query;
-        const errors = getErrors({ limit: Number(limit) || 50, type });
+        const safeLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+        const errors = getErrors({ limit: safeLimit, type });
         res.json({ ok: true, count: errors.length, errors });
     } catch (error) {
         sendSafeError(res, error, 'Error al obtener registros de errores forenses');

@@ -128,40 +128,41 @@ export default function TelegramUsers() {
     const fetchSystemUsers = useCallback(async () => {
         setLoadingSystemUsers(true);
         try {
-            const res = await api.get('/telegram/system-users');
-            if (Array.isArray(res.data) && res.data.length > 0) {
-                setSystemUsers(res.data);
-                return;
+            try {
+                const res = await api.get('/telegram/system-users');
+                if (Array.isArray(res.data) && res.data.length > 0) {
+                    setSystemUsers(res.data);
+                    return;
+                }
+            } catch (e) {
+                console.warn('Error cargando /telegram/system-users:', e.message);
             }
-        } catch (e) {
-            console.warn('Error cargando /telegram/system-users:', e.message);
-        }
 
-        // Fallback defensivo a /users si /telegram/system-users no está disponible aún
-        try {
-            const fallbackRes = await api.get('/users');
-            const list = Array.isArray(fallbackRes.data) ? fallbackRes.data : (fallbackRes.data?.users || []);
-            if (list.length > 0) {
-                const mapped = list.map(u => ({
-                    id: u.id,
-                    username: u.username,
-                    nombre: u.nombre || u.username,
-                    email: u.email || '',
-                    role_id: u.role_id,
-                    role_name: u.role_name || 'Sin Rol',
-                    status: u.status || 'active',
-                    permissions: {
-                        ventas: u.role_name === 'Administrator',
-                        saldos_banco: u.role_name === 'Administrator',
-                        saldos_chequera: u.role_name === 'Administrator',
-                        alertas: u.role_name === 'Administrator'
-                    }
-                }));
-                setSystemUsers(mapped);
-                return;
+            // Fallback defensivo a /users si /telegram/system-users no está disponible aún
+            try {
+                const fallbackRes = await api.get('/users');
+                const list = Array.isArray(fallbackRes.data) ? fallbackRes.data : (fallbackRes.data?.users || []);
+                if (list.length > 0) {
+                    const mapped = list.map(u => ({
+                        id: u.id,
+                        username: u.username,
+                        nombre: u.nombre || u.username,
+                        email: u.email || '',
+                        role_id: u.role_id,
+                        role_name: u.role_name || 'Sin Rol',
+                        status: u.status || 'active',
+                        permissions: {
+                            ventas: u.role_name === 'Administrator',
+                            saldos_banco: u.role_name === 'Administrator',
+                            saldos_chequera: u.role_name === 'Administrator',
+                            alertas: u.role_name === 'Administrator'
+                        }
+                    }));
+                    setSystemUsers(mapped);
+                }
+            } catch (fallbackErr) {
+                console.warn('Fallback a /users falló:', fallbackErr.message);
             }
-        } catch (fallbackErr) {
-            console.warn('Fallback a /users falló:', fallbackErr.message);
         } finally {
             setLoadingSystemUsers(false);
         }
@@ -685,6 +686,11 @@ export default function TelegramUsers() {
     // Toggle rápido de estado activo
     const handleToggleUserActive = async (user) => {
         const newStatus = user.activo ? 0 : 1;
+        if (!newStatus) {
+            const name = `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.telegram_user_id;
+            const confirmed = await confirm(`¿Estás seguro de desactivar el acceso de Telegram para "${name}"?`, { variant: 'danger' });
+            if (!confirmed) return;
+        }
         try {
             await api.put(`/telegram/users/${user.id}`, { activo: newStatus });
             addToast(`Usuario ${newStatus ? 'activado' : 'desactivado'} con éxito`, 'success');
@@ -2814,7 +2820,7 @@ export default function TelegramUsers() {
                                 <input
                                     id="new_bot_token_input"
                                     name="new_bot_token_input"
-                                    type="text"
+                                    type="password"
                                     value={newTokenInput}
                                     onChange={(e) => setNewTokenInput(e.target.value)}
                                     placeholder="Ej: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ..."
@@ -2932,7 +2938,7 @@ export default function TelegramUsers() {
                                 <input
                                     id="new_gemini_key_input"
                                     name="new_gemini_key_input"
-                                    type="text"
+                                    type="password"
                                     value={newGeminiKeyInput}
                                     onChange={(e) => setNewGeminiKeyInput(e.target.value)}
                                     placeholder="Ej: AIzaSyB1234567890abcdef..."

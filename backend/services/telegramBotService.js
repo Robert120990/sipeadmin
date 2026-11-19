@@ -348,22 +348,31 @@ const handleCallbackQuery = async (cq) => {
         }
     }
 
-    // Caso 1: Calificación positiva (👍 Sí)
+    // Caso 1: Calificación positiva (👍 Sí) — validando propietario del feedback
     if (data.startsWith('fb_ok:')) {
+        if (!fromId) {
+            await answerCallbackQuery(cq.id, '⛔ Sesión de Telegram no válida.');
+            return;
+        }
         const feedbackId = parseInt(data.replace('fb_ok:', ''), 10);
         if (feedbackId) {
             try {
                 const db = getDb();
                 if (db) {
+                    const tgUser = await resolveTelegramUser(cq.from);
+                    if (!tgUser || !tgUser.activo) {
+                        await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                        return;
+                    }
                     await db.query(
                         `UPDATE telegram_feedback 
                          SET calificacion = 'UTIL', estado = 'COMPLETADO', updated_at = NOW() 
-                         WHERE id = ?`,
-                        [feedbackId]
+                         WHERE id = ? AND telegram_user_id = ?`,
+                        [feedbackId, fromId]
                     );
                 }
             } catch (err) {
-                console.error('[TelegramBot] Error actualizando feedback UTIL:', err);
+                console.error('[TelegramBot] Error actualizando feedback UTIL:', err.message);
             }
         }
 
@@ -379,8 +388,12 @@ const handleCallbackQuery = async (cq) => {
         return;
     }
 
-    // Caso 2: Calificación negativa (👎 No)
+    // Caso 2: Calificación negativa (👎 No) — validando propietario del feedback
     if (data.startsWith('fb_no:')) {
+        if (!fromId) {
+            await answerCallbackQuery(cq.id, '⛔ Sesión de Telegram no válida.');
+            return;
+        }
         const feedbackId = parseInt(data.replace('fb_no:', ''), 10);
         let consultaOriginal = null;
         let respuestaAnterior = null;
@@ -388,15 +401,20 @@ const handleCallbackQuery = async (cq) => {
             try {
                 const db = getDb();
                 if (db) {
+                    const tgUser = await resolveTelegramUser(cq.from);
+                    if (!tgUser || !tgUser.activo) {
+                        await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                        return;
+                    }
                     await db.query(
                         `UPDATE telegram_feedback 
                          SET calificacion = 'NO_UTIL', estado = 'ABIERTO', updated_at = NOW() 
-                         WHERE id = ?`,
-                        [feedbackId]
+                         WHERE id = ? AND telegram_user_id = ?`,
+                        [feedbackId, fromId]
                     );
                     const [fbRows] = await db.query(
-                        'SELECT consulta_original, respuesta_resumen FROM telegram_feedback WHERE id = ? LIMIT 1',
-                        [feedbackId]
+                        'SELECT consulta_original, respuesta_resumen FROM telegram_feedback WHERE id = ? AND telegram_user_id = ? LIMIT 1',
+                        [feedbackId, fromId]
                     );
                     if (Array.isArray(fbRows) && fbRows.length > 0) {
                         consultaOriginal = fbRows[0].consulta_original || null;
@@ -404,7 +422,7 @@ const handleCallbackQuery = async (cq) => {
                     }
                 }
             } catch (err) {
-                console.error('[TelegramBot] Error actualizando feedback NO_UTIL:', err);
+                console.error('[TelegramBot] Error actualizando feedback NO_UTIL:', err.message);
             }
         }
 
@@ -434,25 +452,23 @@ const handleCallbackQuery = async (cq) => {
         return;
     }
 
-    // Callbacks interactivos para Tickets de Soporte y Consola AGY (Carbon High)
+    // Callbacks interactivos para Tickets de Soporte y Consola AGY (fail-closed)
     if (data.startsWith('agy_') || data.startsWith('ticket_')) {
         try {
-            let tgUser = null;
-            let effPerms = {};
             const db = getDb();
-            if (db && cq.from) {
-                tgUser = await resolveTelegramUser(cq.from);
-                if (tgUser && !tgUser.activo) {
-                    await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
-                    return;
-                }
-                if (tgUser) {
-                    effPerms = await getUserEffectivePermissions(tgUser);
-                    if (effPerms.inactiveInSipe) {
-                        await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
-                        return;
-                    }
-                }
+            if (!db || !cq.from) {
+                await answerCallbackQuery(cq.id, '⛔ No fue posible verificar tu autorización.');
+                return;
+            }
+            const tgUser = await resolveTelegramUser(cq.from);
+            if (!tgUser || !tgUser.activo) {
+                await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                return;
+            }
+            const effPerms = await getUserEffectivePermissions(tgUser);
+            if (effPerms.inactiveInSipe) {
+                await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                return;
             }
             const ticketTelegramAgyService = require('./ticketTelegramAgyService');
             const handled = await ticketTelegramAgyService.handleTicketCallback(
@@ -468,7 +484,7 @@ const handleCallbackQuery = async (cq) => {
         }
     }
 
-    // Verificar autorización del usuario antes de ejecutar callbacks de datos sensibles
+    // Verificar autorización FAIL-CLOSED del usuario antes de ejecutar callbacks de datos sensibles
     if (
         data.startsWith('andelsa_') ||
         data.startsWith('solar_') ||
@@ -478,46 +494,72 @@ const handleCallbackQuery = async (cq) => {
     ) {
         try {
             const db = getDb();
-            if (db && cq.from) {
-                const tgUser = await resolveTelegramUser(cq.from);
-                if (tgUser && !tgUser.activo) {
-                    await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+            if (!db || !cq.from) {
+                await answerCallbackQuery(cq.id, '⛔ No fue posible verificar tu sesión de Telegram.');
+                return;
+            }
+            const tgUser = await resolveTelegramUser(cq.from);
+            if (!tgUser || !tgUser.activo) {
+                await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                return;
+            }
+            const effPerms = await getUserEffectivePermissions(tgUser);
+            if (effPerms.inactiveInSipe) {
+                await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                return;
+            }
+            const canCompetencia = Boolean(effPerms.precios_competencia ?? (effPerms.ventas || effPerms.alertas));
+            if (data.startsWith('comp_') && !canCompetencia) {
+                await answerCallbackQuery(cq.id, '⛔ No tienes permiso para consultar precios de competencia.');
+                return;
+            }
+            if (data.startsWith('andelsa_') && !effPerms.ventas && !effPerms.saldos_banco && !effPerms.isAdmin) {
+                await answerCallbackQuery(cq.id, '⛔ No tienes permiso para consultar reportes de Andelsa.');
+                return;
+            }
+            if (data.startsWith('solar_') && !effPerms.ventas && !effPerms.alertas && !effPerms.isAdmin) {
+                await answerCallbackQuery(cq.id, '⛔ No tienes permiso para consultar energía solar.');
+                return;
+            }
+            if (data.startsWith('pdf_rep:')) {
+                const reqTopic = data.replace('pdf_rep:', '').trim().toLowerCase();
+                if (reqTopic === 'dossier' && !effPerms.isAdmin && !(effPerms.ventas && effPerms.saldos_banco)) {
+                    await answerCallbackQuery(cq.id, '⛔ El Dossier Ejecutivo requiere permisos de Ventas y Bancos.');
                     return;
                 }
-                if (tgUser) {
-                    const effPerms = await getUserEffectivePermissions(tgUser);
-                    if (effPerms.inactiveInSipe) {
-                        await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
-                        return;
-                    }
-                    const canCompetencia = Boolean(effPerms.precios_competencia ?? (effPerms.ventas || effPerms.alertas));
-                    if (data.startsWith('comp_') && !canCompetencia) {
-                        await answerCallbackQuery(cq.id, '⛔ No tienes permiso para consultar precios de competencia.');
-                        return;
-                    }
-                    if (data.startsWith('pdf_rep:')) {
-                        const reqTopic = data.replace('pdf_rep:', '').trim().toLowerCase();
-                        if (reqTopic.includes('banco') && !effPerms.saldos_banco) {
-                            await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de bancos.');
-                            return;
-                        }
-                        if (reqTopic.includes('cheque') && !effPerms.saldos_chequera) {
-                            await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de chequera.');
-                            return;
-                        }
-                        if ((reqTopic.includes('competencia') || reqTopic.includes('precio') || reqTopic.includes('dgehm')) && !canCompetencia) {
-                            await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de precios de competencia.');
-                            return;
-                        }
-                    }
-                    if (data.startsWith('alert_') && !effPerms.alertas && !effPerms.ventas) {
-                        await answerCallbackQuery(cq.id, '⛔ No tienes permiso para gestionar alertas.');
-                        return;
-                    }
+                if (reqTopic.includes('banco') && !effPerms.saldos_banco && !effPerms.isAdmin) {
+                    await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de bancos.');
+                    return;
+                }
+                if (reqTopic.includes('cheque') && !effPerms.saldos_chequera && !effPerms.isAdmin) {
+                    await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de chequera.');
+                    return;
+                }
+                if ((reqTopic.includes('competencia') || reqTopic.includes('precio') || reqTopic.includes('dgehm')) && !canCompetencia) {
+                    await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de precios de competencia.');
+                    return;
+                }
+                if (reqTopic.includes('venta') && !effPerms.ventas && !effPerms.isAdmin) {
+                    await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de ventas.');
+                    return;
+                }
+                if (reqTopic.includes('andelsa') && !effPerms.ventas && !effPerms.saldos_banco && !effPerms.isAdmin) {
+                    await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de Andelsa.');
+                    return;
+                }
+                if (reqTopic.includes('solar') && !effPerms.ventas && !effPerms.alertas && !effPerms.isAdmin) {
+                    await answerCallbackQuery(cq.id, '⛔ No tienes permiso para reportes de energía solar.');
+                    return;
                 }
             }
+            if (data.startsWith('alert_') && !effPerms.alertas && !effPerms.ventas && !effPerms.isAdmin) {
+                await answerCallbackQuery(cq.id, '⛔ No tienes permiso para gestionar alertas.');
+                return;
+            }
         } catch (authErr) {
-            console.warn('[TelegramBot] Warning verificando permisos en callback:', authErr.message);
+            console.error('[TelegramBot] Error verificando permisos en callback (fail-closed):', authErr.message);
+            await answerCallbackQuery(cq.id, '⛔ Error verificando permisos. Intenta nuevamente.');
+            return;
         }
     }
 
@@ -678,12 +720,12 @@ const handleCallbackQuery = async (cq) => {
 
             if (st) {
                 dtlMsg += `📊 <b>Venta de Combustibles:</b>\n`;
-                dtlMsg += `• Total Dinero: <code>${moneyFmt(st.total_venta || 0)}</code>\n`;
-                dtlMsg += `• Total Galones: <code>${numFmt(st.galones || 0)} gal</code>\n`;
+                dtlMsg += `• Total Dinero: <code>${moneyFmt(st.venta ?? st.total_venta ?? 0)}</code>\n`;
+                dtlMsg += `• Total Galones: <code>${numFmt(st.galonaje ?? st.galones ?? 0)} gal</code>\n`;
                 if (st.super) dtlMsg += `   └ Súper: <code>${numFmt(st.super)} gal</code>\n`;
                 if (st.regular) dtlMsg += `   └ Regular: <code>${numFmt(st.regular)} gal</code>\n`;
                 if (st.diesel) dtlMsg += `   └ Diésel: <code>${numFmt(st.diesel)} gal</code>\n`;
-                if (st.ion_diesel) dtlMsg += `   └ Ion Diésel: <code>${numFmt(st.ion_diesel)} gal</code>\n`;
+                if (st.ion || st.ion_diesel) dtlMsg += `   └ Ion Diésel: <code>${numFmt(st.ion ?? st.ion_diesel)} gal</code>\n`;
                 dtlMsg += `\n`;
             }
 
@@ -903,9 +945,11 @@ const getUserEffectivePermissions = async (user) => {
             isLinked: true,
             linkedUser: null,
             inactiveInSipe: false,
+            isAdmin: false,
+            sipePermissions: [],
             ventas: Boolean(user.permiso_ventas),
             saldos_banco: Boolean(user.permiso_saldos_banco),
-            saldos_chequera: Boolean(user.permiso_chequera ?? user.permiso_saldos_chequera),
+            saldos_chequera: Boolean(user.permiso_saldos_chequera),
             alertas: Boolean(user.permiso_alertas),
             precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
         };
@@ -913,7 +957,7 @@ const getUserEffectivePermissions = async (user) => {
 
     try {
         const [rows] = await db.query(`
-            SELECT u.id, u.username, u.nombre, u.email, u.status, r.name as role_name,
+            SELECT u.id, u.username, u.nombre, u.email, u.status, u.role_id, r.name as role_name,
                    GROUP_CONCAT(p.name) as permissions
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
@@ -928,6 +972,8 @@ const getUserEffectivePermissions = async (user) => {
                 isLinked: false,
                 linkedUser: null,
                 inactiveInSipe: false,
+                isAdmin: false,
+                sipePermissions: [],
                 ventas: Boolean(user.permiso_ventas),
                 saldos_banco: Boolean(user.permiso_saldos_banco),
                 saldos_chequera: Boolean(user.permiso_saldos_chequera),
@@ -942,6 +988,8 @@ const getUserEffectivePermissions = async (user) => {
                 isLinked: true,
                 linkedUser: su,
                 inactiveInSipe: true,
+                isAdmin: false,
+                sipePermissions: [],
                 ventas: false,
                 saldos_banco: false,
                 saldos_chequera: false,
@@ -950,8 +998,22 @@ const getUserEffectivePermissions = async (user) => {
             };
         }
 
-        const permsList = (su.permissions || '').split(',');
-        const isAdmin = su.role_name === 'Administrator' || su.role_name === 'Super Administrator' || permsList.includes('/dashboard/seguridad/telegram') || permsList.includes('manage_telegram');
+        let permsList = (su.permissions || '').split(',').map((p) => p.trim()).filter(Boolean);
+        // Evitar truncamiento por límite de 1024 bytes de GROUP_CONCAT consultando permisos directos del rol si hay role_id
+        if (su.role_id) {
+            try {
+                const [permRows] = await db.query(
+                    `SELECT p.name FROM role_permissions rp INNER JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id = ?`,
+                    [su.role_id]
+                );
+                if (Array.isArray(permRows) && permRows.length > 0) {
+                    permsList = permRows.map((r) => String(r.name || '').trim()).filter(Boolean);
+                }
+            } catch (_) {
+                // Fallback a GROUP_CONCAT en mocks de prueba
+            }
+        }
+        const isAdmin = Number(su.role_id) === 1 || su.role_name === 'Administrator' || su.role_name === 'Super Administrator' || permsList.includes('/dashboard/seguridad/telegram') || permsList.includes('manage_telegram');
 
         const hasVentas = isAdmin || permsList.includes('/dashboard/consultas/estaciones/ventas');
         const hasBancos = isAdmin || permsList.includes('/dashboard/bancos/reportes/saldos-bancos') || permsList.includes('/dashboard/bancos/cuentas') || permsList.includes('/dashboard/bancos/movimientos');
@@ -970,6 +1032,7 @@ const getUserEffectivePermissions = async (user) => {
             linkedUser: su,
             inactiveInSipe: false,
             isAdmin: Boolean(isAdmin),
+            sipePermissions: permsList,
             ventas: hasVentas,
             saldos_banco: hasBancos,
             saldos_chequera: hasChequera,
@@ -1263,7 +1326,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
 
     // 0.3 Consultas Administrativas y Financieras de Andelsa (sys.sipesv.com / Nova SaaS)
     if (parsed.isAndelsaInventario || parsed.isAndelsaCostos || parsed.isAndelsaCxc || parsed.isAndelsaVentasCliente || parsed.isAndelsaVentasProducto || parsed.isAndelsaFinanzasResumen) {
-        if (!effectivePerms.ventas && !effectivePerms.bancos) {
+        if (!effectivePerms.ventas && !effectivePerms.saldos_banco && !effectivePerms.isAdmin) {
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar reportes administrativos de Andelsa.', keyboard);
             return true;
         }
@@ -2012,6 +2075,54 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
     const chatId = msg.chat.id;
     const rawText = (msg.text || '').trim();
     const voicePrefix = contextOptions.voicePrefix || '';
+    const hasMedia = Boolean(msg.voice || msg.audio || (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0));
+    if (!rawText && !hasMedia) return;
+
+    // 1. Resolver y autenticar usuario ANTES de procesar voz, fotos OCR o consultas (fail-closed)
+    const user = await resolveTelegramUser(msg.from);
+    if (!user) {
+        await sendTelegramMessage(chatId, '⚠️ Error interno del sistema al identificar usuario.');
+        return;
+    }
+
+    const queryStartTime = Date.now();
+    try {
+        const { recordQueryReceived } = require('./telegramAuditorService');
+        recordQueryReceived(user.telegram_user_id);
+    } catch (_) {
+        // Ignorar
+    }
+
+    // 2. Verificar si está autorizado (activo = 1)
+    if (!user.activo) {
+        await logTelegramQuery(user.telegram_user_id, rawText || (msg.photo ? '[FOTO]' : '[VOZ]'), 'Acceso denegado (usuario inactivo)', 0);
+        const name = escapeHtml(user.first_name || 'Usuario');
+        const notAuthMsg = `⛔ <b>Acceso no autorizado</b>\n\n` +
+            `Hola <b>${name}</b>.\n` +
+            `Tu ID de Telegram es: <code>${escapeHtml(user.telegram_user_id)}</code>.\n\n` +
+            `Tu cuenta aún no tiene permisos para realizar consultas en <b>SIPE Admin</b>.\n` +
+            `Se ha registrado tu solicitud para que un administrador del sistema habilite tu acceso desde el panel web (<i>Seguridad &gt; Usuarios de Telegram</i>).`;
+        await sendTelegramMessage(chatId, notAuthMsg);
+        return;
+    }
+
+    // 2.1 Resolver permisos efectivos (heredados de SIPE o manuales)
+    const effectivePerms = await getUserEffectivePermissions(user);
+
+    // Si está vinculado pero su cuenta en SIPE Admin está inactiva
+    if (effectivePerms.inactiveInSipe) {
+        await logTelegramQuery(user.telegram_user_id, rawText || (msg.photo ? '[FOTO]' : '[VOZ]'), 'Acceso suspendido (usuario SIPE inactivo)', 0);
+        const name = escapeHtml(user.first_name || 'Usuario');
+        const inactiveMsg = `⛔ <b>Acceso Suspendido</b>\n\n` +
+            `Hola <b>${name}</b>.\n` +
+            `Tu cuenta de Telegram está vinculada al usuario de SIPE Admin <b>${escapeHtml(effectivePerms.linkedUser?.nombre || '')}</b>, el cual se encuentra actualmente <b>inactivo</b> en el sistema.\n` +
+            `Por favor contacta a un Administrador para reactivar tu cuenta.`;
+        await sendTelegramMessage(chatId, inactiveMsg);
+        return;
+    }
+
+    const MAX_TELEGRAM_MEDIA_BYTES = 10 * 1024 * 1024;
+    const isSafeTelegramFilePath = (fp) => typeof fp === 'string' && /^[a-zA-Z0-9/_.-]+$/.test(fp) && !fp.includes('..');
 
     // Detección de notas de voz o audios entrantes (Soporte Gemini 2.0 Flash)
     if (msg.voice || msg.audio) {
@@ -2020,6 +2131,12 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             recordVoiceNoteProcessed(msg.from.id);
         } catch (_) {
             // Ignorar defensivamente
+        }
+
+        const mediaSize = Number(msg.voice?.file_size || msg.audio?.file_size || 0);
+        if (mediaSize > MAX_TELEGRAM_MEDIA_BYTES) {
+            await sendTelegramMessage(chatId, '⚠️ El audio supera el límite permitido de 10 MB. Envía una nota de voz más breve.');
+            return;
         }
 
         sendChatAction(chatId, 'record_voice').catch(() => {});
@@ -2037,7 +2154,6 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             return;
         }
 
-        // Envío de feedback de progreso
         await sendTelegramMessage(chatId, '⏳ Escuchando y transcribiendo nota de voz...');
 
         let transcribedText = null;
@@ -2045,13 +2161,15 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             const fileId = msg.voice?.file_id || msg.audio?.file_id;
             const mimeType = msg.voice?.mime_type || msg.audio?.mime_type || 'audio/ogg';
             const { token } = await getBotToken();
-            const fileRes = await axios.get(`${TELEGRAM_API_BASE}${token}/getFile?file_id=${fileId}`, { timeout: 15000 });
+            const fileRes = await axios.get(`${TELEGRAM_API_BASE}${token}/getFile?file_id=${encodeURIComponent(fileId)}`, { timeout: 15000 });
             const filePath = fileRes.data?.result?.file_path;
-            if (!filePath) throw new Error('No se pudo resolver la ruta del audio en Telegram');
+            if (!isSafeTelegramFilePath(filePath)) throw new Error('Ruta de archivo de audio inválida');
 
             sendChatAction(chatId, 'typing').catch(() => {});
             const audioRes = await axios.get(`https://api.telegram.org/file/bot${token}/${filePath}`, {
                 responseType: 'arraybuffer',
+                maxContentLength: MAX_TELEGRAM_MEDIA_BYTES,
+                maxBodyLength: MAX_TELEGRAM_MEDIA_BYTES,
                 timeout: 30000
             });
             const audioBuffer = Buffer.from(audioRes.data);
@@ -2060,11 +2178,9 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         } catch (voiceErr) {
             console.error('[TelegramBot] Error en transcripción de audio:', voiceErr.message);
             try {
-                const { recordVoiceNoteFailed, recordError } = require('./telegramAuditorService');
-                recordVoiceNoteFailed(msg.from.id);
-                recordError({
-                    type: 'VOICE_TRANSCRIPTION_ERROR',
-                    message: voiceErr.message,
+                const { recordVoiceNoteFailed } = require('./telegramAuditorService');
+                recordVoiceNoteFailed({
+                    error: voiceErr.message,
                     userId: msg.from.id,
                     chatId
                 });
@@ -2075,7 +2191,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             const isKeyError = isGeminiApiKeyInvalidError(voiceErr);
             const friendlyReason = isKeyError
                 ? 'La clave de Gemini API configurada es inválida o ha expirado. Un administrador debe actualizarla en <b>Seguridad &gt; Usuarios de Telegram &gt; Configurar Token / IA</b> en SIPE Admin.'
-                : 'Ocurrió un inconveniente al descargar o transcribir tu audio (' + escapeHtml(voiceErr.message || 'error de procesamiento') + ').';
+                : 'Ocurrió un inconveniente al descargar o transcribir tu audio.';
 
             await sendTelegramMessage(
                 chatId,
@@ -2111,6 +2227,12 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
     if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
         sendChatAction(chatId, 'typing').catch(() => {});
 
+        const bestPhoto = msg.photo[msg.photo.length - 1];
+        if (Number(bestPhoto?.file_size || 0) > MAX_TELEGRAM_MEDIA_BYTES) {
+            await sendTelegramMessage(chatId, '⚠️ La imagen supera el límite permitido de 10 MB.');
+            return;
+        }
+
         const apiKey = await getGeminiApiKey();
         if (!apiKey) {
             await sendTelegramMessage(
@@ -2126,39 +2248,38 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         await sendTelegramMessage(chatId, '📸 Analizando imagen / comprobante con IA...');
 
         try {
-            const bestPhoto = msg.photo[msg.photo.length - 1];
             const fileId = bestPhoto.file_id;
             const { token } = await getBotToken();
-            const fileRes = await axios.get(`${TELEGRAM_API_BASE}${token}/getFile?file_id=${fileId}`, { timeout: 15000 });
+            const fileRes = await axios.get(`${TELEGRAM_API_BASE}${token}/getFile?file_id=${encodeURIComponent(fileId)}`, { timeout: 15000 });
             const filePath = fileRes.data?.result?.file_path;
-            if (!filePath) throw new Error('No se pudo resolver la ruta de la imagen en Telegram');
+            if (!isSafeTelegramFilePath(filePath)) throw new Error('Ruta de archivo de imagen inválida');
 
             sendChatAction(chatId, 'typing').catch(() => {});
             const imgRes = await axios.get(`https://api.telegram.org/file/bot${token}/${filePath}`, {
                 responseType: 'arraybuffer',
+                maxContentLength: MAX_TELEGRAM_MEDIA_BYTES,
+                maxBodyLength: MAX_TELEGRAM_MEDIA_BYTES,
                 timeout: 30000
             });
             const imageBuffer = Buffer.from(imgRes.data);
 
             const analysis = await analyzeTelegramImageReceipt(imageBuffer, 'image/jpeg', msg.caption || '');
-            const verification = await verifyReceiptInBankMovements(analysis);
+            // Solo consultar movimientos_bancarios si el usuario tiene permiso de bancos o es Admin
+            const canVerifyBank = Boolean(effectivePerms.saldos_banco || effectivePerms.isAdmin);
+            const verification = canVerifyBank
+                ? await verifyReceiptInBankMovements(analysis)
+                : { found: false, matches: [], restrictedByPermission: true };
             const reportMsg = formatReceiptAnalysisMessage(analysis, verification);
 
-            const photoUser = (await resolveTelegramUser(msg.from).catch(() => null)) || {
-                telegram_user_id: String(msg.from.id),
-                telegram_username: msg.from.username ? `@${msg.from.username}` : null,
-                first_name: msg.from.first_name || 'Usuario'
-            };
-
             await logTelegramQuery(
-                photoUser.telegram_user_id,
+                user.telegram_user_id,
                 'OCR_COMPROBANTE_FOTO',
                 `${analysis.tipo_documento || 'Comprobante'} - ${analysis.banco || ''} - $${analysis.monto_usd || 0}`,
                 1
             );
 
             await sendTelegramResponseWithFeedback(chatId, reportMsg, {
-                user: photoUser,
+                user,
                 query: msg.caption || 'Análisis de comprobante por imagen',
                 responseSummary: `OCR: ${analysis.banco || 'Doc'} $${analysis.monto_usd || 0} (Ref: ${analysis.referencia || 'S/N'})`
             });
@@ -2168,7 +2289,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             await sendTelegramMessage(
                 chatId,
                 '📸 <b>No se pudo procesar la imagen del comprobante</b>\n\n' +
-                'Ocurrió un inconveniente al analizar la fotografía (' + escapeHtml(imgErr.message || 'error de visión IA') + ').\n' +
+                'Ocurrió un inconveniente al analizar la fotografía.\n' +
                 'Por favor, asegúrate de que la imagen sea legible e intenta nuevamente.',
                 getMainReplyKeyboard()
             );
@@ -2177,49 +2298,6 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
     }
 
     if (!rawText) return;
-
-    // 1. Resolver usuario en la base de datos
-    const user = await resolveTelegramUser(msg.from);
-    if (!user) {
-        await sendTelegramMessage(chatId, '⚠️ Error interno del sistema al identificar usuario.');
-        return;
-    }
-
-    const queryStartTime = Date.now();
-    try {
-        const { recordQueryReceived } = require('./telegramAuditorService');
-        recordQueryReceived(user.telegram_user_id);
-    } catch (_) {
-        // Ignorar
-    }
-
-    // 2. Verificar si está autorizado (activo = 1)
-    if (!user.activo) {
-        await logTelegramQuery(user.telegram_user_id, rawText, 'Acceso denegado (usuario inactivo)', 0);
-        const name = escapeHtml(user.first_name || 'Usuario');
-        const notAuthMsg = `⛔ <b>Acceso no autorizado</b>\n\n` +
-            `Hola <b>${name}</b>.\n` +
-            `Tu ID de Telegram es: <code>${escapeHtml(user.telegram_user_id)}</code>.\n\n` +
-            `Tu cuenta aún no tiene permisos para realizar consultas en <b>SIPE Admin</b>.\n` +
-            `Se ha registrado tu solicitud para que un administrador del sistema habilite tu acceso desde el panel web (<i>Seguridad &gt; Usuarios de Telegram</i>).`;
-        await sendTelegramMessage(chatId, notAuthMsg);
-        return;
-    }
-
-    // 2.1 Resolver permisos efectivos (heredados de SIPE o manuales)
-    const effectivePerms = await getUserEffectivePermissions(user);
-
-    // Si está vinculado pero su cuenta en SIPE Admin está inactiva
-    if (effectivePerms.inactiveInSipe) {
-        await logTelegramQuery(user.telegram_user_id, rawText, 'Acceso suspendido (usuario SIPE inactivo)', 0);
-        const name = escapeHtml(user.first_name || 'Usuario');
-        const inactiveMsg = `⛔ <b>Acceso Suspendido</b>\n\n` +
-            `Hola <b>${name}</b>.\n` +
-            `Tu cuenta de Telegram está vinculada al usuario de SIPE Admin <b>${escapeHtml(effectivePerms.linkedUser?.nombre || '')}</b>, el cual se encuentra actualmente <b>inactivo</b> en el sistema.\n` +
-            `Por favor contacta a un Administrador para reactivar tu cuenta.`;
-        await sendTelegramMessage(chatId, inactiveMsg);
-        return;
-    }
 
     const keyboard = getMainReplyKeyboard();
     const cleanLower = rawText.toLowerCase().replace(/^[/\s]+/, '');
@@ -2303,7 +2381,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                     `INSERT INTO bitacora_logs (user_id, username, accion, entidad, entidad_id, detalles, ip_address)
                      VALUES (?, ?, 'JUSTIFY_DISCREPANCY', 'discrepancias', ?, ?, 'TelegramBot')`,
                     [
-                        user.user_id || 1,
+                        user.user_id || null,
                         user.telegram_username || user.first_name || 'telegram_user',
                         pendingJust.stationId || '008',
                         JSON.stringify({
@@ -2571,8 +2649,16 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de chequera.', keyboard);
             return;
         }
-        if (pdfTopic.includes('venta') && !effectivePerms.ventas) {
+        if (pdfTopic.includes('venta') && !effectivePerms.ventas && !effectivePerms.isAdmin) {
             await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de ventas.', keyboard);
+            return;
+        }
+        if (pdfTopic.includes('andelsa') && !effectivePerms.ventas && !effectivePerms.saldos_banco && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de Andelsa.', keyboard);
+            return;
+        }
+        if (pdfTopic.includes('solar') && !effectivePerms.ventas && !effectivePerms.alertas && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para exportar reportes de energía solar.', keyboard);
             return;
         }
 
@@ -2800,8 +2886,8 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
 /**
  * Ciclo principal de Long Polling para Telegram Bot
  */
-const runPollingLoop = async () => {
-    while (runtimeState.isPollingActive) {
+const runPollingLoop = async (generation) => {
+    while (runtimeState.isPollingActive && runtimeState.pollingGeneration === generation) {
         try {
             const { token, isActive } = await getBotToken();
             if (!isActive || !token) {
@@ -2910,8 +2996,10 @@ const initTelegramBot = async () => {
             console.warn('[TelegramBot] Advertencia: no se pudo verificar getMe de inmediato:', connErr.message);
         }
 
+        runtimeState.pollingGeneration = (runtimeState.pollingGeneration || 0) + 1;
+        const activeGen = runtimeState.pollingGeneration;
         runtimeState.isPollingActive = true;
-        runPollingLoop().catch(e => console.error('[TelegramBot] Fallo crítico en polling loop:', e));
+        runPollingLoop(activeGen).catch(e => console.error('[TelegramBot] Fallo crítico en polling loop:', e));
     } catch (e) {
         console.error('[TelegramBot] Error al inicializar bot:', e.message);
     }
@@ -2922,6 +3010,7 @@ const initTelegramBot = async () => {
  */
 const stopTelegramBot = () => {
     runtimeState.isPollingActive = false;
+    runtimeState.pollingGeneration = (runtimeState.pollingGeneration || 0) + 1;
 };
 
 /**

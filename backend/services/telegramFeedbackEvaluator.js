@@ -326,7 +326,7 @@ const buildDeterministicExecutiveFallback = async (queryText) => {
     msg += `• Liquidez Total en Cuentas: <b>${moneyFmt(bancos?.total || 0)}</b> (${(bancos?.cuentas || []).length} cuentas)\n\n`;
     msg += `🛢️ <b>Inventario de Tanques y Pedidos Puma:</b>\n`;
     msg += `• Tanques monitoreados: <code>${tanquesArr.length}</code> (Críticos &lt;24h: <b>${criticos.length}</b>)\n`;
-    msg += `• Pedidos Puma activos: <code>${pedidos?.resumen?.activos || 0}</code> (En tránsito: <code>${pedidos?.resumen?.en_transito || 0}</code> | Retenidos: <b>${pedidos?.resumen?.retenidos || 0}</b>)\n\n`;
+    msg += `• Pedidos Puma activos: <code>${pedidos?.resumen?.total_activos ?? pedidos?.resumen?.activos ?? 0}</code> (En tránsito: <code>${pedidos?.resumen?.en_transito || 0}</code> | Retenidos: <b>${pedidos?.resumen?.retenidos || 0}</b>)\n\n`;
     msg += `<i>SIPE Admin • Motor de Respuesta Ejecutiva</i>`;
     return msg;
 };
@@ -396,9 +396,12 @@ const generateImprovedResponseForFeedback = async (fb = {}, options = {}) => {
         } else if (parsed.isSolar) {
             const targetStationId = parsed.matchedStation ? (parsed.matchedStation.branch_id || parsed.matchedStation.id || parsed.matchedStation.name) : null;
             if (parsed.isMonthly) {
-                const solarData = await solarEnergyService.getSolarResumenMensual(parsed.periodo, targetStationId);
-                const monthName = SPANISH_MONTH_NAMES[(parsed.month || 1) - 1] || 'Mes';
-                htmlOut = formatSolarEnergyMessage(solarData, 'mensual', `${monthName} ${parsed.year}`);
+                const now = new Date();
+                const targetYear = parsed.targetYear || parsed.year || now.getFullYear();
+                const targetMonth = parsed.targetMonth || parsed.month || (now.getMonth() + 1);
+                const solarData = await solarEnergyService.getSolarAhorroMensual(targetYear, targetMonth, targetStationId);
+                const monthName = SPANISH_MONTH_NAMES[targetMonth] || 'Mes';
+                htmlOut = formatSolarEnergyMessage(solarData, 'mensual', `${monthName} ${targetYear}`);
             } else {
                 const solarData = await solarEnergyService.getSolarEstadoActual(targetStationId);
                 htmlOut = formatSolarEnergyMessage(solarData, 'estado_actual', parsed.matchedStation ? parsed.matchedStation.name : null);
@@ -406,7 +409,7 @@ const generateImprovedResponseForFeedback = async (fb = {}, options = {}) => {
         } else if (parsed.isHourlyPeak) {
             const branchId = parsed.matchedStation ? (parsed.matchedStation.saas_branch_id || parsed.matchedStation.branch_id || null) : null;
             const targetDate = parsed.targetDate || getDateStr(-1);
-            const peakData = await salesHourlyService.getHorasPicoDia(targetDate, branchId);
+            const peakData = await salesHourlyService.getHorasPicoVentas(targetDate, branchId);
             htmlOut = formatHorasPicoMessage(peakData, toDisplayDate(targetDate), false);
         } else if (parsed.isTanques) {
             const tanquesData = await getTanquesAutonomia().catch(() => ({ tanques: [] }));

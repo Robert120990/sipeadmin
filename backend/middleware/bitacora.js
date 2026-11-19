@@ -18,7 +18,7 @@ function logAction(db, req, accion, entidad, entidadId, detalles) {
     });
 }
 
-const SENSITIVE_KEY_REGEX = /^(pass(word)?|token|secret|key|apiKey|authorization|pin|cvv|credentials)$/i;
+const SENSITIVE_KEY_REGEX = /(pass(word)?|token|secret|api[_-]?key|private[_-]?key|auth(orization)?|credential|pin|cvv)/i;
 
 function sanitizeData(data, depth = 0) {
     if (!data || depth > 5) return data;
@@ -30,7 +30,7 @@ function sanitizeData(data, depth = 0) {
 
     const sanitized = {};
     for (const [k, v] of Object.entries(data)) {
-        if (SENSITIVE_KEY_REGEX.test(k) || k.toLowerCase().includes('password') || k.toLowerCase().includes('secret')) {
+        if (SENSITIVE_KEY_REGEX.test(k)) {
             sanitized[k] = '***';
         } else if (v && typeof v === 'object') {
             sanitized[k] = sanitizeData(v, depth + 1);

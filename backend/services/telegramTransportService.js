@@ -7,6 +7,7 @@ const DEFAULT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
 const runtimeState = {
     isPollingActive: false,
+    pollingGeneration: 0,
     lastPollAt: null,
     currentOffset: 0,
     botInfo: null,
@@ -14,18 +15,40 @@ const runtimeState = {
 };
 
 /**
- * Obtener token activo desde base de datos o variable de entorno
+ * Redactar secretos (tokens de Telegram / claves de API) antes de registrar logs o errores
+ */
+const redactSecrets = (text = '') => {
+    return String(text || '')
+        .replace(/bot\d+:[A-Za-z0-9_-]{20,}/g, 'bot[REDACTED]')
+        .replace(/\b\d{8,12}:[A-Za-z0-9_-]{30,55}\b/g, '[REDACTED_TELEGRAM_TOKEN]')
+        .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_GEMINI_KEY]');
+};
+
+let tokenCache = { dbRef: null, value: null, expiresAt: 0 };
+
+const invalidateBotTokenCache = () => {
+    tokenCache = { dbRef: null, value: null, expiresAt: 0 };
+};
+
+/**
+ * Obtener token activo desde base de datos o variable de entorno (con caché breve por pool)
  */
 const getBotToken = async () => {
     try {
         const db = getDb();
+        const now = Date.now();
+        if (db && tokenCache.dbRef === db && tokenCache.value && now < tokenCache.expiresAt) {
+            return tokenCache.value;
+        }
         if (db) {
             const [rows] = await db.query('SELECT bot_token, is_active FROM telegram_config WHERE id = 1 LIMIT 1');
             if (rows && rows.length > 0 && rows[0].bot_token) {
-                return {
+                const resolved = {
                     token: rows[0].bot_token.trim(),
                     isActive: Boolean(rows[0].is_active)
                 };
+                tokenCache = { dbRef: db, value: resolved, expiresAt: now + 20000 };
+                return resolved;
             }
         }
     } catch (e) {
@@ -35,6 +58,27 @@ const getBotToken = async () => {
         token: (process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TOKEN).trim(),
         isActive: true
     };
+};
+
+/**
+ * Fragmentar mensajes extensos respetando el límite de 4096 caracteres de Telegram
+ */
+const splitTelegramMessageChunks = (rawText, maxLen = 4000) => {
+    const str = String(rawText || '');
+    if (str.length <= maxLen) return [str];
+    const chunks = [];
+    let remaining = str;
+    while (remaining.length > maxLen) {
+        let splitIdx = remaining.lastIndexOf('\n', maxLen);
+        if (splitIdx < Math.floor(maxLen * 0.4)) {
+            splitIdx = remaining.lastIndexOf(' ', maxLen);
+        }
+        if (splitIdx <= 0) splitIdx = maxLen;
+        chunks.push(remaining.slice(0, splitIdx).trimEnd());
+        remaining = remaining.slice(splitIdx).trimStart();
+    }
+    if (remaining.length > 0) chunks.push(remaining);
+    return chunks;
 };
 
 /**
@@ -69,44 +113,52 @@ const testTelegramConnection = async (customToken = null) => {
 };
 
 /**
- * Enviar mensaje a un chat de Telegram
+ * Enviar mensaje a un chat de Telegram (con fragmentación automática <= 4000 chars y fallback seguro)
  */
 const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
     const { token } = await getBotToken();
     if (!token) return null;
 
-    const payload = {
-        chat_id: chatId,
-        text,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true
-    };
+    const chunks = splitTelegramMessageChunks(text, 4000);
+    let lastResult = null;
 
-    if (replyMarkup) {
-        payload.reply_markup = replyMarkup;
-    }
+    for (let i = 0; i < chunks.length; i++) {
+        const chunkText = chunks[i];
+        const isLast = i === chunks.length - 1;
+        const payload = {
+            chat_id: chatId,
+            text: chunkText,
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+        };
 
-    try {
-        const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
-        return res.data?.result || null;
-    } catch (err) {
-        // Si falló por formato HTML, intentar enviar como texto plano
-        if (err.response?.data?.description?.includes('can\'t parse entities')) {
-            const plainText = text.replace(/<[^>]*>?/gm, '');
-            delete payload.parse_mode;
-            payload.text = plainText;
-            try {
-                const fallbackRes = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
-                return fallbackRes.data?.result || null;
-            } catch (fbErr) {
-                console.error('[TelegramBot] Error enviando mensaje plano fallback:', fbErr.message);
+        if (isLast && replyMarkup) {
+            payload.reply_markup = replyMarkup;
+        }
+
+        try {
+            const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
+            lastResult = res.data?.result || null;
+        } catch (err) {
+            if (err.response?.data?.description?.includes('can\'t parse entities')) {
+                const plainText = chunkText.replace(/<[^>]*>?/gm, '');
+                delete payload.parse_mode;
+                payload.text = plainText;
+                try {
+                    const fallbackRes = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
+                    lastResult = fallbackRes.data?.result || null;
+                } catch (fbErr) {
+                    console.error('[TelegramBot] Error enviando mensaje plano fallback:', redactSecrets(fbErr.message));
+                    return null;
+                }
+            } else {
+                console.error('[TelegramBot] Error enviando mensaje a chat:', chatId, redactSecrets(err.message));
                 return null;
             }
-        } else {
-            console.error('[TelegramBot] Error enviando mensaje a chat:', chatId, err.message);
-            return null;
         }
     }
+
+    return lastResult;
 };
 
 /**
@@ -122,7 +174,7 @@ const sendChatAction = async (chatId, action = 'typing') => {
         }, { timeout: 3000 });
         return { ok: true, result: true };
     } catch (err) {
-        return { ok: false, error: err.message };
+        return { ok: false, error: redactSecrets(err.message) };
     }
 };
 
@@ -137,10 +189,11 @@ const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE
     const { token } = await getBotToken();
     if (!token) return null;
 
+    const safeCaption = caption ? String(caption).slice(0, 1020) : '';
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
-    if (caption) {
-        formData.append('caption', String(caption));
+    if (safeCaption) {
+        formData.append('caption', safeCaption);
         formData.append('parse_mode', 'HTML');
     }
     const blob = new Blob([fileBuffer], { type: 'application/pdf' });
@@ -148,7 +201,7 @@ const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE
 
     // Propiedades descriptivas adjuntas para inspección y pruebas
     formData.chat_id = chatId;
-    formData.caption = caption;
+    formData.caption = safeCaption;
     formData.parse_mode = 'HTML';
     formData.filename = filename;
     formData.fileBuffer = fileBuffer;
@@ -159,7 +212,7 @@ const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE
         });
         return res.data?.result || res.data || null;
     } catch (err) {
-        console.error('[TelegramBot] Error enviando documento a chat:', chatId, err.message);
+        console.error('[TelegramBot] Error enviando documento a chat:', chatId, redactSecrets(err.message));
         return null;
     }
 };
@@ -220,7 +273,7 @@ const answerCallbackQuery = async (callbackQueryId, text = '', showAlert = false
             show_alert: showAlert
         }, { timeout: 10000 });
     } catch (err) {
-        console.warn('[TelegramBot] Error en answerCallbackQuery:', err.message);
+        console.warn('[TelegramBot] Error en answerCallbackQuery:', redactSecrets(err.message));
     }
 };
 
@@ -237,7 +290,7 @@ const editMessageReplyMarkup = async (chatId, messageId, replyMarkup = null) => 
             reply_markup: replyMarkup || { inline_keyboard: [] }
         }, { timeout: 10000 });
     } catch (err) {
-        console.warn('[TelegramBot] Error en editMessageReplyMarkup:', err.message);
+        console.warn('[TelegramBot] Error en editMessageReplyMarkup:', redactSecrets(err.message));
     }
 };
 
@@ -275,6 +328,9 @@ module.exports = {
     TELEGRAM_API_BASE,
     DEFAULT_TOKEN,
     runtimeState,
+    redactSecrets,
+    invalidateBotTokenCache,
+    splitTelegramMessageChunks,
     getBotToken,
     getMainReplyKeyboard,
     testTelegramConnection,
