@@ -473,32 +473,67 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
         }
     }
 
+    const useReviewBranch = process.env.AGY_DIRECT_MAIN !== 'true';
+    let reviewBranch = null;
+    let baseBranch = 'main';
+    let commitHash = null;
+    let diffStat = '';
+    let compareUrl = null;
+
     if (autoCommitPush && process.env.NODE_ENV === 'production') {
         try {
-            if (targetRepo.isAdmin) {
-                const pkgPath = path.join(rootResolved, 'frontend/package.json');
-                if (fs.existsSync(pkgPath)) {
-                    const pkgObj = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                    const parts = String(pkgObj.version || '1.0.0').split('.').map((n) => parseInt(n, 10) || 0);
-                    parts[2] = (parts[2] || 0) + 1;
-                    pkgObj.version = parts.join('.');
-                    fs.writeFileSync(pkgPath, `${JSON.stringify(pkgObj, null, 2)}\n`, 'utf8');
-                    if (!modifiedFiles.includes('frontend/package.json')) modifiedFiles.push('frontend/package.json');
+            baseBranch = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim() || 'main';
+            if (baseBranch.startsWith('agy/ticket-')) baseBranch = 'main';
+
+            try {
+                diffStat = execFileSync('git', ['-c', 'safe.directory=*', 'diff', '--stat', '--', ...modifiedFiles], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }).toString().trim();
+            } catch (_) { /* ignore */ }
+
+            if (useReviewBranch) {
+                reviewBranch = buildAgyReviewBranchName(ticket.ticket_code);
+                execFileSync('git', ['-c', 'safe.directory=*', 'checkout', '-B', reviewBranch], { cwd: rootResolved, timeout: 10000, stdio: 'pipe' });
+                execFileSync('git', ['-c', 'safe.directory=*', 'add', '--', ...modifiedFiles], { cwd: rootResolved, timeout: 12000, stdio: 'pipe' });
+                const cleanSubj = String(ticket.subject || 'ajuste ticket').replace(/["`$\\\r\n]/g, ' ').trim().slice(0, 68);
+                execFileSync(
+                    'git',
+                    ['-c', 'safe.directory=*', '-c', 'user.name=AGY Server Bot', '-c', 'user.email=agy@sipesv.com', 'commit', '-m', `fix(agy): propuesta #${ticket.ticket_code} - ${cleanSubj}`],
+                    { cwd: rootResolved, timeout: 15000, stdio: 'pipe' }
+                );
+                commitHash = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--short', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim();
+                execFileSync('git', ['-c', 'safe.directory=*', 'push', '-f', 'origin', reviewBranch], { cwd: rootResolved, timeout: 25000, stdio: 'pipe' });
+                // Volver inmediatamente a main para mantener producción limpia hasta aprobación humana
+                execFileSync('git', ['-c', 'safe.directory=*', 'checkout', baseBranch], { cwd: rootResolved, timeout: 10000, stdio: 'pipe' });
+                compareUrl = resolveGithubCompareUrl(rootResolved, baseBranch, reviewBranch);
+                stepLogs.push(`Rama de revisión ${reviewBranch} (${commitHash}) publicada en GitHub. Esperando aprobación para fusionar en ${baseBranch}.`);
+            } else {
+                if (targetRepo.isAdmin) {
+                    const pkgPath = path.join(rootResolved, 'frontend/package.json');
+                    if (fs.existsSync(pkgPath)) {
+                        const pkgObj = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                        const parts = String(pkgObj.version || '1.0.0').split('.').map((n) => parseInt(n, 10) || 0);
+                        parts[2] = (parts[2] || 0) + 1;
+                        pkgObj.version = parts.join('.');
+                        fs.writeFileSync(pkgPath, `${JSON.stringify(pkgObj, null, 2)}\n`, 'utf8');
+                        if (!modifiedFiles.includes('frontend/package.json')) modifiedFiles.push('frontend/package.json');
+                    }
                 }
+                execFileSync('git', ['-c', 'safe.directory=*', 'add', '--', ...modifiedFiles], { cwd: rootResolved, timeout: 12000, stdio: 'pipe' });
+                const cleanSubj = String(ticket.subject || 'ajuste ticket').replace(/["`$\\\r\n]/g, ' ').trim().slice(0, 68);
+                execFileSync(
+                    'git',
+                    ['-c', 'safe.directory=*', '-c', 'user.name=AGY Server Bot', '-c', 'user.email=agy@sipesv.com', 'commit', '-m', `fix(agy): resolver #${ticket.ticket_code} - ${cleanSubj}`],
+                    { cwd: rootResolved, timeout: 15000, stdio: 'pipe' }
+                );
+                commitHash = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--short', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim();
+                execFileSync('git', ['-c', 'safe.directory=*', 'pull', '--rebase', '--autostash', 'origin', baseBranch], { cwd: rootResolved, timeout: 25000, stdio: 'pipe' });
+                execFileSync('git', ['-c', 'safe.directory=*', 'push', 'origin', baseBranch], { cwd: rootResolved, timeout: 25000, stdio: 'pipe' });
+                stepLogs.push(`Cambios sincronizados en GitHub (origin/${baseBranch}).`);
             }
-            execFileSync('git', ['-c', 'safe.directory=*', 'add', '--', ...modifiedFiles], { cwd: rootResolved, timeout: 12000, stdio: 'pipe' });
-            const cleanSubj = String(ticket.subject || 'ajuste ticket').replace(/["`$\\]/g, '').slice(0, 68);
-            execFileSync(
-                'git',
-                ['-c', 'safe.directory=*', '-c', 'user.name=AGY Server Bot', '-c', 'user.email=agy@sipesv.com', 'commit', '-m', `fix(agy): resolver #${ticket.ticket_code} - ${cleanSubj}`],
-                { cwd: rootResolved, timeout: 15000, stdio: 'pipe' }
-            );
-            const branch = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim() || 'main';
-            execFileSync('git', ['-c', 'safe.directory=*', 'pull', '--rebase', '--autostash', 'origin', branch], { cwd: rootResolved, timeout: 25000, stdio: 'pipe' });
-            execFileSync('git', ['-c', 'safe.directory=*', 'push', 'origin', branch], { cwd: rootResolved, timeout: 25000, stdio: 'pipe' });
-            stepLogs.push(`Cambios sincronizados en GitHub (origin/${branch}).`);
         } catch (gErr) {
-            stepLogs.push(`Git local: ${String(gErr.message || '').slice(0, 120)}`);
+            try {
+                execFileSync('git', ['-c', 'safe.directory=*', 'checkout', baseBranch], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' });
+            } catch (_) { /* ignore */ }
+            stepLogs.push(`Git local: ${String(gErr.message || '').slice(0, 140)}`);
         }
     }
 
@@ -506,6 +541,34 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
         stepLogs[0] || `Solución implementada mediante Consola AGY (${chosenModel}).`,
         `Archivos actualizados: ${modifiedFiles.join(', ')}`
     ].join(' — ');
+
+    if (useReviewBranch && reviewBranch) {
+        const logLine = `[${new Date().toISOString()}] 🔍 Rama ${reviewBranch} (${commitHash || 'local'}) lista para revisión${compareUrl ? ` (${compareUrl})` : ''}. Archivos: ${modifiedFiles.join(', ')}`;
+        await pool.query(
+            `UPDATE support_tickets
+             SET agy_status = 'esperando_fusion',
+                 agy_execution_log = CONCAT(COALESCE(agy_execution_log, ''), '\n', ?),
+                 agy_updated_at = NOW()
+             WHERE id = ?`,
+            [logLine, ticket.id]
+        ).catch(() => {});
+        const reviewTicket = await ticketService.getTicketById(ticket.id);
+        return {
+            success: true,
+            awaitingMerge: true,
+            reviewBranch,
+            baseBranch,
+            commitHash,
+            diffStat,
+            compareUrl,
+            modifiedFiles,
+            summary: summaryNotes,
+            stepLogs,
+            ticket: reviewTicket,
+            chosenModel,
+            targetRepo
+        };
+    }
 
     const resolvedTicket = await ticketService.executeApprovedPlan(ticket.id, {
         actorId,
@@ -515,6 +578,7 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
 
     return {
         success: true,
+        awaitingMerge: false,
         modifiedFiles,
         summary: summaryNotes,
         stepLogs,
@@ -524,8 +588,149 @@ Reglas: "search" debe coincidir con el código suministrado; prohibido modificar
     };
 }
 
+async function mergeAgyReviewBranchOnServer(ticket, { actorId = null, actorName = 'Telegram Admin' } = {}) {
+    const agySettings = await ticketService.getAgySettings();
+    const repoKey = resolveRepoKeyForTicket(ticket);
+    const targetRepo = growthAgyService.resolveTargetRepo(repoKey, agySettings);
+    const rootResolved = path.resolve(targetRepo.projectPath);
+    const reviewBranch = buildAgyReviewBranchName(ticket.ticket_code);
+    const chosenModel = resolveEffectiveModelForTicket(ticket, agySettings);
+
+    if (!targetRepo.existsLocally || !fs.existsSync(rootResolved)) {
+        return { success: false, summary: `⚠️ Repositorio ${targetRepo.label} no accesible localmente.`, reviewBranch };
+    }
+
+    let baseBranch = 'main';
+    let bumpedVersion = null;
+    try {
+        execFileSync('git', ['-c', 'safe.directory=*', 'fetch', '--all', '--prune'], { cwd: rootResolved, timeout: 20000, stdio: 'pipe' });
+        const curBranch = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim();
+        baseBranch = curBranch && !curBranch.startsWith('agy/ticket-') ? curBranch : 'main';
+        execFileSync('git', ['-c', 'safe.directory=*', 'checkout', baseBranch], { cwd: rootResolved, timeout: 10000, stdio: 'pipe' });
+        execFileSync('git', ['-c', 'safe.directory=*', 'pull', '--rebase', '--autostash', 'origin', baseBranch], { cwd: rootResolved, timeout: 25000, stdio: 'pipe' });
+
+        // Determinar ref de la rama de revisión (origin/agy/... o local)
+        let mergeRef = `origin/${reviewBranch}`;
+        try {
+            execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--verify', mergeRef], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' });
+        } catch (_) {
+            mergeRef = reviewBranch;
+        }
+
+        const cleanSubj = String(ticket.subject || 'ajuste ticket').replace(/["`$\\\r\n]/g, ' ').trim().slice(0, 68);
+        execFileSync(
+            'git',
+            ['-c', 'safe.directory=*', '-c', 'user.name=AGY Server Bot', '-c', 'user.email=agy@sipesv.com', 'merge', '--no-ff', mergeRef, '-m', `merge(agy): aprobar y publicar #${ticket.ticket_code} - ${cleanSubj}`],
+            { cwd: rootResolved, timeout: 20000, stdio: 'pipe' }
+        );
+
+        // Si es SIPE Admin, incrementar versión patch tras la fusión
+        if (targetRepo.isAdmin) {
+            const pkgPath = path.join(rootResolved, 'frontend/package.json');
+            if (fs.existsSync(pkgPath)) {
+                const pkgObj = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                const parts = String(pkgObj.version || '1.0.0').split('.').map((n) => parseInt(n, 10) || 0);
+                parts[2] = (parts[2] || 0) + 1;
+                pkgObj.version = parts.join('.');
+                bumpedVersion = `v${pkgObj.version}`;
+                fs.writeFileSync(pkgPath, `${JSON.stringify(pkgObj, null, 2)}\n`, 'utf8');
+                execFileSync('git', ['-c', 'safe.directory=*', 'add', '--', 'frontend/package.json'], { cwd: rootResolved, timeout: 10000, stdio: 'pipe' });
+                execFileSync(
+                    'git',
+                    ['-c', 'safe.directory=*', '-c', 'user.name=AGY Server Bot', '-c', 'user.email=agy@sipesv.com', 'commit', '-m', `chore: incrementar version a ${pkgObj.version}`],
+                    { cwd: rootResolved, timeout: 15000, stdio: 'pipe' }
+                );
+            }
+        }
+
+        // Compilar frontend tras la fusión antes de empujar a main
+        const frontendDir = path.join(rootResolved, targetRepo.frontendDir);
+        if (fs.existsSync(frontendDir)) {
+            const buildCmd = targetRepo.isAdmin
+                ? 'pnpm --filter frontend run build || npm --prefix frontend run build'
+                : 'npm --prefix client run build || pnpm --filter client run build';
+            execSync(buildCmd, { cwd: rootResolved, timeout: 150000, stdio: 'pipe' });
+        }
+
+        execFileSync('git', ['-c', 'safe.directory=*', 'push', 'origin', baseBranch], { cwd: rootResolved, timeout: 25000, stdio: 'pipe' });
+
+        // Limpiar rama temporal local y remota
+        try { execFileSync('git', ['-c', 'safe.directory=*', 'branch', '-D', reviewBranch], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }); } catch (_) { /* ignore */ }
+        try { execFileSync('git', ['-c', 'safe.directory=*', 'push', 'origin', '--delete', reviewBranch], { cwd: rootResolved, timeout: 15000, stdio: 'pipe' }); } catch (_) { /* ignore */ }
+
+        const finalHash = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--short', 'HEAD'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim();
+        const summary = `Rama ${reviewBranch} fusionada en ${baseBranch} (${finalHash}${bumpedVersion ? ` · ${bumpedVersion}` : ''}) y desplegada.`;
+        const resolvedTicket = await ticketService.executeApprovedPlan(ticket.id, {
+            actorId,
+            actorName,
+            resolutionNotes: summary,
+            resolvedVersion: bumpedVersion
+        });
+        return { success: true, reviewBranch, baseBranch, commitHash: finalHash, version: bumpedVersion, summary, chosenModel, ticket: resolvedTicket };
+    } catch (err) {
+        try { execFileSync('git', ['-c', 'safe.directory=*', 'merge', '--abort'], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }); } catch (_) { /* ignore */ }
+        return { success: false, reviewBranch, baseBranch, summary: `❌ No se pudo fusionar ${reviewBranch}: ${String(err.message || '').slice(0, 220)}` };
+    }
+}
+
+async function discardAgyReviewBranchOnServer(ticket, { actorName = 'Telegram Admin' } = {}) {
+    const agySettings = await ticketService.getAgySettings();
+    const repoKey = resolveRepoKeyForTicket(ticket);
+    const targetRepo = growthAgyService.resolveTargetRepo(repoKey, agySettings);
+    const rootResolved = path.resolve(targetRepo.projectPath);
+    const reviewBranch = buildAgyReviewBranchName(ticket.ticket_code);
+
+    if (targetRepo.existsLocally && fs.existsSync(rootResolved)) {
+        try { execFileSync('git', ['-c', 'safe.directory=*', 'checkout', 'main'], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }); } catch (_) { /* ignore */ }
+        try { execFileSync('git', ['-c', 'safe.directory=*', 'branch', '-D', reviewBranch], { cwd: rootResolved, timeout: 8000, stdio: 'pipe' }); } catch (_) { /* ignore */ }
+        try { execFileSync('git', ['-c', 'safe.directory=*', 'push', 'origin', '--delete', reviewBranch], { cwd: rootResolved, timeout: 15000, stdio: 'pipe' }); } catch (_) { /* ignore */ }
+    }
+
+    await ticketService.rejectPlan(ticket.id, {
+        reason: `Rama de revisión ${reviewBranch} descartada desde Telegram`,
+        actorName
+    });
+    return { success: true, reviewBranch, summary: `🗑️ Rama ${reviewBranch} descartada. Ningún cambio afectó main.` };
+}
+
+function buildAgyReviewBranchName(ticketCode = '') {
+    const slug = String(ticketCode || 'ticket').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
+    return `agy/ticket-${slug}`;
+}
+
+function resolveGithubCompareUrl(rootResolved, baseBranch = 'main', reviewBranch = '') {
+    if (!reviewBranch) return null;
+    try {
+        const remoteUrl = execFileSync('git', ['-c', 'safe.directory=*', 'remote', 'get-url', 'origin'], { cwd: rootResolved, timeout: 5000, stdio: 'pipe' }).toString().trim();
+        const match = remoteUrl.match(/github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
+        if (match && match[1]) {
+            return `https://github.com/${match[1]}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(reviewBranch)}`;
+        }
+    } catch (_) { /* ignore */ }
+    return null;
+}
+
+function buildBranchReviewKeyboard(ticketId, modelId = ticketService.DEFAULT_AGY_MODEL, compareUrl = null) {
+    const shortModel = ticketService.getModelShortLabel(modelId);
+    const rows = [
+        [{ text: '🚀 Fusionar a main y Desplegar', callback_data: `agy_merge_branch:${ticketId}` }],
+        [
+            { text: '🗑️ Descartar Rama', callback_data: `agy_discard_branch:${ticketId}` },
+            { text: '✏️ Pedir Ajustes', callback_data: `agy_plan_feedback:${ticketId}` }
+        ],
+        [{ text: `🧠 Cambiar Modelo (${shortModel})`, callback_data: `agy_model_menu:${ticketId}` }]
+    ];
+    if (compareUrl && /^https:\/\/github\.com\//i.test(compareUrl)) {
+        rows.splice(1, 0, [{ text: '🔍 Ver Diff en GitHub', url: compareUrl }]);
+    }
+    return { inline_keyboard: rows };
+}
+
 function buildCurrentKeyboardForTicket(ticket, activeModel) {
     if (!ticket) return { inline_keyboard: [] };
+    if (ticket.agy_status === 'esperando_fusion') {
+        return buildBranchReviewKeyboard(ticket.id, activeModel);
+    }
     if (ticket.agy_status === 'esperando_aprobacion') {
         return buildPlanApprovalKeyboard(ticket.id, activeModel);
     }
@@ -819,6 +1024,24 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
                     );
                     return;
                 }
+                if (execRes.awaitingMerge && execRes.reviewBranch) {
+                    const reviewKb = buildBranchReviewKeyboard(ticket.id, usedModel, execRes.compareUrl);
+                    if (chatId && messageId) {
+                        await editMessageReplyMarkup(chatId, messageId, reviewKb).catch(() => {});
+                    }
+                    await sendTelegramMessage(
+                        chatId,
+                        `🔍 <b>RAMA DE REVISIÓN LISTA — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                        `🌿 <b>Rama:</b> <code>${escapeHtmlLocal(execRes.reviewBranch)}</code> (<code>${escapeHtmlLocal(execRes.commitHash || 'local')}</code>)\n` +
+                        `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(usedModel)}</code>\n` +
+                        `📌 <b>Asunto:</b> ${escapeHtmlLocal(ticket.subject)}\n` +
+                        `📦 <b>Archivos:</b> <code>${escapeHtmlLocal(execRes.modifiedFiles.join(', '))}</code>\n` +
+                        (execRes.diffStat ? `\n<pre>${escapeHtmlLocal(execRes.diffStat.slice(0, 600))}</pre>\n` : '\n') +
+                        `🛡️ <i><b>main</b> permanece intacta. Revisa el diff y pulsa <b>Fusionar a main y Desplegar</b> cuando estés listo:</i>`,
+                        reviewKb
+                    );
+                    return;
+                }
                 if (chatId && messageId) {
                     await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] }).catch(() => {});
                 }
@@ -838,6 +1061,57 @@ async function handleTicketCallback(cq, tgHelpers, { tgUser = null, effPerms = {
                 );
             }
         });
+        return true;
+    }
+
+    if (action === 'agy_merge_branch') {
+        await answerCallbackQuery(cq.id, '🚀 Fusionando rama de revisión a main y desplegando...');
+        if (chatId && messageId) {
+            await editMessageReplyMarkup(chatId, messageId, {
+                inline_keyboard: [[{ text: '🚀 Fusionando y compilando main...', callback_data: 'agy_noop' }]]
+            }).catch(() => {});
+        }
+        setImmediate(async () => {
+            try {
+                const mRes = await mergeAgyReviewBranchOnServer(ticket, {
+                    actorId: effPerms?.linkedUser?.id || null,
+                    actorName
+                });
+                if (!mRes.success) {
+                    if (chatId && messageId) {
+                        await editMessageReplyMarkup(chatId, messageId, buildBranchReviewKeyboard(ticket.id, activeModel)).catch(() => {});
+                    }
+                    await sendTelegramMessage(chatId, `${escapeHtmlLocal(mRes.summary)}`, buildBranchReviewKeyboard(ticket.id, activeModel));
+                    return;
+                }
+                if (chatId && messageId) {
+                    await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] }).catch(() => {});
+                }
+                await sendTelegramMessage(
+                    chatId,
+                    `🚀 <b>FUSIÓN COMPLETADA Y DESPLEGADA — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                    `🌿 <b>Rama fusionada:</b> <code>${escapeHtmlLocal(mRes.reviewBranch)}</code> → <code>${escapeHtmlLocal(mRes.baseBranch)}</code>\n` +
+                    `🏷️ <b>Commit:</b> <code>${escapeHtmlLocal(mRes.commitHash || '')}</code>${mRes.version ? ` · <b>${escapeHtmlLocal(mRes.version)}</b>` : ''}\n` +
+                    `✅ <i>Ticket marcado como <b>Resuelto</b> y rama temporal limpiada.</i>`
+                );
+            } catch (err) {
+                await sendTelegramMessage(chatId, `⚠️ Error fusionando rama de #${escapeHtmlLocal(ticket.ticket_code)}: ${escapeHtmlLocal(err.message)}`);
+            }
+        });
+        return true;
+    }
+
+    if (action === 'agy_discard_branch') {
+        await answerCallbackQuery(cq.id, '🗑️ Descartando rama de revisión...');
+        const dRes = await discardAgyReviewBranchOnServer(ticket, { actorName });
+        if (chatId && messageId) {
+            await editMessageReplyMarkup(chatId, messageId, buildTicketActionKeyboard(ticket.id, ticket.status, activeModel)).catch(() => {});
+        }
+        await sendTelegramMessage(
+            chatId,
+            `${escapeHtmlLocal(dRes.summary)}\n📌 <b>Ticket #${escapeHtmlLocal(ticket.ticket_code)}</b> sigue abierto para re-planificar.`,
+            buildTicketActionKeyboard(ticket.id, ticket.status, activeModel)
+        );
         return true;
     }
 
@@ -928,7 +1202,7 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
         }
     }
 
-    if (!/^\/(?:tickets|ticket|ver_ticket|agy|ejecutar|reintentar|resolver|modelo|modelos)\b/i.test(trimmed)) {
+    if (!/^\/(?:tickets|ticket|ver_ticket|agy|ejecutar|reintentar|resolver|modelo|modelos|fusionar|descartar)\b/i.test(trimmed)) {
         return false;
     }
 
@@ -1134,6 +1408,19 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
                     );
                     return;
                 }
+                if (execRes.awaitingMerge && execRes.reviewBranch) {
+                    await sendTelegramMessage(
+                        chatId,
+                        `🔍 <b>RAMA DE REVISIÓN LISTA — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
+                        `🌿 <b>Rama:</b> <code>${escapeHtmlLocal(execRes.reviewBranch)}</code> (<code>${escapeHtmlLocal(execRes.commitHash || 'local')}</code>)\n` +
+                        `🧠 <b>Modelo:</b> <code>${escapeHtmlLocal(usedModel)}</code>\n` +
+                        `📦 <b>Archivos:</b> <code>${escapeHtmlLocal(execRes.modifiedFiles.join(', '))}</code>\n` +
+                        (execRes.diffStat ? `\n<pre>${escapeHtmlLocal(execRes.diffStat.slice(0, 600))}</pre>\n` : '\n') +
+                        `🛡️ <i><b>main</b> permanece intacta hasta que apruebes la fusión:</i>`,
+                        buildBranchReviewKeyboard(ticket.id, usedModel, execRes.compareUrl)
+                    );
+                    return;
+                }
                 await sendTelegramMessage(
                     chatId,
                     `✅ <b>TAREA FINALIZADA Y TICKET RESUELTO — #${escapeHtmlLocal(ticket.ticket_code)}</b>\n` +
@@ -1144,6 +1431,37 @@ async function handleTicketTextCommand(chatId, rawText, user, effectivePerms, tg
                 await sendTelegramMessage(chatId, `⚠️ Error ejecutando #${escapeHtmlLocal(ticket.ticket_code)}: ${escapeHtmlLocal(err.message)}`);
             }
         });
+        return true;
+    }
+
+    const mergeCmdMatch = trimmed.match(/^\/fusionar\s+([A-Za-z0-9#-]+)$/i);
+    if (mergeCmdMatch) {
+        const ticket = await getTicketByCodeOrId(mergeCmdMatch[1]);
+        if (!ticket) {
+            await sendTelegramMessage(chatId, `⚠️ No se encontró el ticket <code>${escapeHtmlLocal(mergeCmdMatch[1])}</code>.`);
+            return true;
+        }
+        await sendTelegramMessage(chatId, `🚀 Fusionando rama de revisión de <b>#${escapeHtmlLocal(ticket.ticket_code)}</b> en <code>main</code>...`);
+        setImmediate(async () => {
+            try {
+                const mRes = await mergeAgyReviewBranchOnServer(ticket, { actorId: effectivePerms?.linkedUser?.id || null, actorName });
+                await sendTelegramMessage(chatId, escapeHtmlLocal(mRes.summary));
+            } catch (err) {
+                await sendTelegramMessage(chatId, `⚠️ Error fusionando rama: ${escapeHtmlLocal(err.message)}`);
+            }
+        });
+        return true;
+    }
+
+    const discardCmdMatch = trimmed.match(/^\/descartar\s+([A-Za-z0-9#-]+)$/i);
+    if (discardCmdMatch) {
+        const ticket = await getTicketByCodeOrId(discardCmdMatch[1]);
+        if (!ticket) {
+            await sendTelegramMessage(chatId, `⚠️ No se encontró el ticket <code>${escapeHtmlLocal(discardCmdMatch[1])}</code>.`);
+            return true;
+        }
+        const dRes = await discardAgyReviewBranchOnServer(ticket, { actorName });
+        await sendTelegramMessage(chatId, escapeHtmlLocal(dRes.summary));
         return true;
     }
 
@@ -1179,14 +1497,19 @@ module.exports = {
     isTicketAdminOrManager,
     isAgyCodeAdmin,
     isSafeAgyTargetPath,
+    buildAgyReviewBranchName,
+    resolveGithubCompareUrl,
     resolveEffectiveModelForTicket,
     buildTicketActionKeyboard,
     buildPlanApprovalKeyboard,
+    buildBranchReviewKeyboard,
     buildRetryExecutionKeyboard,
     buildModelPickerKeyboard,
     getTicketByCodeOrId,
     runRealTicketPlanOnServer,
     runRealTicketExecutionOnServer,
+    mergeAgyReviewBranchOnServer,
+    discardAgyReviewBranchOnServer,
     handleTicketCallback,
     handleTicketTextCommand
 };

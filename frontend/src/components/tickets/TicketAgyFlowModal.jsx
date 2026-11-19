@@ -8,6 +8,7 @@ const AGY_STATUS_META = {
     planificando: { label: 'Planificando con AGY...', bg: 'rgba(245,158,11,0.25)', color: '#fde68a' },
     esperando_aprobacion: { label: 'Plan Generado (Esperando Aprobación)', bg: 'rgba(99,102,241,0.25)', color: '#c7d2fe' },
     ejecutando: { label: 'Ejecutando Plan en Consola AGY...', bg: 'rgba(14,165,233,0.25)', color: '#bae6fd' },
+    esperando_fusion: { label: 'Rama de Revisión Lista (Esperando Fusión)', bg: 'rgba(168,85,247,0.25)', color: '#e9d5ff' },
     completado: { label: 'Plan Ejecutado en Consola AGY', bg: 'rgba(16,185,129,0.25)', color: '#6ee7b7' },
     denegado: { label: 'Plan Denegado', bg: 'rgba(239,68,68,0.25)', color: '#fecdd3' },
     error: { label: 'Error de Consola', bg: 'rgba(239,68,68,0.25)', color: '#fecdd3' }

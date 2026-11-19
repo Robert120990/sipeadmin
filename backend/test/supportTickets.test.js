@@ -932,12 +932,18 @@ describe('Support Tickets & Real-Time Notifications (admin.sipesv.com <-> sys.si
         );
         assert.ok(patched.includes('"Actualizado"'), 'applyFlexibleTextEdit debe aplicar el cambio aunque difiera sangría en la búsqueda');
 
-        // 2. Validar contención segura de rutas AGY (sin traversal ni archivos críticos)
+        // 2. Validar contención segura de rutas AGY (sin traversal ni archivos críticos) y ramas de revisión
         assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'frontend/src/pages/Ventas.jsx'), true);
         assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', '../sipeadmin-evil/hack.js'), false);
         assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'backend/.env'), false);
         assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'backend/middleware/auth.js'), false);
         assert.strictEqual(ticketTelegramAgyService.isSafeAgyTargetPath('/opt/sipeadmin', 'deploy.sh'), false);
+        assert.strictEqual(ticketTelegramAgyService.buildAgyReviewBranchName('ADM-0012'), 'agy/ticket-adm-0012');
+        const reviewKb = ticketTelegramAgyService.buildBranchReviewKeyboard(12, 'gemini-4-neon-high', 'https://github.com/Robert120990/sipeadmin/compare/main...agy%2Fticket-adm-0012');
+        const reviewKbStr = JSON.stringify(reviewKb);
+        assert.ok(reviewKbStr.includes('agy_merge_branch:12'));
+        assert.ok(reviewKbStr.includes('agy_discard_branch:12'));
+        assert.ok(reviewKbStr.includes('github.com/Robert120990/sipeadmin/compare'));
 
         // 3. Validar que permiso_alertas por sí solo NO autoriza gestión de tickets ni AGY
         assert.strictEqual(
