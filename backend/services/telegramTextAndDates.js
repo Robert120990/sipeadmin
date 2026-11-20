@@ -506,7 +506,151 @@ const KNOWN_BANKS = [
     { key: 'ATLANTIDA', label: 'Banco Atlántida', keywords: ['atlantida', 'atlántida', 'banco atlantida'] },
     { key: 'CUSCATLAN', label: 'Banco Cuscatlán', keywords: ['cuscatlan', 'cuscatlán', 'banco cuscatlan'] },
     { key: 'BAC', label: 'BAC Credomatic', keywords: ['bac', 'credomatic', 'america central'] },
-    { key: 'AZUL', label: 'Banco Azul', keywords: ['azul', 'banco azul'] }
+    { key: 'AZUL', label: 'Banco Azul', keywords: ['azul', 'banco azul'] },
+    { key: 'CITIBANK', label: 'Citibank / Scotiabank', keywords: ['citibank', 'citi', 'scotiabank'] },
+    { key: 'CONSTELACION', label: 'Constelación', keywords: ['constelacion', 'constelación'] },
+    { key: 'FOMENTO AGROPECUARIO', label: 'Banco de Fomento Agropecuario (BFA)', keywords: ['fomento agropecuario', 'banco de fomento', 'bfa'] }
+];
+
+/**
+ * Contribuyentes, titulares y alias de cuentas bancarias / chequeras
+ */
+const KNOWN_ACCOUNT_HOLDERS = [
+    { key: 'INVERSIONES LIL', label: 'Inversiones LIL, S.A. de C.V.', keywords: ['inversiones lil', 'inv lil', 'lil'] },
+    { key: 'INVERSIONES CMR', label: 'Inversiones CMR, S.A. de C.V.', keywords: ['inversiones cmr', 'inv cmr', 'cmr'] },
+    { key: 'ANDELSA', label: 'Andelsa, S.A. de C.V.', keywords: ['andelsa'] },
+    { key: 'RAUL SOSA', label: 'Raúl R. Sosa / RRS', keywords: ['raul sosa', 'raul r sosa', 'sosa castellanos', 'raul rafael', 'rrs'] },
+    { key: 'CORINA DE SOSA', label: 'Corina M. de Sosa', keywords: ['corina de sosa', 'corina m de sosa', 'corina sosa', 'corina'] },
+    { key: 'CDH', label: 'CDH / LIOF', keywords: ['liof-cdh', 'liof cdh', 'liof', 'cdh'] },
+    { key: 'VENDING', label: 'Vending RRS', keywords: ['vending'] },
+    { key: 'CERRO VERDE', label: 'E-Market Cerro Verde', keywords: ['cerro verde'] },
+    { key: 'RABIDA', label: 'RS Clásica Rábida', keywords: ['rabida', 'rábida'] },
+    { key: 'EL DESVIO', label: 'El Desvío', keywords: ['el desvio', 'desvio', 'desvío'] }
+];
+
+/**
+ * Catálogo de líneas y categorías de tiendas de conveniencia (Super 7 / E-Market)
+ */
+const KNOWN_STORE_LINES = [
+    {
+        key: 'CIGARROS',
+        label: 'Cigarros y Cigarrillos',
+        icon: '🚬',
+        dbMatchers: ['CIGARRILLOS', 'CIGARROS', 'TABACO', 'VUSE', 'WAKA', 'MARLBORO', 'PALL MALL'],
+        keywords: ['cigarros', 'cigarrillos', 'cigarro', 'cigarrillo', 'tabaco', 'vapes', 'vape', 'vuse', 'waka', 'marlboro', 'pall mall']
+    },
+    {
+        key: 'CERVEZAS',
+        label: 'Cervezas',
+        icon: '🍺',
+        dbMatchers: ['CERVEZA', 'CERVEZAS'],
+        keywords: ['cervezas', 'cerveza', 'pilsener', 'golden', 'corona', 'suprema', 'regia', 'modelo', 'heineken']
+    },
+    {
+        key: 'LICORES',
+        label: 'Licores',
+        icon: '🥃',
+        dbMatchers: ['LICOR', 'LICORES'],
+        keywords: ['licores', 'licor', 'ron', 'whisky', 'vodka', 'tequila']
+    },
+    {
+        key: 'BEBIDAS',
+        label: 'Bebidas y Refrescos',
+        icon: '🥤',
+        dbMatchers: ['BEBIDAS', 'BEBIDA FRIA', 'BEBIDAS FRIAS', 'BEBIDAS NO ALCOHOLICAS', 'BEBIDAS LOCALES'],
+        keywords: ['bebidas', 'bebida fria', 'bebidas frias', 'bebidas no alcoholicas', 'gaseosas', 'gaseosa', 'sodas', 'soda', 'refrescos', 'refresco']
+    },
+    {
+        key: 'CAFE',
+        label: 'Café y Bebidas Calientes',
+        icon: '☕',
+        dbMatchers: ['CAFÉ CAPUCCINO', 'CAFÉ HELADO', 'CAFÉ NEGRO', 'CAFE CAPUCCINO', 'CAFE HELADO', 'CAFE NEGRO', 'BEBIDAS CALIENTES'],
+        keywords: ['cafe', 'cafes', 'capuccino', 'cappuccino', 'cafe helado', 'cafe negro', 'bebidas calientes']
+    },
+    {
+        key: 'AGUA',
+        label: 'Agua Embotellada',
+        icon: '💧',
+        dbMatchers: ['AGUA', 'AGUAS'],
+        keywords: ['agua', 'aguas', 'agua embotellada', 'alpina', 'cristal']
+    },
+    {
+        key: 'ENERGIZANTES',
+        label: 'Energizantes',
+        icon: '⚡',
+        dbMatchers: ['ENERGIZANTES'],
+        keywords: ['energizantes', 'energizante', 'raptor', 'red bull', 'monster', 'amper', 'vive 100']
+    },
+    {
+        key: 'JUGOS',
+        label: 'Jugos y Frescos',
+        icon: '🧃',
+        dbMatchers: ['JUGOS', 'JUGOS Y LICUADOS', 'FRESCOS NATURALES'],
+        keywords: ['jugos', 'jugo', 'frescos naturales']
+    },
+    {
+        key: 'COMIDA',
+        label: 'Comida Preparada y Rápida',
+        icon: '🌭',
+        dbMatchers: ['COMIDA', 'COMIDA RAPIDA', 'COMIDA PREPARADA', 'COMIDA PREPARADA EM TIENDA', 'COMIDA CONGELADA', 'COMIDA RAPIDA EMPACADA', 'POLLO EMPANIZADO'],
+        keywords: ['comida', 'comida rapida', 'comida preparada', 'hot dog', 'hotdog', 'nachos', 'sandwich', 'alimentos']
+    },
+    {
+        key: 'BOQUITAS',
+        label: 'Boquitas y Snacks',
+        icon: '🥨',
+        dbMatchers: ['BOQUITAS', 'BOQUITAS SALADAS', 'BOQUITAS DULCE', 'BOQUITAS & GOLOSINAS', 'OTRAS BOQUITAS', 'GOLOSINAS'],
+        keywords: ['boquitas', 'boquita', 'snacks', 'snack', 'churros', 'boquitas saladas', 'golosinas']
+    },
+    {
+        key: 'DULCES',
+        label: 'Dulces, Chocolates y Galletas',
+        icon: '🍫',
+        dbMatchers: ['DULCES', 'DULCES & CHOCOLATES', 'CHOCOLATES', 'GALLETAS', 'CHICLES', 'CHICHLES'],
+        keywords: ['dulces', 'chocolates', 'chocolate', 'galletas', 'galleta', 'chicles', 'chicle']
+    },
+    {
+        key: 'RECARGAS',
+        label: 'Recargas y Paquetes Móviles',
+        icon: '📱',
+        dbMatchers: ['RECARGAS', 'RECARGAS TIGO', 'RECARGAR TIGO', 'RECARGAS CLARO', 'RECARGAS DIGICEL', 'PAQUETES MOVILES', 'SALDO PREPAGO'],
+        keywords: ['recargas', 'recarga', 'saldo prepago', 'paquetes moviles', 'prepago']
+    },
+    {
+        key: 'HIELO_FROZEN',
+        label: 'Hielo, Frozen y Helados',
+        icon: '🧊',
+        dbMatchers: ['HIELO', 'FROZEN', 'HELADOS EMPACADOS', 'HELADOS Y SORBETES', 'NEVERIA & SARITA', 'NEVERIA & SARITAS'],
+        keywords: ['hielo', 'frozen', 'helados', 'helado', 'sorbetes', 'sorbete', 'sarita']
+    },
+    {
+        key: 'PAN_LACTEOS',
+        label: 'Panadería y Lácteos',
+        icon: '🥐',
+        dbMatchers: ['PAN', 'PANADERIA', 'PAN EMPACADO', 'PAN VARIEDAD', 'PAN E-MARKET', 'LACTEOS', 'LECHE', 'OTROS LACTEOS', 'LECHES Y CHOCOLATINAS', 'QUESO PARTIDO'],
+        keywords: ['pan', 'panaderia', 'lacteos', 'leche', 'queso']
+    },
+    {
+        key: 'ABARROTES',
+        label: 'Abarrotes y Mercadería General',
+        icon: '🛒',
+        dbMatchers: ['ABARROTES COMESTIBLES', 'ABARROTES NO COMESTIBLES', 'ABARROTES PERECEDEROS', 'MERCADERIA EN GENERAL', 'GRANOS BASICOS', 'PRODUCTOS ENLATADOS'],
+        keywords: ['abarrotes', 'mercaderia en general', 'granos basicos', 'enlatados']
+    },
+    {
+        key: 'CUIDADO_SALUD',
+        label: 'Cuidado Personal y Medicinas',
+        icon: '💊',
+        dbMatchers: ['CUIDADO PERSONAL', 'CIUDADO PERSONAL', 'CUIDADO SALUD Y BELLEZA', 'MEDICINAS', 'PRESERVATIVOS', 'COSMETICOS', 'COSMETICA', 'BRONCEADORES'],
+        keywords: ['cuidado personal', 'medicinas', 'medicina', 'farmacia', 'preservativos', 'cosmeticos']
+    },
+    {
+        key: 'LUBRICANTES',
+        label: 'Lubricantes y Accesorios',
+        icon: '🛢️',
+        dbMatchers: ['LUBRICANTES', 'ACEITES Y GRASAS', 'ACCESORIOS', 'BATERIAS'],
+        keywords: ['lubricantes', 'lubricante', 'aceites y grasas']
+    }
 ];
 
 /**
@@ -652,8 +796,51 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         }
     }
 
-    // 5. Detección de tiendas de conveniencia
-    const isTiendas = /\b(tienda|tiendas|conveniencia|cortes|corte|e-market|super 7|pedregal)\b/.test(normalized);
+    // 4.1 Detección de contribuyente / titular de cuenta bancaria o chequera (ej. Inversiones LIL, Raúl Sosa, Corina, CDH, CMR)
+    let matchedAccountHolder = null;
+    const holderCandidates = [];
+    for (const h of KNOWN_ACCOUNT_HOLDERS) {
+        for (const kw of h.keywords) {
+            holderCandidates.push({ holder: h, normKw: normalizeText(kw) });
+        }
+    }
+    holderCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of holderCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedAccountHolder = cand.holder;
+            break;
+        }
+    }
+
+    // 4.2 Detección de número o código de cuenta específica (ej. '#1724', 'cuenta 1724', '6203016201724')
+    let matchedAccountNumber = null;
+    const hashAccMatch = String(rawText || '').match(/#(\d{3,16})\b/);
+    const wordAccMatch = normalized.match(/\b(?:cuenta|cta|chequera|numero)\s+(?:no\s+|num\s+)?([0-9-]{3,18})\b/i);
+    if (hashAccMatch) {
+        matchedAccountNumber = hashAccMatch[1];
+    } else if (wordAccMatch && !/^(202[0-9])$/.test(wordAccMatch[1])) {
+        matchedAccountNumber = wordAccMatch[1];
+    }
+
+    // 5. Detección de tiendas de conveniencia y líneas de productos de tienda (cigarros, cervezas, café, comida, etc.)
+    const isTiendas = /\b(tienda|tiendas|conveniencia|cortes|corte|e-market|emarket|super 7|super7|pedregal)\b/.test(normalized);
+
+    let matchedStoreLine = null;
+    const lineCandidates = [];
+    for (const ln of KNOWN_STORE_LINES) {
+        for (const kw of ln.keywords) {
+            lineCandidates.push({ line: ln, normKw: normalizeText(kw) });
+        }
+    }
+    lineCandidates.sort((a, b) => b.normKw.length - a.normKw.length);
+    for (const cand of lineCandidates) {
+        const escaped = escapeRegex(cand.normKw);
+        if (new RegExp(`\\b${escaped}\\b`, 'i').test(normalized)) {
+            matchedStoreLine = cand.line;
+            break;
+        }
+    }
 
     // 5.1 Detección explícita de "hoy" para distinguir turnos en curso vs cierres históricos
     const isExplicitToday = /\b(hoy|el\s+dia\s+de\s+hoy|ahorita|llevamos\s+hoy|vendido\s+hoy)\b/i.test(normalized);
@@ -670,11 +857,23 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
                          (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized));
 
+    // 7.1 Detección de Día de Mayor / Menor Venta del Mes, Rango o Día de la Semana
+    // Ej. "En mes de octubre que dia fue el de mayor venta?", "Que dia de la semana vendió mas miraflores"
+    const isPeakDay = !isHourlyPeak && !isSolar && !hasExplicitTankNoun && (
+        /\b(que\s+dia|cual\s+dia|cual\s+fue\s+el\s+dia|dia\s+de\s+la\s+semana|dias?\s+de\s+la\s+semana|dias?\s+de\s+mayor|dias?\s+de\s+menor|dia\s+con\s+mas|dia\s+con\s+menos|mejor\s+dia|peor\s+dia|dia\s+record|dia\s+pico|dia\s+que\s+mas|dia\s+que\s+menos)\b/i.test(normalized) &&
+        /\b(venta|ventas|vendio|vendieron|mayor|menor|mas|menos|mejor|peor|record|pico|galon(?:es|aje)?)\b/i.test(normalized)
+    );
+    const peakDayOrder = /\b(menor|menos|peor|baja|minima)\b/i.test(normalized) ? 'ASC' : 'DESC';
+
+    // 7.2 Detección de Pagos Programados / Control de Pagos y Vencimientos
+    const isPagosProgramados = /\b(pagos?\s+programados?|pagos?\s+pendientes?|cuales\s+son\s+los\s+pagos?|que\s+pagos?\s+(?:hay|tenemos|vienen|tocan)|recordatorios?\s+de\s+pagos?|control\s+de\s+pagos?|vencimientos?\s+de\s+pagos?|proximos?\s+pagos?)\b/i.test(normalized);
+
     // 8. Detección de consultas administrativas y financieras de Andelsa / Nova SaaS (sys.sipesv.com)
+    const hasExplicitBankOrChequeraWords = /\b(chequera|chequeras|cheques?\s+disponibles?|saldo\s+en\s+chequeras?|cuentas?\s+de\s+cheques?|saldos?\s+(?:en\s+|de\s+)?bancos?|saldos?\s+bancarios?|cuentas?\s+bancarias?)\b/i.test(normalized);
     const isAndelsaMention = /\b(andelsa|planta andelsa|empresa andelsa)\b/i.test(normalized) ||
                              (matchedStation && matchedStation.id === 'ANDELSA');
     const isSysSaasMention = /\b(sys\.sipesv|sistema saas|nova saas|saas)\b/i.test(normalized);
-    const isAndelsaRelated = isAndelsaMention || isSysSaasMention;
+    const isAndelsaRelated = (isAndelsaMention || isSysSaasMention) && !hasExplicitBankOrChequeraWords;
 
     const isAndelsaInventario = isAndelsaRelated && /\b(inventario|inventarios|stock|existencia|existencias|kardex|almacen)\b/i.test(normalized);
     const isAndelsaCostos = isAndelsaRelated && /\b(costo|costos|margen|margenes|utilidad|ganancia)\b/i.test(normalized);
@@ -687,8 +886,8 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     );
 
     // 8.1 Nuevos Intents Ejecutivos Deterministas: Tanques, Pedidos Puma, Rentabilidad EBITDA, Tránsito/Vales y Chequera
-    let isPedidosPuma = !isAndelsaRelated && (
-        /\b(pedidos?\s+puma|ordenes?\s+puma|portal\s+puma|pedidos?\s+de\s+combustible|pipas?\s+en\s+(?:ruta|transito|camino)|cisternas?\s+en\s+(?:ruta|transito|camino)|pedidos?\s+retenidos?|ordenes?\s+retenidas?|estado\s+de\s+(?:los\s+)?pedidos?|que\s+pedidos?\s+hay|pipas?\s+pendientes?)\b/i.test(normalized)
+    let isPedidosPuma = !isAndelsaRelated && !isPagosProgramados && (
+        /\b(pedidos?\s+puma|ordenes?\s+puma|portal\s+puma|pedidos?\s+de\s+combustible|pipas?\s+en\s+(?:ruta|transito|camino)|cisternas?\s+en\s+(?:ruta|transito|camino)|pedidos?\s+retenidos?|ordenes?\s+retenidas?|estado\s+de\s+(?:los\s+)?pedidos?|que\s+pedidos?\s+hay|pipas?\s+pendientes?|pedidos?\s+programados?)\b/i.test(normalized)
     );
 
     let isTanques = !isAndelsaRelated && !isSolar && !isPedidosPuma && (
@@ -700,9 +899,20 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         /\b(dinero\s+en\s+transito|efectivo\s+en\s+transito|remesas?\s+en\s+transito|remesas?\s+pendientes?|remesas?\s+sin\s+abonar|vales?\s+sin\s+facturar|vales?\s+pendientes?|creditos?\s+sin\s+dte|creditos?\s+sin\s+facturar|vales?\s+vencidos?)\b/i.test(normalized)
     );
 
-    let isChequera = /\b(chequera|chequeras|cheques?\s+disponibles?|saldo\s+en\s+chequeras?|cuentas?\s+de\s+cheques?)\b/i.test(normalized);
-    const isBancosGlobal = !matchedBank && !isChequera && !isTransitoVales && !isAndelsaRelated && (
-        /\b(saldos?\s+(?:en\s+|de\s+)?bancos?|saldos?\s+bancarios?|cuentas?\s+bancarias?|cuanto\s+(?:dinero\s+)?hay\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|cuanto\s+tenemos\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|disponible\s+en\s+bancos?|total\s+en\s+bancos?|liquidez\s+bancaria)\b/i.test(normalized)
+    let isChequera = /\b(chequera|chequeras|cheques?\s+disponibles?|saldos?\s+(?:en\s+|de\s+)?chequeras?|cuentas?\s+de\s+cheques?)\b/i.test(normalized);
+    const hasAccountFilterIntent = !isTransitoVales && !isAndelsaCxc && (Boolean(matchedAccountHolder) || Boolean(matchedAccountNumber)) &&
+        /\b(saldos?|cuentas?|bancos?|chequeras?|cheques?|disponible)\b/i.test(normalized);
+    const isBancosGlobal = !isChequera && !isTransitoVales && !isAndelsaRelated && (
+        (!matchedBank && /\b(saldos?\s+(?:en\s+|de\s+)?bancos?|saldos?\s+bancarios?|cuentas?\s+bancarias?|cuanto\s+(?:dinero\s+)?hay\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|cuanto\s+tenemos\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|disponible\s+en\s+bancos?|total\s+en\s+bancos?|liquidez\s+bancaria)\b/i.test(normalized)) ||
+        (hasAccountFilterIntent && !matchedBank)
+    );
+
+    // 8.2 Detección de Venta de Tienda por Línea / Producto o Detalle de Tienda de Estación Específica
+    // Ej. "Vent cigarros la loma", "Detalle venta de tienda la loma", "ventas por linea super 7 costa del sol"
+    const isTiendaLinea = !isAndelsaRelated && !isChequera && !isBancosGlobal && !matchedBank && (
+        Boolean(matchedStoreLine) ||
+        (isTiendas && Boolean(matchedStation)) ||
+        (isTiendas && /\b(detalle|desglose|linea|lineas|categoria|categorias|rubro|rubros|producto|productos)\b/i.test(normalized))
     );
 
     // 9. Detección de Precios de la Competencia (DGEHM) y Marcas Competidoras
@@ -861,6 +1071,14 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         matchedStation,
         matchedFuel,
         matchedBank,
+        matchedAccountHolder,
+        matchedAccountNumber,
+        hasAccountFilterIntent,
+        matchedStoreLine,
+        isTiendaLinea,
+        isPeakDay,
+        peakDayOrder,
+        isPagosProgramados,
         matchedCompetitorBrand,
         isCompetencia,
         onlyCheaper,
@@ -917,6 +1135,8 @@ module.exports = {
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS,
+    KNOWN_ACCOUNT_HOLDERS,
+    KNOWN_STORE_LINES,
     resolveStationId,
     findStationById,
     findFuelByKey,

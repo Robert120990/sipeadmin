@@ -517,6 +517,22 @@ export default function TelegramUsers() {
         }
     };
 
+    // Validar y aplicar mejoras del motor NLU en lote a todas las sugerencias negativas
+    const handleApplyBatchImprovements = async () => {
+        setRegenSending(true);
+        try {
+            const res = await api.post('/telegram/feedback/aplicar-mejoras-lote');
+            if (res.data?.ok) {
+                addToast(res.data.message || 'Mejoras aplicadas y validadas sobre las sugerencias', 'success');
+                fetchFeedback();
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al aplicar lote de mejoras', 'error');
+        } finally {
+            setRegenSending(false);
+        }
+    };
+
     // Probar conexión
     const handleTestConnection = async () => {
         setStatusLoading(true);
@@ -2122,9 +2138,32 @@ export default function TelegramUsers() {
                                     </span>
                                 )}
                             </div>
-                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                                NLU Determinista + Agente IA 360° + Autocorrección Activa en 👎
-                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                    NLU Determinista + Agente IA 360° + Autocorrección Activa en 👎
+                                </span>
+                                {feedbackStats.no_utiles > 0 && (
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={handleApplyBatchImprovements}
+                                        disabled={regenSending}
+                                        style={{
+                                            height: '30px',
+                                            padding: '0 0.7rem',
+                                            fontSize: '0.74rem',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.35rem',
+                                            borderColor: 'rgba(16, 185, 129, 0.4)',
+                                            color: '#10B981'
+                                        }}
+                                        title="Validar y aplicar mejoras del motor sobre todas las sugerencias registradas"
+                                    >
+                                        <CheckCircle2 size={13} /> Validar y Resolver Lote ({feedbackStats.no_utiles})
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
                         {negativeAnalysis.por_categoria && negativeAnalysis.por_categoria.length > 0 && (

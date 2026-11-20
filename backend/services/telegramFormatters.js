@@ -109,20 +109,27 @@ const formatVentasMessage = (data, date, options = {}) => {
 };
 
 /**
- * Formatear mensaje de Saldos en Bancos
+ * Formatear mensaje de Saldos en Bancos (global o filtrado por contribuyente/banco/cuenta)
  */
 const formatBancosMessage = (data) => {
-    let msg = `🏦 <b>SALDOS CONSOLIDADOS EN BANCOS</b>\n`;
+    const isFiltered = Boolean(data?.hasFilter && data?.filterLabel);
+    let msg = isFiltered
+        ? `🏦 <b>SALDOS EN BANCOS • ${escapeHtml(data.filterLabel.toUpperCase())}</b>\n`
+        : `🏦 <b>SALDOS CONSOLIDADOS EN BANCOS</b>\n`;
     msg += `📅 <b>Fecha:</b> ${toDisplayDate(data.fecha)}\n`;
+    if (isFiltered) {
+        msg += `🔎 <b>Filtro:</b> ${escapeHtml(data.filterLabel)}\n`;
+    }
     msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
-    msg += `💰 <b>SALDO TOTAL EN BANCOS:</b>\n`;
+    msg += `💰 <b>${isFiltered ? 'SALDO TOTAL FILTRADO:' : 'SALDO TOTAL EN BANCOS:'}</b>\n`;
     msg += `<b>${moneyFmt(data.total)}</b>\n\n`;
 
     if (!data.cuentas || data.cuentas.length === 0) {
-        msg += `<i>No se encontraron cuentas bancarias con saldo positivo para la fecha.</i>\n`;
+        msg += isFiltered
+            ? `<i>No se encontraron cuentas bancarias con saldo activo para el criterio "${escapeHtml(data.filterLabel)}".</i>\n`
+            : `<i>No se encontraron cuentas bancarias con saldo positivo para la fecha.</i>\n`;
     } else {
-        msg += `📋 <b>DETALLE POR CUENTA:</b>\n`;
-        // Agrupar por banco
+        msg += `📋 <b>DETALLE POR CUENTA (${data.cuentas.length}):</b>\n`;
         const porBanco = {};
         data.cuentas.forEach(c => {
             const b = c.banco || 'Otros';
@@ -145,21 +152,35 @@ const formatBancosMessage = (data) => {
 };
 
 /**
- * Formatear mensaje de Saldos en Chequera
+ * Formatear mensaje de Saldos en Chequera (global o filtrado por contribuyente/banco/cuenta)
  */
 const formatChequeraMessage = (data) => {
-    let msg = `🧾 <b>SALDOS EN CHEQUERA</b>\n`;
+    const isFiltered = Boolean(data?.hasFilter && data?.filterLabel);
+    let msg = isFiltered
+        ? `🧾 <b>SALDOS EN CHEQUERA • ${escapeHtml(data.filterLabel.toUpperCase())}</b>\n`
+        : `🧾 <b>SALDOS EN CHEQUERA</b>\n`;
     msg += `📅 <b>Fecha:</b> ${toDisplayDate(data.fecha)}\n`;
+    if (isFiltered) {
+        msg += `🔎 <b>Contribuyente / Filtro:</b> ${escapeHtml(data.filterLabel)}\n`;
+    }
     msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
-    msg += `💰 <b>TOTAL EN CHEQUERAS:</b>\n`;
+
+    if (isFiltered && Number(data.total_sobregiro || 0) < 0 && Number(data.total_positivo || 0) > 0) {
+        msg += `🟢 <b>Cuentas en Positivo:</b> <code>${moneyFmt(data.total_positivo)}</code>\n`;
+        msg += `🔴 <b>En Sobregiro / Flotante:</b> <code>${moneyFmt(data.total_sobregiro)}</code>\n`;
+    }
+    msg += `💰 <b>${isFiltered ? 'SALDO NETO EN CHEQUERA:' : 'TOTAL EN CHEQUERAS:'}</b>\n`;
     msg += `<b>${moneyFmt(data.total)}</b>\n\n`;
 
     if (!data.cuentas || data.cuentas.length === 0) {
-        msg += `<i>No se registraron cuentas de chequera con movimiento activo.</i>\n`;
+        msg += isFiltered
+            ? `<i>No se encontraron cuentas de chequera para "${escapeHtml(data.filterLabel)}".</i>\n`
+            : `<i>No se registraron cuentas de chequera con movimiento activo.</i>\n`;
     } else {
-        msg += `📋 <b>DETALLE POR CUENTA DE CHEQUES:</b>\n`;
+        msg += `📋 <b>DETALLE POR CUENTA DE CHEQUES (${data.cuentas.length}):</b>\n`;
         data.cuentas.forEach((c, idx) => {
-            msg += `${idx + 1}. <b>${escapeHtml(c.banco)}</b>\n`;
+            const icon = Number(c.saldo || 0) < 0 ? '🔴' : '🟢';
+            msg += `${idx + 1}. ${icon} <b>${escapeHtml(c.banco)}</b>\n`;
             msg += `   └ ${escapeHtml(c.cuenta)}: <code>${moneyFmt(c.saldo)}</code>\n`;
         });
     }
@@ -1176,6 +1197,186 @@ const formatHelpMessage = () => {
     return msg;
 };
 
+/**
+ * Formatear reporte de Ventas de Tienda de Conveniencia por Línea / Categoría y Producto
+ */
+const formatVentasTiendaLineaMessage = (data) => {
+    const st = data?.station;
+    const ln = data?.storeLine;
+    const sDate = data?.startDate || getDateStr(-1);
+    const eDate = data?.endDate || sDate;
+    const periodoLabel = data?.fallbackPeriodoLabel
+        ? data.fallbackPeriodoLabel
+        : (sDate === eDate ? toDisplayDate(sDate) : `Del ${toDisplayDate(sDate)} al ${toDisplayDate(eDate)}`);
+
+    const storeTitle = st ? `Super 7 / E-Market • ${st.name}` : 'Todas las Tiendas de Conveniencia';
+
+    if (ln) {
+        let msg = `${ln.icon || '🛒'} <b>VENTA DE LÍNEA EN TIENDA • ${escapeHtml(ln.label.toUpperCase())}</b>\n`;
+        msg += `🏪 <b>Tienda:</b> ${escapeHtml(storeTitle)}\n`;
+        msg += `📅 <b>Período:</b> ${escapeHtml(periodoLabel)}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+        msg += `💰 <b>Venta Total ${escapeHtml(ln.label)}:</b> <b>${moneyFmt(data?.total_linea_usd || 0)}</b>\n`;
+        if (Number(data?.total_unidades_linea || 0) > 0) {
+            msg += `📦 <b>Unidades Vendidas:</b> <code>${numFmt(data.total_unidades_linea)} unid.</code>\n`;
+        }
+        if (Number(data?.total_tickets_linea || 0) > 0) {
+            msg += `🧾 <b>Transacciones / Tickets:</b> <code>${data.total_tickets_linea} tickets</code>\n`;
+        }
+        if (Number(data?.total_tienda_usd || 0) > 0) {
+            msg += `📊 <b>Participación en Tienda:</b> <code>${Number(data?.participacion_linea_pct || 0).toFixed(2)}%</code> (de ${moneyFmt(data.total_tienda_usd)} total tienda)\n`;
+        }
+        msg += `\n`;
+
+        const prods = data?.productos_top || [];
+        const lineas = data?.lineas || [];
+        if (prods.length > 0) {
+            msg += `🏆 <b>Desglose de Productos (${escapeHtml(ln.label)}):</b>\n`;
+            prods.slice(0, 10).forEach((p, idx) => {
+                msg += `${idx + 1}. <b>${escapeHtml(p.producto)}</b>\n`;
+                msg += `   └ 💵 <b>${moneyFmt(p.monto)}</b> | 📦 <code>${numFmt(p.unidades)} un.</code> (${p.tickets} tickets)\n`;
+            });
+        } else if (lineas.length > 0) {
+            msg += `📋 <b>Líneas Registradas:</b>\n`;
+            lineas.forEach((l, idx) => {
+                msg += `${idx + 1}. <b>${escapeHtml(l.linea)}:</b> <b>${moneyFmt(l.monto)}</b> (${Number(l.porcentaje || 0).toFixed(1)}%)\n`;
+            });
+        } else {
+            msg += `ℹ️ <i>No se registran ventas en la línea "${escapeHtml(ln.label)}" para el período consultado.</i>\n`;
+        }
+
+        msg += `\n<i>SIPE Admin • Punto de Venta Tiendas</i>`;
+        return msg;
+    }
+
+    let msg = `🛒 <b>DETALLE DE VENTA POR LÍNEAS EN TIENDA</b>\n`;
+    msg += `🏪 <b>Tienda:</b> ${escapeHtml(storeTitle)}\n`;
+    msg += `📅 <b>Período:</b> ${escapeHtml(periodoLabel)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    msg += `💰 <b>Venta Total en Tienda:</b> <b>${moneyFmt(data?.total_tienda_usd || 0)}</b>\n\n`;
+
+    const allLineas = data?.todas_las_lineas || data?.lineas || [];
+    if (allLineas.length === 0) {
+        msg += `ℹ️ <i>No se encontraron cortes o líneas de tienda cerradas para la fecha consultada.</i>\n`;
+    } else {
+        msg += `📊 <b>Desglose por Línea de Producto (Top ${Math.min(allLineas.length, 15)}):</b>\n`;
+        allLineas.slice(0, 15).forEach((l, idx) => {
+            const unidStr = Number(l.unidades || 0) > 0 ? ` • <code>${numFmt(l.unidades)} un.</code>` : '';
+            msg += `${idx + 1}. <b>${escapeHtml(l.linea)}:</b> <b>${moneyFmt(l.monto)}</b> (<code>${Number(l.porcentaje || 0).toFixed(1)}%</code>)${unidStr}\n`;
+        });
+    }
+
+    msg += `\n<i>SIPE Admin • Punto de Venta Tiendas</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de Día de Mayor / Menor Venta del Mes o Rango y Ranking por Día de la Semana
+ */
+const formatPeakDayVentasMessage = (data) => {
+    const isLowest = data?.order === 'ASC';
+    const titleType = isLowest ? 'DÍA DE MENOR VENTA' : 'DÍA DE MAYOR VENTA';
+    const st = data?.station;
+    const scopeLabel = st ? st.name : 'Red Consolidada SIPE';
+    const top = data?.dia_principal;
+    const topDays = data?.top_dias || [];
+    const dowRanking = data?.ranking_dias_semana || [];
+
+    let msg = `🏆 <b>${titleType} • ${escapeHtml((data?.periodo_label || 'PERÍODO').toUpperCase())}</b>\n`;
+    msg += `🏪 <b>Alcance:</b> ${escapeHtml(scopeLabel)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    if (!top) {
+        msg += `ℹ️ <i>No se encontraron cierres diarios registrados para el período ${escapeHtml(data?.periodo_label || '')}.</i>\n`;
+        return msg;
+    }
+
+    msg += `🥇 <b>${isLowest ? 'Día de Menor Venta:' : 'Día Récord de Mayor Venta:'}</b>\n`;
+    msg += `📅 <b>${escapeHtml(top.dia_semana)} ${toDisplayDate(top.fecha)}</b>\n`;
+    msg += `• 💰 <b>Venta Total del Día:</b> <b>${moneyFmt(top.venta_total)}</b>\n`;
+    msg += `• ⛽ <b>Galonaje Despachado:</b> <code>${numFmt(top.galonaje)} gal</code>\n`;
+    if (Number(top.venta_tienda || 0) > 0) {
+        msg += `• 🛒 <b>Venta Combustible / Tienda:</b> ${moneyFmt(top.venta_pista)} pista + ${moneyFmt(top.venta_tienda)} tienda\n`;
+    }
+    msg += `• 📈 <b>Promedio Diario del Período:</b> <code>${moneyFmt(data.promedio_diario_venta)}</code> (<code>${numFmt(data.promedio_diario_galonaje)} gal/día</code>)\n\n`;
+
+    if (topDays.length > 1) {
+        const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
+        msg += `📆 <b>Top ${Math.min(topDays.length, 5)} Días con ${isLowest ? 'Menor' : 'Mayor'} Venta:</b>\n`;
+        topDays.slice(0, 5).forEach((d, idx) => {
+            msg += `${medals[idx] || `${idx + 1}.`} <b>${escapeHtml(d.dia_semana)} ${toDisplayDate(d.fecha)}:</b> <b>${moneyFmt(d.venta_total)}</b> (<code>${numFmt(d.galonaje)} gal</code>)\n`;
+        });
+        msg += `\n`;
+    }
+
+    if (dowRanking.length > 0) {
+        const bestDow = dowRanking[0];
+        msg += `📊 <b>Rendimiento Promedio por Día de la Semana:</b>\n`;
+        msg += `<i>(Mejor día de la semana: <b>${escapeHtml(bestDow.dia_semana)}</b> con promedio de <b>${moneyFmt(bestDow.promedio_venta)}</b>)</i>\n`;
+        dowRanking.forEach((w, idx) => {
+            const icon = idx === 0 ? '🔥' : '▪️';
+            msg += `${icon} <b>${escapeHtml(w.dia_semana)}:</b> Prom. <b>${moneyFmt(w.promedio_venta)}</b> | <code>${numFmt(w.promedio_galonaje)} gal</code> (${w.cantidad_dias} días)\n`;
+        });
+    }
+
+    msg += `\n<i>SIPE Admin • Inteligencia Comercial</i>`;
+    return msg;
+};
+
+/**
+ * Formatear reporte de Pagos Programados y Vencimientos Pendientes (Control de Pagos)
+ */
+const formatPagosProgramadosMessage = (data) => {
+    const pagos = data?.pagos || [];
+    const urgentes = data?.vencidos_o_hoy || [];
+    const prox7 = data?.proximos_7_dias || [];
+    const posteriores = data?.posteriores || [];
+
+    let msg = `💳 <b>CONTROL DE PAGOS PROGRAMADOS Y VENCIMIENTOS</b>\n`;
+    msg += `📅 <b>Fecha de Corte:</b> ${toDisplayDate(data?.fecha_consulta || getDateStr(0))}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    msg += `💰 <b>Total Pendiente Programado:</b> <b>${moneyFmt(data?.total_pendiente_usd || 0)}</b> (<code>${data?.cantidad_total || 0} pagos</code>)\n`;
+    if (urgentes.length > 0) {
+        msg += `🔴 <b>Para Hoy / Vencidos:</b> <b>${moneyFmt(data?.total_urgente_usd || 0)}</b> (<code>${urgentes.length} compromisos</code>)\n`;
+    }
+    msg += `\n`;
+
+    if (pagos.length === 0) {
+        msg += `✅ <i>No hay pagos pendientes vencidos ni programados en Control de Pagos en este momento.</i>\n`;
+        msg += `\n<i>SIPE Admin • Tesorería y Control de Pagos</i>`;
+        return msg;
+    }
+
+    if (urgentes.length > 0) {
+        msg += `🔴 <b>COMPROMISOS PARA HOY O VENCIDOS (${urgentes.length}):</b>\n`;
+        urgentes.slice(0, 8).forEach(p => {
+            msg += `• <b>${escapeHtml(p.descripcion)}:</b> <b>${moneyFmt(p.monto)}</b> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
+        });
+        msg += `\n`;
+    }
+
+    if (prox7.length > 0) {
+        msg += `🟡 <b>PRÓXIMOS 7 DÍAS (${prox7.length}):</b>\n`;
+        prox7.slice(0, 8).forEach(p => {
+            msg += `• <b>${escapeHtml(p.descripcion)}:</b> <b>${moneyFmt(p.monto)}</b> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
+        });
+        msg += `\n`;
+    }
+
+    if (posteriores.length > 0) {
+        msg += `🟢 <b>PROGRAMADOS POSTERIORES (${posteriores.length}):</b>\n`;
+        posteriores.slice(0, 6).forEach(p => {
+            msg += `• <b>${escapeHtml(p.descripcion)}:</b> <code>${moneyFmt(p.monto)}</code> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
+        });
+        msg += `\n`;
+    }
+
+    msg += `<i>SIPE Admin • Tesorería y Control de Pagos</i>`;
+    return msg;
+};
+
 module.exports = {
     formatVentasMessage,
     formatBancosMessage,
@@ -1187,6 +1388,9 @@ module.exports = {
     formatRankingMessage,
     formatSpecificBankMessage,
     formatTiendasMessage,
+    formatVentasTiendaLineaMessage,
+    formatPeakDayVentasMessage,
+    formatPagosProgramadosMessage,
     formatVentasMensualMessage,
     formatVentasRangoMessage,
     formatHorasPicoMessage,

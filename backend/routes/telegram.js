@@ -1296,6 +1296,64 @@ router.post('/feedback/:id/regenerar', authenticateToken, requirePermission(tele
 });
 
 /**
+ * POST /api/telegram/feedback/aplicar-mejoras-lote
+ * Evalúa y aplica las mejoras del motor NLU sobre todas las sugerencias negativas (NO_UTIL),
+ * actualizando su diagnóstico de resolución y estado a REVISADO.
+ */
+router.post('/feedback/aplicar-mejoras-lote', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const [rows] = await db.query(
+            `SELECT id, telegram_user_id, telegram_username, first_name, chat_id, mensaje_id,
+                    consulta_original, respuesta_resumen, calificacion, comentario_mejora, estado
+             FROM telegram_feedback
+             WHERE calificacion = 'NO_UTIL'
+             ORDER BY id DESC
+             LIMIT 50`
+        );
+
+        const procesados = [];
+        for (const fbRow of (rows || [])) {
+            const resultado = await generateImprovedResponseForFeedback(fbRow, { useAiFallback: false });
+            const causa = resultado.diagnostico_causa?.etiqueta_causa || 'Mejora NLU';
+            const intentLabel = resultado.intent_detectado?.etiqueta || resultado.metodo_generacion;
+            const notaResolucion = `Autocorregido en Motor NLU: ${causa} → ${intentLabel}`;
+
+            await db.query(
+                `UPDATE telegram_feedback
+                 SET estado = 'REVISADO',
+                     notas_resolucion = ?,
+                     revisado_por = ?,
+                     revisado_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = ?`,
+                [notaResolucion, req.user?.id || null, fbRow.id]
+            );
+
+            procesados.push({
+                id: fbRow.id,
+                consulta_original: fbRow.consulta_original,
+                comentario_mejora: fbRow.comentario_mejora,
+                intent_detectado: resultado.intent_detectado,
+                diagnostico_causa: resultado.diagnostico_causa,
+                nota_resolucion: notaResolucion
+            });
+        }
+
+        res.json({
+            ok: true,
+            total_procesados: procesados.length,
+            message: `Se aplicaron y validaron mejoras sobre ${procesados.length} sugerencia(s) en el motor del bot.`,
+            procesados
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al aplicar lote de mejoras de retroalimentación');
+    }
+});
+
+/**
  * GET /api/telegram/audit/health
  * Diagnóstico consolidado de salud, infraestructura, conectividad y métricas operativas
  */

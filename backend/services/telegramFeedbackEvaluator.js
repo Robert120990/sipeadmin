@@ -14,8 +14,13 @@ const {
     getConsolidadoVentas,
     getSaldosBancosData,
     getSaldosChequeraData,
+    filterBankOrChequeraAccounts,
+    getVentasTiendaPorLineaData,
+    getRankingDiasVentasData,
+    getPagosProgramadosData,
     getPreciosCompetenciaData,
-    getPedidosPumaData
+    getPedidosPumaData,
+    formatPreciosCompetenciaMessage
 } = require('./telegramDataService');
 const {
     getResumenMensualData,
@@ -31,11 +36,13 @@ const {
     formatRankingMessage,
     formatSpecificBankMessage,
     formatTiendasMessage,
+    formatVentasTiendaLineaMessage,
+    formatPeakDayVentasMessage,
+    formatPagosProgramadosMessage,
     formatVentasMensualMessage,
     formatVentasRangoMessage,
     formatHorasPicoMessage,
     formatSolarEnergyMessage,
-    formatPreciosCompetenciaMessage,
     formatTanquesAutonomiaMessage,
     formatPedidosPumaMessage,
     formatRentabilidadEbitdaMessage,
@@ -81,9 +88,36 @@ const detectIntentInfo = (rawQuery = '') => {
         if (parsed.isPedidosPuma) return { codigo: 'PEDIDOS_PUMA', etiqueta: 'Pedidos Combustible Portal Puma' };
         if (parsed.isRentabilidad) return { codigo: 'RENTABILIDAD_EBITDA', etiqueta: 'Rentabilidad Real y EBITDA' };
         if (parsed.isTransitoVales) return { codigo: 'TRANSITO_Y_VALES', etiqueta: 'Efectivo en Tránsito y Vales sin DTE' };
-        if (parsed.isChequera) return { codigo: 'SALDOS_CHEQUERA', etiqueta: 'Saldos Disponibles en Chequera' };
+        if (parsed.isPagosProgramados) return { codigo: 'PAGOS_PROGRAMADOS', etiqueta: 'Control de Pagos y Vencimientos' };
+        if (parsed.isChequera) {
+            const filterSuffix = parsed.matchedAccountHolder?.label || parsed.matchedBank?.label || (parsed.matchedAccountNumber ? `#${parsed.matchedAccountNumber}` : '');
+            return {
+                codigo: filterSuffix ? 'SALDOS_CHEQUERA_FILTRADO' : 'SALDOS_CHEQUERA',
+                etiqueta: filterSuffix ? `Saldos en Chequera (${filterSuffix})` : 'Saldos Disponibles en Chequera'
+            };
+        }
         if (parsed.matchedBank) return { codigo: 'BANCO_ESPECIFICO', etiqueta: `Saldo en ${parsed.matchedBank.label}` };
-        if (parsed.isBancosGlobal) return { codigo: 'SALDOS_BANCOS', etiqueta: 'Saldos Consolidados en Bancos' };
+        if (parsed.isBancosGlobal) {
+            const filterSuffix = parsed.matchedAccountHolder?.label || (parsed.matchedAccountNumber ? `#${parsed.matchedAccountNumber}` : '');
+            return {
+                codigo: filterSuffix ? 'SALDOS_BANCOS_FILTRADO' : 'SALDOS_BANCOS',
+                etiqueta: filterSuffix ? `Saldos en Bancos (${filterSuffix})` : 'Saldos Consolidados en Bancos'
+            };
+        }
+        if (parsed.isTiendaLinea) {
+            const lineLabel = parsed.matchedStoreLine ? parsed.matchedStoreLine.label : 'Desglose por Líneas';
+            const stLabel = parsed.matchedStation ? ` • ${parsed.matchedStation.name}` : '';
+            return {
+                codigo: 'TIENDA_VENTA_LINEA',
+                etiqueta: `Tienda por Línea (${lineLabel}${stLabel})`
+            };
+        }
+        if (parsed.isPeakDay) {
+            return {
+                codigo: 'DIA_PICO_VENTAS',
+                etiqueta: `Día de ${parsed.peakDayOrder === 'ASC' ? 'Menor' : 'Mayor'} Venta y Día de la Semana`
+            };
+        }
         if (parsed.isMonthly) return { codigo: 'VENTAS_MENSUALES', etiqueta: 'Consolidado Mensual de Ventas' };
         if (parsed.isRange) return { codigo: 'VENTAS_RANGO', etiqueta: 'Ventas por Rango de Fechas' };
         if (parsed.isRanking) return { codigo: 'RANKING_ESTACIONES', etiqueta: 'Ranking de Estaciones' };
@@ -149,6 +183,66 @@ const classifyNegativeFeedback = (fb = {}) => {
             severidad: 'alta',
             diagnostico: 'Al consultar ventas de «hoy» antes del cierre de turno en pista, se mostraba $0.00 sin explicar que los turnos siguen abiertos ni dar referencia del último cierre.',
             accion_correctiva: 'Aviso explícito de turnos en curso + referencia automática del último cierre consolidado (ayer).',
+            corregido_en_motor: true
+        };
+    }
+
+    // 2.b Precios de Competencia (DGEHM) que antes caían al resumen de ventas totales
+    if (
+        /\b(competencia|competidores|dgehm)\b/.test(allNorm) &&
+        (/\b(venta|ventas|galon|galones)\b/.test(sNorm) || /\b(venta|ventas|competencia)\b/.test(cNorm))
+    ) {
+        return {
+            codigo_causa: 'PRECIOS_COMPETENCIA_DGEHM',
+            etiqueta_causa: 'Precios de Competencia vs Ventas Totales',
+            severidad: 'alta',
+            diagnostico: 'La consulta solicitaba precios de la competencia (DGEHM), pero el bot respondió con el resumen general de ventas de combustible.',
+            accion_correctiva: 'Intent determinista PRECIOS_COMPETENCIA habilitado con comparativa DGEHM por zona, marca y diferencial en centavos.',
+            corregido_en_motor: true
+        };
+    }
+
+    // 2.c Filtro de Saldos en Chequera o Bancos por Contribuyente / Titular / Cuenta Específica
+    if (
+        /\b(chequera|chequeras|banco|bancos|saldo|saldos|cuenta|cuentas)\b/.test(allNorm) &&
+        /\b(contribuyente|inversiones\s+lil|lil|cmr|andelsa|raul\s+sosa|corina|cdh|especific[oa])\b/.test(allNorm)
+    ) {
+        return {
+            codigo_causa: 'FILTRO_CUENTA_CONTRIBUYENTE',
+            etiqueta_causa: 'Filtro por Contribuyente / Banco / Cuenta',
+            severidad: 'alta',
+            diagnostico: 'El usuario solicitó saldos de chequera o banco filtrados por contribuyente (ej. Inversiones LIL), banco o cuenta específica.',
+            accion_correctiva: 'Motor filterBankOrChequeraAccounts() activo con soporte de contribuyentes (Inversiones LIL, CMR, Andelsa, RRS, Corina, CDH), bancos y # de cuenta.',
+            corregido_en_motor: true
+        };
+    }
+
+    // 2.d Ventas de Tienda de Conveniencia por Línea / Categoría de Producto (ej. Cigarros en Super 7 San Martín La Loma)
+    if (
+        /\b(cigarro|cigarros|cigarrillos|cerveza|cervezas|licor|licores|bebidas|cafe|comida|boquitas|dulces|linea|lineas|super\s*7|e-market|emarket)\b/.test(allNorm) &&
+        (/\b(linea|cigarro|cigarros|tienda|super\s*7|e-market)\b/.test(allNorm))
+    ) {
+        return {
+            codigo_causa: 'VENTA_LINEA_TIENDA',
+            etiqueta_causa: 'Desglose por Línea de Tienda (Super 7 / E-Market)',
+            severidad: 'alta',
+            diagnostico: 'El usuario consultó la venta de una línea específica de tienda (ej. Cigarros en Super 7 La Loma), pero recibió el resumen de galones de pista.',
+            accion_correctiva: 'Motor getVentasTiendaPorLineaData() activo conectando sales_items/product_categories (SaaS) y cort_ventas (legado) por línea y top productos.',
+            corregido_en_motor: true
+        };
+    }
+
+    // 2.e Día de Mayor / Menor Venta del Mes o Día de la Semana
+    if (
+        /\b(que\s+dia|cual\s+dia|dia\s+de\s+mayor|dia\s+de\s+menor|dia\s+de\s+la\s+semana|mejor\s+dia|mayor\s+venta)\b/.test(allNorm) &&
+        /\b(dia|semana)\b/.test(qNorm)
+    ) {
+        return {
+            codigo_causa: 'DIA_PICO_VENTAS',
+            etiqueta_causa: 'Ranking Diario / Día de Mayor Venta del Mes',
+            severidad: 'alta',
+            diagnostico: 'El usuario preguntó qué día específico fue el de mayor venta en el mes, pero recibió el acumulado mensual por gasolinera.',
+            accion_correctiva: 'Motor getRankingDiasVentasData() activo con cálculo del Día Récord #1, Top 5 días del período y promedio por día de la semana (Lunes a Domingo).',
             corregido_en_motor: true
         };
     }
@@ -261,10 +355,13 @@ const analyzeNegativeFeedbackBatch = async (feedbackRows = null) => {
         }
 
         const diagnostico_causa = classifyNegativeFeedback(row);
+        const origIntent = detectIntentInfo(String(row.consulta_original || ''));
         const combinedQuery = row.comentario_mejora
             ? `${row.consulta_original || ''} ${row.comentario_mejora}`.trim()
             : String(row.consulta_original || '');
-        const intent_actual = detectIntentInfo(combinedQuery);
+        const intent_actual = (origIntent && origIntent.codigo !== 'AGENTE_IA_360' && origIntent.codigo !== 'VACIO')
+            ? origIntent
+            : detectIntentInfo(combinedQuery);
 
         const prevCat = categoryMap.get(diagnostico_causa.codigo_causa) || {
             codigo: diagnostico_causa.codigo_causa,
@@ -352,28 +449,74 @@ const generateImprovedResponseForFeedback = async (fb = {}, options = {}) => {
 
     const diagnostico_causa = classifyNegativeFeedback(fb);
 
-    // Priorizar combinación consulta + comentario si aporta contexto; probar primero comentario específico y luego combinado
+    // Priorizar consulta original si ya activa un intent determinista especializado; de lo contrario combinar con comentario limpio
+    const cleanCommentForEval = comment
+        .replace(/\b(?:pero\s+la\s+respuesta\s+fue|me\s+compartio\s+unicamente|no\s+resumen\s+de\s+venta|la\s+respuesta\s+esperada\s+era)[^,.]*/gi, ' ')
+        .trim();
+
     const candidateQueries = [];
-    if (hasSubstantiveComment && origQuery) {
-        candidateQueries.push(`${origQuery} ${comment}`.trim());
-        candidateQueries.push(comment);
-    }
     if (origQuery) {
         candidateQueries.push(origQuery);
+    }
+    if (hasSubstantiveComment && origQuery) {
+        candidateQueries.push(`${origQuery} ${cleanCommentForEval || comment}`.trim());
+        candidateQueries.push(cleanCommentForEval || comment);
     } else if (comment) {
-        candidateQueries.push(comment);
+        candidateQueries.push(cleanCommentForEval || comment);
     }
 
     const primaryEvalQuery = candidateQueries[0] || origQuery || comment || 'Resumen ejecutivo';
     let parsed = null;
     let matchedCandidate = primaryEvalQuery;
 
+    // Preferir el primer candidato que active una ruta determinista concreta
     for (const q of candidateQueries) {
         const p = parseNaturalLanguageQuery(q);
-        if (p) {
+        const info = detectIntentInfo(q);
+        if (p && info.codigo !== 'AGENTE_IA_360' && info.codigo !== 'VACIO') {
             parsed = p;
             matchedCandidate = q;
             break;
+        }
+        if (p && !parsed) {
+            parsed = p;
+            matchedCandidate = q;
+        }
+    }
+
+    // Si la consulta original no tenía estación, línea o periodo mensual/rango pero el comentario sí la aclaró (ej. "solo Costa del Sol", "del mes de octubre 2026"), enriquecer parsed
+    if (parsed && hasSubstantiveComment) {
+        const commentParsed = parseNaturalLanguageQuery(cleanCommentForEval || comment);
+        if (commentParsed) {
+            if (!parsed.matchedStation && commentParsed.matchedStation) parsed.matchedStation = commentParsed.matchedStation;
+            if (!parsed.matchedStoreLine && commentParsed.matchedStoreLine) {
+                parsed.matchedStoreLine = commentParsed.matchedStoreLine;
+                parsed.isTiendaLinea = true;
+            }
+            if (!parsed.matchedAccountHolder && commentParsed.matchedAccountHolder) {
+                parsed.matchedAccountHolder = commentParsed.matchedAccountHolder;
+            }
+            if (!parsed.matchedBank && commentParsed.matchedBank) {
+                parsed.matchedBank = commentParsed.matchedBank;
+            }
+            if (!parsed.isMonthly && commentParsed.isMonthly) {
+                parsed.isMonthly = true;
+                parsed.isMensual = true;
+                parsed.targetMonth = commentParsed.targetMonth;
+                parsed.targetYear = commentParsed.targetYear;
+                parsed.targetPeriod = commentParsed.targetPeriod;
+                parsed.startDate = commentParsed.startDate;
+                parsed.endDate = commentParsed.endDate;
+                parsed.targetDate = commentParsed.targetDate;
+                matchedCandidate = `${origQuery} ${cleanCommentForEval || comment}`.trim();
+            } else if (!parsed.isRange && commentParsed.isRange) {
+                parsed.isRange = true;
+                parsed.isRango = true;
+                parsed.startDate = commentParsed.startDate;
+                parsed.endDate = commentParsed.endDate;
+                parsed.dateRange = commentParsed.dateRange;
+                matchedCandidate = `${origQuery} ${cleanCommentForEval || comment}`.trim();
+            }
         }
     }
 
@@ -432,15 +575,57 @@ const generateImprovedResponseForFeedback = async (fb = {}, options = {}) => {
         } else if (parsed.isTransitoVales) {
             const transitoData = await getAuditoriaDineroEnTransito().catch(() => ({ resumen: {}, remesas_en_transito: [], vales_pendientes_72h: [] }));
             htmlOut = formatTransitoValesMessage(transitoData);
+        } else if (parsed.isPagosProgramados) {
+            const pagosData = await getPagosProgramadosData().catch(() => ({ pagos: [], total_pendiente_usd: 0 }));
+            htmlOut = formatPagosProgramadosMessage(pagosData);
         } else if (parsed.isChequera) {
             const cheqData = await getSaldosChequeraData().catch(() => ({ total: 0, cuentas: [] }));
-            htmlOut = formatChequeraMessage(cheqData);
+            const filteredCheq = filterBankOrChequeraAccounts(cheqData, {
+                matchedBank: parsed.matchedBank,
+                matchedAccountHolder: parsed.matchedAccountHolder,
+                matchedStation: parsed.matchedStation,
+                matchedAccountNumber: parsed.matchedAccountNumber
+            });
+            htmlOut = formatChequeraMessage(filteredCheq);
         } else if (parsed.matchedBank) {
             const bankData = await getSaldosBancosData().catch(() => ({ total: 0, cuentas: [] }));
-            htmlOut = formatSpecificBankMessage(bankData, parsed.matchedBank);
+            const hasSubFilter = Boolean(parsed.matchedAccountHolder || parsed.matchedStation || parsed.matchedAccountNumber);
+            htmlOut = hasSubFilter
+                ? formatBancosMessage(filterBankOrChequeraAccounts(bankData, {
+                    matchedBank: parsed.matchedBank,
+                    matchedAccountHolder: parsed.matchedAccountHolder,
+                    matchedStation: parsed.matchedStation,
+                    matchedAccountNumber: parsed.matchedAccountNumber
+                }))
+                : formatSpecificBankMessage(bankData, parsed.matchedBank);
         } else if (parsed.isBancosGlobal) {
             const bankData = await getSaldosBancosData().catch(() => ({ total: 0, cuentas: [] }));
-            htmlOut = formatBancosMessage(bankData);
+            const filteredBank = filterBankOrChequeraAccounts(bankData, {
+                matchedBank: parsed.matchedBank,
+                matchedAccountHolder: parsed.matchedAccountHolder,
+                matchedStation: parsed.matchedStation,
+                matchedAccountNumber: parsed.matchedAccountNumber
+            });
+            htmlOut = formatBancosMessage(filteredBank);
+        } else if (parsed.isTiendaLinea) {
+            const lineaData = await getVentasTiendaPorLineaData({
+                startDate: parsed.startDate || parsed.targetDate,
+                endDate: parsed.endDate || parsed.targetDate,
+                targetDate: parsed.targetDate,
+                station: parsed.matchedStation,
+                storeLine: parsed.matchedStoreLine
+            }).catch(() => ({ lineas: [], productos_top: [], total_linea_usd: 0, total_tienda_usd: 0 }));
+            htmlOut = formatVentasTiendaLineaMessage(lineaData);
+        } else if (parsed.isPeakDay) {
+            const peakDayData = await getRankingDiasVentasData({
+                startDate: parsed.isRange ? parsed.startDate : null,
+                endDate: parsed.isRange ? parsed.endDate : null,
+                year: parsed.isMonthly ? parsed.targetYear : null,
+                month: parsed.isMonthly ? parsed.targetMonth : null,
+                station: parsed.matchedStation,
+                order: parsed.peakDayOrder || 'DESC'
+            }).catch(() => ({ top_dias: [], ranking_dias_semana: [], dia_principal: null }));
+            htmlOut = formatPeakDayVentasMessage(peakDayData);
         } else if (parsed.isMonthly) {
             const y = parsed.targetYear || parsed.year || new Date().getFullYear();
             const m = parsed.targetMonth || parsed.month || (new Date().getMonth() + 1);

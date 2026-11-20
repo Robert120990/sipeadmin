@@ -22,6 +22,8 @@ const {
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS,
+    KNOWN_ACCOUNT_HOLDERS,
+    KNOWN_STORE_LINES,
     resolveStationId,
     findStationById,
     findFuelByKey,
@@ -52,6 +54,10 @@ const {
     clearQueryCache,
     getSaldosBancosData,
     getSaldosChequeraData,
+    filterBankOrChequeraAccounts,
+    getVentasTiendaPorLineaData,
+    getRankingDiasVentasData,
+    getPagosProgramadosData,
     getConsolidadoVentas,
     getPedidosPumaData,
     COMPETENCIA_STATION_NAMES,
@@ -75,6 +81,9 @@ const {
     formatRankingMessage,
     formatSpecificBankMessage,
     formatTiendasMessage,
+    formatVentasTiendaLineaMessage,
+    formatPeakDayVentasMessage,
+    formatPagosProgramadosMessage,
     formatVentasMensualMessage,
     formatVentasRangoMessage,
     formatHorasPicoMessage,
@@ -1613,7 +1622,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
     }
 
-    // 0.29 Consulta explícita de Saldos en Chequera (con o sin banco específico, ej. 'chequera de Promerica')
+    // 0.29 Consulta explícita de Saldos en Chequera (con soporte de filtro por banco, contribuyente/titular, estación o cuenta)
     if (parsed.isChequera) {
         if (!effectivePerms.saldos_chequera) {
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar saldos en chequera.', keyboard);
@@ -1623,20 +1632,14 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getSaldosChequeraData();
-            let payload = data;
-            if (parsed.matchedBank && Array.isArray(data?.cuentas)) {
-                const bankCuentas = data.cuentas.filter(c => {
-                    const bNorm = normalizeText(c.banco || '');
-                    return parsed.matchedBank.keywords.some(kw => bNorm.includes(normalizeText(kw)));
-                });
-                payload = {
-                    ...data,
-                    cuentas: bankCuentas,
-                    total: bankCuentas.reduce((s, c) => s + Number(c.saldo || 0), 0)
-                };
-            }
+            const payload = filterBankOrChequeraAccounts(data, {
+                matchedBank: parsed.matchedBank,
+                matchedAccountHolder: parsed.matchedAccountHolder,
+                matchedStation: parsed.matchedStation,
+                matchedAccountNumber: parsed.matchedAccountNumber
+            });
             const msg = formatChequeraMessage(payload);
-            await logTelegramQuery(user.telegram_user_id, rawText, 'Saldos en Chequera', 1);
+            await logTelegramQuery(user.telegram_user_id, rawText, payload.filterLabel ? `Chequera (${payload.filterLabel})` : 'Saldos en Chequera', 1);
             setUserConversationContext(user?.telegram_user_id, {
                 lastTopic: 'chequera',
                 query: rawText
@@ -1650,7 +1653,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
     }
 
-    // 0.30 Consulta explícita de Saldos Consolidados en Bancos
+    // 0.30 Consulta explícita de Saldos Consolidados en Bancos (con soporte de filtro por contribuyente/titular o cuenta)
     if (parsed.isBancosGlobal) {
         if (!effectivePerms.saldos_banco) {
             await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar saldos bancarios.', keyboard);
@@ -1660,8 +1663,14 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getSaldosBancosData();
-            const msg = formatBancosMessage(data);
-            await logTelegramQuery(user.telegram_user_id, rawText, 'Saldos en Bancos', 1);
+            const payload = filterBankOrChequeraAccounts(data, {
+                matchedBank: parsed.matchedBank,
+                matchedAccountHolder: parsed.matchedAccountHolder,
+                matchedStation: parsed.matchedStation,
+                matchedAccountNumber: parsed.matchedAccountNumber
+            });
+            const msg = formatBancosMessage(payload);
+            await logTelegramQuery(user.telegram_user_id, rawText, payload.filterLabel ? `Bancos (${payload.filterLabel})` : 'Saldos en Bancos', 1);
             setUserConversationContext(user?.telegram_user_id, {
                 lastTopic: 'bancos',
                 query: rawText
@@ -1671,6 +1680,109 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         } catch (err) {
             console.error('[TelegramBot] Error en consulta global de bancos NLU:', err);
             await sendTelegramMessage(chatId, '❌ Error al consultar saldos bancarios: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 0.31 Consulta de Pagos Programados y Vencimientos Pendientes (Control de Pagos)
+    if (parsed.isPagosProgramados) {
+        if (!effectivePerms.saldos_banco && !effectivePerms.ventas && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar pagos programados.', keyboard);
+            return true;
+        }
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const pagosData = await getPagosProgramadosData();
+            const msg = formatPagosProgramadosMessage(pagosData);
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Pagos Programados', 1);
+            setUserConversationContext(user?.telegram_user_id, {
+                lastTopic: 'pagos_programados',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de pagos programados:', err);
+            await sendTelegramMessage(chatId, '❌ Error al consultar pagos programados: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 0.32 Consulta de Ventas de Tienda por Línea / Categoría o Detalle de Tienda de Estación (ej. 'Vent cigarros la loma', 'Detalle venta de tienda la loma')
+    if (parsed.isTiendaLinea) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas de tiendas.', keyboard);
+            return true;
+        }
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const lineaData = await getVentasTiendaPorLineaData({
+                startDate: parsed.startDate || parsed.targetDate,
+                endDate: parsed.endDate || parsed.targetDate,
+                targetDate: parsed.targetDate,
+                station: parsed.matchedStation,
+                storeLine: parsed.matchedStoreLine
+            });
+            const msg = formatVentasTiendaLineaMessage(lineaData);
+            await logTelegramQuery(
+                user.telegram_user_id,
+                rawText,
+                `Tienda Línea: ${parsed.matchedStoreLine?.label || 'Todas'} (${parsed.matchedStation?.name || 'Global'})`,
+                1
+            );
+            setUserConversationContext(user?.telegram_user_id, {
+                lastDate: lineaData.endDate || parsed.targetDate,
+                lastStationId: parsed.matchedStation?.id || null,
+                lastStationName: parsed.matchedStation?.name || null,
+                lastTopic: 'tienda_linea',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de línea de tienda:', err);
+            await sendTelegramMessage(chatId, '❌ Error al consultar ventas por línea de tienda: ' + escapeHtml(err.message), keyboard);
+            return true;
+        }
+    }
+
+    // 0.33 Consulta de Día de Mayor / Menor Venta del Mes o Rango y Día de la Semana (ej. 'En mes de octubre que dia fue el de mayor venta?', 'Que dia de la semana vendió mas miraflores')
+    if (parsed.isPeakDay) {
+        if (!effectivePerms.ventas) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar ventas.', keyboard);
+            return true;
+        }
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const peakDayData = await getRankingDiasVentasData({
+                startDate: parsed.isRange ? parsed.startDate : null,
+                endDate: parsed.isRange ? parsed.endDate : null,
+                year: parsed.isMonthly ? parsed.targetYear : null,
+                month: parsed.isMonthly ? parsed.targetMonth : null,
+                station: parsed.matchedStation,
+                order: parsed.peakDayOrder || 'DESC'
+            });
+            const msg = formatPeakDayVentasMessage(peakDayData);
+            await logTelegramQuery(
+                user.telegram_user_id,
+                rawText,
+                `Día Mayor/Menor Venta (${peakDayData.periodo_label})`,
+                1
+            );
+            setUserConversationContext(user?.telegram_user_id, {
+                lastStationId: parsed.matchedStation?.id || null,
+                lastStationName: parsed.matchedStation?.name || null,
+                lastTopic: 'dia_pico_ventas',
+                query: rawText
+            });
+            await sendFeedback(chatId, msg, { user, query: rawText });
+            return true;
+        } catch (err) {
+            console.error('[TelegramBot] Error en consulta de día de mayor venta:', err);
+            await sendTelegramMessage(chatId, '❌ Error al calcular el día de mayor venta: ' + escapeHtml(err.message), keyboard);
             return true;
         }
     }
@@ -1881,7 +1993,15 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         sendChatAction(chatId, 'typing').catch(() => {});
         try {
             const data = await getSaldosBancosData();
-            const msg = formatSpecificBankMessage(data, parsed.matchedBank);
+            const hasSubFilter = Boolean(parsed.matchedAccountHolder || parsed.matchedStation || parsed.matchedAccountNumber);
+            const msg = hasSubFilter
+                ? formatBancosMessage(filterBankOrChequeraAccounts(data, {
+                    matchedBank: parsed.matchedBank,
+                    matchedAccountHolder: parsed.matchedAccountHolder,
+                    matchedStation: parsed.matchedStation,
+                    matchedAccountNumber: parsed.matchedAccountNumber
+                }))
+                : formatSpecificBankMessage(data, parsed.matchedBank);
             await logTelegramQuery(user.telegram_user_id, rawText, `Banco: ${parsed.matchedBank.label}`, 1);
             try {
                 const { learnAlias } = require('./conversationalAiService');
@@ -3183,6 +3303,68 @@ formatDiscrepancyAlertMessage.getInlineMarkup = getDiscrepancyInlineMarkup;
 
 
 /**
+ * Obtiene usuarios activos autorizados para recibir alertas broadcast, evitando
+ * truncamiento de permisos por el límite de 1024 bytes de GROUP_CONCAT.
+ */
+const fetchAuthorizedAlertUsers = async (db) => {
+    try {
+        const [users] = await db.query(`
+            SELECT tu.*, u.status as sipe_status, u.role_id as sipe_role_id, r.name as sipe_role_name,
+                   GROUP_CONCAT(p.name) as sipe_permissions
+            FROM telegram_usuarios tu
+            LEFT JOIN users u ON tu.user_id = u.id
+            LEFT JOIN roles r ON u.role_id = r.id
+            LEFT JOIN role_permissions rp ON r.id = rp.role_id
+            LEFT JOIN permissions p ON rp.permission_id = p.id
+            WHERE tu.activo = 1
+            GROUP BY tu.id
+        `);
+
+        const roleIds = [...new Set((users || []).map(u => Number(u.sipe_role_id)).filter(id => Number.isFinite(id) && id > 0))];
+        const permsByRole = {};
+        if (roleIds.length > 0) {
+            try {
+                const [permRows] = await db.query(
+                    'SELECT rp.role_id, p.name FROM role_permissions rp INNER JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id IN (?)',
+                    [roleIds]
+                );
+                if (Array.isArray(permRows)) {
+                    for (const pr of permRows) {
+                        const rid = Number(pr.role_id);
+                        if (!permsByRole[rid]) permsByRole[rid] = [];
+                        if (pr.name) permsByRole[rid].push(String(pr.name).trim());
+                    }
+                }
+            } catch (_) {
+                // Fallback a GROUP_CONCAT en mocks
+            }
+        }
+
+        return (users || []).filter(u => {
+            if (u.user_id && u.sipe_status === 'inactive') return false;
+            if (Number(u.permiso_alertas) === 1) return true;
+            if (u.user_id && (Number(u.sipe_role_id) === 1 || u.sipe_role_name === 'Administrator' || u.sipe_role_name === 'Super Administrator')) return true;
+            const directPerms = permsByRole[Number(u.sipe_role_id)];
+            const perms = (Array.isArray(directPerms) && directPerms.length > 0)
+                ? directPerms
+                : (u.sipe_permissions || '').split(',').map(p => p.trim()).filter(Boolean);
+            return perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') ||
+                   perms.includes('/dashboard/consultas/estaciones/resumen-cierre');
+        });
+    } catch (dbErr) {
+        try {
+            const [simpleUsers] = await db.query(
+                'SELECT * FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1'
+            );
+            return simpleUsers || [];
+        } catch (sErr) {
+            console.warn('[TelegramBot] Error consultando telegram_usuarios:', sErr.message);
+            return [];
+        }
+    }
+};
+
+/**
  * Difusión Proactiva de Alertas de Discrepancias
  * Analiza consolidado de ventas, filtra descuadres >$10 en pista, >$5 en tiendas o mermas anómalas
  * y lo envía vía Telegram a todos los directores autorizados (activo = 1 y permiso_alertas = 1).
@@ -3271,36 +3453,7 @@ const broadcastDiscrepancyAlerts = async (targetDate = null, customDataOrOptions
     if (!customUsers) {
         const db = getDb();
         if (db) {
-            try {
-                const [users] = await db.query(`
-                    SELECT tu.*, u.status as sipe_status, r.name as sipe_role_name,
-                           GROUP_CONCAT(p.name) as sipe_permissions
-                    FROM telegram_usuarios tu
-                    LEFT JOIN users u ON tu.user_id = u.id
-                    LEFT JOIN roles r ON u.role_id = r.id
-                    LEFT JOIN role_permissions rp ON r.id = rp.role_id
-                    LEFT JOIN permissions p ON rp.permission_id = p.id
-                    WHERE tu.activo = 1
-                    GROUP BY tu.id
-                `);
-                authorizedUsers = (users || []).filter(u => {
-                    if (u.user_id && u.sipe_status === 'inactive') return false;
-                    if (Number(u.permiso_alertas) === 1) return true;
-                    if (u.user_id && (u.sipe_role_name === 'Administrator' || u.sipe_role_name === 'Super Administrator')) return true;
-                    const perms = (u.sipe_permissions || '').split(',');
-                    return perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') ||
-                           perms.includes('/dashboard/consultas/estaciones/resumen-cierre');
-                });
-            } catch (dbErr) {
-                try {
-                    const [simpleUsers] = await db.query(
-                        'SELECT * FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1'
-                    );
-                    authorizedUsers = simpleUsers || [];
-                } catch (sErr) {
-                    console.warn('[TelegramBot] Error consultando telegram_usuarios:', sErr.message);
-                }
-            }
+            authorizedUsers = await fetchAuthorizedAlertUsers(db);
         }
     }
 
@@ -3393,36 +3546,7 @@ const broadcastCustomAlert = async ({ message, title = null, severity = 'alerta'
     if (!customUsers) {
         const db = getDb();
         if (db) {
-            try {
-                const [users] = await db.query(`
-                    SELECT tu.*, u.status as sipe_status, r.name as sipe_role_name,
-                           GROUP_CONCAT(p.name) as sipe_permissions
-                    FROM telegram_usuarios tu
-                    LEFT JOIN users u ON tu.user_id = u.id
-                    LEFT JOIN roles r ON u.role_id = r.id
-                    LEFT JOIN role_permissions rp ON r.id = rp.role_id
-                    LEFT JOIN permissions p ON rp.permission_id = p.id
-                    WHERE tu.activo = 1
-                    GROUP BY tu.id
-                `);
-                authorizedUsers = (users || []).filter(u => {
-                    if (u.user_id && u.sipe_status === 'inactive') return false;
-                    if (Number(u.permiso_alertas) === 1) return true;
-                    if (u.user_id && (u.sipe_role_name === 'Administrator' || u.sipe_role_name === 'Super Administrator')) return true;
-                    const perms = (u.sipe_permissions || '').split(',');
-                    return perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') ||
-                           perms.includes('/dashboard/consultas/estaciones/resumen-cierre');
-                });
-            } catch (dbErr) {
-                try {
-                    const [simpleUsers] = await db.query(
-                        'SELECT * FROM telegram_usuarios WHERE activo = 1 AND permiso_alertas = 1'
-                    );
-                    authorizedUsers = simpleUsers || [];
-                } catch (sErr) {
-                    console.warn('[TelegramBot] Error consultando telegram_usuarios:', sErr.message);
-                }
-            }
+            authorizedUsers = await fetchAuthorizedAlertUsers(db);
         }
     }
 
@@ -3681,6 +3805,15 @@ module.exports = {
     KNOWN_STATIONS,
     KNOWN_FUELS,
     KNOWN_BANKS,
+    KNOWN_ACCOUNT_HOLDERS,
+    KNOWN_STORE_LINES,
+    filterBankOrChequeraAccounts,
+    getVentasTiendaPorLineaData,
+    getRankingDiasVentasData,
+    getPagosProgramadosData,
+    formatVentasTiendaLineaMessage,
+    formatPeakDayVentasMessage,
+    formatPagosProgramadosMessage,
     sendChatAction,
     queryMemoryCache,
     getCachedQuery,
