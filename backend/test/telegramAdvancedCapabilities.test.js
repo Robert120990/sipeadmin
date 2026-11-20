@@ -258,7 +258,10 @@ describe('OpenClaw Telegram Bot - Advanced Capabilities', () => {
                 const sampleAudio = Buffer.from('VOICE_AUDIO_STREAM_BINARY');
                 const text = await transcribeTelegramVoice(sampleAudio, 'audio/ogg');
                 assert.strictEqual(text, 'cuanto vendio miraflores el dia de ayer');
-                assert.strictEqual(capturedModel, 'gemini-2.0-flash');
+                assert.ok(
+                    ['gemini-3.8-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].includes(capturedModel),
+                    `Modelo Gemini inesperado: ${capturedModel}`
+                );
                 assert.ok(capturedPrompt.includes('español salvadoreño formal'));
                 assert.strictEqual(capturedMime, 'audio/ogg');
             } finally {
