@@ -97,7 +97,9 @@ if [ -n "$PM2_BIN" ]; then
     fi
 
     echo "--- Asegurando sipeadmin-webhook activo en puerto 7778 ---" >> "$DEBUG_FILE"
-    $PM2_BIN startOrRestart "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-webhook --update-env >> "$DEBUG_FILE" 2>&1 || true
+    if ! $PM2_BIN describe sipeadmin-webhook >/dev/null 2>&1; then
+        $PM2_BIN start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-webhook --update-env >> "$DEBUG_FILE" 2>&1 || true
+    fi
 
     $PM2_BIN save >> "$DEBUG_FILE" 2>&1 || true
     if command -v sudo >/dev/null 2>&1; then
