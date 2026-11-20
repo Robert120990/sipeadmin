@@ -141,6 +141,13 @@ const Dashboard = () => {
     const auditoria = homeIntel?.auditoria;
     const personal = homeIntel?.actividad_personal || { tickets_abiertos: 0, mis_tareas_pendientes: 0 };
     const alertasTanques = abastecimiento?.tanques?.alertas_tanques || [];
+    const baterias = abastecimiento?.tanques?.baterias || abastecimiento?.baterias || [];
+
+    const getBateriaColor = (pct) => {
+        if (pct > 50) return '#10b981';
+        if (pct >= 20) return '#f59e0b';
+        return '#ef4444';
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', animation: 'fadeIn 0.4s ease-out' }}>
@@ -365,6 +372,41 @@ const Dashboard = () => {
                     >
                         Gestionar Pedidos <ArrowRight size={13} />
                     </button>
+                </div>
+            )}
+
+            {/* Banda Compacta de Nivel de Batería por Tanque/Pipa (#TKT-0035) */}
+            {permisos.abastecimiento && baterias.length > 0 && (
+                <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '0.76rem', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <Fuel size={15} color="var(--primary)" /> Nivel de Batería por Tanque
+                        </span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+                        {baterias.map((b, i) => {
+                            const pct = Math.max(0, Math.min(100, Number(b.porcentaje_bateria ?? b.porcentaje ?? 0)));
+                            const color = getBateriaColor(pct);
+                            return (
+                                <div key={i} style={{ flex: '1 1 210px', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
+                                        <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                                            {b.estacion || b.nombre || 'Tanque'}{b.nombre_combustible ? ` • ${b.nombre_combustible}` : ''}
+                                        </span>
+                                        <span style={{ fontWeight: 'bold', color }}>{pct.toFixed(0)}%</span>
+                                    </div>
+                                    <div style={{ width: '100%', height: '10px', borderRadius: '6px', backgroundColor: 'rgba(148, 163, 184, 0.25)', overflow: 'hidden' }}>
+                                        <div style={{ width: `${pct}%`, height: '100%', backgroundColor: color, borderRadius: '6px', transition: 'width 0.4s ease' }} />
+                                    </div>
+                                    {(b.galones_actuales !== undefined || b.capacidad_total !== undefined) && (
+                                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                            {(b.galones_actuales || 0).toLocaleString()} / {(b.capacidad_total || 0).toLocaleString()} gal
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
             )}
 
