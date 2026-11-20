@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
     Search, Plus, CheckCircle, Edit, Trash2, X, Save, Download,
     Printer, Sparkles, Send, ArrowUp, ArrowDown, ArrowUpDown,
-    Filter, CreditCard, RotateCcw, CalendarClock, Paperclip
+    Filter, CreditCard, RotateCcw, CalendarClock, Paperclip, Bell, Bot
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -14,6 +14,7 @@ import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import ControlPagosModal from '../components/ControlPagosModal';
 import ReceiptViewerModal from '../components/ReceiptViewerModal';
+import MibotProgramarModal from '../components/MibotProgramarModal';
 import { parseDateOnly, todayStr } from '../utils/date';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
@@ -200,6 +201,10 @@ export default function ControlRecordatorios() {
     const [quickViewerOpen, setQuickViewerOpen] = useState(false);
     const [quickViewerItems, setQuickViewerItems] = useState([]);
     const [quickViewerTitle, setQuickViewerTitle] = useState('Comprobantes');
+
+    // Popup MiBot Telegram (programar avisos de pago pendiente, tareas, validaciones o reuniones)
+    const [mibotModalOpen, setMibotModalOpen] = useState(false);
+    const [mibotTargetRow, setMibotTargetRow] = useState(null);
 
     // Report preview state
     const [previewModalOpen, setPreviewModalOpen] = useState(false);
@@ -965,6 +970,27 @@ export default function ControlRecordatorios() {
                     </button>
                     <button
                         type="button"
+                        className="btn-secondary"
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            height: '36px',
+                            padding: '0 0.9rem',
+                            fontSize: '0.8rem',
+                            borderColor: 'rgba(0, 136, 204, 0.45)',
+                            color: '#38bdf8'
+                        }}
+                        onClick={() => {
+                            setMibotTargetRow(null);
+                            setMibotModalOpen(true);
+                        }}
+                        title="Programar recordatorio de pago, tarea, validación o reunión por Telegram (MiBot)"
+                    >
+                        <Bot size={15} /> MiBot Telegram
+                    </button>
+                    <button
+                        type="button"
                         className="btn-success"
                         style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', height: '36px', padding: '0 1rem', fontSize: '0.8rem' }}
                         onClick={() => {
@@ -1150,7 +1176,7 @@ export default function ControlRecordatorios() {
                                         </th>
                                     );
                                 })}
-                                <th style={{ textAlign: 'center', padding: '0.45rem 0.5rem', fontSize: '0.74rem', letterSpacing: '0.03em', width: '102px' }}>
+                                <th style={{ textAlign: 'center', padding: '0.45rem 0.5rem', fontSize: '0.74rem', letterSpacing: '0.03em', width: '132px' }}>
                                     ACCIONES
                                 </th>
                             </tr>
@@ -1622,6 +1648,49 @@ export default function ControlRecordatorios() {
                                             onClick={() => setPagosPopupRow(r)}
                                         >
                                             <CheckCircle size={14} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            style={{
+                                                padding: '0.3rem',
+                                                position: 'relative',
+                                                backgroundColor: r.mibot_avisos_count > 0 ? 'rgba(0, 136, 204, 0.28)' : 'rgba(0, 136, 204, 0.14)',
+                                                borderColor: 'rgba(0, 136, 204, 0.45)',
+                                                color: '#38bdf8'
+                                            }}
+                                            title={
+                                                r.mibot_avisos_count > 0
+                                                    ? `MiBot Telegram: ${r.mibot_avisos_count} aviso(s) programado(s) — Clic para ver o programar`
+                                                    : 'Programar recordatorio o validación por Telegram (MiBot)'
+                                            }
+                                            onClick={() => {
+                                                setMibotTargetRow(r);
+                                                setMibotModalOpen(true);
+                                            }}
+                                        >
+                                            <Bell size={14} />
+                                            {r.mibot_avisos_count > 0 && (
+                                                <span style={{
+                                                    position: 'absolute',
+                                                    top: '-5px',
+                                                    right: '-5px',
+                                                    minWidth: '15px',
+                                                    height: '15px',
+                                                    padding: '0 3px',
+                                                    borderRadius: '999px',
+                                                    backgroundColor: '#0088cc',
+                                                    color: '#fff',
+                                                    fontSize: '0.6rem',
+                                                    fontWeight: 800,
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    lineHeight: 1
+                                                }}>
+                                                    {r.mibot_avisos_count}
+                                                </span>
+                                            )}
                                         </button>
                                         <button
                                             type="button"
@@ -2298,6 +2367,17 @@ export default function ControlRecordatorios() {
                 onClose={() => setQuickViewerOpen(false)}
                 comprobantes={quickViewerItems}
                 title={quickViewerTitle}
+            />
+
+            {/* Popup MiBot Personal de Telegram (Recordatorios de pago pendiente, tareas, validaciones y reuniones) */}
+            <MibotProgramarModal
+                open={mibotModalOpen}
+                onClose={() => {
+                    setMibotModalOpen(false);
+                    setMibotTargetRow(null);
+                }}
+                vencimientoRow={mibotTargetRow}
+                onSaved={fetchData}
             />
         </div>
     );

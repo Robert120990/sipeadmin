@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import api from '../services/api';
 import Modal from './Modal';
 import ReceiptViewerModal from './ReceiptViewerModal';
+import MibotProgramarModal from './MibotProgramarModal';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
@@ -10,7 +11,7 @@ import { todayStr, formatDateDMY } from '../utils/date';
 import {
     CreditCard, Building2, Banknote, FileText, Receipt, ArrowLeftRight,
     CheckCircle, Clock, Sparkles, Upload, Paperclip, Trash2, Edit, Save,
-    Plus, X, Eye, ShieldCheck, Layers, Camera, User, Loader2
+    Plus, X, Eye, ShieldCheck, Layers, Camera, User, Loader2, Bell
 } from 'lucide-react';
 
 const PAYMENT_METHOD_OPTIONS = [
@@ -85,6 +86,9 @@ export default function ControlPagosModal({
     const [viewerOpen, setViewerOpen] = useState(false);
     const [viewerItems, setViewerItems] = useState([]);
     const [viewerIdx, setViewerIdx] = useState(0);
+
+    // Programar aviso personal MiBot por Telegram
+    const [mibotOpen, setMibotOpen] = useState(false);
 
     // Cuentas oficiales de bancos ordenadas con sortCuentas (regla AGENTS.md)
     const sortedBankAccounts = useMemo(() => {
@@ -621,18 +625,41 @@ export default function ControlPagosModal({
                                     </div>
                                 </div>
 
-                                <span style={{
-                                    padding: '0.22rem 0.65rem',
-                                    borderRadius: '12px',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 800,
-                                    backgroundColor: statusBadgeStyle.bg,
-                                    color: statusBadgeStyle.color,
-                                    border: statusBadgeStyle.border,
-                                    flexShrink: 0
-                                }}>
-                                    {statusBadgeStyle.label}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', flexShrink: 0 }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setMibotOpen(true)}
+                                        title="Programar recordatorio o validación por Telegram (MiBot) a uno o varios usuarios"
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.32rem',
+                                            padding: '0.24rem 0.62rem',
+                                            borderRadius: '12px',
+                                            fontSize: '0.72rem',
+                                            fontWeight: 700,
+                                            cursor: 'pointer',
+                                            border: '1px solid rgba(0, 136, 204, 0.5)',
+                                            backgroundColor: 'rgba(0, 136, 204, 0.16)',
+                                            color: '#38bdf8'
+                                        }}
+                                    >
+                                        <Bell size={12} />
+                                        {resumen.saldo_pendiente > 0 ? 'Avisar MiBot Telegram' : 'Validar por MiBot'}
+                                    </button>
+                                    <span style={{
+                                        padding: '0.22rem 0.65rem',
+                                        borderRadius: '12px',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 800,
+                                        backgroundColor: statusBadgeStyle.bg,
+                                        color: statusBadgeStyle.color,
+                                        border: statusBadgeStyle.border,
+                                        flexShrink: 0
+                                    }}>
+                                        {statusBadgeStyle.label}
+                                    </span>
+                                </div>
                             </div>
 
                             {/* KPIs de Monto Total / Pagado / Saldo Pendiente */}
@@ -1654,6 +1681,24 @@ export default function ControlPagosModal({
                 initialIndex={viewerIdx}
                 title={`Comprobantes — ${detail?.vencimiento?.descripcion || vencimientoRow?.descripcion || ''}`}
                 onDelete={handleDeleteReceipt}
+            />
+
+            <MibotProgramarModal
+                open={mibotOpen}
+                onClose={() => setMibotOpen(false)}
+                vencimientoRow={vencimientoRow ? {
+                    ...vencimientoRow,
+                    descripcion: detail?.vencimiento?.descripcion || vencimientoRow.descripcion,
+                    ubicacion: detail?.vencimiento?.ubicacion || vencimientoRow.ubicacion,
+                    vence: detail?.vencimiento?.vence || vencimientoRow.vence,
+                    monto: resumen.monto_total,
+                    monto_total: resumen.monto_total,
+                    monto_pagado: resumen.monto_pagado,
+                    saldo_pendiente: resumen.saldo_pendiente,
+                    estado_pago: resumen.estado_pago
+                } : null}
+                defaultTipo={resumen.saldo_pendiente > 0 ? 'RECORDATORIO_PAGO' : 'VALIDACION'}
+                onSaved={onSaved}
             />
         </>
     );

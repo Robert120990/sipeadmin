@@ -5,12 +5,18 @@ import {
     Activity, Power, HelpCircle, Check, Eye,
     UserCheck, ShieldAlert, ShieldCheck, Link2,
     ThumbsUp, ThumbsDown, MessageSquare, Database, Cpu, Radio,
-    Terminal, AlertOctagon, Key, ClipboardPaste, Sparkles
+    Terminal, AlertOctagon, Key, ClipboardPaste, Sparkles,
+    Bell, Calendar, Users
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import MibotProgramarModal, {
+    MIBOT_TIPO_OPTIONS,
+    formatMibotDateTime,
+    getDeliveryBadgeStyle
+} from '../components/MibotProgramarModal';
 
 export default function TelegramUsers() {
     const { addToast } = useToast();
@@ -19,11 +25,20 @@ export default function TelegramUsers() {
     // Estado principal
     const [loading, setLoading] = useState(true);
     const [users, setUsers] = useState([]);
-    const [summary, setSummary] = useState({ total: 0, activos: 0, vinculados: 0, pendientes: 0, inactivos: 0 });
+    const [summary, setSummary] = useState({ total: 0, activos: 0, mibot_activos: 0, vinculados: 0, pendientes: 0, inactivos: 0 });
     const [botStatus, setBotStatus] = useState(null);
     const [statusLoading, setStatusLoading] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
-    const [activeTab, setActiveTab] = useState('users'); // 'users' | 'bitacora' | 'feedback'
+    const [activeTab, setActiveTab] = useState('users'); // 'users' | 'mibot' | 'bitacora' | 'feedback' | 'diagnostico'
+
+    // MiBot Personal (Avisos de pagos, tareas, validaciones y reuniones multi-usuario)
+    const [mibotProgramaciones, setMibotProgramaciones] = useState([]);
+    const [loadingMibot, setLoadingMibot] = useState(false);
+    const [mibotTipoFilter, setMibotTipoFilter] = useState('ALL');
+    const [mibotEstadoFilter, setMibotEstadoFilter] = useState('ALL');
+    const [mibotModalOpen, setMibotModalOpen] = useState(false);
+    const [mibotDefaultTipo, setMibotDefaultTipo] = useState('REUNION');
+    const [sendingMibotId, setSendingMibotId] = useState(null);
 
     // Catálogo de usuarios de SIPE Admin para vinculación
     const [systemUsers, setSystemUsers] = useState([]);
@@ -70,6 +85,7 @@ export default function TelegramUsers() {
         telegram_username: '',
         first_name: '',
         last_name: '',
+        cargo: '',
         user_id: '',
         heredar_permisos: true,
         activo: 1,
@@ -77,6 +93,11 @@ export default function TelegramUsers() {
         permiso_saldos_banco: 1,
         permiso_saldos_chequera: 1,
         permiso_alertas: 1,
+        recibir_mibot: 1,
+        mibot_pagos: 1,
+        mibot_tareas: 1,
+        mibot_validaciones: 1,
+        mibot_reuniones: 1,
         notas: ''
     };
     const [formData, setFormData] = useState(initialFormState);
@@ -195,6 +216,61 @@ export default function TelegramUsers() {
         }
     }, [addToast]);
 
+    // Cargar programaciones de MiBot Personal
+    const fetchMibotProgramaciones = useCallback(async () => {
+        setLoadingMibot(true);
+        try {
+            const params = { limit: 150 };
+            if (mibotTipoFilter !== 'ALL') params.tipo = mibotTipoFilter;
+            if (mibotEstadoFilter !== 'ALL') params.estado = mibotEstadoFilter;
+            const res = await api.get('/telegram/mibot/programaciones', { params });
+            setMibotProgramaciones(Array.isArray(res.data?.programaciones) ? res.data.programaciones : []);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al cargar programaciones de MiBot', 'error');
+        } finally {
+            setLoadingMibot(false);
+        }
+    }, [addToast, mibotTipoFilter, mibotEstadoFilter]);
+
+    const handleSendMibotNow = async (prog) => {
+        setSendingMibotId(prog.id);
+        try {
+            const res = await api.post(`/telegram/mibot/programaciones/${prog.id}/enviar-ahora`);
+            addToast(res.data?.message || 'Mensaje personal de MiBot enviado por Telegram', 'success');
+            fetchMibotProgramaciones();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error enviando aviso MiBot', 'error');
+        } finally {
+            setSendingMibotId(null);
+        }
+    };
+
+    const handleChangeMibotEstado = async (prog, nuevoEstado) => {
+        if (nuevoEstado === 'CANCELADO') {
+            const ok = await confirm(`¿Cancelar el aviso MiBot "${prog.titulo}"? Dejará de enviarse a los destinatarios.`, { variant: 'danger' });
+            if (!ok) return;
+        }
+        try {
+            await api.patch(`/telegram/mibot/programaciones/${prog.id}/estado`, { estado: nuevoEstado });
+            addToast(`Aviso MiBot actualizado a ${nuevoEstado}`, 'success');
+            fetchMibotProgramaciones();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error actualizando estado de MiBot', 'error');
+        }
+    };
+
+    const handleDeleteMibot = async (prog) => {
+        const ok = await confirm(`¿Eliminar definitivamente el aviso MiBot "${prog.titulo}" y su historial de entregas?`, { variant: 'danger' });
+        if (!ok) return;
+        try {
+            await api.delete(`/telegram/mibot/programaciones/${prog.id}`);
+            addToast('Programación MiBot eliminada', 'success');
+            fetchMibotProgramaciones();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error eliminando programación MiBot', 'error');
+        }
+    };
+
     // Cargar retroalimentación & sugerencias de mejora + diagnóstico de negativas
     const fetchFeedback = useCallback(async () => {
         setLoadingFeedback(true);
@@ -283,6 +359,12 @@ export default function TelegramUsers() {
         fetchSystemUsers();
         fetchHealthDiagnostics();
     }, [fetchBotStatus, fetchTokenConfig, fetchUsers, fetchSystemUsers, fetchHealthDiagnostics]);
+
+    useEffect(() => {
+        if (activeTab === 'mibot') {
+            fetchMibotProgramaciones();
+        }
+    }, [activeTab, fetchMibotProgramaciones]);
 
     useEffect(() => {
         if (activeTab === 'bitacora') {
@@ -645,6 +727,7 @@ export default function TelegramUsers() {
             telegram_username: user.telegram_username ? user.telegram_username.replace(/^@/, '') : '',
             first_name: user.first_name || '',
             last_name: user.last_name || '',
+            cargo: user.cargo || '',
             user_id: targetUserId,
             heredar_permisos: isLinked,
             activo: user.activo ? 1 : 0,
@@ -652,6 +735,11 @@ export default function TelegramUsers() {
             permiso_saldos_banco: user.effective_permissions ? (user.effective_permissions.saldos_banco ? 1 : 0) : (user.permiso_saldos_banco ? 1 : 0),
             permiso_saldos_chequera: user.effective_permissions ? (user.effective_permissions.saldos_chequera ? 1 : 0) : (user.permiso_saldos_chequera ? 1 : 0),
             permiso_alertas: user.effective_permissions ? (user.effective_permissions.alertas ? 1 : 0) : (user.permiso_alertas ? 1 : 0),
+            recibir_mibot: user.recibir_mibot !== undefined && user.recibir_mibot !== null ? (user.recibir_mibot ? 1 : 0) : 1,
+            mibot_pagos: user.mibot_pagos !== undefined && user.mibot_pagos !== null ? (user.mibot_pagos ? 1 : 0) : 1,
+            mibot_tareas: user.mibot_tareas !== undefined && user.mibot_tareas !== null ? (user.mibot_tareas ? 1 : 0) : 1,
+            mibot_validaciones: user.mibot_validaciones !== undefined && user.mibot_validaciones !== null ? (user.mibot_validaciones ? 1 : 0) : 1,
+            mibot_reuniones: user.mibot_reuniones !== undefined && user.mibot_reuniones !== null ? (user.mibot_reuniones ? 1 : 0) : 1,
             notas: user.notas || ''
         });
         setModalOpen(true);
@@ -751,7 +839,7 @@ export default function TelegramUsers() {
     // Filtrar usuarios
     const filteredUsers = users.filter(u => {
         const term = searchTerm.toLowerCase();
-        const full = `${u.first_name || ''} ${u.last_name || ''} ${u.telegram_username || ''} ${u.telegram_user_id || ''}`.toLowerCase();
+        const full = `${u.first_name || ''} ${u.last_name || ''} ${u.cargo || ''} ${u.telegram_username || ''} ${u.telegram_user_id || ''}`.toLowerCase();
         return full.includes(term);
     });
 
@@ -1044,6 +1132,17 @@ export default function TelegramUsers() {
                         <RefreshCw size={15} className={statusLoading ? 'spin' : ''} /> Reiniciar
                     </button>
                     <button
+                        className="btn-secondary"
+                        onClick={() => {
+                            setMibotDefaultTipo('REUNION');
+                            setMibotModalOpen(true);
+                        }}
+                        style={{ height: '36px', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0 0.85rem', borderColor: 'rgba(0, 136, 204, 0.45)', color: '#38bdf8' }}
+                        title="Programar recordatorio de pago, tarea, validación o reunión para 1 o varios usuarios"
+                    >
+                        <Bell size={15} /> Programar MiBot
+                    </button>
+                    <button
                         className="btn-primary"
                         onClick={handleOpenCreate}
                         style={{ height: '36px', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0 1rem' }}
@@ -1183,6 +1282,25 @@ export default function TelegramUsers() {
                     Usuarios Autorizados ({summary.total})
                 </button>
                 <button
+                    onClick={() => setActiveTab('mibot')}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: '0.45rem 1rem',
+                        fontSize: '0.825rem',
+                        fontWeight: activeTab === 'mibot' ? 700 : 500,
+                        color: activeTab === 'mibot' ? '#0088cc' : 'var(--text-muted)',
+                        borderBottom: activeTab === 'mibot' ? '2px solid #0088cc' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem'
+                    }}
+                >
+                    <Bell size={13} />
+                    MiBot (Avisos, Tareas y Reuniones)
+                </button>
+                <button
                     onClick={() => setActiveTab('bitacora')}
                     style={{
                         background: 'none',
@@ -1290,6 +1408,10 @@ export default function TelegramUsers() {
                             <span style={{ fontSize: '0.78rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.1)', color: '#10B981', fontWeight: 600 }}>
                                 {summary.activos} Activos
                             </span>
+                            <span style={{ fontSize: '0.78rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(0, 136, 204, 0.14)', color: '#38bdf8', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <Bot size={13} />
+                                {summary.mibot_activos ?? summary.activos} con MiBot
+                            </span>
                             <span style={{ fontSize: '0.78rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.1)', color: '#3B82F6', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                                 <UserCheck size={13} />
                                 {summary.vinculados || 0} Vinculados a SIPE
@@ -1362,9 +1484,23 @@ export default function TelegramUsers() {
 
                                             <td style={{ padding: '0.55rem 0.65rem', fontSize: '0.8rem' }}>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                                                    <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
-                                                        {`${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Sin Nombre'}
-                                                    </span>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                                        <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                                                            {`${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Sin Nombre'}
+                                                        </span>
+                                                        {u.cargo && (
+                                                            <span style={{
+                                                                fontSize: '0.68rem',
+                                                                padding: '0.08rem 0.4rem',
+                                                                borderRadius: '4px',
+                                                                backgroundColor: 'rgba(14, 165, 233, 0.14)',
+                                                                color: '#38bdf8',
+                                                                fontWeight: 700
+                                                            }}>
+                                                                {u.cargo}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     <span style={{ fontSize: '0.74rem', color: 'var(--primary)' }}>
                                                         {u.telegram_username || 'Sin username'}
                                                     </span>
@@ -1499,6 +1635,42 @@ export default function TelegramUsers() {
                                                             🚨 Alertas
                                                         </span>
                                                     </div>
+                                                    <div style={{ display: 'flex', gap: '0.28rem', justifyContent: 'center', flexWrap: 'wrap', marginTop: '0.15rem' }}>
+                                                        {Number(u.recibir_mibot ?? 1) === 1 ? (
+                                                            <>
+                                                                <span
+                                                                    style={{
+                                                                        fontSize: '0.66rem',
+                                                                        padding: '0.1rem 0.4rem',
+                                                                        borderRadius: '4px',
+                                                                        background: 'rgba(0, 136, 204, 0.16)',
+                                                                        color: '#38bdf8',
+                                                                        fontWeight: 700
+                                                                    }}
+                                                                    title="MiBot Personal habilitado para este usuario"
+                                                                >
+                                                                    🤖 MiBot:
+                                                                    {[
+                                                                        Number(u.mibot_pagos ?? 1) === 1 ? 'Pagos' : null,
+                                                                        Number(u.mibot_tareas ?? 1) === 1 ? 'Tareas' : null,
+                                                                        Number(u.mibot_validaciones ?? 1) === 1 ? 'Valid.' : null,
+                                                                        Number(u.mibot_reuniones ?? 1) === 1 ? 'Reuniones' : null
+                                                                    ].filter(Boolean).join(' · ') || 'Personalizado'}
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            <span style={{
+                                                                fontSize: '0.66rem',
+                                                                padding: '0.1rem 0.4rem',
+                                                                borderRadius: '4px',
+                                                                background: 'rgba(107, 114, 128, 0.12)',
+                                                                color: '#9CA3AF',
+                                                                fontWeight: 600
+                                                            }}>
+                                                                🤖 MiBot desactivado
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </td>
 
@@ -1549,6 +1721,257 @@ export default function TelegramUsers() {
                         </table>
                     </div>
                 </>
+            )}
+
+            {activeTab === 'mibot' && (
+                /* Tab de MiBot Personal: Recordatorios de Pagos, Tareas, Validaciones y Reuniones */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', width: '100%', maxWidth: '100%', minWidth: 0 }}>
+                    {/* Barra de Controles y Filtros Compactos */}
+                    <div className="card glass" style={{ padding: '0.85rem 1.15rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                            {[
+                                { id: 'ALL', label: 'Todos' },
+                                ...MIBOT_TIPO_OPTIONS.map(t => ({ id: t.id, label: `${t.emoji} ${t.short}` }))
+                            ].map(opt => (
+                                <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setMibotTipoFilter(opt.id)}
+                                    style={{
+                                        height: '32px',
+                                        padding: '0 0.75rem',
+                                        borderRadius: '16px',
+                                        fontSize: '0.76rem',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                        border: mibotTipoFilter === opt.id ? '1px solid #0088cc' : '1px solid var(--border)',
+                                        backgroundColor: mibotTipoFilter === opt.id ? 'rgba(0, 136, 204, 0.2)' : 'transparent',
+                                        color: mibotTipoFilter === opt.id ? '#38bdf8' : 'var(--text-muted)'
+                                    }}
+                                >
+                                    {opt.label}
+                                </button>
+                            ))}
+
+                            <select
+                                className="form-control"
+                                value={mibotEstadoFilter}
+                                onChange={e => setMibotEstadoFilter(e.target.value)}
+                                style={{ height: '32px', fontSize: '0.78rem', width: '145px', padding: '0 0.5rem' }}
+                            >
+                                <option value="ALL">Estado: Todos</option>
+                                <option value="PROGRAMADO">Programados</option>
+                                <option value="ENVIADO">Enviados</option>
+                                <option value="COMPLETADO">Completados</option>
+                                <option value="CANCELADO">Cancelados</option>
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={fetchMibotProgramaciones}
+                                disabled={loadingMibot}
+                                style={{ height: '36px', fontSize: '0.78rem', padding: '0 0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                            >
+                                <RefreshCw size={13} className={loadingMibot ? 'spin' : ''} /> Actualizar
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-primary"
+                                onClick={() => {
+                                    setMibotDefaultTipo('REUNION');
+                                    setMibotModalOpen(true);
+                                }}
+                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.95rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                            >
+                                <Plus size={15} /> Nuevo Aviso / Reunión
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Tabla de Programaciones MiBot */}
+                    <div className="card glass table-responsive" style={{ padding: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch', width: '100%', maxWidth: '100%' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '920px', marginTop: 0 }}>
+                            <thead>
+                                <tr style={{ background: 'var(--surface-color)', borderBottom: '1px solid var(--border)' }}>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '125px' }}>
+                                        Tipo
+                                    </th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>
+                                        Asunto y Mensaje
+                                    </th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '320px' }}>
+                                        Destinatarios Personales (Confirmación)
+                                    </th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '155px' }}>
+                                        Programación
+                                    </th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '105px' }}>
+                                        Estado
+                                    </th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '115px' }}>
+                                        Acciones
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loadingMibot ? (
+                                    <tr>
+                                        <td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                            Cargando programaciones de MiBot...
+                                        </td>
+                                    </tr>
+                                ) : mibotProgramaciones.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                            No hay avisos, tareas ni reuniones programadas en MiBot. Usa <strong>&quot;+ Nuevo Aviso / Reunión&quot;</strong> para comenzar.
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    mibotProgramaciones.map(p => {
+                                        const tipoMeta = MIBOT_TIPO_OPTIONS.find(t => t.id === p.tipo) || MIBOT_TIPO_OPTIONS[0];
+                                        return (
+                                            <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.78rem', verticalAlign: 'top' }}>
+                                                    <span style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.3rem',
+                                                        padding: '0.16rem 0.45rem',
+                                                        borderRadius: '6px',
+                                                        fontSize: '0.72rem',
+                                                        fontWeight: 700,
+                                                        backgroundColor: tipoMeta.bg,
+                                                        color: tipoMeta.color
+                                                    }}>
+                                                        {tipoMeta.emoji} {tipoMeta.short}
+                                                    </span>
+                                                    {p.vencimiento_id && (
+                                                        <div style={{ fontSize: '0.67rem', color: '#38bdf8', marginTop: '0.2rem', fontWeight: 600 }}>
+                                                            Control Pagos #{p.recordatorio_id || p.vencimiento_id}
+                                                        </div>
+                                                    )}
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', verticalAlign: 'top' }}>
+                                                    <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{p.titulo}</div>
+                                                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.35, wordBreak: 'break-word' }}>
+                                                        {p.mensaje}
+                                                    </div>
+                                                    {(p.ubicacion || (p.monto_pendiente !== null && p.monto_pendiente !== undefined)) && (
+                                                        <div style={{ fontSize: '0.71rem', color: '#fbbf24', marginTop: '0.2rem', display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
+                                                            {p.ubicacion && <span>📍 {p.ubicacion}</span>}
+                                                            {p.monto_pendiente !== null && p.monto_pendiente !== undefined && (
+                                                                <span>Saldo: <strong>${Number(p.monto_pendiente).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.75rem', verticalAlign: 'top' }}>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem' }}>
+                                                        {(p.destinatarios || []).map(d => {
+                                                            const st = getDeliveryBadgeStyle(d.estado_entrega);
+                                                            return (
+                                                                <span
+                                                                    key={d.id}
+                                                                    title={d.respuesta_nota || d.error_msg || `${d.nombre_destinatario}: ${d.estado_entrega}`}
+                                                                    style={{
+                                                                        fontSize: '0.7rem',
+                                                                        padding: '0.12rem 0.45rem',
+                                                                        borderRadius: '6px',
+                                                                        backgroundColor: st.bg,
+                                                                        color: st.color,
+                                                                        border: st.border,
+                                                                        fontWeight: 600
+                                                                    }}
+                                                                >
+                                                                    {d.nombre_destinatario}{d.cargo ? ` (${d.cargo})` : ''} · {st.label}
+                                                                </span>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)', verticalAlign: 'top' }}>
+                                                    <div style={{ color: 'var(--text-main)', fontWeight: 600 }}>
+                                                        {formatMibotDateTime(p.proximo_envio_at || p.programado_para)}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.69rem', marginTop: '0.12rem' }}>
+                                                        {p.frecuencia === 'DIARIO_HASTA_PAGAR' ? '🔁 Diario hasta pagar' : p.frecuencia === 'DIARIO' ? '🔁 Diario' : p.frecuencia === 'SEMANAL' ? '🔁 Semanal' : '1 vez'}
+                                                    </div>
+                                                    {p.total_envios > 0 && (
+                                                        <div style={{ fontSize: '0.68rem', color: '#38bdf8' }}>
+                                                            Envíos: {p.total_envios}
+                                                        </div>
+                                                    )}
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', verticalAlign: 'top' }}>
+                                                    <span style={{
+                                                        fontSize: '0.7rem',
+                                                        fontWeight: 700,
+                                                        padding: '0.16rem 0.5rem',
+                                                        borderRadius: '10px',
+                                                        backgroundColor: p.estado === 'PROGRAMADO' ? 'rgba(56, 189, 248, 0.16)' : p.estado === 'COMPLETADO' ? 'rgba(16, 185, 129, 0.16)' : p.estado === 'CANCELADO' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(99, 102, 241, 0.16)',
+                                                        color: p.estado === 'PROGRAMADO' ? '#38bdf8' : p.estado === 'COMPLETADO' ? '#34d399' : p.estado === 'CANCELADO' ? '#f87171' : '#a5b4fc'
+                                                    }}>
+                                                        {p.estado}
+                                                    </span>
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', verticalAlign: 'top' }}>
+                                                    <div style={{ display: 'inline-flex', gap: '0.28rem', alignItems: 'center' }}>
+                                                        {p.estado !== 'CANCELADO' && (
+                                                            <button
+                                                                type="button"
+                                                                className="icon-btn"
+                                                                disabled={sendingMibotId === p.id}
+                                                                onClick={() => handleSendMibotNow(p)}
+                                                                title="Enviar mensaje personal ahora mismo a cada destinatario"
+                                                            >
+                                                                <Send size={14} color="#0088cc" />
+                                                            </button>
+                                                        )}
+                                                        {p.estado === 'PROGRAMADO' ? (
+                                                            <button
+                                                                type="button"
+                                                                className="icon-btn"
+                                                                onClick={() => handleChangeMibotEstado(p, 'CANCELADO')}
+                                                                title="Cancelar programación"
+                                                            >
+                                                                <XCircle size={14} color="#f59e0b" />
+                                                            </button>
+                                                        ) : p.estado === 'CANCELADO' ? (
+                                                            <button
+                                                                type="button"
+                                                                className="icon-btn"
+                                                                onClick={() => handleChangeMibotEstado(p, 'PROGRAMADO')}
+                                                                title="Reactivar programación"
+                                                            >
+                                                                <CheckCircle2 size={14} color="#10b981" />
+                                                            </button>
+                                                        ) : null}
+                                                        <button
+                                                            type="button"
+                                                            className="icon-btn"
+                                                            onClick={() => handleDeleteMibot(p)}
+                                                            title="Eliminar programación MiBot"
+                                                        >
+                                                            <Trash2 size={14} color="#EF4444" />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             )}
 
             {activeTab === 'bitacora' && (
@@ -2382,7 +2805,7 @@ export default function TelegramUsers() {
                             />
                         </div>
 
-                        <div className="form-group span-2">
+                        <div className="form-group">
                             <label style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem', display: 'block' }}>
                                 Username de Telegram (Opcional)
                             </label>
@@ -2391,6 +2814,20 @@ export default function TelegramUsers() {
                                 placeholder="Ej: cmorales (sin @)"
                                 value={formData.telegram_username}
                                 onChange={e => setFormData({ ...formData, telegram_username: e.target.value })}
+                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.65rem' }}
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem', display: 'block' }}>
+                                Cargo / Puesto (para saludo personal de MiBot)
+                            </label>
+                            <input
+                                type="text"
+                                maxLength={120}
+                                placeholder="Ej: Gerente General, Contabilidad..."
+                                value={formData.cargo}
+                                onChange={e => setFormData({ ...formData, cargo: e.target.value })}
                                 style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0 0.65rem' }}
                             />
                         </div>
@@ -2505,6 +2942,84 @@ export default function TelegramUsers() {
                                     🚨 Alertas en Estaciones (/alertas)
                                 </label>
                             </div>
+                        </div>
+
+                        {/* Configuración de MiBot Personal (Recordatorios de Pago, Tareas, Validaciones, Reuniones) */}
+                        <div className="form-group span-2" style={{
+                            borderTop: '1px solid var(--border)',
+                            paddingTop: '0.75rem',
+                            marginTop: '0.15rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.55rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                <label style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.45rem',
+                                    fontSize: '0.82rem',
+                                    fontWeight: 700,
+                                    color: '#38bdf8',
+                                    cursor: 'pointer',
+                                    userSelect: 'none'
+                                }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(formData.recibir_mibot)}
+                                        onChange={e => setFormData({ ...formData, recibir_mibot: e.target.checked ? 1 : 0 })}
+                                        style={{ width: '16px', height: '16px' }}
+                                    />
+                                    🤖 Habilitar MiBot Personal (comunicación directa con este usuario)
+                                </label>
+                            </div>
+
+                            {Boolean(formData.recibir_mibot) && (
+                                <div className="form-grid form-grid-2" style={{
+                                    gap: '0.5rem',
+                                    padding: '0.6rem 0.75rem',
+                                    borderRadius: '8px',
+                                    background: 'rgba(0, 136, 204, 0.06)',
+                                    border: '1px solid rgba(0, 136, 204, 0.22)'
+                                }}>
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer', userSelect: 'none' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(formData.mibot_pagos)}
+                                            onChange={e => setFormData({ ...formData, mibot_pagos: e.target.checked ? 1 : 0 })}
+                                            style={{ width: '16px', height: '16px' }}
+                                        />
+                                        💳 Recordatorios de Pagos Pendientes
+                                    </label>
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer', userSelect: 'none' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(formData.mibot_tareas)}
+                                            onChange={e => setFormData({ ...formData, mibot_tareas: e.target.checked ? 1 : 0 })}
+                                            style={{ width: '16px', height: '16px' }}
+                                        />
+                                        📋 Envío de Tareas Asignadas
+                                    </label>
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer', userSelect: 'none' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(formData.mibot_validaciones)}
+                                            onChange={e => setFormData({ ...formData, mibot_validaciones: e.target.checked ? 1 : 0 })}
+                                            style={{ width: '16px', height: '16px' }}
+                                        />
+                                        ✅ Validar Actividades
+                                    </label>
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer', userSelect: 'none' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(formData.mibot_reuniones)}
+                                            onChange={e => setFormData({ ...formData, mibot_reuniones: e.target.checked ? 1 : 0 })}
+                                            style={{ width: '16px', height: '16px' }}
+                                        />
+                                        📅 Recordatorios de Reuniones
+                                    </label>
+                                </div>
+                            )}
                         </div>
 
                         <div className="form-group span-2">
@@ -3169,6 +3684,15 @@ export default function TelegramUsers() {
                     </div>
                 </div>
             </Modal>
+            {/* Modal Compartido de Programación MiBot (Avisos de Pagos, Tareas, Validaciones y Reuniones) */}
+            <MibotProgramarModal
+                open={mibotModalOpen}
+                onClose={() => setMibotModalOpen(false)}
+                defaultTipo={mibotDefaultTipo}
+                onSaved={() => {
+                    fetchMibotProgramaciones();
+                }}
+            />
         </div>
     );
 }
