@@ -30,10 +30,10 @@
     "semantic_hash": ""
   },
   "backend/middleware/bitacora.js": {
-    "mtime": 1791036893.3251123,
-    "seen": 1791822880.7085679,
-    "ast_hash": "ea3b99c968a904d05b923f347c4d8357",
-    "semantic_hash": "ea3b99c968a904d05b923f347c4d8357"
+    "mtime": 1795202654.3234692,
+    "seen": 1795203483.2830434,
+    "ast_hash": "99bcd94510e16be763d945379544dd88",
+    "semantic_hash": ""
   },
   "backend/migrations/20260814_create_check_format_tables.js": {
     "mtime": 1788265759.5887764,
@@ -114,10 +114,10 @@
     "semantic_hash": "12058e588b002fb7f97c7aab93f819cc"
   },
   "backend/routes/conciliacion.js": {
-    "mtime": 1791033479.6539927,
-    "seen": 1791822880.7085679,
-    "ast_hash": "b24becc22b060ab28fe91af611291964",
-    "semantic_hash": "b24becc22b060ab28fe91af611291964"
+    "mtime": 1795205040.1534822,
+    "seen": 1795205648.629042,
+    "ast_hash": "949c361479a711feafb7381067726200",
+    "semantic_hash": ""
   },
   "backend/routes/config.js": {
     "mtime": 1792116151.802867,
@@ -162,9 +162,9 @@
     "semantic_hash": "96ee2b6fd4ff1e69439260af844420aa"
   },
   "backend/routes/operaciones.js": {
-    "mtime": 1795047259.9105859,
-    "seen": 1795048326.3516467,
-    "ast_hash": "98b2934fb04ebb89ddc3b66519dc1342",
+    "mtime": 1795205011.686231,
+    "seen": 1795205648.629042,
+    "ast_hash": "4ebd3911912c98a53c6b8c5fdf5d1f84",
     "semantic_hash": ""
   },
   "backend/routes/rrhh.js": {
@@ -180,9 +180,9 @@
     "semantic_hash": ""
   },
   "backend/routes/telegram.js": {
-    "mtime": 1795046165.6906698,
-    "seen": 1795048326.352645,
-    "ast_hash": "07b5488f3784e0253c2adbe9a34d5bf0",
+    "mtime": 1795200842.8858352,
+    "seen": 1795203483.2830434,
+    "ast_hash": "02002f569bc94371bae0885bb9daebeb",
     "semantic_hash": ""
   },
   "backend/scripts/backup-db.js": {
@@ -216,9 +216,9 @@
     "semantic_hash": "95bc5f979ecea73b9feb01f8bf87ee87"
   },
   "backend/server.js": {
-    "mtime": 1794618291.4321005,
-    "seen": 1794618755.2905447,
-    "ast_hash": "d474e2a5c74e5eb314e33c75fa1446fd",
+    "mtime": 1795205031.5973358,
+    "seen": 1795205648.629042,
+    "ast_hash": "c24d440be1b1f83893524ae6338deb29",
     "semantic_hash": ""
   },
   "backend/services/birthdayNotifier.js": {
@@ -228,9 +228,9 @@
     "semantic_hash": "97193079db2d64729e681f682cebafa0"
   },
   "backend/services/cashflowForecast.js": {
-    "mtime": 1794663677.4049778,
-    "seen": 1794664799.7054813,
-    "ast_hash": "ee401ae1c1c3154e1ca76a86547a5a3d",
+    "mtime": 1795202841.0834706,
+    "seen": 1795203483.2830434,
+    "ast_hash": "a04720b7534ee252175d03b924470ddf",
     "semantic_hash": ""
   },
   "backend/services/creditRiskService.js": {
@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1795046165.7034125,
-    "seen": 1795048326.352645,
-    "ast_hash": "d9d58fb16b912ab4907cd7b144d8f7c0",
+    "mtime": 1795200842.889921,
+    "seen": 1795203483.2830434,
+    "ast_hash": "a3b6a06b3fb247ec6ae20c3b978d06b5",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1795047717.6714852,
-    "seen": 1795048326.352645,
-    "ast_hash": "95c2baf0faac6f0e212bfe3d3a13e4d3",
+    "mtime": 1795200842.8966286,
+    "seen": 1795203483.2830434,
+    "ast_hash": "2d5c47ed16b6bf90bacf6e4fa8a8395a",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -684,10 +684,10 @@
     "semantic_hash": "6b31720a91a6f61cdca176b2bd8113ab"
   },
   "frontend/src/pages/ConciliacionBancaria.jsx": {
-    "mtime": 1790452708.6476502,
-    "seen": 1791822880.7085679,
-    "ast_hash": "662728e7ced70f6f811ac977d2ea4980",
-    "semantic_hash": "662728e7ced70f6f811ac977d2ea4980"
+    "mtime": 1795205257.6620693,
+    "seen": 1795205648.629042,
+    "ast_hash": "382aada55f94108e5b29e554e684c6c2",
+    "semantic_hash": ""
   },
   "frontend/src/pages/ConfiguracionContabilidad.jsx": {
     "mtime": 1792116459.888002,
@@ -738,9 +738,9 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/ControlRecordatorios.jsx": {
-    "mtime": 1795047489.7667663,
-    "seen": 1795048326.352645,
-    "ast_hash": "74c3b10b5a531f5bbf343a2e75bb94e0",
+    "mtime": 1795205307.525472,
+    "seen": 1795205648.629042,
+    "ast_hash": "bdfd5cda7cc5dd04435b2db7ab3094a9",
     "semantic_hash": ""
   },
   "frontend/src/pages/CuentasBancarias.jsx": {
@@ -924,9 +924,9 @@
     "semantic_hash": "4f19518f5045ed51d3fdfa818e2f1a92"
   },
   "frontend/src/pages/TelegramUsers.jsx": {
-    "mtime": 1795046165.7090886,
-    "seen": 1795048326.352645,
-    "ast_hash": "1384d4c92aaf36aeacdaa9958e128594",
+    "mtime": 1795200842.899996,
+    "seen": 1795203483.2830434,
+    "ast_hash": "900a5c5cc211910939ac9ad354a54ad3",
     "semantic_hash": ""
   },
   "frontend/src/pages/Users.jsx": {
@@ -1230,9 +1230,9 @@
     "semantic_hash": ""
   },
   "backend/services/telegramAuditorService.js": {
-    "mtime": 1794618691.5859232,
-    "seen": 1794618755.2905447,
-    "ast_hash": "889dd891080aa17a2929fd3292b9a457",
+    "mtime": 1795200842.8889167,
+    "seen": 1795203483.2830434,
+    "ast_hash": "b56fb5aa05955b0868982e79c9aac40e",
     "semantic_hash": ""
   },
   "backend/test/telegramAuditor.test.js": {
@@ -1320,21 +1320,21 @@
     "semantic_hash": ""
   },
   "backend/routes/tickets.js": {
-    "mtime": 1795046158.7679026,
-    "seen": 1795048326.352645,
-    "ast_hash": "549fbf9684f7402a3e4d396a67a1cf03",
+    "mtime": 1795200842.8868792,
+    "seen": 1795203483.2830434,
+    "ast_hash": "ba217a520c537360237a4e51d68c95c4",
     "semantic_hash": ""
   },
   "backend/services/ticketService.js": {
-    "mtime": 1795046158.7679026,
-    "seen": 1795048326.352645,
-    "ast_hash": "331a9dfffc860ad63fd12327d38d96de",
+    "mtime": 1795200842.8933582,
+    "seen": 1795203483.2830434,
+    "ast_hash": "9ec3219b4b7d82c1707cd8835f5ed5fd",
     "semantic_hash": ""
   },
   "backend/test/supportTickets.test.js": {
-    "mtime": 1795046158.777122,
-    "seen": 1795048326.352645,
-    "ast_hash": "e2ccd8a07df504bf23e14438e5074822",
+    "mtime": 1795200842.8955555,
+    "seen": 1795203483.2830434,
+    "ast_hash": "860073c6f40bbdb97a3b7b7e6e5d2407",
     "semantic_hash": ""
   },
   "frontend/src/components/CommandPalette.jsx": {
@@ -1356,9 +1356,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/tickets/TicketAgyFlowModal.jsx": {
-    "mtime": 1795046158.7791243,
-    "seen": 1795048326.352645,
-    "ast_hash": "ee5d50bb9718bbfd93186b7a58d1a87d",
+    "mtime": 1795200842.8966286,
+    "seen": 1795203483.2830434,
+    "ast_hash": "85afc12f7d6179cb01ebe4461f91884b",
     "semantic_hash": ""
   },
   "frontend/src/components/tickets/TicketAiBundleModal.jsx": {
@@ -1434,15 +1434,15 @@
     "semantic_hash": ""
   },
   "backend/routes/finanzasCrecimiento.js": {
-    "mtime": 1795046158.763302,
-    "seen": 1795048326.3516467,
-    "ast_hash": "af8649c50504c4e6ea2204c8ab1d9e93",
+    "mtime": 1795200842.8852518,
+    "seen": 1795203483.2830434,
+    "ast_hash": "4addeb1dd8026a6178296476ca866778",
     "semantic_hash": ""
   },
   "backend/services/businessGrowthAgyService.js": {
-    "mtime": 1795046158.7679026,
-    "seen": 1795048326.352645,
-    "ast_hash": "01105c2045ec98ff25d6e53d9861bb65",
+    "mtime": 1795200842.8879113,
+    "seen": 1795203483.2830434,
+    "ast_hash": "1be6353b70a8c09d1f78a402a7caf64f",
     "semantic_hash": ""
   },
   "backend/test/finanzasCrecimiento.test.js": {
@@ -1452,9 +1452,9 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/FinanzasCrecimiento.jsx": {
-    "mtime": 1795046158.7791243,
-    "seen": 1795048326.352645,
-    "ast_hash": "881ee2931c60795e6b55ab1b73d5f844",
+    "mtime": 1795200842.8977952,
+    "seen": 1795203483.2830434,
+    "ast_hash": "b4762beb4e52121ad49938eeeec63268",
     "semantic_hash": ""
   },
   "backend/test/telegramCompetencia.test.js": {
@@ -1524,9 +1524,9 @@
     "semantic_hash": ""
   },
   "backend/services/telegramTransportService.js": {
-    "mtime": 1794618669.7571185,
-    "seen": 1794618755.2905447,
-    "ast_hash": "167d3a1018b352dfb17f952f4a2923a9",
+    "mtime": 1795200842.8910546,
+    "seen": 1795203483.2830434,
+    "ast_hash": "165364fa8a90c8c72f3046fad55a0db9",
     "semantic_hash": ""
   },
   "backend/test/architectureAndContracts.test.js": {
@@ -1554,9 +1554,9 @@
     "semantic_hash": ""
   },
   "backend/services/telegramFeedbackEvaluator.js": {
-    "mtime": 1795046165.8041878,
-    "seen": 1795048326.352645,
-    "ast_hash": "b8d9c34a7c2630bb0e7d1af8ec790c52",
+    "mtime": 1795200842.8910546,
+    "seen": 1795203483.2830434,
+    "ast_hash": "4ccf8a820423ef5b1213eb1cf89b87f8",
     "semantic_hash": ""
   },
   "backend/test/telegramFeedbackImprovement.test.js": {
@@ -1572,9 +1572,45 @@
     "semantic_hash": ""
   },
   "backend/services/ticketTelegramAgyService.js": {
-    "mtime": 1795046158.7751203,
-    "seen": 1795048326.352645,
-    "ast_hash": "346cec35e8826f5727059e1fae5f56dd",
+    "mtime": 1795200842.8945186,
+    "seen": 1795203483.2830434,
+    "ast_hash": "757334b6d4e183e1e09ed8c771d5a995",
+    "semantic_hash": ""
+  },
+  "backend/services/recordatoriosPagosService.js": {
+    "mtime": 1795204956.0484495,
+    "seen": 1795205648.629042,
+    "ast_hash": "1bdf3d02bb00edbce5b03d0dd53b2e19",
+    "semantic_hash": ""
+  },
+  "backend/test/recordatoriosPagos.test.js": {
+    "mtime": 1795205342.4544113,
+    "seen": 1795205648.629042,
+    "ast_hash": "d00ddb66e225dc40a6c2eb5d29072a2f",
+    "semantic_hash": ""
+  },
+  "backend/test/telegramSecurity.test.js": {
+    "mtime": 1795200842.8955555,
+    "seen": 1795203483.2830434,
+    "ast_hash": "6b2475c68e12ebf19f9db7a1e376f9a0",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/ControlPagosModal.jsx": {
+    "mtime": 1795205212.0822246,
+    "seen": 1795205648.629042,
+    "ast_hash": "cb931f0d4bcc38f3cb823ff7f0da643c",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/ReceiptViewerModal.jsx": {
+    "mtime": 1795205254.2359703,
+    "seen": 1795205648.629042,
+    "ast_hash": "3b23d6d21df78c4c08838a52ccc694d1",
+    "semantic_hash": ""
+  },
+  "frontend/src/utils/receiptCompressor.js": {
+    "mtime": 1795202953.365094,
+    "seen": 1795203483.2830434,
+    "ast_hash": "05f152d30130c89a2c61aab80c1f64f3",
     "semantic_hash": ""
   }
 }
