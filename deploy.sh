@@ -25,7 +25,11 @@ export PATH="$HOME/.nvm/versions/node/$(node -v 2>/dev/null)/bin:$HOME/.local/sh
 PROJECT_DIR="${PROJECT_DIR:-$ORIGINAL_DIR}"
 cd "$PROJECT_DIR"
 
-DEBUG_FILE="/tmp/sipeadmin-deploy-debug.txt"
+mkdir -p "$PROJECT_DIR/logs"
+DEBUG_FILE="$PROJECT_DIR/logs/deploy-debug.log"
+if ! touch "$DEBUG_FILE" 2>/dev/null; then
+    DEBUG_FILE="/tmp/sipeadmin-deploy-$(whoami 2>/dev/null || echo user).log"
+fi
 mkdir -p "$PROJECT_DIR/frontend/dist"
 mkdir -p "$PROJECT_DIR/frontend/public"
 
