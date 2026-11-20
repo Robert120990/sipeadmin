@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { getActiveMibotCountsByVencimientos } = require('./mibotNotifierService');
 
 const PAGOS_UPLOADS_DIR = path.join(__dirname, '..', 'uploads', 'pagos');
 
@@ -563,7 +564,7 @@ async function enrichRecordatoriosList(db, rows = []) {
 
     const placeholders = venIds.map(() => '?').join(',');
 
-    const [abonoRows, compRows, metaRows] = await Promise.all([
+    const [abonoRows, compRows, metaRows, mibotCountsMap] = await Promise.all([
         db.query(
             `SELECT vencimiento_id, id, tipo_operacion, metodo_pago, cuenta_bancaria_id,
                     cuenta_label, tarjeta_ref, referencia_doc, fecha_pago, monto, estado_conciliacion
@@ -584,7 +585,8 @@ async function enrichRecordatoriosList(db, rows = []) {
              FROM recordatorios_vencimientos_meta
              WHERE vencimiento_id IN (${placeholders})`,
             venIds
-        ).then(([r]) => r)
+        ).then(([r]) => r),
+        getActiveMibotCountsByVencimientos(db, venIds)
     ]);
 
     const abonosByVen = new Map();
@@ -623,6 +625,8 @@ async function enrichRecordatoriosList(db, rows = []) {
             else estadoConciliacion = 'PENDIENTE';
         }
 
+        const mibotCounts = mibotCountsMap.get(vid) || { programados: 0, total: 0 };
+
         return {
             ...row,
             tipo_operacion: tipoOperacion,
@@ -632,6 +636,8 @@ async function enrichRecordatoriosList(db, rows = []) {
             estado_pago: balance.estado_pago, // 'PENDIENTE' | 'PARCIAL' | 'CANCELADO'
             abonos_count: balance.abonos_count,
             comprobantes_count: compCountByVen.get(vid) || 0,
+            mibot_avisos_count: mibotCounts.programados,
+            mibot_total_count: mibotCounts.total,
             metodos_usados: metodosUsados,
             metodo_pago_preferido: meta?.metodo_pago_preferido || null,
             cuenta_bancaria_id_preferida: meta?.cuenta_bancaria_id || null,

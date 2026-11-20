@@ -1,9 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const { getDb } = require('../db');
+const { getDb, getExternalDb } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const {
+    ensureMibotSchema,
+    getEligibleMibotRecipients,
+    listMibotProgramaciones,
+    createMibotProgramacion,
+    dispatchMibotProgramacion,
+    getMibotProgramacionById,
+    normalizeScheduleDatetime,
+    getElSalvadorNowSql,
+    MIBOT_ESTADOS
+} = require('../services/mibotNotifierService');
 const {
     getBotStatus,
     testTelegramConnection,
@@ -42,6 +53,15 @@ const {
 const telegramPerms = [
     '/dashboard/seguridad/telegram',
     'manage_telegram'
+];
+
+const mibotAccessPerms = [
+    ...telegramPerms,
+    'manage_recordatorios',
+    '/dashboard/operaciones/recordatorios',
+    '/dashboard',
+    'view_dashboard',
+    '/dashboard/finanzas/resumen'
 ];
 
 const safeCompareSecret = (a, b) => {
@@ -485,6 +505,43 @@ router.post('/test-gemini', authenticateToken, requirePermission(telegramPerms),
     }
 });
 
+const fetchPermissionsMapByRoleIds = async (db, roleIds = []) => {
+    const cleanRoleIds = [...new Set(roleIds.map(Number).filter(id => Number.isFinite(id) && id > 0))];
+    const permsByRole = {};
+    if (cleanRoleIds.length === 0) return permsByRole;
+    try {
+        const [rows] = await db.query(
+            `SELECT rp.role_id, p.name
+             FROM role_permissions rp
+             INNER JOIN permissions p ON rp.permission_id = p.id
+             WHERE rp.role_id IN (?)`,
+            [cleanRoleIds]
+        );
+        if (Array.isArray(rows)) {
+            for (const row of rows) {
+                const rid = Number(row.role_id);
+                if (!permsByRole[rid]) permsByRole[rid] = [];
+                if (row.name) permsByRole[rid].push(String(row.name).trim());
+            }
+        }
+    } catch (_) {
+        // Fallback seguro si el entorno usa mock sin tabla role_permissions
+    }
+    return permsByRole;
+};
+
+const computeTelegramModuleFlags = ({ roleId, roleName, perms = [] }) => {
+    const rName = String(roleName || '').toLowerCase();
+    const isAdmin = Number(roleId) === 1 || rName === 'administrator' || rName === 'super administrator' || rName === 'administrador';
+    return {
+        isAdmin,
+        ventas: isAdmin || perms.includes('/dashboard/consultas/estaciones/ventas'),
+        saldos_banco: isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-bancos') || perms.includes('/dashboard/bancos/cuentas') || perms.includes('/dashboard/bancos/movimientos'),
+        saldos_chequera: isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-chequera') || perms.includes('/dashboard/bancos/cheques'),
+        alertas: isAdmin || perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') || perms.includes('/dashboard/consultas/estaciones/resumen-cierre')
+    };
+};
+
 /**
  * GET /api/telegram/system-users
  * Lista de usuarios del sistema SIPE Admin con sus roles y permisos para vinculación
@@ -506,9 +563,14 @@ router.get('/system-users', authenticateToken, requirePermission(telegramPerms),
             ORDER BY u.nombre ASC, u.username ASC
         `);
 
+        const permsByRole = await fetchPermissionsMapByRoleIds(db, users.map(u => u.role_id));
+
         const formatted = users.map(u => {
-            const isAdmin = u.role_name === 'Administrator';
-            const perms = (u.permissions || '').split(',');
+            const directPerms = permsByRole[Number(u.role_id)];
+            const perms = (Array.isArray(directPerms) && directPerms.length > 0)
+                ? directPerms
+                : (u.permissions || '').split(',').map(p => p.trim()).filter(Boolean);
+            const flags = computeTelegramModuleFlags({ roleId: u.role_id, roleName: u.role_name, perms });
             return {
                 id: u.id,
                 username: u.username,
@@ -518,10 +580,10 @@ router.get('/system-users', authenticateToken, requirePermission(telegramPerms),
                 role_name: u.role_name || 'Sin Rol',
                 status: u.status || 'active',
                 permissions: {
-                    ventas: isAdmin || perms.includes('/dashboard/consultas/estaciones/ventas'),
-                    saldos_banco: isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-bancos') || perms.includes('/dashboard/bancos/cuentas') || perms.includes('/dashboard/bancos/movimientos'),
-                    saldos_chequera: isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-chequera') || perms.includes('/dashboard/bancos/cheques'),
-                    alertas: isAdmin || perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') || perms.includes('/dashboard/consultas/estaciones/resumen-cierre')
+                    ventas: flags.ventas,
+                    saldos_banco: flags.saldos_banco,
+                    saldos_chequera: flags.saldos_chequera,
+                    alertas: flags.alertas
                 }
             };
         });
@@ -541,13 +603,16 @@ router.get('/users', authenticateToken, requirePermission(telegramPerms), async 
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
 
+        await ensureMibotSchema(db);
+
         const [users] = await db.query(`
             SELECT tu.id, tu.telegram_user_id, tu.telegram_username, tu.first_name, tu.last_name,
-                   tu.user_id, tu.activo, tu.permiso_ventas, tu.permiso_saldos_banco, 
-                   tu.permiso_saldos_chequera, tu.permiso_alertas, tu.notas,
-                   tu.last_interaction, tu.created_at, tu.updated_at,
+                   tu.cargo, tu.user_id, tu.activo, tu.permiso_ventas, tu.permiso_saldos_banco, 
+                   tu.permiso_saldos_chequera, tu.permiso_alertas,
+                   tu.recibir_mibot, tu.mibot_pagos, tu.mibot_tareas, tu.mibot_validaciones, tu.mibot_reuniones,
+                   tu.notas, tu.last_interaction, tu.created_at, tu.updated_at,
                    u.nombre as sipe_nombre, u.username as sipe_username, u.email as sipe_email,
-                   u.status as sipe_status, r.name as sipe_role_name,
+                   u.status as sipe_status, u.role_id as sipe_role_id, r.name as sipe_role_name,
                    GROUP_CONCAT(p.name) as sipe_permissions
             FROM telegram_usuarios tu
             LEFT JOIN users u ON tu.user_id = u.id
@@ -558,6 +623,8 @@ router.get('/users', authenticateToken, requirePermission(telegramPerms), async 
             ORDER BY tu.activo ASC, tu.created_at DESC
         `);
 
+        const permsByRole = await fetchPermissionsMapByRoleIds(db, users.map(u => u.sipe_role_id));
+
         const enhancedUsers = users.map(u => {
             const isLinked = Boolean(u.user_id && u.sipe_nombre);
             let effectiveVentas = Boolean(u.permiso_ventas);
@@ -566,16 +633,24 @@ router.get('/users', authenticateToken, requirePermission(telegramPerms), async 
             let effectiveAlertas = Boolean(u.permiso_alertas);
 
             if (isLinked) {
-                const isAdmin = u.sipe_role_name === 'Administrator';
-                const perms = (u.sipe_permissions || '').split(',');
-                effectiveVentas = isAdmin || perms.includes('/dashboard/consultas/estaciones/ventas');
-                effectiveBancos = isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-bancos') || perms.includes('/dashboard/bancos/cuentas') || perms.includes('/dashboard/bancos/movimientos');
-                effectiveChequera = isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-chequera') || perms.includes('/dashboard/bancos/cheques');
-                effectiveAlertas = isAdmin || perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') || perms.includes('/dashboard/consultas/estaciones/resumen-cierre');
+                const directPerms = permsByRole[Number(u.sipe_role_id)];
+                const perms = (Array.isArray(directPerms) && directPerms.length > 0)
+                    ? directPerms
+                    : (u.sipe_permissions || '').split(',').map(p => p.trim()).filter(Boolean);
+                const flags = computeTelegramModuleFlags({ roleId: u.sipe_role_id, roleName: u.sipe_role_name, perms });
+                effectiveVentas = flags.ventas;
+                effectiveBancos = flags.saldos_banco;
+                effectiveChequera = flags.saldos_chequera;
+                effectiveAlertas = flags.alertas;
             }
 
             return {
                 ...u,
+                recibir_mibot: u.recibir_mibot !== undefined && u.recibir_mibot !== null ? Number(u.recibir_mibot) : 1,
+                mibot_pagos: u.mibot_pagos !== undefined && u.mibot_pagos !== null ? Number(u.mibot_pagos) : 1,
+                mibot_tareas: u.mibot_tareas !== undefined && u.mibot_tareas !== null ? Number(u.mibot_tareas) : 1,
+                mibot_validaciones: u.mibot_validaciones !== undefined && u.mibot_validaciones !== null ? Number(u.mibot_validaciones) : 1,
+                mibot_reuniones: u.mibot_reuniones !== undefined && u.mibot_reuniones !== null ? Number(u.mibot_reuniones) : 1,
                 is_linked: isLinked,
                 effective_permissions: {
                     ventas: effectiveVentas,
@@ -589,6 +664,7 @@ router.get('/users', authenticateToken, requirePermission(telegramPerms), async 
         const summary = {
             total: enhancedUsers.length,
             activos: enhancedUsers.filter(u => u.activo === 1).length,
+            mibot_activos: enhancedUsers.filter(u => u.activo === 1 && Number(u.recibir_mibot) === 1).length,
             vinculados: enhancedUsers.filter(u => u.is_linked).length,
             pendientes: enhancedUsers.filter(u => u.activo === 0 && (u.notas || '').includes('Solicitud')).length,
             inactivos: enhancedUsers.filter(u => u.activo === 0).length
@@ -610,12 +686,18 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
         telegram_username,
         first_name,
         last_name,
+        cargo,
         user_id,
         activo,
         permiso_ventas,
         permiso_saldos_banco,
         permiso_saldos_chequera,
         permiso_alertas,
+        recibir_mibot,
+        mibot_pagos,
+        mibot_tareas,
+        mibot_validaciones,
+        mibot_reuniones,
         notas
     } = req.body;
 
@@ -627,36 +709,62 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
 
+        await ensureMibotSchema(db);
+
         const cleanUid = String(telegram_user_id).trim();
         const username = telegram_username ? (telegram_username.startsWith('@') ? telegram_username : `@${telegram_username}`) : null;
+        const cleanCargo = cargo !== undefined && cargo !== null && String(cargo).trim()
+            ? String(cargo).trim().slice(0, 120)
+            : null;
         const targetUserId = user_id ? parseInt(user_id, 10) : null;
+        if (targetUserId) {
+            const [sipeUsers] = await db.query('SELECT id FROM users WHERE id = ? LIMIT 1', [targetUserId]);
+            if (!sipeUsers || sipeUsers.length === 0) {
+                return res.status(400).json({ message: 'El usuario de SIPE Admin seleccionado no existe.' });
+            }
+        }
 
         await db.query(`
             INSERT INTO telegram_usuarios 
-            (telegram_user_id, telegram_username, first_name, last_name, user_id, activo, permiso_ventas, permiso_saldos_banco, permiso_saldos_chequera, permiso_alertas, notas, last_interaction)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            (telegram_user_id, telegram_username, first_name, last_name, cargo, user_id, activo,
+             permiso_ventas, permiso_saldos_banco, permiso_saldos_chequera, permiso_alertas,
+             recibir_mibot, mibot_pagos, mibot_tareas, mibot_validaciones, mibot_reuniones,
+             notas, last_interaction)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ON DUPLICATE KEY UPDATE
             telegram_username = VALUES(telegram_username),
             first_name = VALUES(first_name),
             last_name = VALUES(last_name),
+            cargo = VALUES(cargo),
             user_id = VALUES(user_id),
             activo = VALUES(activo),
             permiso_ventas = VALUES(permiso_ventas),
             permiso_saldos_banco = VALUES(permiso_saldos_banco),
             permiso_saldos_chequera = VALUES(permiso_saldos_chequera),
             permiso_alertas = VALUES(permiso_alertas),
+            recibir_mibot = VALUES(recibir_mibot),
+            mibot_pagos = VALUES(mibot_pagos),
+            mibot_tareas = VALUES(mibot_tareas),
+            mibot_validaciones = VALUES(mibot_validaciones),
+            mibot_reuniones = VALUES(mibot_reuniones),
             notas = VALUES(notas)
         `, [
             cleanUid,
             username,
             first_name || '',
             last_name || '',
+            cleanCargo,
             targetUserId,
             activo !== undefined ? (activo ? 1 : 0) : 1,
             permiso_ventas !== undefined ? (permiso_ventas ? 1 : 0) : 1,
             permiso_saldos_banco !== undefined ? (permiso_saldos_banco ? 1 : 0) : 1,
             permiso_saldos_chequera !== undefined ? (permiso_saldos_chequera ? 1 : 0) : 1,
             permiso_alertas !== undefined ? (permiso_alertas ? 1 : 0) : 1,
+            recibir_mibot !== undefined ? (recibir_mibot ? 1 : 0) : 1,
+            mibot_pagos !== undefined ? (mibot_pagos ? 1 : 0) : 1,
+            mibot_tareas !== undefined ? (mibot_tareas ? 1 : 0) : 1,
+            mibot_validaciones !== undefined ? (mibot_validaciones ? 1 : 0) : 1,
+            mibot_reuniones !== undefined ? (mibot_reuniones ? 1 : 0) : 1,
             notas || ''
         ]);
 
@@ -664,7 +772,7 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
         if (activo) {
             sendTelegramMessage(
                 cleanUid,
-                `🎉 ¡<b>Felicidades ${escapeHtml(first_name || '')}</b>! Tu cuenta de Telegram ha sido <b>aprobada y autorizada</b> para realizar consultas en <b>SIPE Admin</b>.\n\nEscribe <b>/menu</b> para comenzar a consultar.`
+                `🎉 ¡<b>Felicidades ${escapeHtml(first_name || '')}</b>! Tu cuenta de Telegram ha sido <b>aprobada y autorizada</b> para realizar consultas y recibir avisos personales de <b>MiBot SIPE</b>.\n\nEscribe <b>/menu</b> o <b>/mibot</b> para comenzar.`
             ).catch(e => console.warn('Aviso de activación no entregado:', e.message));
         }
 
@@ -676,7 +784,7 @@ router.post('/users', authenticateToken, requirePermission(telegramPerms), async
 
 /**
  * PUT /api/telegram/users/:id
- * Actualizar permisos y estado de un usuario
+ * Actualizar permisos, configuración de MiBot y estado de un usuario
  */
 router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), async (req, res) => {
     const { id } = req.params;
@@ -684,12 +792,18 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
         telegram_username,
         first_name,
         last_name,
+        cargo,
         user_id,
         activo,
         permiso_ventas,
         permiso_saldos_banco,
         permiso_saldos_chequera,
         permiso_alertas,
+        recibir_mibot,
+        mibot_pagos,
+        mibot_tareas,
+        mibot_validaciones,
+        mibot_reuniones,
         notas
     } = req.body;
 
@@ -697,38 +811,63 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
 
+        await ensureMibotSchema(db);
+
         const [currRows] = await db.query('SELECT * FROM telegram_usuarios WHERE id = ?', [id]);
         if (!currRows || currRows.length === 0) {
             return res.status(404).json({ message: 'Usuario de Telegram no encontrado.' });
         }
         const currentUser = currRows[0];
 
-        const username = telegram_username ? (telegram_username.startsWith('@') ? telegram_username : `@${telegram_username}`) : currentUser.telegram_username;
+        const username = telegram_username !== undefined
+            ? (telegram_username ? (telegram_username.startsWith('@') ? telegram_username : `@${telegram_username}`) : null)
+            : currentUser.telegram_username;
+        const resolvedCargo = cargo !== undefined
+            ? (cargo && String(cargo).trim() ? String(cargo).trim().slice(0, 120) : null)
+            : currentUser.cargo;
         const resolvedUserId = user_id !== undefined ? (user_id ? parseInt(user_id, 10) : null) : currentUser.user_id;
+        if (resolvedUserId) {
+            const [sipeUsers] = await db.query('SELECT id FROM users WHERE id = ? LIMIT 1', [resolvedUserId]);
+            if (!sipeUsers || sipeUsers.length === 0) {
+                return res.status(400).json({ message: 'El usuario de SIPE Admin seleccionado no existe.' });
+            }
+        }
 
         await db.query(`
             UPDATE telegram_usuarios SET
                 telegram_username = ?,
                 first_name = ?,
                 last_name = ?,
+                cargo = ?,
                 user_id = ?,
                 activo = ?,
                 permiso_ventas = ?,
                 permiso_saldos_banco = ?,
                 permiso_saldos_chequera = ?,
                 permiso_alertas = ?,
+                recibir_mibot = ?,
+                mibot_pagos = ?,
+                mibot_tareas = ?,
+                mibot_validaciones = ?,
+                mibot_reuniones = ?,
                 notas = ?
             WHERE id = ?
         `, [
             username,
             first_name !== undefined ? first_name : currentUser.first_name,
             last_name !== undefined ? last_name : currentUser.last_name,
+            resolvedCargo,
             resolvedUserId,
             activo !== undefined ? (activo ? 1 : 0) : currentUser.activo,
             permiso_ventas !== undefined ? (permiso_ventas ? 1 : 0) : currentUser.permiso_ventas,
             permiso_saldos_banco !== undefined ? (permiso_saldos_banco ? 1 : 0) : currentUser.permiso_saldos_banco,
             permiso_saldos_chequera !== undefined ? (permiso_saldos_chequera ? 1 : 0) : currentUser.permiso_saldos_chequera,
             permiso_alertas !== undefined ? (permiso_alertas ? 1 : 0) : currentUser.permiso_alertas,
+            recibir_mibot !== undefined ? (recibir_mibot ? 1 : 0) : (currentUser.recibir_mibot ?? 1),
+            mibot_pagos !== undefined ? (mibot_pagos ? 1 : 0) : (currentUser.mibot_pagos ?? 1),
+            mibot_tareas !== undefined ? (mibot_tareas ? 1 : 0) : (currentUser.mibot_tareas ?? 1),
+            mibot_validaciones !== undefined ? (mibot_validaciones ? 1 : 0) : (currentUser.mibot_validaciones ?? 1),
+            mibot_reuniones !== undefined ? (mibot_reuniones ? 1 : 0) : (currentUser.mibot_reuniones ?? 1),
             notas !== undefined ? notas : currentUser.notas,
             id
         ]);
@@ -737,7 +876,7 @@ router.put('/users/:id', authenticateToken, requirePermission(telegramPerms), as
         if (!currentUser.activo && activo) {
             sendTelegramMessage(
                 currentUser.telegram_user_id,
-                `🎉 ¡<b>Hola ${escapeHtml(currentUser.first_name || '')}</b>! Tu cuenta de Telegram ha sido <b>activada</b> en <b>SIPE Admin</b>.\n\nEscribe <b>/menu</b> para consultar ventas, saldos o alertas.`
+                `🎉 ¡<b>Hola ${escapeHtml(currentUser.first_name || '')}</b>! Tu cuenta de Telegram ha sido <b>activada</b> en <b>SIPE Admin</b>.\n\nEscribe <b>/menu</b> o <b>/mibot</b> para consultar ventas, saldos, alertas y tus avisos personales.`
             ).catch(e => console.warn('Aviso no entregado:', e.message));
         }
 
@@ -763,7 +902,7 @@ router.post('/users/:id/link', authenticateToken, requirePermission(telegramPerm
 
         if (targetUserId) {
             const [users] = await db.query(`
-                SELECT u.id, u.nombre, u.username, r.name as role_name,
+                SELECT u.id, u.nombre, u.username, u.role_id, r.name as role_name,
                        GROUP_CONCAT(p.name) as permissions
                 FROM users u
                 LEFT JOIN roles r ON u.role_id = r.id
@@ -778,13 +917,17 @@ router.post('/users/:id/link', authenticateToken, requirePermission(telegramPerm
             }
 
             const su = users[0];
-            const isAdmin = su.role_name === 'Administrator';
-            const perms = (su.permissions || '').split(',');
+            const permsByRole = await fetchPermissionsMapByRoleIds(db, [su.role_id]);
+            const directPerms = permsByRole[Number(su.role_id)];
+            const perms = (Array.isArray(directPerms) && directPerms.length > 0)
+                ? directPerms
+                : (su.permissions || '').split(',').map(p => p.trim()).filter(Boolean);
+            const flags = computeTelegramModuleFlags({ roleId: su.role_id, roleName: su.role_name, perms });
 
-            const pVentas = (isAdmin || perms.includes('/dashboard/consultas/estaciones/ventas')) ? 1 : 0;
-            const pBancos = (isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-bancos') || perms.includes('/dashboard/bancos/cuentas') || perms.includes('/dashboard/bancos/movimientos')) ? 1 : 0;
-            const pChequera = (isAdmin || perms.includes('/dashboard/bancos/reportes/saldos-chequera') || perms.includes('/dashboard/bancos/cheques')) ? 1 : 0;
-            const pAlertas = (isAdmin || perms.includes('/dashboard/consultas/estaciones/diferencias-combustible') || perms.includes('/dashboard/consultas/estaciones/resumen-cierre')) ? 1 : 0;
+            const pVentas = flags.ventas ? 1 : 0;
+            const pBancos = flags.saldos_banco ? 1 : 0;
+            const pChequera = flags.saldos_chequera ? 1 : 0;
+            const pAlertas = flags.alertas ? 1 : 0;
 
             if (sync_permissions !== false) {
                 await db.query(`
@@ -1190,6 +1333,222 @@ router.post('/audit/clear-errors', authenticateN8nOrAdmin, async (req, res) => {
         res.json({ ok: true, message: 'Buffer de errores forenses limpiado exitosamente', ...result });
     } catch (error) {
         sendSafeError(res, error, 'Error al limpiar buffer de errores forenses');
+    }
+});
+
+/**
+ * =========================================================================
+ * MIBOT PERSONAL DE TELEGRAM (Recordatorios de Pago, Tareas, Validaciones, Reuniones)
+ * Accesible para administradores de Telegram y usuarios de Control de Pagos.
+ * =========================================================================
+ */
+
+/**
+ * GET /api/telegram/mibot/destinatarios
+ * Lista de usuarios registrados en Telegram habilitados para recibir avisos personales de MiBot
+ */
+router.get('/mibot/destinatarios', authenticateToken, requirePermission(mibotAccessPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const tipo = req.query.tipo ? String(req.query.tipo).trim().toUpperCase() : null;
+        const includeAllActive = req.query.include_all === '1' || req.query.include_all === 'true';
+        const destinatarios = await getEligibleMibotRecipients(db, { tipo, includeAllActive });
+
+        res.json({
+            ok: true,
+            server_time_sv: getElSalvadorNowSql(),
+            destinatarios
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al cargar destinatarios de MiBot');
+    }
+});
+
+/**
+ * GET /api/telegram/mibot/programaciones
+ * Lista de programaciones MiBot (opcionalmente filtradas por vencimiento_id, estado o tipo)
+ */
+router.get('/mibot/programaciones', authenticateToken, requirePermission(mibotAccessPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+
+        const vencimientoId = req.query.vencimiento_id ? parseInt(req.query.vencimiento_id, 10) : null;
+        const estado = req.query.estado ? String(req.query.estado).trim().toUpperCase() : null;
+        const tipo = req.query.tipo ? String(req.query.tipo).trim().toUpperCase() : null;
+        const limit = req.query.limit ? parseInt(req.query.limit, 10) : 100;
+
+        const programaciones = await listMibotProgramaciones(db, {
+            vencimientoId: Number.isFinite(vencimientoId) ? vencimientoId : null,
+            estado,
+            tipo,
+            limit
+        });
+
+        res.json({
+            ok: true,
+            server_time_sv: getElSalvadorNowSql(),
+            programaciones
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al listar programaciones de MiBot');
+    }
+});
+
+/**
+ * POST /api/telegram/mibot/programaciones
+ * Crea una programación de aviso personal MiBot para 1 o varios usuarios registrados en Telegram.
+ * Si enviar_ahora=true, despacha inmediatamente un mensaje personal a cada destinatario.
+ */
+router.post('/mibot/programaciones', authenticateToken, requirePermission(mibotAccessPerms), async (req, res) => {
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+        const externalDb = getExternalDb();
+
+        const result = await createMibotProgramacion({
+            db,
+            externalDb,
+            payload: req.body || {},
+            actorUser: req.user,
+            sendTelegramFn: sendTelegramMessage
+        });
+
+        const totalDest = result.programacion?.destinatarios?.length || 0;
+        const sentMsg = result.dispatch
+            ? `Aviso MiBot enviado personalmente a ${result.dispatch.sent} de ${result.dispatch.total} usuario(s) en Telegram.`
+            : `Aviso MiBot programado para ${totalDest} usuario(s) en Telegram.`;
+
+        res.status(201).json({
+            ok: true,
+            message: sentMsg,
+            programacion: result.programacion,
+            dispatch: result.dispatch
+        });
+    } catch (error) {
+        if (error.status === 400 || error.status === 404) {
+            return res.status(error.status).json({ ok: false, message: error.message });
+        }
+        sendSafeError(res, error, 'Error al programar aviso de MiBot');
+    }
+});
+
+/**
+ * POST /api/telegram/mibot/programaciones/:id/enviar-ahora
+ * Envía de inmediato una programación MiBot a cada uno de sus destinatarios en Telegram
+ */
+router.post('/mibot/programaciones/:id/enviar-ahora', authenticateToken, requirePermission(mibotAccessPerms), async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, message: 'ID de programación MiBot inválido.' });
+    }
+
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+        const externalDb = getExternalDb();
+
+        const dispatch = await dispatchMibotProgramacion({
+            db,
+            externalDb,
+            programacionId: id,
+            sendTelegramFn: sendTelegramMessage,
+            isAutomaticCron: false
+        });
+
+        const programacion = await getMibotProgramacionById(db, id);
+        res.json({
+            ok: true,
+            message: `MiBot envió el mensaje personalmente a ${dispatch.sent} de ${dispatch.total} destinatario(s).`,
+            dispatch,
+            programacion
+        });
+    } catch (error) {
+        if (error.status === 400 || error.status === 404) {
+            return res.status(error.status).json({ ok: false, message: error.message });
+        }
+        sendSafeError(res, error, 'Error al enviar aviso de MiBot');
+    }
+});
+
+/**
+ * PATCH /api/telegram/mibot/programaciones/:id/estado
+ * Cancelar, completar o reactivar una programación MiBot
+ */
+router.patch('/mibot/programaciones/:id/estado', authenticateToken, requirePermission(mibotAccessPerms), async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, message: 'ID de programación MiBot inválido.' });
+    }
+
+    const estado = String(req.body?.estado || '').trim().toUpperCase();
+    if (!MIBOT_ESTADOS.includes(estado)) {
+        return res.status(400).json({ ok: false, message: `Estado inválido. Permitidos: ${MIBOT_ESTADOS.join(', ')}` });
+    }
+
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+        await ensureMibotSchema(db);
+
+        const existing = await getMibotProgramacionById(db, id);
+        if (!existing) {
+            return res.status(404).json({ ok: false, message: 'Programación MiBot no encontrada.' });
+        }
+
+        let nextRun = existing.proximo_envio_at;
+        if (estado === 'CANCELADO' || estado === 'COMPLETADO') {
+            nextRun = null;
+        } else if (estado === 'PROGRAMADO') {
+            const customWhen = req.body?.programado_para
+                ? normalizeScheduleDatetime(req.body.programado_para)
+                : null;
+            nextRun = customWhen || normalizeScheduleDatetime(existing.programado_para) || getElSalvadorNowSql();
+        }
+
+        await db.query(
+            `UPDATE mibot_programaciones
+             SET estado = ?, proximo_envio_at = ?
+             WHERE id = ?`,
+            [estado, nextRun, id]
+        );
+
+        const updated = await getMibotProgramacionById(db, id);
+        res.json({
+            ok: true,
+            message: `Estado de programación MiBot actualizado a ${estado}.`,
+            programacion: updated
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar estado de programación MiBot');
+    }
+});
+
+/**
+ * DELETE /api/telegram/mibot/programaciones/:id
+ * Eliminar una programación MiBot
+ */
+router.delete('/mibot/programaciones/:id', authenticateToken, requirePermission(mibotAccessPerms), async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, message: 'ID de programación MiBot inválido.' });
+    }
+
+    try {
+        const db = getDb();
+        if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
+        await ensureMibotSchema(db);
+
+        const [delRes] = await db.query('DELETE FROM mibot_programaciones WHERE id = ?', [id]);
+        if (!delRes || delRes.affectedRows === 0) {
+            return res.status(404).json({ ok: false, message: 'Programación MiBot no encontrada.' });
+        }
+
+        res.json({ ok: true, message: 'Programación MiBot eliminada correctamente.' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al eliminar programación MiBot');
     }
 });
 

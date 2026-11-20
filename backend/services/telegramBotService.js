@@ -452,6 +452,39 @@ const handleCallbackQuery = async (cq) => {
         return;
     }
 
+    // Callbacks interactivos de MiBot Personal (recordatorios de pago, tareas, validaciones y reuniones)
+    if (data.startsWith('mibot:')) {
+        try {
+            const db = getDb();
+            if (!db || !cq.from) {
+                await answerCallbackQuery(cq.id, '⛔ No fue posible verificar tu autorización.');
+                return;
+            }
+            const tgUser = await resolveTelegramUser(cq.from);
+            if (!tgUser || !tgUser.activo) {
+                await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                return;
+            }
+            const effPerms = await getUserEffectivePermissions(tgUser);
+            if (effPerms.inactiveInSipe) {
+                await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                return;
+            }
+            const mibotService = require('./mibotNotifierService');
+            const handled = await mibotService.handleMibotCallbackQuery({
+                db,
+                cq,
+                tgUser,
+                transport: { answerCallbackQuery, editMessageReplyMarkup, sendTelegramMessage }
+            });
+            if (handled) return;
+        } catch (mibotCbErr) {
+            console.error('[TelegramBot] Error en callback de MiBot:', mibotCbErr.message);
+            await answerCallbackQuery(cq.id, '⚠️ Error procesando tu respuesta en MiBot.');
+            return;
+        }
+    }
+
     // Callbacks interactivos para Tickets de Soporte y Consola AGY (fail-closed)
     if (data.startsWith('agy_') || data.startsWith('ticket_')) {
         try {
@@ -2557,6 +2590,30 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         const feedbackList = await getFeedbackList({ limit: 5 });
         const listMsg = formatFeedbackListMessage(feedbackList);
         await sendTelegramMessage(chatId, voicePrefix + listMsg, keyboard);
+        return;
+    }
+
+    // Comandos de MiBot Personal (ver avisos, pagos pendientes, tareas y reuniones asignadas)
+    if (
+        cleanLower === 'mibot' ||
+        cleanLower === '/mibot' ||
+        cleanLower === 'mis avisos' ||
+        cleanLower === '/misavisos' ||
+        cleanLower === 'mis recordatorios' ||
+        cleanLower === 'mis reuniones' ||
+        cleanLower === 'mis tareas'
+    ) {
+        await logTelegramQuery(user.telegram_user_id, '/mibot', 'Consulta de avisos personales MiBot', 1);
+        try {
+            const db = getDb();
+            const mibotService = require('./mibotNotifierService');
+            const displayName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.telegram_username || 'Usuario';
+            const inboxHtml = await mibotService.formatUserPersonalMibotInbox(db, user.telegram_user_id, displayName);
+            await sendTelegramMessage(chatId, voicePrefix + inboxHtml, keyboard);
+        } catch (mibotErr) {
+            console.error('[TelegramBot] Error consultando MiBot inbox:', mibotErr.message);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No fue posible consultar tus avisos de MiBot en este momento.', keyboard);
+        }
         return;
     }
 

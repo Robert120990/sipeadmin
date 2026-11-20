@@ -308,6 +308,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Expr
 // Initialize DB, Schedulers, Telegram Bot and Start Server
 const { initBirthdayScheduler } = require('./services/birthdayNotifier');
 const { initPaymentScheduler } = require('./services/paymentNotifier');
+const { initMibotScheduler } = require('./services/mibotNotifierService');
 const { initTelegramBot } = require('./services/telegramBotService');
 const { initAutoSyncScheduler } = require('./services/autoSyncScheduler');
 const { runInitialServiceSeeds } = require('./services/dbBootstrapSeeds');
@@ -316,6 +317,7 @@ initDB().then(async () => {
     await runInitialServiceSeeds();
     initBirthdayScheduler();
     initPaymentScheduler();
+    initMibotScheduler();
     initTelegramBot();
     initAutoSyncScheduler(io);
     initTicketRealtimeWatcher(io);
