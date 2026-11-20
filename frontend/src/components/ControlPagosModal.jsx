@@ -90,12 +90,15 @@ export default function ControlPagosModal({
     // Programar aviso personal MiBot por Telegram
     const [mibotOpen, setMibotOpen] = useState(false);
 
-    // Cuentas oficiales de bancos ordenadas con sortCuentas (regla AGENTS.md)
+    // Cuentas bancarias ordenadas con sortCuentas (incluye oficiales y contables SaaS)
     const sortedBankAccounts = useMemo(() => {
-        const onlyOfficial = (cuentasBancarias || []).filter(c => c.raw_id || typeof c.id === 'number');
-        const source = onlyOfficial.length > 0 ? onlyOfficial : (cuentasBancarias || []);
-        return sortCuentas(source);
+        return sortCuentas(cuentasBancarias || []);
     }, [cuentasBancarias]);
+
+    const resolveNumericCuentaId = useCallback((val) => {
+        const n = Number(val);
+        return Number.isInteger(n) && n > 0 ? n : null;
+    }, []);
 
     const ubicacionAccounts = useMemo(() => {
         const ubic = String(detail?.vencimiento?.ubicacion || vencimientoRow?.ubicacion || '').toUpperCase().trim();
@@ -329,10 +332,53 @@ export default function ControlPagosModal({
     const applySuggestion = (sug) => {
         if (!sug) return;
         setMetodoPago(sug.metodo_pago || 'TRANSFERENCIA');
-        if (sug.cuenta_bancaria_id) {
+        const labelToMatch = String(sug.cuenta_label || sug.label || '').toUpperCase().trim();
+        let matchedAccount = sug.cuenta_bancaria_id
+            ? sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(sug.cuenta_bancaria_id))
+            : null;
+
+        if (!matchedAccount && labelToMatch) {
+            const numDigits = labelToMatch.replace(/[^0-9]/g, '');
+            if (numDigits.length >= 4) {
+                matchedAccount = sortedBankAccounts.find(c => {
+                    const cDigits = String(c.numero || '').replace(/[^0-9]/g, '');
+                    return cDigits && (cDigits === numDigits || cDigits.endsWith(numDigits) || numDigits.endsWith(cDigits));
+                }) || null;
+            }
+            if (!matchedAccount) {
+                const bankRules = [
+                    { test: /\bBAC\b|AMERICA CENTRAL/, bank: /AMERICA CENTRAL|\bBAC\b/ },
+                    { test: /\bDAVI\b|DAVIVIENDA/, bank: /DAVIVIENDA/ },
+                    { test: /\bPROM\b|PROMERICA/, bank: /PROMERICA/ },
+                    { test: /\bAGRIC|AGRICOLA/, bank: /AGRICOLA/ },
+                    { test: /\bBFA\b|FOMENTO/, bank: /BFA|FOMENTO/ },
+                    { test: /CUSCAT/, bank: /CUSCATLAN/ },
+                    { test: /\bBH\b|HIPOTECARIO/, bank: /HIPOTECARIO/ }
+                ];
+                const entityTokens = ['ANDELSA', 'MIRAFLORES', 'CHALCHUAPA', 'SAN MARTIN', 'LOMA', 'DESVIO', 'COSTA', 'PEDREGAL', 'LIL', 'RAUL', 'CORINA']
+                    .filter(tk => labelToMatch.includes(tk));
+                const matchedBankRule = bankRules.find(r => r.test.test(labelToMatch));
+
+                matchedAccount = sortedBankAccounts.find(c => {
+                    const cb = String(c.banco_nombre || '').toUpperCase();
+                    const blob = `${cb} ${c.nombre || ''} ${c.empresa_nombre || ''}`.toUpperCase();
+                    if (matchedBankRule && !matchedBankRule.bank.test(cb) && !matchedBankRule.bank.test(blob)) {
+                        return false;
+                    }
+                    if (entityTokens.length > 0) {
+                        return entityTokens.every(tk => blob.includes(tk));
+                    }
+                    return Boolean(matchedBankRule);
+                }) || null;
+            }
+        }
+
+        if (matchedAccount) {
+            setCuentaBancariaId(String(matchedAccount.raw_id || matchedAccount.id));
+            setCuentaLabel(formatCuentaLabel(matchedAccount));
+        } else if (sug.cuenta_bancaria_id) {
             setCuentaBancariaId(String(sug.cuenta_bancaria_id));
-            const found = sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(sug.cuenta_bancaria_id));
-            setCuentaLabel(found ? formatCuentaLabel(found) : (sug.cuenta_label || sug.label || ''));
+            setCuentaLabel(sug.cuenta_label || sug.label || '');
         } else {
             setCuentaBancariaId('');
             setCuentaLabel(sug.cuenta_label || (sug.metodo_pago === 'EFECTIVO' ? sug.label : ''));
@@ -406,7 +452,7 @@ export default function ControlPagosModal({
             const res = await api.patch(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/meta`, {
                 tipo_operacion: tipoOperacion,
                 metodo_pago_preferido: metodoPago,
-                cuenta_bancaria_id: cuentaBancariaId ? Number(cuentaBancariaId) : null,
+                cuenta_bancaria_id: resolveNumericCuentaId(cuentaBancariaId),
                 cuenta_label: cuentaLabel || null,
                 tarjeta_ref: tarjetaRef || null,
                 notas_control: notas || null,
@@ -437,7 +483,7 @@ export default function ControlPagosModal({
             const payload = {
                 tipo_operacion: tipoOperacion,
                 metodo_pago: metodoPago,
-                cuenta_bancaria_id: cuentaBancariaId ? Number(cuentaBancariaId) : null,
+                cuenta_bancaria_id: resolveNumericCuentaId(cuentaBancariaId),
                 cuenta_label: cuentaLabel || null,
                 tarjeta_ref: tarjetaRef || null,
                 beneficiario: beneficiario ? beneficiario.trim() : null,
@@ -1093,7 +1139,7 @@ export default function ControlPagosModal({
                                         </select>
                                         {ubicacionAccounts.length > 0 && (
                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem', marginTop: '0.32rem' }}>
-                                                {ubicacionAccounts.slice(0, 3).map(c => {
+                                                {ubicacionAccounts.slice(0, 6).map(c => {
                                                     const idVal = String(c.raw_id || c.id);
                                                     const active = cuentaBancariaId === idVal;
                                                     return (

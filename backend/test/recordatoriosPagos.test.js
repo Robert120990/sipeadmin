@@ -184,7 +184,8 @@ describe('Control de Pagos Avanzado: Abonos Parciales, Sugerencias Inteligentes 
         const mockAdminCuentas = [
             { raw_id: 541, banco_nombre: 'PROMERICA', nombre: 'PISTA #1900 MIRAFLORES', numero: '10000033001900', empresa_nombre: 'INVERSIONES RRS' },
             { raw_id: 583, banco_nombre: 'DAVIVIENDA', nombre: 'DAVIVIENDA AHORRO - SOSA CASTELLANOS', numero: '015541116587', empresa_nombre: 'ANDELSA S.A DE C.V' },
-            { raw_id: 584, banco_nombre: 'DAVIVIENDA', nombre: 'BANCO DAVIVIENDA INV LIL', numero: '15510057325', empresa_nombre: 'INVERSIONES LIL' }
+            { raw_id: 584, banco_nombre: 'DAVIVIENDA', nombre: 'BANCO DAVIVIENDA INV LIL', numero: '15510057325', empresa_nombre: 'INVERSIONES LIL' },
+            { raw_id: 594, banco_nombre: 'AMERICA CENTRAL', nombre: 'ANDELSA - BAC CTA CTE', numero: '201002367', empresa_nombre: 'ANDELSA S.A DE C.V' }
         ];
 
         it('debe normalizar fechas ISO y DD/MM/YYYY y descartar inválidas', () => {
@@ -240,6 +241,42 @@ describe('Control de Pagos Avanzado: Abonos Parciales, Sugerencias Inteligentes 
 
             assert.equal(matched.cuenta_bancaria_id, 583);
             assert.ok(matched.cuenta_match_reason.includes('ANDELSA'));
+        });
+
+        it('debe emparejar la cuenta BAC ANDELSA (201002367 / id 594) por número o por banco BAC + contexto ANDELSA', () => {
+            const byNumber = matchExtractedReceiptToCatalog({
+                tipo_documento: 'Transferencia Bancaria',
+                metodo_pago: 'TRANSFERENCIA',
+                monto_usd: 15800,
+                fecha: '2026-11-20',
+                banco_origen: 'BAC',
+                cuenta_origen: '201002367',
+                beneficiario: 'INVERSIONES AVICOLAS DE HONDUR'
+            }, mockAdminCuentas, {
+                ubicacion: 'ANDELSA',
+                tipo_operacion: 'CXP',
+                monto_total: 33300,
+                saldo_pendiente: 15800
+            });
+
+            assert.equal(byNumber.cuenta_bancaria_id, 594);
+            assert.ok(byNumber.cuenta_label.includes('201002367'));
+
+            const byContext = matchExtractedReceiptToCatalog({
+                tipo_documento: 'Transferencia Bancaria',
+                metodo_pago: 'TRANSFERENCIA',
+                monto_usd: 15800,
+                fecha: '2026-11-20',
+                banco_origen: 'BAC',
+                beneficiario: 'INVERSIONES AVICOLAS DE HONDUR'
+            }, mockAdminCuentas, {
+                ubicacion: 'ANDELSA',
+                tipo_operacion: 'CXP',
+                monto_total: 33300,
+                saldo_pendiente: 15800
+            });
+
+            assert.equal(byContext.cuenta_bancaria_id, 594);
         });
 
         it('debe clasificar correctamente vouchers de Tarjeta de Crédito y Notas de Crédito', () => {

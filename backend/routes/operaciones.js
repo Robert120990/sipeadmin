@@ -1052,7 +1052,7 @@ router.get('/operaciones/recordatorios/presets-pago', authenticateToken, require
             if (accountingDb) {
                 const [coaRows] = await accountingDb.query(`
                     SELECT ca.id, ca.company_id, ca.code, ca.name,
-                           COALESCE(co.nombre, '') AS company_name
+                           COALESCE(co.nombre_comercial, co.razon_social, '') AS company_name
                     FROM chart_of_accounts ca
                     LEFT JOIN companies co ON ca.company_id = co.id
                     WHERE ca.code LIKE '110103%' AND LENGTH(ca.code) >= 9
@@ -1085,6 +1085,7 @@ router.get('/operaciones/recordatorios/presets-pago', authenticateToken, require
                     const key = digits || `saas-${row.id}`;
                     const item = {
                         id: `coa-${row.id}`,
+                        source: 'contabilidad_saas',
                         banco_nombre: bancoNombre,
                         nombre: displayNombre,
                         numero,
