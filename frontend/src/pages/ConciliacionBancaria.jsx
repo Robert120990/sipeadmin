@@ -91,6 +91,7 @@ export default function ConciliacionBancaria() {
     const [cuentaInfo, setCuentaInfo] = useState(null);
     const [movimientosConciliados, setMovimientosConciliados] = useState([]);
     const [pendientes, setPendientes] = useState([]);
+    const [sugerenciasControlPagos, setSugerenciasControlPagos] = useState([]);
     const [resumen, setResumen] = useState({
         saldo_banco: 0,
         saldo_chequera: 0,
@@ -295,6 +296,7 @@ export default function ConciliacionBancaria() {
             setCuentaInfo(res.data.cuenta || null);
             setMovimientosConciliados(res.data.movimientos_conciliados || []);
             setPendientes(res.data.pendientes || []);
+            setSugerenciasControlPagos(res.data.sugerencias_control_pagos || []);
             setResumen(res.data.resumen || { saldo_banco: 0, saldo_chequera: 0, diferencia: 0, ultima_validacion: null });
             setSaldoBancoManual(res.data.resumen?.saldo_banco !== undefined ? String(res.data.resumen.saldo_banco) : '0');
             setSelectedPendingKeys(new Set());
@@ -361,6 +363,42 @@ export default function ConciliacionBancaria() {
             String(item.monto_display || '').includes(q)
         );
     }, [pendientes, searchTerm]);
+
+    const filteredSugerenciasCP = useMemo(() => {
+        if (!searchTerm) return sugerenciasControlPagos;
+        const q = searchTerm.toLowerCase();
+        return sugerenciasControlPagos.filter(item =>
+            String(item.descripcion_ref || '').toLowerCase().includes(q) ||
+            String(item.ubicacion || '').toLowerCase().includes(q) ||
+            String(item.referencia_doc || '').toLowerCase().includes(q) ||
+            String(item.metodo_pago || '').toLowerCase().includes(q) ||
+            String(item.notas || '').toLowerCase().includes(q) ||
+            String(item.monto || '').includes(q)
+        );
+    }, [sugerenciasControlPagos, searchTerm]);
+
+    const handleVincularControlPago = async (sug, accion) => {
+        if (accion === 'DESCARTAR') {
+            const ok = await confirm(`¿Ocultar el pago "${sug.descripcion_ref}" ($${Number(sug.monto || 0).toFixed(2)}) de sugerencias de conciliación?`, { variant: 'danger' });
+            if (!ok) return;
+        } else if (accion === 'CREAR_Y_CONCILIAR') {
+            const ok = await confirm(`¿Crear el movimiento bancario por $${Number(sug.monto || 0).toFixed(2)} ("${sug.descripcion_ref}") y marcarlo conciliado?`);
+            if (!ok) return;
+        }
+        try {
+            const res = await api.post('/bancos/conciliacion/vincular-control-pago', {
+                abono_id: sug.id,
+                accion,
+                movimiento_bancario_id: sug.suggested_match?.id || null,
+                origen_tipo: sug.suggested_match?.origen_tipo || 'MOV',
+                fecha_aplicado: fechaAplicadoInput || todayStr
+            });
+            addToast(res.data?.message || 'Actualizado', 'success');
+            fetchData();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al procesar sugerencia de Control de Pagos', 'error');
+        }
+    };
 
     // Selección de pendientes
     const handleTogglePending = (key) => {
@@ -1156,11 +1194,11 @@ export default function ConciliacionBancaria() {
 
             {/* 4. Selector de Pestañas & Búsqueda */}
             <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <button 
                         onClick={() => { setActiveTab('MOVIMIENTOS'); setSelectedPendingKeys(new Set()); }}
                         className={activeTab === 'MOVIMIENTOS' ? 'btn-primary' : 'btn-secondary'}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1.2rem', fontWeight: '600' }}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1.1rem', fontWeight: '600' }}
                     >
                         <CheckCircle2 size={16} /> MOVIMIENTOS ({filteredMovimientos.length})
                     </button>
@@ -1168,9 +1206,25 @@ export default function ConciliacionBancaria() {
                     <button 
                         onClick={() => { setActiveTab('PENDIENTES'); }}
                         className={activeTab === 'PENDIENTES' ? 'btn-primary' : 'btn-secondary'}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1.2rem', fontWeight: '600' }}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1.1rem', fontWeight: '600' }}
                     >
                         <ArrowRightLeft size={16} /> PENDIENTES ({filteredPendientes.length})
+                    </button>
+
+                    <button
+                        onClick={() => { setActiveTab('CONTROL_PAGOS'); setSelectedPendingKeys(new Set()); }}
+                        className={activeTab === 'CONTROL_PAGOS' ? 'btn-primary' : 'btn-secondary'}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            padding: '0.5rem 1.1rem',
+                            fontWeight: '600',
+                            borderColor: filteredSugerenciasCP.length > 0 && activeTab !== 'CONTROL_PAGOS' ? 'rgba(56, 189, 248, 0.5)' : undefined
+                        }}
+                        title="Pagos bancarios registrados en Control de Pagos listos para conciliar"
+                    >
+                        <Check size={16} /> CONTROL PAGOS ({filteredSugerenciasCP.length})
                     </button>
                 </div>
 
@@ -1215,6 +1269,105 @@ export default function ConciliacionBancaria() {
             </div>
 
             {/* 5. Tabla de Datos */}
+            {activeTab === 'CONTROL_PAGOS' ? (
+                <div className="card glass table-responsive" style={{ padding: 0 }}>
+                    <table style={{ minWidth: '960px', width: '100%', fontSize: '0.8rem' }}>
+                        <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                <th style={{ padding: '0.45rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Fecha Pago</th>
+                                <th style={{ padding: '0.45rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Tipo / Método</th>
+                                <th style={{ padding: '0.45rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Concepto / Ubicación</th>
+                                <th style={{ padding: '0.45rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Ref. / Doc</th>
+                                <th style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>Monto</th>
+                                <th style={{ padding: '0.45rem 0.6rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Coincidencia Sugerida</th>
+                                <th style={{ padding: '0.45rem 0.6rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filteredSugerenciasCP.length === 0 ? (
+                                <tr>
+                                    <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                        No hay pagos bancarios pendientes de conciliar desde Control de Pagos para esta cuenta.
+                                    </td>
+                                </tr>
+                            ) : filteredSugerenciasCP.map(sug => (
+                                <tr key={sug.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                    <td style={{ padding: '0.45rem 0.6rem', whiteSpace: 'nowrap' }}>{sug.fecha_pago_display || sug.fecha_pago}</td>
+                                    <td style={{ padding: '0.45rem 0.6rem', whiteSpace: 'nowrap' }}>
+                                        <span style={{
+                                            padding: '0.12rem 0.42rem',
+                                            borderRadius: '5px',
+                                            fontSize: '0.7rem',
+                                            fontWeight: 700,
+                                            backgroundColor: sug.tipo_operacion === 'CXC' ? 'rgba(16, 185, 129, 0.18)' : 'rgba(99, 102, 241, 0.18)',
+                                            color: sug.tipo_operacion === 'CXC' ? '#34d399' : '#c7d2fe'
+                                        }}>
+                                            {sug.tipo_operacion} · {sug.metodo_pago}
+                                        </span>
+                                    </td>
+                                    <td style={{ padding: '0.45rem 0.6rem' }}>
+                                        <div style={{ fontWeight: 700 }}>{sug.descripcion_ref || 'Pago'}</div>
+                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            {sug.ubicacion || 'General'}
+                                            {sug.beneficiario ? ` · A favor de: ${sug.beneficiario}` : ''}
+                                            {sug.notas ? ` · ${sug.notas}` : ''}
+                                            {sug.comprobantes_count > 0 && sug.comprobante_url && (
+                                                <> · <a href={sug.comprobante_url} target="_blank" rel="noopener noreferrer" style={{ color: '#38bdf8' }}>Ver comprobante ({sug.comprobantes_count})</a></>
+                                            )}
+                                        </div>
+                                    </td>
+                                    <td style={{ padding: '0.45rem 0.6rem' }}>{sug.referencia_doc || '—'}</td>
+                                    <td style={{ padding: '0.45rem 0.6rem', textAlign: 'right', fontWeight: 800, color: sug.tipo_operacion === 'CXC' ? '#34d399' : '#f87171', whiteSpace: 'nowrap' }}>
+                                        {sug.tipo_operacion === 'CXC' ? '+' : '-'}${Number(sug.monto || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td style={{ padding: '0.45rem 0.6rem', fontSize: '0.74rem' }}>
+                                        {sug.suggested_match ? (
+                                            <div style={{ color: '#6ee7b7' }}>
+                                                <strong>{sug.suggested_match.origen_tipo} #{sug.suggested_match.documento || sug.suggested_match.id}</strong> · {sug.suggested_match.fecha_display}
+                                                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{sug.suggested_match.concepto}</div>
+                                            </div>
+                                        ) : (
+                                            <span style={{ color: 'var(--text-muted)' }}>Sin movimiento en chequera aún</span>
+                                        )}
+                                    </td>
+                                    <td style={{ padding: '0.45rem 0.6rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                        <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center' }}>
+                                            {sug.suggested_match ? (
+                                                <button
+                                                    type="button"
+                                                    className="btn-primary"
+                                                    style={{ height: '28px', padding: '0 0.65rem', fontSize: '0.72rem' }}
+                                                    onClick={() => handleVincularControlPago(sug, 'VINCULAR')}
+                                                >
+                                                    Vincular y Conciliar
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    className="btn-primary"
+                                                    style={{ height: '28px', padding: '0 0.65rem', fontSize: '0.72rem' }}
+                                                    onClick={() => handleVincularControlPago(sug, 'CREAR_Y_CONCILIAR')}
+                                                >
+                                                    Crear Mov. y Conciliar
+                                                </button>
+                                            )}
+                                            <button
+                                                type="button"
+                                                className="btn-secondary"
+                                                style={{ height: '28px', padding: '0 0.5rem', fontSize: '0.72rem' }}
+                                                onClick={() => handleVincularControlPago(sug, 'DESCARTAR')}
+                                                title="Descartar sugerencia"
+                                            >
+                                                <X size={13} />
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ) : (
             <div className="card glass table-responsive" style={{ padding: 0 }}>
                 <table style={{ minWidth: '950px', width: '100%', whiteSpace: 'nowrap', fontSize: '0.85rem' }}>
                     <thead>
@@ -1359,6 +1512,7 @@ export default function ConciliacionBancaria() {
                     </tbody>
                 </table>
             </div>
+            )}
 
             {/* 6. Barra Inferior de Totales y Conciliación (Diseño idéntico a las referencias) */}
             <div className="card glass" style={{ 

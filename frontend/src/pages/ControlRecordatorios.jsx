@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
     Search, Plus, CheckCircle, Edit, Trash2, X, Save, Download,
     Printer, Sparkles, Send, ArrowUp, ArrowDown, ArrowUpDown,
-    Filter, CreditCard, RotateCcw, CalendarClock
+    Filter, CreditCard, RotateCcw, CalendarClock, Paperclip
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -12,6 +12,8 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
+import ControlPagosModal from '../components/ControlPagosModal';
+import ReceiptViewerModal from '../components/ReceiptViewerModal';
 import { parseDateOnly, todayStr } from '../utils/date';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
@@ -192,6 +194,12 @@ export default function ControlRecordatorios() {
     const [isPagoModalOpen, setIsPagoModalOpen] = useState(false);
     const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
     const [parentsList, setParentsList] = useState([]);
+
+    // Nuevo Popup completo de Pagos / Abonos Parciales / Comprobantes
+    const [pagosPopupRow, setPagosPopupRow] = useState(null);
+    const [quickViewerOpen, setQuickViewerOpen] = useState(false);
+    const [quickViewerItems, setQuickViewerItems] = useState([]);
+    const [quickViewerTitle, setQuickViewerTitle] = useState('Comprobantes');
 
     // Report preview state
     const [previewModalOpen, setPreviewModalOpen] = useState(false);
@@ -377,7 +385,7 @@ export default function ControlRecordatorios() {
 
             if (qNorm) {
                 const rowBlob = normalizeText(
-                    `${r.id_recordatorio} ${r.ubicacion} ${r.descripcion} ${venceFmt} ${r.vence} ${r.observacion} ${montoStr} ${r.forma_pago} ${r.estado} ${fecPagoFmt}`
+                    `${r.id_recordatorio} ${r.ubicacion} ${r.descripcion} ${venceFmt} ${r.vence} ${r.observacion} ${montoStr} ${r.forma_pago} ${r.estado} ${r.estado_pago || ''} ${r.tipo_operacion || ''} ${fecPagoFmt}`
                 );
                 const tokens = qNorm.split(/\s+/).filter(Boolean);
                 if (!tokens.every(tk => rowBlob.includes(tk))) return false;
@@ -388,9 +396,20 @@ export default function ControlRecordatorios() {
             if (columnFilters.descripcion && !normalizeText(r.descripcion).includes(normalizeText(columnFilters.descripcion))) return false;
             if (columnFilters.vence && !`${venceFmt} ${r.vence || ''}`.toLowerCase().includes(columnFilters.vence.trim().toLowerCase())) return false;
             if (columnFilters.observacion && !normalizeText(r.observacion).includes(normalizeText(columnFilters.observacion))) return false;
-            if (columnFilters.monto && !`${montoStr} ${mc(r.monto)}`.toLowerCase().includes(columnFilters.monto.trim().toLowerCase())) return false;
-            if (columnFilters.forma_pago && !normalizeText(r.forma_pago).includes(normalizeText(columnFilters.forma_pago))) return false;
-            if (columnFilters.estado && normalizeText(r.estado) !== normalizeText(columnFilters.estado)) return false;
+            if (columnFilters.monto && !`${montoStr} ${mc(r.monto)} ${Number(r.saldo_pendiente || 0).toFixed(2)}`.toLowerCase().includes(columnFilters.monto.trim().toLowerCase())) return false;
+            if (columnFilters.forma_pago && !normalizeText(`${r.forma_pago || ''} ${r.tipo_operacion || ''}`).includes(normalizeText(columnFilters.forma_pago))) return false;
+            if (columnFilters.estado) {
+                const targetEst = normalizeText(columnFilters.estado);
+                const rowEstPago = normalizeText(r.estado_pago || r.estado);
+                const rowEstLegacy = normalizeText(r.estado);
+                if (targetEst === 'parcial') {
+                    if (rowEstPago !== 'parcial') return false;
+                } else if (targetEst === 'pendiente') {
+                    if (rowEstLegacy !== 'pendiente' && rowEstPago !== 'parcial') return false;
+                } else if (rowEstLegacy !== targetEst && rowEstPago !== targetEst) {
+                    return false;
+                }
+            }
             if (columnFilters.fecha_cancelacion && !`${fecPagoFmt} ${r.fecha_cancelacion || ''}`.toLowerCase().includes(columnFilters.fecha_cancelacion.trim().toLowerCase())) return false;
 
             return true;
@@ -403,6 +422,11 @@ export default function ControlRecordatorios() {
         return [...filtered].sort((a, b) => {
             if (key === 'id_recordatorio' || key === 'monto') {
                 return (Number(a[key] || 0) - Number(b[key] || 0)) * dir;
+            }
+            if (key === 'estado') {
+                const ea = String(a.estado_pago || a.estado || '');
+                const eb = String(b.estado_pago || b.estado || '');
+                return ea.localeCompare(eb, 'es') * dir;
             }
             if (key === 'vence' || key === 'fecha_cancelacion') {
                 const da = String(a[key] || '').slice(0, 10);
@@ -418,6 +442,9 @@ export default function ControlRecordatorios() {
 
     const totalMonto = useMemo(() => {
         return displayRecordatorios.reduce((sum, item) => {
+            if (item.saldo_pendiente !== undefined && item.saldo_pendiente !== null) {
+                return sum + Number(item.saldo_pendiente || 0);
+            }
             if (item.estado === 'PENDIENTE') return sum + Number(item.monto || 0);
             return sum;
         }, 0);
@@ -425,10 +452,43 @@ export default function ControlRecordatorios() {
 
     const totalPagadoVista = useMemo(() => {
         return displayRecordatorios.reduce((sum, item) => {
+            if (item.monto_pagado !== undefined && item.monto_pagado !== null) {
+                return sum + Number(item.monto_pagado || 0);
+            }
             if (item.estado === 'CANCELADO') return sum + Number(item.monto || 0);
             return sum;
         }, 0);
     }, [displayRecordatorios]);
+
+    const parcialesCount = useMemo(() => {
+        return displayRecordatorios.filter(item => item.estado_pago === 'PARCIAL').length;
+    }, [displayRecordatorios]);
+
+    const totalCxcPendiente = useMemo(() => {
+        return displayRecordatorios.reduce((sum, item) => {
+            if (item.tipo_operacion !== 'CXC') return sum;
+            const saldo = item.saldo_pendiente !== undefined && item.saldo_pendiente !== null
+                ? Number(item.saldo_pendiente || 0)
+                : (item.estado === 'PENDIENTE' ? Number(item.monto || 0) : 0);
+            return sum + saldo;
+        }, 0);
+    }, [displayRecordatorios]);
+
+    const openQuickReceiptsViewer = async (rec) => {
+        try {
+            const res = await api.get(`/operaciones/recordatorios/vencimiento/${rec.id}/detalle`);
+            const comps = res.data?.comprobantes || [];
+            if (comps.length === 0) {
+                setPagosPopupRow(rec);
+                return;
+            }
+            setQuickViewerItems(comps);
+            setQuickViewerTitle(`Comprobantes — ${rec.descripcion || ''}`);
+            setQuickViewerOpen(true);
+        } catch (err) {
+            addToast('Error al cargar comprobantes del registro', 'error');
+        }
+    };
 
     // Contextual presets for Pago / Forma de Pago Modal
     const ubicacionSuggestedAccounts = useMemo(() => {
@@ -764,13 +824,17 @@ export default function ControlRecordatorios() {
         }
         const wsData = displayRecordatorios.map(r => ({
             'ID Principal': r.id_recordatorio,
+            'Tipo': r.tipo_operacion || 'CXP',
             'Ubicación': r.ubicacion,
             'Descripción': r.descripcion,
             'Vence': formatDate(r.vence),
             'Observación': r.observacion,
-            'Monto': Number(r.monto),
+            'Monto Total': Number(r.monto || 0),
+            'Abonado': Number(r.monto_pagado ?? (r.estado === 'CANCELADO' ? r.monto : 0)),
+            'Saldo Pendiente': Number(r.saldo_pendiente ?? (r.estado === 'PENDIENTE' ? r.monto : 0)),
             'Forma Pago': r.forma_pago,
-            'Estado': r.estado,
+            'Estado': r.estado_pago === 'PARCIAL' ? `PENDIENTE (PARCIAL ${Math.round(Number(r.porcentaje_pagado || 0))}%)` : r.estado,
+            'Comprobantes': Number(r.comprobantes_count || 0),
             'Fec Pago': formatDate(r.fecha_cancelacion)
         }));
         const ws = XLSX.utils.json_to_sheet(wsData);
@@ -803,21 +867,24 @@ export default function ControlRecordatorios() {
         doc.setFontSize(8.5);
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(100, 116, 139);
+        const estadoLabel = estadoFilter === 'P' ? 'Pendientes' : estadoFilter === 'PARCIAL' ? 'Parciales' : estadoFilter === 'C' ? 'Finalizados' : 'Todos';
         const sub = selectedParent
-            ? `Filtrado por: ${selectedParent.descripcion} (ID: ${selectedParent.id})  |  Registros: ${displayRecordatorios.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`
-            : `Período: ${fechaDesde} al ${fechaHasta}  |  Estado: ${estadoFilter === 'P' ? 'Pendientes' : estadoFilter === 'C' ? 'Finalizados' : 'Todos'}  |  Registros: ${displayRecordatorios.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')}`;
+            ? `Filtrado por: ${selectedParent.descripcion} (ID: ${selectedParent.id})  |  Registros: ${displayRecordatorios.length}  |  Saldo Pendiente: ${mc(totalMonto)}  |  Generado: ${new Date().toLocaleDateString('es-SV')}`
+            : `Período: ${fechaDesde} al ${fechaHasta}  |  Estado: ${estadoLabel}  |  Registros: ${displayRecordatorios.length}  |  Saldo Pendiente: ${mc(totalMonto)}  |  Generado: ${new Date().toLocaleDateString('es-SV')}`;
         doc.text(sub, 14, 21);
 
-        const tableColumn = ['Ubicación', 'Descripción', 'Vence', 'Observación', 'Monto', 'Forma de Pago', 'Estado', 'Fecha Pago'];
+        const tableColumn = ['Tipo', 'Ubicación', 'Descripción', 'Vence', 'Monto', 'Abonado', 'Saldo', 'Forma de Pago', 'Estado', 'Comp.'];
         const tableRows = displayRecordatorios.map(r => [
+            r.tipo_operacion || 'CXP',
             r.ubicacion || '-',
             r.descripcion || '-',
             formatDate(r.vence),
-            r.observacion || '-',
             mc(r.monto),
+            mc(r.monto_pagado ?? (r.estado === 'CANCELADO' ? r.monto : 0)),
+            mc(r.saldo_pendiente ?? (r.estado === 'PENDIENTE' ? r.monto : 0)),
             r.forma_pago || '-',
-            r.estado === 'P' ? 'PENDIENTE' : r.estado === 'C' ? 'PAGADO' : (r.estado || '-'),
-            formatDate(r.fecha_cancelacion)
+            r.estado_pago === 'PARCIAL' ? `PARCIAL ${Math.round(Number(r.porcentaje_pagado || 0))}%` : (r.estado || '-'),
+            String(r.comprobantes_count || 0)
         ]);
 
         autoTable(doc, {
@@ -825,16 +892,18 @@ export default function ControlRecordatorios() {
             body: tableRows,
             startY: 26,
             theme: 'striped',
-            styles: { fontSize: 8, cellPadding: 2 },
+            styles: { fontSize: 7.5, cellPadding: 1.8 },
             columnStyles: {
-                0: { cellWidth: 34 },
-                1: { cellWidth: 48 },
-                2: { halign: 'center', cellWidth: 21 },
-                3: { cellWidth: 40 },
-                4: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
-                5: { cellWidth: 40 },
-                6: { halign: 'center', cellWidth: 22 },
-                7: { halign: 'center', cellWidth: 22 }
+                0: { halign: 'center', cellWidth: 13 },
+                1: { cellWidth: 32 },
+                2: { cellWidth: 46 },
+                3: { halign: 'center', cellWidth: 20 },
+                4: { halign: 'right', cellWidth: 22 },
+                5: { halign: 'right', cellWidth: 22 },
+                6: { halign: 'right', fontStyle: 'bold', cellWidth: 22 },
+                7: { cellWidth: 38 },
+                8: { halign: 'center', cellWidth: 24 },
+                9: { halign: 'center', cellWidth: 12 }
             },
             headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], halign: 'center' },
             margin: { left: 14, right: 14, bottom: 15 }
@@ -910,23 +979,23 @@ export default function ControlRecordatorios() {
 
             {/* BARRA COMPACTA DE FILTROS Y BUSCADOR DINÁMICO */}
             <div className="card glass" style={{ padding: '1rem 1.25rem', display: 'flex', flexWrap: 'wrap', gap: '0.85rem', alignItems: 'flex-end' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', opacity: selectedParent ? 0.5 : 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', opacity: selectedParent ? 0.5 : 1, flex: '1 1 125px', maxWidth: '150px' }}>
                     <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em' }}>VENCEN DESDE</label>
                     <input
                         type="date"
                         className="form-control"
-                        style={{ height: '36px', fontSize: '0.825rem', width: '142px' }}
+                        style={{ height: '36px', fontSize: '0.825rem', width: '100%' }}
                         value={fechaDesde}
                         onChange={e => setFechaDesde(e.target.value)}
                         disabled={!!selectedParent}
                     />
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', opacity: selectedParent ? 0.5 : 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', opacity: selectedParent ? 0.5 : 1, flex: '1 1 125px', maxWidth: '150px' }}>
                     <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em' }}>VENCEN HASTA</label>
                     <input
                         type="date"
                         className="form-control"
-                        style={{ height: '36px', fontSize: '0.825rem', width: '142px' }}
+                        style={{ height: '36px', fontSize: '0.825rem', width: '100%' }}
                         value={fechaHasta}
                         onChange={e => setFechaHasta(e.target.value)}
                         disabled={!!selectedParent}
@@ -934,7 +1003,7 @@ export default function ControlRecordatorios() {
                 </div>
 
                 {/* Buscador dinámico en tiempo real */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: '1 1 230px', minWidth: '200px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: '1 1 220px', minWidth: 'min(200px, 100%)' }}>
                     <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em' }}>BUSCADOR DINÁMICO</label>
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                         <Search size={15} style={{ position: 'absolute', left: '0.65rem', color: 'var(--text-muted)', pointerEvents: 'none' }} />
@@ -989,6 +1058,7 @@ export default function ControlRecordatorios() {
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center', marginLeft: 'auto' }}>
                     {[
                         { id: 'P', label: 'Pendientes', color: 'var(--primary)', shadow: 'rgba(99, 102, 241, 0.35)' },
+                        { id: 'PARCIAL', label: 'Parciales', color: '#0ea5e9', shadow: 'rgba(14, 165, 233, 0.35)' },
                         { id: 'C', label: 'Finalizados', color: '#10b981', shadow: 'rgba(16, 185, 129, 0.35)' },
                         { id: 'ALL', label: 'Todos', color: '#64748b', shadow: 'rgba(100, 116, 139, 0.35)' }
                     ].map(tab => (
@@ -1169,6 +1239,7 @@ export default function ControlRecordatorios() {
                                         >
                                             <option value="">Todos</option>
                                             <option value="PENDIENTE">PENDIENTE</option>
+                                            <option value="PARCIAL">PARCIAL</option>
                                             <option value="CANCELADO">CANCELADO</option>
                                         </select>
                                     </th>
@@ -1271,7 +1342,17 @@ export default function ControlRecordatorios() {
                                         )}
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--primary)' }}>
-                                        {mc(r.monto)}
+                                        <div>{mc(r.monto)}</div>
+                                        {r.estado_pago === 'PARCIAL' && (
+                                            <div style={{ marginTop: '0.18rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                                                <div style={{ fontSize: '0.67rem', fontWeight: 600, color: '#38bdf8', lineHeight: 1.15 }}>
+                                                    Abono {mc(r.monto_pagado)} · Resta <strong style={{ color: '#fbbf24' }}>{mc(r.saldo_pendiente)}</strong>
+                                                </div>
+                                                <div style={{ height: '4px', width: '100%', maxWidth: '115px', borderRadius: '999px', backgroundColor: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                                                    <div style={{ height: '100%', width: `${Math.min(100, Number(r.porcentaje_pagado || 0))}%`, backgroundColor: '#38bdf8' }} />
+                                                </div>
+                                            </div>
+                                        )}
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', position: 'relative' }}>
                                         {inlineEditId === r.id ? (() => {
@@ -1391,46 +1472,140 @@ export default function ControlRecordatorios() {
                                                 </div>
                                             );
                                         })() : (
-                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', maxWidth: '100%' }}>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.28rem', maxWidth: '100%' }}>
                                                 <button
                                                     type="button"
-                                                    onClick={() => startInlineEdit(r)}
-                                                    title="Clic para editar Método / Forma de Pago directamente en esta fila"
+                                                    onClick={() => setPagosPopupRow(r)}
+                                                    title="Abrir popup de Método de Pago, Abonos Parciales, Sugerencias y Comprobantes"
                                                     style={{
                                                         display: 'inline-flex',
                                                         alignItems: 'center',
-                                                        gap: '0.35rem',
+                                                        gap: '0.32rem',
                                                         maxWidth: '100%',
                                                         padding: '0.22rem 0.5rem',
                                                         borderRadius: '6px',
-                                                        border: r.forma_pago ? '1px solid rgba(99, 102, 241, 0.35)' : '1px dashed rgba(148, 163, 184, 0.4)',
-                                                        backgroundColor: r.forma_pago ? 'rgba(99, 102, 241, 0.12)' : 'rgba(255, 255, 255, 0.03)',
-                                                        color: r.forma_pago ? 'var(--text)' : 'var(--text-muted)',
-                                                        fontSize: '0.75rem',
+                                                        border: r.forma_pago || r.abonos_count > 0 ? '1px solid rgba(99, 102, 241, 0.42)' : '1px dashed rgba(148, 163, 184, 0.45)',
+                                                        backgroundColor: r.forma_pago || r.abonos_count > 0 ? 'rgba(99, 102, 241, 0.14)' : 'rgba(255, 255, 255, 0.03)',
+                                                        color: r.forma_pago || r.abonos_count > 0 ? 'var(--text)' : 'var(--text-muted)',
+                                                        fontSize: '0.74rem',
                                                         cursor: 'pointer',
                                                         textAlign: 'left'
                                                     }}
                                                 >
-                                                    <CreditCard size={12} style={{ flexShrink: 0, color: r.forma_pago ? 'var(--primary)' : 'var(--text-muted)' }} />
-                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '165px' }}>
-                                                        {r.forma_pago || 'Editar método...'}
+                                                    <CreditCard size={12} style={{ flexShrink: 0, color: r.forma_pago || r.abonos_count > 0 ? 'var(--primary)' : 'var(--text-muted)' }} />
+                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '150px' }}>
+                                                        {r.forma_pago || 'Gestionar pago...'}
                                                     </span>
-                                                    <Edit size={11} style={{ flexShrink: 0, opacity: 0.7 }} />
+                                                </button>
+                                                {r.tipo_operacion === 'CXC' && (
+                                                    <span
+                                                        title="Clasificado como Cuenta por Cobrar (Ingreso en Flujo de Caja)"
+                                                        style={{
+                                                            padding: '0.1rem 0.35rem',
+                                                            borderRadius: '5px',
+                                                            fontSize: '0.64rem',
+                                                            fontWeight: 800,
+                                                            backgroundColor: 'rgba(16, 185, 129, 0.18)',
+                                                            color: '#34d399',
+                                                            border: '1px solid rgba(16, 185, 129, 0.35)'
+                                                        }}
+                                                    >
+                                                        CXC
+                                                    </span>
+                                                )}
+                                                {r.abonos_count > 1 && (
+                                                    <span
+                                                        title={`${r.abonos_count} pagos aplicados`}
+                                                        style={{
+                                                            padding: '0.1rem 0.35rem',
+                                                            borderRadius: '5px',
+                                                            fontSize: '0.64rem',
+                                                            fontWeight: 700,
+                                                            backgroundColor: 'rgba(14, 165, 233, 0.18)',
+                                                            color: '#7dd3fc'
+                                                        }}
+                                                    >
+                                                        {r.abonos_count} pagos
+                                                    </span>
+                                                )}
+                                                {r.comprobantes_count > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openQuickReceiptsViewer(r)}
+                                                        title={`Ver ${r.comprobantes_count} comprobante(s) adjunto(s)`}
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.2rem',
+                                                            padding: '0.14rem 0.4rem',
+                                                            borderRadius: '6px',
+                                                            fontSize: '0.68rem',
+                                                            fontWeight: 700,
+                                                            border: '1px solid rgba(56, 189, 248, 0.4)',
+                                                            backgroundColor: 'rgba(56, 189, 248, 0.14)',
+                                                            color: '#7dd3fc',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        <Paperclip size={10} /> {r.comprobantes_count}
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => startInlineEdit(r)}
+                                                    title="Edición rápida de texto en línea"
+                                                    style={{
+                                                        background: 'none',
+                                                        border: 'none',
+                                                        color: 'var(--text-muted)',
+                                                        cursor: 'pointer',
+                                                        padding: '0.15rem',
+                                                        opacity: 0.65,
+                                                        display: 'inline-flex'
+                                                    }}
+                                                >
+                                                    <Edit size={11} />
                                                 </button>
                                             </div>
                                         )}
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem' }}>
-                                        <span style={{
-                                            padding: '0.15rem 0.45rem',
-                                            borderRadius: '4px',
-                                            fontSize: '0.72rem',
-                                            fontWeight: 'bold',
-                                            backgroundColor: r.estado === 'CANCELADO' ? 'rgba(40,167,69,0.2)' : 'rgba(255,193,7,0.2)',
-                                            color: r.estado === 'CANCELADO' ? '#28a745' : '#ffc107'
-                                        }}>
-                                            {r.estado}
-                                        </span>
+                                        {r.estado_pago === 'PARCIAL' ? (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.18rem', alignItems: 'flex-start' }}>
+                                                <span style={{
+                                                    padding: '0.12rem 0.42rem',
+                                                    borderRadius: '4px',
+                                                    fontSize: '0.68rem',
+                                                    fontWeight: 'bold',
+                                                    backgroundColor: 'rgba(255,193,7,0.2)',
+                                                    color: '#ffc107'
+                                                }}>
+                                                    PENDIENTE
+                                                </span>
+                                                <span style={{
+                                                    padding: '0.1rem 0.4rem',
+                                                    borderRadius: '4px',
+                                                    fontSize: '0.66rem',
+                                                    fontWeight: 800,
+                                                    backgroundColor: 'rgba(14, 165, 233, 0.2)',
+                                                    color: '#38bdf8',
+                                                    border: '1px solid rgba(14, 165, 233, 0.4)'
+                                                }}>
+                                                    PARCIAL {Math.round(Number(r.porcentaje_pagado || 0))}%
+                                                </span>
+                                            </div>
+                                        ) : (
+                                            <span style={{
+                                                padding: '0.15rem 0.45rem',
+                                                borderRadius: '4px',
+                                                fontSize: '0.72rem',
+                                                fontWeight: 'bold',
+                                                backgroundColor: r.estado === 'CANCELADO' ? 'rgba(40,167,69,0.2)' : 'rgba(255,193,7,0.2)',
+                                                color: r.estado === 'CANCELADO' ? '#28a745' : '#ffc107'
+                                            }}>
+                                                {r.estado}
+                                            </span>
+                                        )}
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem' }}>
                                         {formatDate(r.fecha_cancelacion) || '—'}
@@ -1439,10 +1614,12 @@ export default function ControlRecordatorios() {
                                         <button
                                             type="button"
                                             className="btn-primary"
-                                            style={{ padding: '0.3rem' }}
-                                            title={r.estado === 'CANCELADO' ? 'Pago ya aplicado' : 'Marcar como Pagado'}
-                                            disabled={r.estado === 'CANCELADO'}
-                                            onClick={() => openPagoOrEditModal(r, 'pay')}
+                                            style={{
+                                                padding: '0.3rem',
+                                                backgroundColor: r.estado_pago === 'PARCIAL' ? '#0ea5e9' : (r.estado === 'CANCELADO' ? '#10b981' : undefined)
+                                            }}
+                                            title={r.estado === 'CANCELADO' ? 'Ver pagos y comprobantes' : (r.estado_pago === 'PARCIAL' ? 'Aplicar siguiente abono / completar saldo' : 'Registrar pago o abono parcial')}
+                                            onClick={() => setPagosPopupRow(r)}
                                         >
                                             <CheckCircle size={14} />
                                         </button>
@@ -1450,8 +1627,8 @@ export default function ControlRecordatorios() {
                                             type="button"
                                             className="btn-success"
                                             style={{ padding: '0.3rem', backgroundColor: r.estado === 'CANCELADO' ? '#6366f1' : '#17a2b8' }}
-                                            title={r.estado === 'CANCELADO' ? 'Editar Forma / Fecha de Pago' : 'Editar Recordatorio'}
-                                            onClick={() => loadForEdit(r)}
+                                            title={r.estado === 'CANCELADO' ? 'Gestionar Forma / Comprobantes' : 'Editar Recordatorio'}
+                                            onClick={() => r.estado === 'CANCELADO' ? setPagosPopupRow(r) : loadForEdit(r)}
                                         >
                                             <Edit size={14} />
                                         </button>
@@ -1459,8 +1636,8 @@ export default function ControlRecordatorios() {
                                             type="button"
                                             className="btn-danger"
                                             style={{ padding: '0.3rem' }}
-                                            title="Eliminar"
-                                            disabled={r.estado === 'CANCELADO'}
+                                            title={r.abonos_count > 0 ? 'Elimine los abonos desde el popup de pagos antes de borrar' : 'Eliminar'}
+                                            disabled={r.estado === 'CANCELADO' || r.abonos_count > 0}
                                             onClick={() => handleDelete(r)}
                                         >
                                             <Trash2 size={14} />
@@ -1487,12 +1664,18 @@ export default function ControlRecordatorios() {
             }}>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
                     <span>Mostrando <strong>{displayRecordatorios.length}</strong> de <strong>{recordatorios.length}</strong> registros</span>
+                    {parcialesCount > 0 && (
+                        <span>Parciales activos: <strong style={{ color: '#38bdf8' }}>{parcialesCount}</strong></span>
+                    )}
+                    {totalCxcPendiente > 0 && (
+                        <span>CXC por Cobrar: <strong style={{ color: '#34d399' }}>{mc(totalCxcPendiente)}</strong></span>
+                    )}
                     {totalPagadoVista > 0 && (
-                        <span>Total Pagado (vista): <strong style={{ color: '#10b981' }}>{mc(totalPagadoVista)}</strong></span>
+                        <span>Total Pagado / Abonado (vista): <strong style={{ color: '#10b981' }}>{mc(totalPagadoVista)}</strong></span>
                     )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.95rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MONTO TOTAL (Pendiente):</span>
+                    <span style={{ fontSize: '0.95rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>SALDO PENDIENTE REAL:</span>
                     <span style={{ fontSize: '1.35rem', fontWeight: 'bold', color: 'var(--danger)' }}>{mc(totalMonto)}</span>
                 </div>
             </div>
@@ -2098,6 +2281,23 @@ export default function ControlRecordatorios() {
                 badge="PAGOS"
                 totalPages={totalPages}
                 fileName={previewFileName}
+            />
+
+            {/* Popup completo de Gestión de Pagos, Abonos Parciales, Sugerencias Inteligentes y Comprobantes */}
+            <ControlPagosModal
+                open={Boolean(pagosPopupRow)}
+                onClose={() => setPagosPopupRow(null)}
+                vencimientoRow={pagosPopupRow}
+                cuentasBancarias={cuentasBancarias}
+                onSaved={fetchData}
+            />
+
+            {/* Visor Lightbox rápido de comprobantes desde la tabla principal */}
+            <ReceiptViewerModal
+                open={quickViewerOpen}
+                onClose={() => setQuickViewerOpen(false)}
+                comprobantes={quickViewerItems}
+                title={quickViewerTitle}
             />
         </div>
     );

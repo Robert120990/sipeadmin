@@ -7,6 +7,7 @@ const { sendSafeError } = require('../utils/errorHandler');
 const energyLatamService = require('../services/energyLatamService');
 const solarEnergyService = require('../services/solarEnergyService');
 const salesHourlyService = require('../services/salesHourlyService');
+const recordatoriosPagosService = require('../services/recordatoriosPagosService');
 
 const vencimientosViewPerms = [
     '/dashboard',
@@ -1031,6 +1032,8 @@ router.get('/operaciones/recordatorios/presets-pago', authenticateToken, require
                     : nombre;
                 const item = {
                     id: `cta-${row.id}`,
+                    raw_id: Number(row.id),
+                    source: 'admin_bancos',
                     banco_nombre: bancoNombre,
                     nombre: displayNombre,
                     numero,
@@ -1098,7 +1101,19 @@ router.get('/operaciones/recordatorios/presets-pago', authenticateToken, require
 
         res.json({
             cuentas: Array.from(cuentasMap.values()),
-            metodos_base: ['TRANSFERENCIA', 'CHEQUE', 'EFECTIVO', 'TARJETA DE CREDITO', 'DEBITO AUTOMATICO']
+            metodos_base: [
+                'TRANSFERENCIA',
+                'CHEQUE',
+                'TARJETA DE CREDITO',
+                'TARJETA DE DEBITO',
+                'EFECTIVO',
+                'NOTA DE CREDITO',
+                'REMISION',
+                'DEBITO AUTOMATICO',
+                'DEPOSITO',
+                'COMPENSACION'
+            ],
+            metodos_catalogo: recordatoriosPagosService.PAYMENT_METHODS
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar presets de pago');
@@ -1117,10 +1132,11 @@ router.get('/operaciones/recordatorios/ubicaciones', authenticateToken, requireP
 
 router.get('/operaciones/recordatorios', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
     try {
-        const { desde, hasta, estado, id_recordatorio } = req.query; 
+        const { desde, hasta, estado, id_recordatorio } = req.query;
+        const db = getDb();
         const externalDb = await getExternalDb();
         let statusFilter = "a.estado IN ('P', 'C')";
-        if (estado === 'P') statusFilter = "a.estado = 'P'";
+        if (estado === 'P' || estado === 'PARCIAL') statusFilter = "a.estado = 'P'";
         else if (estado === 'C') statusFilter = "a.estado = 'C'";
         let query = `
             SELECT c.descripcion as ubicacion, b.id_ubicacion, b.descripcion, a.vencimiento as vence, b.forma_pago as observacion, 
@@ -1140,7 +1156,11 @@ router.get('/operaciones/recordatorios', authenticateToken, requirePermission(re
         }
         query += " ORDER BY a.vencimiento ";
         const [rows] = await externalDb.query(query, params);
-        res.json(rows);
+        const enriched = await recordatoriosPagosService.enrichRecordatoriosList(db, rows);
+        const finalRows = estado === 'PARCIAL'
+            ? enriched.filter(r => r.estado_pago === 'PARCIAL')
+            : enriched;
+        res.json(finalRows);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar recordatorios'); 
     }
@@ -1317,10 +1337,470 @@ router.patch('/operaciones/recordatorios/vencimiento/:id', authenticateToken, re
 
 router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
     try {
+        const db = getDb();
         const externalDb = await getExternalDb();
-        await externalDb.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id = ?", [req.params.id]);
+        const venId = parseInt(req.params.id, 10);
+        await externalDb.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id = ?", [venId]);
+        try {
+            await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+            const [comps] = await db.query('SELECT archivo_url FROM recordatorios_pagos_comprobantes WHERE vencimiento_id = ?', [venId]);
+            for (const c of comps) {
+                recordatoriosPagosService.deleteReceiptFile(c.archivo_url);
+            }
+            await db.query('DELETE FROM recordatorios_pagos_comprobantes WHERE vencimiento_id = ?', [venId]);
+            await db.query('DELETE FROM recordatorios_pagos_abonos WHERE vencimiento_id = ?', [venId]);
+            await db.query('DELETE FROM recordatorios_vencimientos_meta WHERE vencimiento_id = ?', [venId]);
+        } catch (cleanupErr) {
+            console.warn('[Recordatorios] Aviso limpiando abonos/comprobantes al eliminar vencimiento:', cleanupErr.message);
+        }
         res.json({ success: true, message: 'Recordatorio Eliminado!' });
     } catch (error) { sendSafeError(res, error, 'Error al eliminar vencimiento'); }
+});
+
+// --- CONTROL DE PAGOS AVANZADO: MULTI-ABONOS, PARCIALES, COMPROBANTES Y SUGERENCIAS ---
+
+router.get('/operaciones/recordatorios/vencimiento/:id/detalle', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const venId = parseInt(req.params.id, 10);
+        if (!venId) return res.status(400).json({ message: 'ID de vencimiento inválido' });
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: venId });
+        if (!detail) return res.status(404).json({ message: 'Vencimiento no encontrado' });
+        res.json(detail);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar detalle de pagos del vencimiento');
+    }
+});
+
+router.patch('/operaciones/recordatorios/vencimiento/:id/meta', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const venId = parseInt(req.params.id, 10);
+        if (!venId) return res.status(400).json({ message: 'ID de vencimiento inválido' });
+        const {
+            tipo_operacion,
+            metodo_pago_preferido,
+            cuenta_bancaria_id,
+            cuenta_label,
+            tarjeta_ref,
+            notas_control,
+            forma_pago_legacy
+        } = req.body || {};
+
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+
+        const [venRows] = await externalDb.query(
+            'SELECT id, id_recordatorio FROM web_rc_recordatorios_vencimientos WHERE id = ? LIMIT 1',
+            [venId]
+        );
+        if (!venRows || venRows.length === 0) {
+            return res.status(404).json({ message: 'Vencimiento no encontrado' });
+        }
+        const recordatorioId = venRows[0].id_recordatorio;
+        const normOp = recordatoriosPagosService.normalizeTipoOperacion(tipo_operacion);
+        const normMetodo = metodo_pago_preferido ? recordatoriosPagosService.normalizeMetodoPago(metodo_pago_preferido) : null;
+        const parsedCuentaId = cuenta_bancaria_id ? parseInt(cuenta_bancaria_id, 10) || null : null;
+        const safeCuentaLabel = cuenta_label ? String(cuenta_label).trim().slice(0, 150) : null;
+        const safeTarjeta = tarjeta_ref ? String(tarjeta_ref).trim().slice(0, 100) : null;
+        const safeNotas = notas_control !== undefined ? String(notas_control || '').trim().slice(0, 1000) : null;
+        const actor = req.user?.username || req.user?.email || 'sistema';
+
+        await db.query(
+            `INSERT INTO recordatorios_vencimientos_meta
+                (vencimiento_id, recordatorio_id, tipo_operacion, metodo_pago_preferido, cuenta_bancaria_id, cuenta_label, tarjeta_ref, notas_control, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                tipo_operacion = VALUES(tipo_operacion),
+                metodo_pago_preferido = COALESCE(VALUES(metodo_pago_preferido), metodo_pago_preferido),
+                cuenta_bancaria_id = VALUES(cuenta_bancaria_id),
+                cuenta_label = VALUES(cuenta_label),
+                tarjeta_ref = VALUES(tarjeta_ref),
+                notas_control = COALESCE(VALUES(notas_control), notas_control),
+                updated_by = VALUES(updated_by)`,
+            [venId, recordatorioId, normOp, normMetodo, parsedCuentaId, safeCuentaLabel, safeTarjeta, safeNotas, actor]
+        );
+
+        // Si el usuario preasignó una forma de pago textual o cuenta, actualizar el campo legacy si aún no hay abonos
+        const [abonoCnt] = await db.query('SELECT COUNT(*) AS c FROM recordatorios_pagos_abonos WHERE vencimiento_id = ?', [venId]);
+        if (Number(abonoCnt[0]?.c || 0) === 0) {
+            const legacyText = String(forma_pago_legacy || safeCuentaLabel || safeTarjeta || (normMetodo ? recordatoriosPagosService.getMethodMeta(normMetodo).label : '')).trim().slice(0, 50);
+            if (legacyText) {
+                await externalDb.query(
+                    'UPDATE web_rc_recordatorios_vencimientos SET forma_pago = ? WHERE id = ?',
+                    [legacyText, venId]
+                );
+            }
+        } else if (tipo_operacion) {
+            await db.query('UPDATE recordatorios_pagos_abonos SET tipo_operacion = ? WHERE vencimiento_id = ?', [normOp, venId]);
+        }
+
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: venId });
+        res.json({ success: true, message: 'Clasificación y método actualizados', detail });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar configuración del pago');
+    }
+});
+
+router.post('/operaciones/recordatorios/vencimiento/:id/abonos', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const venId = parseInt(req.params.id, 10);
+        if (!venId) return res.status(400).json({ message: 'ID de vencimiento inválido' });
+
+        const {
+            tipo_operacion = 'CXP',
+            metodo_pago = 'TRANSFERENCIA',
+            cuenta_bancaria_id = null,
+            cuenta_label = null,
+            tarjeta_ref = null,
+            beneficiario = null,
+            referencia_doc = null,
+            fecha_pago,
+            monto,
+            notas = null,
+            comprobantes = []
+        } = req.body || {};
+
+        const numericMonto = Math.round((Number(monto) || 0) * 100) / 100;
+        if (!Number.isFinite(numericMonto) || numericMonto <= 0) {
+            return res.status(400).json({ message: 'El monto del abono debe ser mayor a $0.00' });
+        }
+
+        const cleanFecha = fecha_pago ? String(fecha_pago).split('T')[0] : new Date().toISOString().split('T')[0];
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanFecha)) {
+            return res.status(400).json({ message: 'La fecha de pago no es válida (use YYYY-MM-DD)' });
+        }
+
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+
+        const [venRows] = await externalDb.query(
+            `SELECT a.id, a.id_recordatorio, b.descripcion, b.monto, c.descripcion AS ubicacion
+             FROM web_rc_recordatorios_vencimientos a
+             INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id
+             LEFT JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id
+             WHERE a.id = ? LIMIT 1`,
+            [venId]
+        );
+        if (!venRows || venRows.length === 0) {
+            return res.status(404).json({ message: 'Vencimiento no encontrado' });
+        }
+        const ven = venRows[0];
+
+        const normOp = recordatoriosPagosService.normalizeTipoOperacion(tipo_operacion);
+        const normMetodo = recordatoriosPagosService.normalizeMetodoPago(metodo_pago);
+        const parsedCuentaId = cuenta_bancaria_id ? parseInt(cuenta_bancaria_id, 10) || null : null;
+        const safeCuentaLabel = cuenta_label ? String(cuenta_label).trim().slice(0, 150) : null;
+        const safeTarjeta = tarjeta_ref ? String(tarjeta_ref).trim().slice(0, 100) : null;
+        const safeBeneficiario = beneficiario ? String(beneficiario).trim().slice(0, 150) : null;
+        const safeRef = referencia_doc ? String(referencia_doc).trim().slice(0, 120) : null;
+        const safeNotas = notas ? String(notas).trim().slice(0, 1000) : null;
+        const actor = req.user?.username || req.user?.email || 'sistema';
+
+        // Según preferencia: no inserta automáticamente en movimientos_bancarios;
+        // queda como PENDIENTE de conciliación si tiene cuenta bancaria asociada para sugerirlo en Conciliación Bancaria.
+        const estadoConciliacion = (parsedCuentaId && recordatoriosPagosService.BANK_RECONCILIABLE_METHODS.has(normMetodo))
+            ? 'PENDIENTE'
+            : 'NO_APLICA';
+
+        const [ins] = await db.query(
+            `INSERT INTO recordatorios_pagos_abonos
+                (vencimiento_id, recordatorio_id, ubicacion, descripcion_ref, tipo_operacion, metodo_pago,
+                 cuenta_bancaria_id, cuenta_label, tarjeta_ref, beneficiario, referencia_doc, fecha_pago, monto, notas,
+                 estado_conciliacion, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                venId,
+                ven.id_recordatorio,
+                String(ven.ubicacion || '').slice(0, 120),
+                String(ven.descripcion || '').slice(0, 150),
+                normOp,
+                normMetodo,
+                parsedCuentaId,
+                safeCuentaLabel,
+                safeTarjeta,
+                safeBeneficiario,
+                safeRef,
+                cleanFecha,
+                numericMonto,
+                safeNotas,
+                estadoConciliacion,
+                actor
+            ]
+        );
+        const abonoId = ins.insertId;
+
+        // Actualizar meta con el tipo_operacion y método más reciente
+        await db.query(
+            `INSERT INTO recordatorios_vencimientos_meta
+                (vencimiento_id, recordatorio_id, tipo_operacion, metodo_pago_preferido, cuenta_bancaria_id, cuenta_label, tarjeta_ref, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                tipo_operacion = VALUES(tipo_operacion),
+                metodo_pago_preferido = VALUES(metodo_pago_preferido),
+                cuenta_bancaria_id = COALESCE(VALUES(cuenta_bancaria_id), cuenta_bancaria_id),
+                cuenta_label = COALESCE(VALUES(cuenta_label), cuenta_label),
+                tarjeta_ref = COALESCE(VALUES(tarjeta_ref), tarjeta_ref),
+                updated_by = VALUES(updated_by)`,
+            [venId, ven.id_recordatorio, normOp, normMetodo, parsedCuentaId, safeCuentaLabel, safeTarjeta, actor]
+        );
+
+        // Guardar comprobantes adjuntos (si se enviaron múltiples archivos junto al abono)
+        if (Array.isArray(comprobantes) && comprobantes.length > 0) {
+            for (const comp of comprobantes.slice(0, 10)) {
+                if (!comp || !comp.data_url) continue;
+                const saved = recordatoriosPagosService.saveReceiptBase64({
+                    dataUrl: comp.data_url,
+                    nombreOriginal: comp.nombre_original || 'comprobante.webp',
+                    vencimientoId: venId
+                });
+                await db.query(
+                    `INSERT INTO recordatorios_pagos_comprobantes
+                        (vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        venId,
+                        abonoId,
+                        saved.nombre_original,
+                        saved.archivo_url,
+                        saved.mime_type,
+                        saved.tamano_bytes,
+                        comp.ancho ? parseInt(comp.ancho, 10) || null : null,
+                        comp.alto ? parseInt(comp.alto, 10) || null : null,
+                        comp.nota ? String(comp.nota).trim().slice(0, 255) : null,
+                        actor
+                    ]
+                );
+            }
+        }
+
+        const synced = await recordatoriosPagosService.syncVencimientoWithAbonos({ db, externalDb, vencimientoId: venId });
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: venId });
+
+        const msg = synced?.balance?.estado_pago === 'CANCELADO'
+            ? 'Pago registrado y saldo liquidado al 100% (CANCELADO)'
+            : `Abono parcial registrado (${synced?.balance?.porcentaje_pagado || 0}% · Saldo pendiente: $${Number(synced?.balance?.saldo_pendiente || 0).toFixed(2)})`;
+
+        res.status(201).json({ success: true, message: msg, abono_id: abonoId, detail });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al registrar abono/pago');
+    }
+});
+
+router.put('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const abonoId = parseInt(req.params.abonoId, 10);
+        if (!abonoId) return res.status(400).json({ message: 'ID de abono inválido' });
+
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+
+        const [existingRows] = await db.query('SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1', [abonoId]);
+        if (!existingRows || existingRows.length === 0) {
+            return res.status(404).json({ message: 'Abono no encontrado' });
+        }
+        const existing = existingRows[0];
+
+        const {
+            tipo_operacion = existing.tipo_operacion,
+            metodo_pago = existing.metodo_pago,
+            cuenta_bancaria_id = existing.cuenta_bancaria_id,
+            cuenta_label = existing.cuenta_label,
+            tarjeta_ref = existing.tarjeta_ref,
+            beneficiario = existing.beneficiario,
+            referencia_doc = existing.referencia_doc,
+            fecha_pago = existing.fecha_pago,
+            monto = existing.monto,
+            notas = existing.notas
+        } = req.body || {};
+
+        const numericMonto = Math.round((Number(monto) || 0) * 100) / 100;
+        if (!Number.isFinite(numericMonto) || numericMonto <= 0) {
+            return res.status(400).json({ message: 'El monto del abono debe ser mayor a $0.00' });
+        }
+        const cleanFecha = fecha_pago ? String(fecha_pago).split('T')[0] : String(existing.fecha_pago).split('T')[0];
+        const normOp = recordatoriosPagosService.normalizeTipoOperacion(tipo_operacion);
+        const normMetodo = recordatoriosPagosService.normalizeMetodoPago(metodo_pago);
+        const parsedCuentaId = cuenta_bancaria_id ? parseInt(cuenta_bancaria_id, 10) || null : null;
+        const estadoConc = existing.estado_conciliacion === 'CONCILIADO'
+            ? 'CONCILIADO'
+            : ((parsedCuentaId && recordatoriosPagosService.BANK_RECONCILIABLE_METHODS.has(normMetodo)) ? 'PENDIENTE' : 'NO_APLICA');
+
+        await db.query(
+            `UPDATE recordatorios_pagos_abonos
+             SET tipo_operacion = ?, metodo_pago = ?, cuenta_bancaria_id = ?, cuenta_label = ?,
+                 tarjeta_ref = ?, beneficiario = ?, referencia_doc = ?, fecha_pago = ?, monto = ?, notas = ?,
+                 estado_conciliacion = ?
+             WHERE id = ?`,
+            [
+                normOp,
+                normMetodo,
+                parsedCuentaId,
+                cuenta_label ? String(cuenta_label).trim().slice(0, 150) : null,
+                tarjeta_ref ? String(tarjeta_ref).trim().slice(0, 100) : null,
+                beneficiario ? String(beneficiario).trim().slice(0, 150) : null,
+                referencia_doc ? String(referencia_doc).trim().slice(0, 120) : null,
+                cleanFecha,
+                numericMonto,
+                notas ? String(notas).trim().slice(0, 1000) : null,
+                estadoConc,
+                abonoId
+            ]
+        );
+
+        await recordatoriosPagosService.syncVencimientoWithAbonos({ db, externalDb, vencimientoId: existing.vencimiento_id });
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: existing.vencimiento_id });
+        res.json({ success: true, message: 'Abono actualizado correctamente', detail });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar abono');
+    }
+});
+
+router.post('/operaciones/recordatorios/analizar-comprobante', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const {
+            data_url = null,
+            archivo_url = null,
+            nombre_original = '',
+            contexto = {}
+        } = req.body || {};
+
+        if (!data_url && !archivo_url) {
+            return res.status(400).json({ message: 'Debe proporcionar un comprobante (imagen o PDF) para analizar.' });
+        }
+
+        const db = getDb();
+        const analisis = await recordatoriosPagosService.analyzePaymentReceiptWithAI({
+            dataUrl: data_url,
+            archivoUrl: archivo_url,
+            nombreOriginal: nombre_original,
+            db,
+            contexto: contexto && typeof contexto === 'object' ? contexto : {}
+        });
+
+        res.json({
+            ok: true,
+            analisis
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'No se pudo leer el comprobante con IA');
+    }
+});
+
+router.delete('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const abonoId = parseInt(req.params.abonoId, 10);
+        if (!abonoId) return res.status(400).json({ message: 'ID de abono inválido' });
+
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+
+        const [existingRows] = await db.query('SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1', [abonoId]);
+        if (!existingRows || existingRows.length === 0) {
+            return res.status(404).json({ message: 'Abono no encontrado' });
+        }
+        const existing = existingRows[0];
+
+        // Desvincular comprobantes de este abono (manteniéndolos en el vencimiento para no perder evidencia)
+        await db.query('UPDATE recordatorios_pagos_comprobantes SET abono_id = NULL WHERE abono_id = ?', [abonoId]);
+        await db.query('DELETE FROM recordatorios_pagos_abonos WHERE id = ?', [abonoId]);
+
+        await recordatoriosPagosService.syncVencimientoWithAbonos({
+            db,
+            externalDb,
+            vencimientoId: existing.vencimiento_id,
+            forcePendingOnEmpty: true
+        });
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: existing.vencimiento_id });
+        res.json({ success: true, message: 'Abono eliminado y saldo recalculado', detail });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al eliminar abono');
+    }
+});
+
+router.post('/operaciones/recordatorios/vencimiento/:id/comprobantes', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const venId = parseInt(req.params.id, 10);
+        if (!venId) return res.status(400).json({ message: 'ID de vencimiento inválido' });
+
+        const { abono_id = null, comprobantes = [] } = req.body || {};
+        if (!Array.isArray(comprobantes) || comprobantes.length === 0) {
+            return res.status(400).json({ message: 'Debe adjuntar al menos un comprobante' });
+        }
+
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+
+        const actor = req.user?.username || req.user?.email || 'sistema';
+        const parsedAbonoId = abono_id ? parseInt(abono_id, 10) || null : null;
+        const inserted = [];
+
+        for (const comp of comprobantes.slice(0, 10)) {
+            if (!comp || !comp.data_url) continue;
+            const saved = recordatoriosPagosService.saveReceiptBase64({
+                dataUrl: comp.data_url,
+                nombreOriginal: comp.nombre_original || 'comprobante.webp',
+                vencimientoId: venId
+            });
+            const [ins] = await db.query(
+                `INSERT INTO recordatorios_pagos_comprobantes
+                    (vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    venId,
+                    parsedAbonoId,
+                    saved.nombre_original,
+                    saved.archivo_url,
+                    saved.mime_type,
+                    saved.tamano_bytes,
+                    comp.ancho ? parseInt(comp.ancho, 10) || null : null,
+                    comp.alto ? parseInt(comp.alto, 10) || null : null,
+                    comp.nota ? String(comp.nota).trim().slice(0, 255) : null,
+                    actor
+                ]
+            );
+            inserted.push({ id: ins.insertId, ...saved });
+        }
+
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: venId });
+        res.status(201).json({
+            success: true,
+            message: `${inserted.length} comprobante(s) guardado(s) correctamente`,
+            comprobantes: inserted,
+            detail
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al subir comprobante(s)');
+    }
+});
+
+router.delete('/operaciones/recordatorios/comprobantes/:comprobanteId', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+    try {
+        const compId = parseInt(req.params.comprobanteId, 10);
+        if (!compId) return res.status(400).json({ message: 'ID de comprobante inválido' });
+
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+
+        const [rows] = await db.query('SELECT * FROM recordatorios_pagos_comprobantes WHERE id = ? LIMIT 1', [compId]);
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ message: 'Comprobante no encontrado' });
+        }
+        const comp = rows[0];
+        recordatoriosPagosService.deleteReceiptFile(comp.archivo_url);
+        await db.query('DELETE FROM recordatorios_pagos_comprobantes WHERE id = ?', [compId]);
+
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: comp.vencimiento_id });
+        res.json({ success: true, message: 'Comprobante eliminado', detail });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al eliminar comprobante');
+    }
 });
 
 // --- PORTAL ENERGY-LATAM / PUMA ORDERS & BANK INTEGRATION ---

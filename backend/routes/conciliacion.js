@@ -273,10 +273,68 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
         const saldoBanco = ultimaValidacion ? Number(ultimaValidacion.monto_banco) : saldoChequeraCalculado;
         const diferencia = Number((saldoBanco - saldoChequeraCalculado).toFixed(2));
 
+        // 8. Sugerencias desde Control de Pagos (abonos bancarios aún sin conciliar, sin insertar automáticamente en movimientos)
+        let sugerenciasControlPagos = [];
+        try {
+            const [abRows] = await withRetry(() => db.query(
+                `SELECT a.id, a.vencimiento_id, a.recordatorio_id, a.ubicacion, a.descripcion_ref,
+                        a.tipo_operacion, a.metodo_pago, a.cuenta_bancaria_id, a.cuenta_label,
+                        a.beneficiario, a.referencia_doc, a.fecha_pago, a.monto, a.notas, a.estado_conciliacion,
+                        a.created_by,
+                        (SELECT COUNT(*) FROM recordatorios_pagos_comprobantes c
+                         WHERE c.vencimiento_id = a.vencimiento_id AND (c.abono_id = a.id OR c.abono_id IS NULL)) AS comprobantes_count,
+                        (SELECT c.archivo_url FROM recordatorios_pagos_comprobantes c
+                         WHERE c.vencimiento_id = a.vencimiento_id AND (c.abono_id = a.id OR c.abono_id IS NULL)
+                         ORDER BY c.id DESC LIMIT 1) AS comprobante_url
+                 FROM recordatorios_pagos_abonos a
+                 WHERE a.cuenta_bancaria_id = ?
+                   AND a.estado_conciliacion = 'PENDIENTE'
+                   AND a.fecha_pago <= ?
+                 ORDER BY a.fecha_pago DESC, a.id DESC
+                 LIMIT 100`,
+                [cuenta_id, dbHasta]
+            ));
+
+            const allCandidates = [...pendientes, ...movimientosConciliados];
+            sugerenciasControlPagos = (abRows || []).map(ab => {
+                const abMonto = Number(ab.monto || 0);
+                const abTime = ab.fecha_pago ? new Date(String(ab.fecha_pago).split('T')[0] + 'T12:00:00').getTime() : 0;
+                const abRef = String(ab.referencia_doc || '').trim().toLowerCase();
+
+                const suggestedMatch = allCandidates.find(m => {
+                    const mMonto = Number(m.monto_display || m.monto || 0);
+                    if (Math.abs(mMonto - abMonto) > 0.05) return false;
+                    if (abRef && String(m.documento || '').toLowerCase().includes(abRef)) return true;
+                    const mDate = m.fecha ? new Date(String(m.fecha).split('T')[0] + 'T12:00:00').getTime() : 0;
+                    return Math.abs(mDate - abTime) <= 7 * 24 * 3600 * 1000;
+                }) || null;
+
+                return {
+                    ...ab,
+                    monto: abMonto,
+                    fecha_pago_display: toDisplayDate(ab.fecha_pago),
+                    comprobantes_count: Number(ab.comprobantes_count || 0),
+                    suggested_match: suggestedMatch ? {
+                        id: suggestedMatch.id,
+                        origen_tipo: suggestedMatch.origen_tipo,
+                        documento: suggestedMatch.documento,
+                        concepto: suggestedMatch.concepto,
+                        fecha_display: suggestedMatch.fecha_display,
+                        monto_display: suggestedMatch.monto_display,
+                        ya_conciliado: Boolean(suggestedMatch.fecha_aplicado)
+                    } : null
+                };
+            });
+        } catch (_errSug) {
+            // Si aún no existen tablas de control de pagos, no interrumpir conciliación
+            sugerenciasControlPagos = [];
+        }
+
         res.json({
             cuenta,
             movimientos_conciliados: movimientosConciliados,
             pendientes,
+            sugerencias_control_pagos: sugerenciasControlPagos,
             resumen: {
                 saldo_banco: saldoBanco,
                 saldo_chequera: saldoChequeraCalculado,
@@ -791,6 +849,104 @@ router.put('/movimiento/:id', authenticateToken, requirePermission(['manage_conc
         res.json({ message: 'Registro actualizado correctamente' });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar registro');
+    }
+});
+
+// ── 7. Vincular o Crear y Conciliar Sugerencia de Control de Pagos ───────────
+router.post('/vincular-control-pago', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
+    const {
+        abono_id,
+        accion = 'VINCULAR', // 'VINCULAR' | 'CREAR_Y_CONCILIAR' | 'DESCARTAR'
+        movimiento_bancario_id = null,
+        origen_tipo = 'MOV',
+        fecha_aplicado = null
+    } = req.body || {};
+
+    const parsedAbonoId = parseInt(abono_id, 10);
+    if (!parsedAbonoId) {
+        return res.status(400).json({ message: 'Debe indicar el ID del pago de Control de Pagos.' });
+    }
+
+    try {
+        const db = getDb();
+        const [[abono]] = await db.query('SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1', [parsedAbonoId]);
+        if (!abono) {
+            return res.status(404).json({ message: 'Registro de pago no encontrado.' });
+        }
+
+        const dbFechaAplicado = toDBDate(fecha_aplicado || abono.fecha_pago || new Date());
+
+        if (accion === 'DESCARTAR') {
+            await db.query(
+                "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'NO_APLICA' WHERE id = ?",
+                [parsedAbonoId]
+            );
+            return res.json({ success: true, message: 'Sugerencia descartada de conciliación.' });
+        }
+
+        if (accion === 'VINCULAR') {
+            const movId = movimiento_bancario_id ? parseInt(movimiento_bancario_id, 10) || null : null;
+            if (movId && origen_tipo === 'CK') {
+                await db.query(
+                    'UPDATE cheques SET fecha_aplicado = COALESCE(fecha_aplicado, ?) WHERE id = ?',
+                    [dbFechaAplicado, movId]
+                );
+            } else if (movId) {
+                await db.query(
+                    'UPDATE movimientos_bancarios SET fecha_aplicado = COALESCE(fecha_aplicado, ?) WHERE id = ?',
+                    [dbFechaAplicado, movId]
+                );
+            }
+            await db.query(
+                "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ? WHERE id = ?",
+                [movId, parsedAbonoId]
+            );
+            return res.json({ success: true, message: 'Pago de Control de Pagos vinculado y conciliado.' });
+        }
+
+        if (accion === 'CREAR_Y_CONCILIAR') {
+            if (!abono.cuenta_bancaria_id) {
+                return res.status(400).json({ message: 'El pago no tiene cuenta bancaria asociada.' });
+            }
+            const [[cuenta]] = await db.query(
+                'SELECT id, empresa_id, cod_cta FROM cuentas_bancarias WHERE id = ? LIMIT 1',
+                [abono.cuenta_bancaria_id]
+            );
+            if (!cuenta) {
+                return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+            }
+
+            const monto = Number(abono.monto || 0);
+            const isIngreso = abono.tipo_operacion === 'CXC';
+            const cargo = isIngreso ? 0 : monto;
+            const abonoVal = isIngreso ? monto : 0;
+            const documento = String(abono.referencia_doc || `CP-${abono.vencimiento_id}-${abono.id}`).slice(0, 100);
+            const concepto = `[CONTROL PAGOS · ${abono.metodo_pago}] ${abono.descripcion_ref || ''}${abono.beneficiario ? ` · A FAVOR DE: ${abono.beneficiario}` : ''}${abono.ubicacion ? ` (${abono.ubicacion})` : ''}${abono.notas ? ` - ${abono.notas}` : ''}`
+                .toUpperCase()
+                .slice(0, 255);
+            const fechaMov = toDBDate(abono.fecha_pago || new Date());
+
+            const [ins] = await db.query(
+                `INSERT INTO movimientos_bancarios
+                    (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, cod_cta, es_contabilizado)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+                [cuenta.empresa_id, cuenta.id, fechaMov, dbFechaAplicado, documento, concepto, monto, cargo, abonoVal, cuenta.cod_cta || '']
+            );
+
+            await db.query(
+                "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ? WHERE id = ?",
+                [ins.insertId, parsedAbonoId]
+            );
+            return res.json({
+                success: true,
+                message: 'Movimiento bancario creado y conciliado desde Control de Pagos.',
+                movimiento_bancario_id: ins.insertId
+            });
+        }
+
+        return res.status(400).json({ message: 'Acción no válida.' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al conciliar pago desde Control de Pagos');
     }
 });
 

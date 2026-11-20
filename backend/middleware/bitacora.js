@@ -32,6 +32,8 @@ function sanitizeData(data, depth = 0) {
     for (const [k, v] of Object.entries(data)) {
         if (SENSITIVE_KEY_REGEX.test(k)) {
             sanitized[k] = '***';
+        } else if (typeof v === 'string' && v.startsWith('data:') && v.length > 500) {
+            sanitized[k] = `[archivo adjunto omitido · ${Math.round(v.length / 1024)} KB]`;
         } else if (v && typeof v === 'object') {
             sanitized[k] = sanitizeData(v, depth + 1);
         } else {

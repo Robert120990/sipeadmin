@@ -1,0 +1,1660 @@
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import api from '../services/api';
+import Modal from './Modal';
+import ReceiptViewerModal from './ReceiptViewerModal';
+import { useConfirm } from './ConfirmDialog';
+import { useToast } from './Toast';
+import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
+import { compressReceiptFile, formatBytes } from '../utils/receiptCompressor';
+import { todayStr, formatDateDMY } from '../utils/date';
+import {
+    CreditCard, Building2, Banknote, FileText, Receipt, ArrowLeftRight,
+    CheckCircle, Clock, Sparkles, Upload, Paperclip, Trash2, Edit, Save,
+    Plus, X, Eye, ShieldCheck, Layers, Camera, User, Loader2
+} from 'lucide-react';
+
+const PAYMENT_METHOD_OPTIONS = [
+    { id: 'TRANSFERENCIA', label: 'Transferencia', icon: ArrowLeftRight, category: 'BANCO', color: '#38bdf8' },
+    { id: 'CHEQUE', label: 'Cheque', icon: FileText, category: 'BANCO', color: '#a78bfa' },
+    { id: 'TARJETA_CREDITO', label: 'Tarjeta Crédito', icon: CreditCard, category: 'TARJETA', color: '#f59e0b' },
+    { id: 'TARJETA_DEBITO', label: 'Tarjeta Débito', icon: CreditCard, category: 'TARJETA', color: '#fb923c' },
+    { id: 'EFECTIVO', label: 'Efectivo / Caja', icon: Banknote, category: 'EFECTIVO', color: '#22c55e' },
+    { id: 'NOTA_CREDITO', label: 'Nota de Crédito', icon: Receipt, category: 'DOCUMENTO', color: '#c084fc' },
+    { id: 'REMISION', label: 'Remisión', icon: Layers, category: 'DOCUMENTO', color: '#2dd4bf' },
+    { id: 'DEBITO_AUTOMATICO', label: 'Débito Auto.', icon: Building2, category: 'BANCO', color: '#60a5fa' },
+    { id: 'DEPOSITO', label: 'Depósito', icon: Building2, category: 'BANCO', color: '#34d399' },
+    { id: 'COMPENSACION', label: 'Compensación', icon: ArrowLeftRight, category: 'DOCUMENTO', color: '#94a3b8' }
+];
+
+const OPERATION_TYPES = [
+    { id: 'CXP', label: 'CXP · Por Pagar', hint: 'Egreso en Flujo de Caja (saldo pendiente)', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.14)' },
+    { id: 'CXC', label: 'CXC · Por Cobrar', hint: 'Ingreso esperado en Flujo de Caja', color: '#10b981', bg: 'rgba(16, 185, 129, 0.14)' },
+    { id: 'GASTO', label: 'Gasto Operativo', hint: 'Egreso operativo directo en Flujo de Caja', color: '#6366f1', bg: 'rgba(99, 102, 241, 0.14)' }
+];
+
+const getMethodLabel = (id) => PAYMENT_METHOD_OPTIONS.find(m => m.id === id)?.label || id || 'Transferencia';
+const getMethodCategory = (id) => PAYMENT_METHOD_OPTIONS.find(m => m.id === id)?.category || 'BANCO';
+
+const mc = (val) => `$${Number(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const formatDateShort = (d) => {
+    if (!d) return '—';
+    return formatDateDMY(String(d).split('T')[0]);
+};
+
+export default function ControlPagosModal({
+    open,
+    onClose,
+    vencimientoRow = null,
+    cuentasBancarias = [],
+    onSaved = null
+}) {
+    const { confirm } = useConfirm();
+    const { addToast } = useToast();
+
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [uploadingOnly, setUploadingOnly] = useState(false);
+    const [detail, setDetail] = useState(null);
+
+    // Estado del formulario de abono / método
+    const [editingAbonoId, setEditingAbonoId] = useState(null);
+    const [tipoOperacion, setTipoOperacion] = useState('CXP');
+    const [metodoPago, setMetodoPago] = useState('TRANSFERENCIA');
+    const [cuentaBancariaId, setCuentaBancariaId] = useState('');
+    const [cuentaLabel, setCuentaLabel] = useState('');
+    const [tarjetaRef, setTarjetaRef] = useState('');
+    const [beneficiario, setBeneficiario] = useState('');
+    const [referenciaDoc, setReferenciaDoc] = useState('');
+    const [fechaPago, setFechaPago] = useState(todayStr());
+    const [montoAbono, setMontoAbono] = useState('');
+    const [notas, setNotas] = useState('');
+
+    // Comprobantes en cola + OCR inteligente (PDF o captura/foto)
+    const [pendingReceipts, setPendingReceipts] = useState([]);
+    const [compressingFiles, setCompressingFiles] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
+    const [autoOcrEnabled, setAutoOcrEnabled] = useState(true);
+    const [analyzingOcr, setAnalyzingOcr] = useState(false);
+    const [lastOcrResult, setLastOcrResult] = useState(null);
+    const fileInputRef = useRef(null);
+    const cameraInputRef = useRef(null);
+    const extraFileInputRef = useRef(null);
+
+    // Visor Lightbox de comprobantes
+    const [viewerOpen, setViewerOpen] = useState(false);
+    const [viewerItems, setViewerItems] = useState([]);
+    const [viewerIdx, setViewerIdx] = useState(0);
+
+    // Cuentas oficiales de bancos ordenadas con sortCuentas (regla AGENTS.md)
+    const sortedBankAccounts = useMemo(() => {
+        const onlyOfficial = (cuentasBancarias || []).filter(c => c.raw_id || typeof c.id === 'number');
+        const source = onlyOfficial.length > 0 ? onlyOfficial : (cuentasBancarias || []);
+        return sortCuentas(source);
+    }, [cuentasBancarias]);
+
+    const ubicacionAccounts = useMemo(() => {
+        const ubic = String(detail?.vencimiento?.ubicacion || vencimientoRow?.ubicacion || '').toUpperCase().trim();
+        if (!ubic) return [];
+        return sortedBankAccounts.filter(c => {
+            if (Array.isArray(c.ubicacion_tags) && c.ubicacion_tags.some(t => ubic.includes(t) || t.includes(ubic))) {
+                return true;
+            }
+            const blob = `${c.nombre || ''} ${c.empresa_nombre || ''} ${c.banco_nombre || ''}`.toUpperCase();
+            return blob.includes(ubic);
+        });
+    }, [sortedBankAccounts, detail, vencimientoRow]);
+
+    const loadDetail = useCallback(async (venId) => {
+        if (!venId) return;
+        setLoading(true);
+        try {
+            const res = await api.get(`/operaciones/recordatorios/vencimiento/${venId}/detalle`);
+            const data = res.data;
+            setDetail(data);
+            setTipoOperacion(data?.meta?.tipo_operacion || data?.vencimiento?.tipo_operacion || 'CXP');
+
+            const topSug = data?.sugerencias?.mas_usadas_similares?.[0] || null;
+            const prefMethod = data?.meta?.metodo_pago_preferido || topSug?.metodo_pago || 'TRANSFERENCIA';
+            const prefCuentaId = data?.meta?.cuenta_bancaria_id || topSug?.cuenta_bancaria_id || '';
+            const prefCuentaLabel = data?.meta?.cuenta_label || topSug?.cuenta_label || '';
+            const prefTarjeta = data?.meta?.tarjeta_ref || topSug?.tarjeta_ref || '';
+
+            setMetodoPago(prefMethod);
+            setCuentaBancariaId(prefCuentaId ? String(prefCuentaId) : '');
+            setCuentaLabel(prefCuentaLabel || '');
+            setTarjetaRef(prefTarjeta || '');
+
+            const saldo = Number(data?.resumen?.saldo_pendiente ?? data?.vencimiento?.monto ?? 0);
+            setMontoAbono(saldo > 0 ? saldo.toFixed(2) : '');
+            setFechaPago(todayStr());
+            setBeneficiario('');
+            setReferenciaDoc('');
+            setNotas('');
+            setPendingReceipts([]);
+            setLastOcrResult(null);
+            setEditingAbonoId(null);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al cargar detalle de pagos', 'error');
+        } finally {
+            setLoading(false);
+        }
+    }, [addToast]);
+
+    useEffect(() => {
+        if (open && vencimientoRow?.id) {
+            loadDetail(vencimientoRow.id);
+        } else if (!open) {
+            setDetail(null);
+            setPendingReceipts([]);
+            setLastOcrResult(null);
+            setEditingAbonoId(null);
+        }
+    }, [open, vencimientoRow?.id, loadDetail]);
+
+    // Aplica los campos extraídos por IA al formulario de abono
+    const applyOcrAnalysisToForm = useCallback((an) => {
+        if (!an) return;
+        const filledFields = [];
+
+        if (an.metodo_pago) {
+            setMetodoPago(an.metodo_pago);
+            filledFields.push('método');
+        }
+        if (an.cuenta_bancaria_id) {
+            setCuentaBancariaId(String(an.cuenta_bancaria_id));
+            const found = sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(an.cuenta_bancaria_id));
+            setCuentaLabel(found ? formatCuentaLabel(found) : (an.cuenta_label || ''));
+            filledFields.push('cuenta bancaria');
+        } else if (an.cuenta_label && an.metodo_pago === 'EFECTIVO') {
+            setCuentaBancariaId('');
+            setCuentaLabel(an.cuenta_label);
+            filledFields.push('caja efectivo');
+        }
+        if (an.tarjeta_ref) {
+            setTarjetaRef(an.tarjeta_ref);
+            filledFields.push('tarjeta');
+        }
+        if (an.monto && Number(an.monto) > 0) {
+            setMontoAbono(Number(an.monto).toFixed(2));
+            filledFields.push('monto');
+        }
+        if (an.fecha_pago) {
+            setFechaPago(an.fecha_pago);
+            filledFields.push('fecha');
+        }
+        if (an.beneficiario) {
+            setBeneficiario(an.beneficiario);
+            filledFields.push('beneficiario');
+        }
+        if (an.referencia_doc) {
+            setReferenciaDoc(an.referencia_doc);
+            filledFields.push('referencia');
+        }
+        if (an.notas_sugeridas) {
+            setNotas(an.notas_sugeridas);
+        } else if (an.concepto) {
+            setNotas(an.concepto);
+        }
+
+        return filledFields;
+    }, [sortedBankAccounts]);
+
+    // Llama al endpoint seguro de lectura IA (soporta WebP/JPG/PNG y PDF)
+    const runReceiptOcr = useCallback(async ({ dataUrl = null, archivoUrl = null, nombreOriginal = '' }) => {
+        if (!dataUrl && !archivoUrl) return;
+        setAnalyzingOcr(true);
+        try {
+            const res = await api.post('/operaciones/recordatorios/analizar-comprobante', {
+                data_url: dataUrl,
+                archivo_url: archivoUrl,
+                nombre_original: nombreOriginal,
+                contexto: {
+                    descripcion: detail?.vencimiento?.descripcion || vencimientoRow?.descripcion || '',
+                    ubicacion: detail?.vencimiento?.ubicacion || vencimientoRow?.ubicacion || '',
+                    tipo_operacion: tipoOperacion,
+                    monto_total: Number(detail?.resumen?.monto_total ?? vencimientoRow?.monto ?? 0),
+                    saldo_pendiente: Number(detail?.resumen?.saldo_pendiente ?? vencimientoRow?.monto ?? 0)
+                }
+            });
+
+            const an = res.data?.analisis;
+            if (an) {
+                setLastOcrResult(an);
+                const filled = applyOcrAnalysisToForm(an) || [];
+                addToast(
+                    filled.length > 0
+                        ? `IA completó automáticamente: ${filled.join(', ')}`
+                        : 'Comprobante leído; revisa los campos detectados',
+                    'success'
+                );
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'No se pudo leer automáticamente el comprobante', 'warning');
+        } finally {
+            setAnalyzingOcr(false);
+        }
+    }, [addToast, applyOcrAnalysisToForm, detail, tipoOperacion, vencimientoRow]);
+
+    // Procesar múltiples archivos (drag&drop, file input, cámara móvil o Ctrl+V)
+    const handleProcessFiles = useCallback(async (fileList, { immediateUpload = false, targetAbonoId = null } = {}) => {
+        const files = Array.from(fileList || []).filter(Boolean);
+        if (files.length === 0) return;
+
+        setCompressingFiles(true);
+        const compressedBatch = [];
+        try {
+            for (const file of files.slice(0, 8)) {
+                try {
+                    const comp = await compressReceiptFile(file);
+                    compressedBatch.push({
+                        ...comp,
+                        tempId: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                        nota: ''
+                    });
+                } catch (fileErr) {
+                    addToast(fileErr.message || `Error comprimiendo ${file.name}`, 'warning');
+                }
+            }
+
+            if (compressedBatch.length === 0) return;
+
+            if (immediateUpload && vencimientoRow?.id) {
+                setUploadingOnly(true);
+                try {
+                    const res = await api.post(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/comprobantes`, {
+                        abono_id: targetAbonoId,
+                        comprobantes: compressedBatch.map(c => ({
+                            data_url: c.data_url,
+                            nombre_original: c.nombre_original,
+                            ancho: c.ancho,
+                            alto: c.alto,
+                            nota: c.nota || null
+                        }))
+                    });
+                    if (res.data?.detail) setDetail(res.data.detail);
+                    addToast(res.data?.message || 'Comprobante(s) subido(s) y comprimido(s)', 'success');
+                    if (onSaved) onSaved();
+                } catch (err) {
+                    addToast(err.response?.data?.message || 'Error al guardar comprobantes', 'error');
+                } finally {
+                    setUploadingOnly(false);
+                }
+            } else {
+                setPendingReceipts(prev => [...prev, ...compressedBatch]);
+                const savedBytes = compressedBatch.reduce((acc, c) => acc + Math.max(0, (c.original_size || 0) - (c.compressed_size || 0)), 0);
+                addToast(
+                    `${compressedBatch.length} comprobante(s) listo(s)${savedBytes > 20000 ? ` (ahorro ${formatBytes(savedBytes)})` : ''}`,
+                    'success'
+                );
+                // Auto-lectura IA sobre el primer archivo nuevo cuando está habilitada
+                if (autoOcrEnabled && compressedBatch[0]?.data_url) {
+                    runReceiptOcr({
+                        dataUrl: compressedBatch[0].data_url,
+                        nombreOriginal: compressedBatch[0].nombre_original
+                    });
+                }
+            }
+        } finally {
+            setCompressingFiles(false);
+        }
+    }, [addToast, autoOcrEnabled, onSaved, runReceiptOcr, vencimientoRow?.id]);
+
+    // Permitir pegar capturas directamente con Ctrl+V mientras el popup está abierto
+    useEffect(() => {
+        if (!open) return;
+        const onPaste = (e) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            const pastedFiles = [];
+            for (const item of items) {
+                if (item.kind === 'file') {
+                    const f = item.getAsFile();
+                    if (f) pastedFiles.push(f);
+                }
+            }
+            if (pastedFiles.length > 0) {
+                e.preventDefault();
+                handleProcessFiles(pastedFiles);
+            }
+        };
+        window.addEventListener('paste', onPaste);
+        return () => window.removeEventListener('paste', onPaste);
+    }, [open, handleProcessFiles]);
+
+    const applySuggestion = (sug) => {
+        if (!sug) return;
+        setMetodoPago(sug.metodo_pago || 'TRANSFERENCIA');
+        if (sug.cuenta_bancaria_id) {
+            setCuentaBancariaId(String(sug.cuenta_bancaria_id));
+            const found = sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(sug.cuenta_bancaria_id));
+            setCuentaLabel(found ? formatCuentaLabel(found) : (sug.cuenta_label || sug.label || ''));
+        } else {
+            setCuentaBancariaId('');
+            setCuentaLabel(sug.cuenta_label || (sug.metodo_pago === 'EFECTIVO' ? sug.label : ''));
+        }
+        if (sug.tarjeta_ref) {
+            setTarjetaRef(sug.tarjeta_ref);
+        } else if (sug.metodo_pago === 'TARJETA_CREDITO' || sug.metodo_pago === 'TARJETA_DEBITO') {
+            setTarjetaRef(sug.label || '');
+        }
+    };
+
+    const handleSelectBankAccount = (val) => {
+        setCuentaBancariaId(val);
+        if (!val) {
+            setCuentaLabel('');
+            return;
+        }
+        const found = sortedBankAccounts.find(c => String(c.raw_id || c.id) === String(val));
+        if (found) {
+            setCuentaLabel(formatCuentaLabel(found));
+        }
+    };
+
+    const applyQuickPercentage = (pct) => {
+        const total = Number(detail?.resumen?.monto_total ?? vencimientoRow?.monto ?? 0);
+        const saldo = Number(detail?.resumen?.saldo_pendiente ?? total);
+        if (pct === 100) {
+            setMontoAbono(saldo > 0 ? saldo.toFixed(2) : total.toFixed(2));
+            return;
+        }
+        const computed = Math.round(((total * pct) / 100) * 100) / 100;
+        const capped = saldo > 0 ? Math.min(computed, saldo) : computed;
+        setMontoAbono(capped.toFixed(2));
+        if (!notas) {
+            setNotas(`Anticipo / pago parcial ${pct}%`);
+        }
+    };
+
+    const startEditAbono = (ab) => {
+        setEditingAbonoId(ab.id);
+        setTipoOperacion(ab.tipo_operacion || 'CXP');
+        setMetodoPago(ab.metodo_pago || 'TRANSFERENCIA');
+        setCuentaBancariaId(ab.cuenta_bancaria_id ? String(ab.cuenta_bancaria_id) : '');
+        setCuentaLabel(ab.cuenta_label || '');
+        setTarjetaRef(ab.tarjeta_ref || '');
+        setBeneficiario(ab.beneficiario || '');
+        setReferenciaDoc(ab.referencia_doc || '');
+        setFechaPago(ab.fecha_pago ? String(ab.fecha_pago).split('T')[0] : todayStr());
+        setMontoAbono(Number(ab.monto || 0).toFixed(2));
+        setNotas(ab.notas || '');
+        setPendingReceipts([]);
+        setLastOcrResult(null);
+    };
+
+    const cancelEditAbono = () => {
+        setEditingAbonoId(null);
+        const saldo = Number(detail?.resumen?.saldo_pendiente ?? 0);
+        setMontoAbono(saldo > 0 ? saldo.toFixed(2) : '');
+        setBeneficiario('');
+        setReferenciaDoc('');
+        setNotas('');
+        setLastOcrResult(null);
+        setFechaPago(todayStr());
+    };
+
+    const handleSaveMetaOnly = async () => {
+        if (!vencimientoRow?.id) return;
+        setSaving(true);
+        try {
+            const legacyText = cuentaLabel || tarjetaRef || getMethodLabel(metodoPago);
+            const res = await api.patch(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/meta`, {
+                tipo_operacion: tipoOperacion,
+                metodo_pago_preferido: metodoPago,
+                cuenta_bancaria_id: cuentaBancariaId ? Number(cuentaBancariaId) : null,
+                cuenta_label: cuentaLabel || null,
+                tarjeta_ref: tarjetaRef || null,
+                notas_control: notas || null,
+                forma_pago_legacy: legacyText
+            });
+            if (res.data?.detail) setDetail(res.data.detail);
+            addToast('Clasificación y método preasignados correctamente', 'success');
+            if (onSaved) onSaved();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al guardar preasignación', 'error');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleSubmitAbono = async (e) => {
+        e.preventDefault();
+        if (!vencimientoRow?.id) return;
+
+        const numMonto = Math.round((Number(montoAbono) || 0) * 100) / 100;
+        if (!Number.isFinite(numMonto) || numMonto <= 0) {
+            addToast('Ingresa un monto mayor a $0.00 para aplicar el pago o usa "Solo Preasignar"', 'warning');
+            return;
+        }
+
+        setSaving(true);
+        try {
+            const payload = {
+                tipo_operacion: tipoOperacion,
+                metodo_pago: metodoPago,
+                cuenta_bancaria_id: cuentaBancariaId ? Number(cuentaBancariaId) : null,
+                cuenta_label: cuentaLabel || null,
+                tarjeta_ref: tarjetaRef || null,
+                beneficiario: beneficiario ? beneficiario.trim() : null,
+                referencia_doc: referenciaDoc || null,
+                fecha_pago: fechaPago || todayStr(),
+                monto: numMonto,
+                notas: notas || null
+            };
+
+            if (editingAbonoId) {
+                const res = await api.put(`/operaciones/recordatorios/abonos/${editingAbonoId}`, payload);
+                if (pendingReceipts.length > 0) {
+                    await api.post(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/comprobantes`, {
+                        abono_id: editingAbonoId,
+                        comprobantes: pendingReceipts.map(c => ({
+                            data_url: c.data_url,
+                            nombre_original: c.nombre_original,
+                            ancho: c.ancho,
+                            alto: c.alto,
+                            nota: c.nota || null
+                        }))
+                    });
+                    await loadDetail(vencimientoRow.id);
+                } else if (res.data?.detail) {
+                    setDetail(res.data.detail);
+                }
+                addToast(res.data?.message || 'Abono actualizado', 'success');
+                setEditingAbonoId(null);
+            } else {
+                const res = await api.post(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/abonos`, {
+                    ...payload,
+                    comprobantes: pendingReceipts.map(c => ({
+                        data_url: c.data_url,
+                        nombre_original: c.nombre_original,
+                        ancho: c.ancho,
+                        alto: c.alto,
+                        nota: c.nota || null
+                    }))
+                });
+                const updatedDetail = res.data?.detail;
+                if (updatedDetail) {
+                    setDetail(updatedDetail);
+                    const nextSaldo = Number(updatedDetail?.resumen?.saldo_pendiente || 0);
+                    setMontoAbono(nextSaldo > 0 ? nextSaldo.toFixed(2) : '');
+                }
+                addToast(res.data?.message || 'Pago aplicado correctamente', 'success');
+            }
+
+            setBeneficiario('');
+            setReferenciaDoc('');
+            setNotas('');
+            setPendingReceipts([]);
+            setLastOcrResult(null);
+            if (onSaved) onSaved();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al registrar el pago', 'error');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDeleteAbono = async (ab) => {
+        const ok = await confirm(
+            `¿Eliminar el abono de ${mc(ab.monto)} (${getMethodLabel(ab.metodo_pago)}) del ${formatDateShort(ab.fecha_pago)}? El saldo pendiente se recalculará automáticamente.`,
+            { variant: 'danger' }
+        );
+        if (!ok) return;
+        try {
+            const res = await api.delete(`/operaciones/recordatorios/abonos/${ab.id}`);
+            if (res.data?.detail) {
+                setDetail(res.data.detail);
+                const nextSaldo = Number(res.data.detail?.resumen?.saldo_pendiente || 0);
+                setMontoAbono(nextSaldo > 0 ? nextSaldo.toFixed(2) : '');
+            }
+            if (editingAbonoId === ab.id) setEditingAbonoId(null);
+            addToast(res.data?.message || 'Abono eliminado', 'success');
+            if (onSaved) onSaved();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al eliminar abono', 'error');
+        }
+    };
+
+    const handleDeleteReceipt = async (comp) => {
+        const ok = await confirm(`¿Eliminar el comprobante "${comp.nombre_original}"?`, { variant: 'danger' });
+        if (!ok) return;
+        try {
+            const res = await api.delete(`/operaciones/recordatorios/comprobantes/${comp.id}`);
+            if (res.data?.detail) {
+                setDetail(res.data.detail);
+                setViewerItems(res.data.detail.comprobantes || []);
+                if ((res.data.detail.comprobantes || []).length === 0) setViewerOpen(false);
+            }
+            addToast('Comprobante eliminado', 'success');
+            if (onSaved) onSaved();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al eliminar comprobante', 'error');
+        }
+    };
+
+    const openLightbox = (items, idx = 0) => {
+        setViewerItems(items || []);
+        setViewerIdx(idx);
+        setViewerOpen(true);
+    };
+
+    const resumen = detail?.resumen || {
+        monto_total: Number(vencimientoRow?.monto || 0),
+        monto_pagado: Number(vencimientoRow?.monto_pagado || 0),
+        saldo_pendiente: Number(vencimientoRow?.saldo_pendiente ?? vencimientoRow?.monto ?? 0),
+        porcentaje_pagado: Number(vencimientoRow?.porcentaje_pagado || 0),
+        estado_pago: vencimientoRow?.estado_pago || vencimientoRow?.estado || 'PENDIENTE'
+    };
+
+    const abonos = detail?.abonos || [];
+    const comprobantes = detail?.comprobantes || [];
+    const sugerencias = detail?.sugerencias || { mas_usadas_similares: [], tarjetas_frecuentes: [], efectivo_cajas: [] };
+    const methodCategory = getMethodCategory(metodoPago);
+
+    const projectedBalance = useMemo(() => {
+        const entered = Number(montoAbono) || 0;
+        if (entered <= 0) return null;
+        let currentPaid = Number(resumen.monto_pagado || 0);
+        if (editingAbonoId) {
+            const old = abonos.find(a => a.id === editingAbonoId);
+            if (old) currentPaid = Math.max(0, currentPaid - Number(old.monto || 0));
+        }
+        const afterPaid = Math.round((currentPaid + entered) * 100) / 100;
+        const total = Number(resumen.monto_total || 0);
+        const afterSaldo = Math.round(Math.max(0, total - afterPaid) * 100) / 100;
+        const afterPct = total > 0 ? Math.min(100, Math.round((afterPaid / total) * 1000) / 10) : 100;
+        return {
+            afterPaid,
+            afterSaldo,
+            afterPct,
+            willBeComplete: total > 0 ? afterPaid >= (total - 0.005) : true
+        };
+    }, [montoAbono, resumen, editingAbonoId, abonos]);
+
+    const statusBadgeStyle = useMemo(() => {
+        if (resumen.estado_pago === 'CANCELADO') {
+            return { bg: 'rgba(16, 185, 129, 0.2)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.45)', label: 'CANCELADO (100%)' };
+        }
+        if (resumen.estado_pago === 'PARCIAL') {
+            return { bg: 'rgba(14, 165, 233, 0.18)', color: '#38bdf8', border: '1px solid rgba(14, 165, 233, 0.45)', label: `PENDIENTE · PARCIAL (${resumen.porcentaje_pagado}%)` };
+        }
+        return { bg: 'rgba(245, 158, 11, 0.18)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.45)', label: 'PENDIENTE' };
+    }, [resumen.estado_pago, resumen.porcentaje_pagado]);
+
+    return (
+        <>
+            <Modal
+                open={open}
+                onClose={onClose}
+                title={`Gestión de Pagos y Comprobantes — #${vencimientoRow?.id_recordatorio || ''}`}
+                size="xl"
+            >
+                {loading && !detail ? (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        Cargando historial de pagos, sugerencias inteligentes y comprobantes...
+                    </div>
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', minWidth: 0 }}>
+                        {/* ENCABEZADO FINANCIERO Y BARRA DE PROGRESO */}
+                        <div style={{
+                            padding: '0.75rem 0.9rem',
+                            borderRadius: '10px',
+                            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+                            border: '1px solid var(--border-color)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.55rem',
+                            minWidth: 0
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <div style={{ minWidth: 0, flex: '1 1 200px' }}>
+                                    <div style={{ fontSize: '0.94rem', fontWeight: 800, color: 'var(--text)', wordBreak: 'break-word' }}>
+                                        {detail?.vencimiento?.descripcion || vencimientoRow?.descripcion || 'Compromiso de Pago'}
+                                    </div>
+                                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '0.15rem', display: 'flex', flexWrap: 'wrap', gap: '0.55rem' }}>
+                                        <span>Ubicación: <strong style={{ color: 'var(--text)' }}>{detail?.vencimiento?.ubicacion || vencimientoRow?.ubicacion || 'General'}</strong></span>
+                                        <span>Vence: <strong style={{ color: '#fbbf24' }}>{formatDateShort(detail?.vencimiento?.vence || vencimientoRow?.vence)}</strong></span>
+                                        {detail?.vencimiento?.observacion && (
+                                            <span>Obs.: <strong>{detail.vencimiento.observacion}</strong></span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <span style={{
+                                    padding: '0.22rem 0.65rem',
+                                    borderRadius: '12px',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 800,
+                                    backgroundColor: statusBadgeStyle.bg,
+                                    color: statusBadgeStyle.color,
+                                    border: statusBadgeStyle.border,
+                                    flexShrink: 0
+                                }}>
+                                    {statusBadgeStyle.label}
+                                </span>
+                            </div>
+
+                            {/* KPIs de Monto Total / Pagado / Saldo Pendiente */}
+                            <div className="form-grid form-grid-3" style={{ gap: '0.5rem' }}>
+                                <div style={{ padding: '0.45rem 0.65rem', borderRadius: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                    <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Monto Total</div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text)' }}>{mc(resumen.monto_total)}</div>
+                                </div>
+                                <div style={{ padding: '0.45rem 0.65rem', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+                                    <div style={{ fontSize: '0.67rem', color: '#6ee7b7', textTransform: 'uppercase', fontWeight: 700 }}>Total Abonado ({abonos.length})</div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: '#34d399' }}>{mc(resumen.monto_pagado)}</div>
+                                </div>
+                                <div style={{
+                                    padding: '0.45rem 0.65rem',
+                                    borderRadius: '8px',
+                                    background: resumen.saldo_pendiente > 0 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.06)',
+                                    border: resumen.saldo_pendiente > 0 ? '1px solid rgba(245, 158, 11, 0.35)' : '1px solid rgba(16, 185, 129, 0.2)'
+                                }}>
+                                    <div style={{ fontSize: '0.67rem', color: resumen.saldo_pendiente > 0 ? '#fcd34d' : '#6ee7b7', textTransform: 'uppercase', fontWeight: 700 }}>Saldo Pendiente</div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: resumen.saldo_pendiente > 0 ? '#fbbf24' : '#34d399' }}>
+                                        {mc(resumen.saldo_pendiente)}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Barra de progreso visual */}
+                            <div style={{ height: '7px', borderRadius: '999px', backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                                <div style={{
+                                    height: '100%',
+                                    width: `${Math.min(100, Math.max(0, Number(resumen.porcentaje_pagado || 0)))}%`,
+                                    background: resumen.estado_pago === 'CANCELADO'
+                                        ? 'linear-gradient(90deg, #10b981, #34d399)'
+                                        : 'linear-gradient(90deg, #0ea5e9, #38bdf8)',
+                                    transition: 'width 0.25s ease'
+                                }} />
+                            </div>
+
+                            {/* Selector de Clasificación Financiera (CXP / CXC / GASTO) */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>FLUJO DE CAJA:</span>
+                                    {OPERATION_TYPES.map(op => {
+                                        const active = tipoOperacion === op.id;
+                                        return (
+                                            <button
+                                                key={op.id}
+                                                type="button"
+                                                onClick={() => setTipoOperacion(op.id)}
+                                                title={op.hint}
+                                                style={{
+                                                    padding: '0.24rem 0.6rem',
+                                                    borderRadius: '12px',
+                                                    fontSize: '0.72rem',
+                                                    fontWeight: 700,
+                                                    cursor: 'pointer',
+                                                    border: active ? `1px solid ${op.color}` : '1px solid rgba(255,255,255,0.12)',
+                                                    backgroundColor: active ? op.bg : 'rgba(255,255,255,0.03)',
+                                                    color: active ? op.color : 'var(--text-muted)'
+                                                }}
+                                            >
+                                                {op.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <span style={{ fontSize: '0.69rem', color: 'var(--text-muted)' }}>
+                                    {OPERATION_TYPES.find(o => o.id === tipoOperacion)?.hint}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* CUERPO PRINCIPAL EN 2 COLUMNAS RESPONSIVAS (.form-grid-2 colapsa a 1 col en móvil) */}
+                        <div className="form-grid form-grid-2" style={{ gap: '0.85rem', alignItems: 'start' }}>
+                            {/* COLUMNA IZQUIERDA: LECTURA IA + FORMULARIO DE PAGO */}
+                            <form
+                                onSubmit={handleSubmitAbono}
+                                style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.7rem',
+                                    padding: '0.8rem',
+                                    borderRadius: '10px',
+                                    backgroundColor: 'rgba(255,255,255,0.025)',
+                                    border: editingAbonoId ? '1px solid rgba(99, 102, 241, 0.55)' : '1px solid var(--border-color)',
+                                    minWidth: 0
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                    <div style={{ fontSize: '0.84rem', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text)' }}>
+                                        {editingAbonoId ? <Edit size={15} color="#818cf8" /> : <Plus size={15} color="#34d399" />}
+                                        <span>{editingAbonoId ? 'Editando Abono' : 'Registrar Pago / Abono Parcial'}</span>
+                                    </div>
+                                    {editingAbonoId && (
+                                        <button type="button" className="btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.72rem' }} onClick={cancelEditAbono}>
+                                            Cancelar edición
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* BLOQUE 1: SUBIR PDF / CAPTURA / TOMAR FOTO -> AUTO-COMPLETA TODO CON IA */}
+                                <div style={{
+                                    padding: '0.65rem',
+                                    borderRadius: '9px',
+                                    backgroundColor: 'rgba(56, 189, 248, 0.06)',
+                                    border: isDragging ? '2px dashed #38bdf8' : '1px dashed rgba(56, 189, 248, 0.45)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.5rem'
+                                }}
+                                    onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+                                    onDragLeave={() => setIsDragging(false)}
+                                    onDrop={e => {
+                                        e.preventDefault();
+                                        setIsDragging(false);
+                                        handleProcessFiles(e.dataTransfer?.files);
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#7dd3fc', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                            <Sparkles size={13} />
+                                            Paso rápido: Sube PDF, captura o foto para auto-llenar
+                                        </span>
+                                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={autoOcrEnabled}
+                                                onChange={e => setAutoOcrEnabled(e.target.checked)}
+                                                style={{ width: '16px', height: '16px' }}
+                                            />
+                                            Auto-leer IA
+                                        </label>
+                                    </div>
+
+                                    <input
+                                        ref={fileInputRef}
+                                        type="file"
+                                        multiple
+                                        accept="image/*,.pdf"
+                                        style={{ display: 'none' }}
+                                        onChange={e => {
+                                            handleProcessFiles(e.target.files);
+                                            e.target.value = '';
+                                        }}
+                                    />
+                                    <input
+                                        ref={cameraInputRef}
+                                        type="file"
+                                        accept="image/*"
+                                        capture="environment"
+                                        style={{ display: 'none' }}
+                                        onChange={e => {
+                                            handleProcessFiles(e.target.files);
+                                            e.target.value = '';
+                                        }}
+                                    />
+
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            disabled={compressingFiles || analyzingOcr}
+                                            onClick={() => fileInputRef.current?.click()}
+                                            style={{ flex: '1 1 140px', fontSize: '0.76rem', padding: '0.45rem 0.7rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                                        >
+                                            <Upload size={14} /> Subir Foto / PDF
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            disabled={compressingFiles || analyzingOcr}
+                                            onClick={() => cameraInputRef.current?.click()}
+                                            style={{ flex: '1 1 120px', fontSize: '0.76rem', padding: '0.45rem 0.7rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                                            title="Usar cámara del teléfono para escanear comprobante"
+                                        >
+                                            <Camera size={14} /> Tomar Foto
+                                        </button>
+                                    </div>
+                                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                                        También puedes arrastrar aquí o pegar capturas con <strong>Ctrl + V</strong> · Comprime a WebP legible (~120 KB) y lee cuenta, monto y beneficiario.
+                                    </div>
+
+                                    {/* Estado de lectura IA en curso */}
+                                    {analyzingOcr && (
+                                        <div style={{
+                                            padding: '0.45rem 0.65rem',
+                                            borderRadius: '7px',
+                                            backgroundColor: 'rgba(99, 102, 241, 0.16)',
+                                            border: '1px solid rgba(99, 102, 241, 0.4)',
+                                            color: '#c7d2fe',
+                                            fontSize: '0.74rem',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.45rem'
+                                        }}>
+                                            <Loader2 size={14} className="animate-spin" style={{ flexShrink: 0 }} />
+                                            <span>Analizando comprobante con IA (cuenta, monto, beneficiario, referencia)...</span>
+                                        </div>
+                                    )}
+
+                                    {/* Resultado de la lectura IA */}
+                                    {lastOcrResult && !analyzingOcr && (
+                                        <div style={{
+                                            padding: '0.5rem 0.65rem',
+                                            borderRadius: '8px',
+                                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                            border: '1px solid rgba(16, 185, 129, 0.35)',
+                                            fontSize: '0.72rem',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: '0.25rem'
+                                        }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                                <span style={{ fontWeight: 800, color: '#34d399', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                    <Sparkles size={12} /> Leído por IA ({lastOcrResult.confianza || 'alta'})
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => applyOcrAnalysisToForm(lastOcrResult)}
+                                                    style={{
+                                                        padding: '0.14rem 0.45rem',
+                                                        borderRadius: '6px',
+                                                        fontSize: '0.68rem',
+                                                        fontWeight: 700,
+                                                        border: '1px solid rgba(16, 185, 129, 0.4)',
+                                                        backgroundColor: 'rgba(16, 185, 129, 0.16)',
+                                                        color: '#a7f3d0',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    Re-aplicar datos
+                                                </button>
+                                            </div>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', color: 'var(--text)' }}>
+                                                {lastOcrResult.monto && <span>Monto: <strong style={{ color: '#34d399' }}>{mc(lastOcrResult.monto)}</strong></span>}
+                                                {lastOcrResult.beneficiario && <span>A favor de: <strong>{lastOcrResult.beneficiario}</strong></span>}
+                                                {lastOcrResult.referencia_doc && <span>Ref: <strong>{lastOcrResult.referencia_doc}</strong></span>}
+                                            </div>
+                                            {lastOcrResult.cuenta_match_reason ? (
+                                                <div style={{ color: '#6ee7b7', fontSize: '0.69rem' }}>
+                                                    ✓ Cuenta vinculada automáticamente: <strong>{lastOcrResult.cuenta_label}</strong> ({lastOcrResult.cuenta_match_reason})
+                                                </div>
+                                            ) : (lastOcrResult.banco_origen || lastOcrResult.cuenta_origen) && (
+                                                <div style={{ color: '#fde68a', fontSize: '0.69rem' }}>
+                                                    Detectado en documento: {lastOcrResult.banco_origen || ''} {lastOcrResult.cuenta_origen || ''} (verifica cuenta abajo)
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Miniaturas de comprobantes pendientes de guardar */}
+                                    {pendingReceipts.length > 0 && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                            {pendingReceipts.map((r, idx) => (
+                                                <div
+                                                    key={r.tempId}
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.35rem',
+                                                        padding: '0.25rem 0.42rem',
+                                                        borderRadius: '7px',
+                                                        backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                                                        fontSize: '0.69rem',
+                                                        maxWidth: '100%'
+                                                    }}
+                                                >
+                                                    {r.mime_type === 'application/pdf' ? (
+                                                        <FileText size={16} color="#f87171" style={{ flexShrink: 0, cursor: 'pointer' }} onClick={() => openLightbox(pendingReceipts, idx)} />
+                                                    ) : (
+                                                        <img
+                                                            src={r.data_url}
+                                                            alt=""
+                                                            onClick={() => openLightbox(pendingReceipts, idx)}
+                                                            style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }}
+                                                        />
+                                                    )}
+                                                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                                        <span style={{ maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                                                            {r.nombre_original}
+                                                        </span>
+                                                        <span style={{ fontSize: '0.63rem', color: '#6ee7b7' }}>
+                                                            {formatBytes(r.compressed_size)}
+                                                            {r.original_size > r.compressed_size ? ` (de ${formatBytes(r.original_size)})` : ''}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        disabled={analyzingOcr}
+                                                        onClick={() => runReceiptOcr({ dataUrl: r.data_url, nombreOriginal: r.nombre_original })}
+                                                        style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.45)', color: '#c7d2fe', borderRadius: '5px', cursor: 'pointer', padding: '0.15rem 0.3rem', fontSize: '0.64rem', display: 'inline-flex', alignItems: 'center', gap: '2px' }}
+                                                        title="Leer este comprobante con IA"
+                                                    >
+                                                        <Sparkles size={10} /> IA
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setPendingReceipts(prev => prev.filter(x => x.tempId !== r.tempId))}
+                                                        style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.1rem' }}
+                                                        title="Quitar"
+                                                    >
+                                                        <X size={13} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* SUGERENCIAS INTELIGENTES POR HISTORIAL REAL */}
+                                {sugerencias.mas_usadas_similares?.length > 0 && (
+                                    <div style={{
+                                        padding: '0.5rem 0.65rem',
+                                        borderRadius: '8px',
+                                        backgroundColor: 'rgba(16, 185, 129, 0.07)',
+                                        border: '1px solid rgba(16, 185, 129, 0.28)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '0.32rem'
+                                    }}>
+                                        <div style={{ fontSize: '0.71rem', fontWeight: 800, color: '#34d399', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                            <Sparkles size={12} />
+                                            <span>Más usadas en transacciones similares:</span>
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.32rem' }}>
+                                            {sugerencias.mas_usadas_similares.map((sug, idx) => (
+                                                <button
+                                                    key={sug.key || idx}
+                                                    type="button"
+                                                    onClick={() => applySuggestion(sug)}
+                                                    title={sug.motivo || 'Aplicar sugerencia'}
+                                                    style={{
+                                                        padding: '0.24rem 0.5rem',
+                                                        borderRadius: '12px',
+                                                        fontSize: '0.7rem',
+                                                        fontWeight: 600,
+                                                        border: '1px solid rgba(16, 185, 129, 0.42)',
+                                                        backgroundColor: 'rgba(16, 185, 129, 0.14)',
+                                                        color: '#d1fae5',
+                                                        cursor: 'pointer',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.28rem',
+                                                        maxWidth: '100%'
+                                                    }}
+                                                >
+                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 'min(200px, 60vw)' }}>
+                                                        {sug.label}
+                                                    </span>
+                                                    <span style={{
+                                                        fontSize: '0.63rem',
+                                                        padding: '0.05rem 0.3rem',
+                                                        borderRadius: '8px',
+                                                        backgroundColor: 'rgba(0,0,0,0.28)',
+                                                        color: '#6ee7b7',
+                                                        flexShrink: 0
+                                                    }}>
+                                                        {sug.usos}x
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* TODOS LOS TIPOS / MÉTODOS DE PAGO */}
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.32rem' }}>
+                                        TIPO / MÉTODO DE PAGO
+                                    </label>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                        {PAYMENT_METHOD_OPTIONS.map(opt => {
+                                            const Icon = opt.icon;
+                                            const active = metodoPago === opt.id;
+                                            return (
+                                                <button
+                                                    key={opt.id}
+                                                    type="button"
+                                                    onClick={() => setMetodoPago(opt.id)}
+                                                    style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.28rem',
+                                                        padding: '0.3rem 0.55rem',
+                                                        borderRadius: '7px',
+                                                        fontSize: '0.72rem',
+                                                        fontWeight: active ? 700 : 500,
+                                                        cursor: 'pointer',
+                                                        border: active ? `1px solid ${opt.color}` : '1px solid rgba(255,255,255,0.1)',
+                                                        backgroundColor: active ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255,255,255,0.03)',
+                                                        color: active ? '#fff' : 'var(--text-muted)'
+                                                    }}
+                                                >
+                                                    <Icon size={12} style={{ color: opt.color, flexShrink: 0 }} />
+                                                    <span>{opt.label}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* CUENTA BANCARIA / TARJETA / EFECTIVO SEGÚN MÉTODO */}
+                                {(methodCategory === 'BANCO' || metodoPago === 'TARJETA_DEBITO') && (
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.28rem' }}>
+                                            CUENTA BANCARIA (SUGERENCIA EN CONCILIACIÓN BANCARIA)
+                                        </label>
+                                        <select
+                                            className="form-control"
+                                            style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
+                                            value={cuentaBancariaId}
+                                            onChange={e => handleSelectBankAccount(e.target.value)}
+                                        >
+                                            <option value="">-- Seleccionar cuenta bancaria --</option>
+                                            {ubicacionAccounts.length > 0 && (
+                                                <optgroup label={`Sugeridas para ${detail?.vencimiento?.ubicacion || vencimientoRow?.ubicacion}`}>
+                                                    {ubicacionAccounts.map(c => (
+                                                        <option key={`ub-${c.raw_id || c.id}`} value={String(c.raw_id || c.id)}>
+                                                            {formatCuentaLabel(c)}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            <optgroup label="Todas las Cuentas Bancarias">
+                                                {sortedBankAccounts.map(c => (
+                                                    <option key={`all-${c.raw_id || c.id}`} value={String(c.raw_id || c.id)}>
+                                                        {formatCuentaLabel(c)}
+                                                    </option>
+                                                ))}
+                                            </optgroup>
+                                        </select>
+                                        {ubicacionAccounts.length > 0 && (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem', marginTop: '0.32rem' }}>
+                                                {ubicacionAccounts.slice(0, 3).map(c => {
+                                                    const idVal = String(c.raw_id || c.id);
+                                                    const active = cuentaBancariaId === idVal;
+                                                    return (
+                                                        <button
+                                                            key={`chip-${idVal}`}
+                                                            type="button"
+                                                            onClick={() => handleSelectBankAccount(idVal)}
+                                                            style={{
+                                                                padding: '0.18rem 0.45rem',
+                                                                borderRadius: '10px',
+                                                                fontSize: '0.68rem',
+                                                                border: active ? '1px solid var(--primary)' : '1px solid rgba(255,255,255,0.12)',
+                                                                background: active ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255,255,255,0.04)',
+                                                                color: active ? '#fff' : 'var(--text-muted)',
+                                                                cursor: 'pointer',
+                                                                maxWidth: '100%',
+                                                                overflow: 'hidden',
+                                                                textOverflow: 'ellipsis',
+                                                                whiteSpace: 'nowrap'
+                                                            }}
+                                                        >
+                                                            {formatCuentaLabel(c)}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {(metodoPago === 'TARJETA_CREDITO' || metodoPago === 'TARJETA_DEBITO') && (
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.28rem' }}>
+                                            TARJETA UTILIZADA (BANCO / TERMINACIÓN)
+                                        </label>
+                                        <input
+                                            type="text"
+                                            className="form-control"
+                                            style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
+                                            placeholder="Ej. TC DAVI #0038, VISA BAC *4521..."
+                                            value={tarjetaRef}
+                                            onChange={e => setTarjetaRef(e.target.value)}
+                                        />
+                                        {sugerencias.tarjetas_frecuentes?.length > 0 && (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem', marginTop: '0.32rem' }}>
+                                                {sugerencias.tarjetas_frecuentes.slice(0, 6).map(t => (
+                                                    <button
+                                                        key={t}
+                                                        type="button"
+                                                        onClick={() => setTarjetaRef(t)}
+                                                        style={{
+                                                            padding: '0.18rem 0.48rem',
+                                                            borderRadius: '10px',
+                                                            fontSize: '0.69rem',
+                                                            border: tarjetaRef === t ? '1px solid #f59e0b' : '1px solid rgba(245, 158, 11, 0.3)',
+                                                            background: tarjetaRef === t ? 'rgba(245, 158, 11, 0.22)' : 'rgba(245, 158, 11, 0.08)',
+                                                            color: '#fde68a',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        💳 {t}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {metodoPago === 'EFECTIVO' && (
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.28rem' }}>
+                                            ORIGEN DEL EFECTIVO / CAJA
+                                        </label>
+                                        <input
+                                            type="text"
+                                            className="form-control"
+                                            style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
+                                            placeholder="Ej. Efectivo Caja Chica Oficina, Efectivo Pista..."
+                                            value={cuentaLabel}
+                                            onChange={e => setCuentaLabel(e.target.value)}
+                                        />
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem', marginTop: '0.32rem' }}>
+                                            {(sugerencias.efectivo_cajas || []).map(caja => (
+                                                <button
+                                                    key={caja}
+                                                    type="button"
+                                                    onClick={() => setCuentaLabel(caja)}
+                                                    style={{
+                                                        padding: '0.18rem 0.48rem',
+                                                        borderRadius: '10px',
+                                                        fontSize: '0.69rem',
+                                                        border: cuentaLabel === caja ? '1px solid #22c55e' : '1px solid rgba(34, 197, 94, 0.3)',
+                                                        background: cuentaLabel === caja ? 'rgba(34, 197, 94, 0.2)' : 'rgba(34, 197, 94, 0.08)',
+                                                        color: '#bbf7d0',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    💵 {caja}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* MONTO DEL ABONO + BOTONES RÁPIDOS DE PORCENTAJE + FECHA */}
+                                <div className="form-grid form-grid-2" style={{ gap: '0.55rem' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                            MONTO A APLICAR ($)
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            inputMode="decimal"
+                                            className="form-control"
+                                            style={{ height: '38px', fontSize: '0.88rem', fontWeight: 800, color: '#34d399', width: '100%' }}
+                                            placeholder="0.00"
+                                            value={montoAbono}
+                                            onChange={e => setMontoAbono(e.target.value)}
+                                        />
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.3rem' }}>
+                                            {[25, 50, 75, 100].map(pct => (
+                                                <button
+                                                    key={pct}
+                                                    type="button"
+                                                    onClick={() => applyQuickPercentage(pct)}
+                                                    style={{
+                                                        padding: '0.16rem 0.45rem',
+                                                        borderRadius: '6px',
+                                                        fontSize: '0.69rem',
+                                                        fontWeight: 700,
+                                                        border: '1px solid rgba(99, 102, 241, 0.35)',
+                                                        backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                                                        color: '#c7d2fe',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    {pct === 100 ? 'Saldo 100%' : `${pct}%`}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                            FECHA DEL PAGO
+                                        </label>
+                                        <input
+                                            type="date"
+                                            className="form-control"
+                                            style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
+                                            value={fechaPago}
+                                            onChange={e => setFechaPago(e.target.value)}
+                                            required
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* PREVIEW EN VIVO DE ESTADO PARCIAL VS CANCELADO */}
+                                {projectedBalance && (
+                                    <div style={{
+                                        padding: '0.45rem 0.65rem',
+                                        borderRadius: '7px',
+                                        fontSize: '0.73rem',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.45rem',
+                                        backgroundColor: projectedBalance.willBeComplete ? 'rgba(16, 185, 129, 0.12)' : 'rgba(14, 165, 233, 0.12)',
+                                        border: projectedBalance.willBeComplete ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid rgba(14, 165, 233, 0.35)',
+                                        color: projectedBalance.willBeComplete ? '#6ee7b7' : '#7dd3fc'
+                                    }}>
+                                        {projectedBalance.willBeComplete ? <CheckCircle size={14} style={{ flexShrink: 0 }} /> : <Clock size={14} style={{ flexShrink: 0 }} />}
+                                        {projectedBalance.willBeComplete ? (
+                                            <span>Con este pago se liquida el <strong>100%</strong> y el registro pasará a <strong>CANCELADO</strong>.</span>
+                                        ) : (
+                                            <span>
+                                                Pago <strong>PARCIAL ({projectedBalance.afterPct}%)</strong>: seguirá en <strong>PENDIENTE</strong> con saldo de <strong>{mc(projectedBalance.afterSaldo)}</strong>.
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* A QUIÉN SE HIZO (BENEFICIARIO) + # REFERENCIA */}
+                                <div className="form-grid form-grid-2" style={{ gap: '0.55rem' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                            A QUIÉN SE HIZO / BENEFICIARIO
+                                        </label>
+                                        <input
+                                            type="text"
+                                            maxLength={150}
+                                            className="form-control"
+                                            style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
+                                            placeholder="Proveedor, persona o comercio..."
+                                            value={beneficiario}
+                                            onChange={e => setBeneficiario(e.target.value)}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                            # REF. / CHEQUE / NC / REMISIÓN
+                                        </label>
+                                        <input
+                                            type="text"
+                                            maxLength={120}
+                                            className="form-control"
+                                            style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
+                                            placeholder="TRF-99812, CHQ #4401, NC-0021..."
+                                            value={referenciaDoc}
+                                            onChange={e => setReferenciaDoc(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                        NOTA / CONCEPTO DEL ABONO
+                                    </label>
+                                    <input
+                                        type="text"
+                                        maxLength={300}
+                                        className="form-control"
+                                        style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
+                                        placeholder="Ej. Anticipo 50% por trabajo, saldo final..."
+                                        value={notas}
+                                        onChange={e => setNotas(e.target.value)}
+                                    />
+                                </div>
+
+                                {/* AVISO DE CONCILIACIÓN */}
+                                {cuentaBancariaId && (
+                                    <div style={{ fontSize: '0.7rem', color: '#93c5fd', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <ShieldCheck size={13} style={{ flexShrink: 0 }} />
+                                        <span>Aparecerá como <strong>sugerencia</strong> en Conciliación Bancaria (sin duplicar Movimientos Bancarios).</span>
+                                    </div>
+                                )}
+
+                                {/* BOTONES DE ACCIÓN */}
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap', paddingTop: '0.35rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                                    {!editingAbonoId && (
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            disabled={saving}
+                                            onClick={handleSaveMetaOnly}
+                                            style={{ flex: '1 1 135px', fontSize: '0.78rem', padding: '0.45rem 0.75rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                                            title="Guarda clasificación CXP/CXC y método preferido sin aplicar dinero todavía"
+                                        >
+                                            <Save size={14} /> Solo Preasignar
+                                        </button>
+                                    )}
+                                    <button
+                                        type="submit"
+                                        className="btn-primary"
+                                        disabled={saving || compressingFiles || analyzingOcr}
+                                        style={{ flex: '1 1 175px', fontSize: '0.8rem', padding: '0.45rem 0.9rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
+                                    >
+                                        <CheckCircle size={15} />
+                                        {saving ? 'Guardando...' : (editingAbonoId ? 'Guardar Cambios' : 'Registrar Abono / Pago')}
+                                    </button>
+                                </div>
+                            </form>
+
+                            {/* COLUMNA DERECHA: HISTORIAL DE ABONOS Y GALERÍA DE COMPROBANTES */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', minWidth: 0 }}>
+                                {/* HISTORIAL DE PAGOS / ABONOS */}
+                                <div style={{
+                                    padding: '0.8rem',
+                                    borderRadius: '10px',
+                                    backgroundColor: 'rgba(255,255,255,0.025)',
+                                    border: '1px solid var(--border-color)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.5rem',
+                                    minWidth: 0
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                        <span style={{ fontSize: '0.82rem', fontWeight: 800 }}>
+                                            Pagos Aplicados ({abonos.length})
+                                        </span>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                            Total: <strong style={{ color: '#34d399' }}>{mc(resumen.monto_pagado)}</strong>
+                                        </span>
+                                    </div>
+
+                                    {abonos.length === 0 ? (
+                                        <div style={{
+                                            padding: '0.9rem',
+                                            borderRadius: '8px',
+                                            backgroundColor: 'rgba(255,255,255,0.02)',
+                                            textAlign: 'center',
+                                            fontSize: '0.76rem',
+                                            color: 'var(--text-muted)'
+                                        }}>
+                                            {resumen.estado_pago === 'CANCELADO'
+                                                ? 'Este registro fue cancelado anteriormente sin desglose de abonos. Puedes adjuntar comprobantes abajo o registrar el detalle.'
+                                                : 'Aún no hay abonos registrados. Sube un comprobante PDF/captura o registra un pago parcial (ej. 50%).'}
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: '300px', overflowY: 'auto' }}>
+                                            {abonos.map(ab => {
+                                                const abComps = comprobantes.filter(c => Number(c.abono_id) === Number(ab.id));
+                                                return (
+                                                    <div
+                                                        key={ab.id}
+                                                        style={{
+                                                            padding: '0.55rem 0.65rem',
+                                                            borderRadius: '8px',
+                                                            backgroundColor: editingAbonoId === ab.id ? 'rgba(99, 102, 241, 0.14)' : 'rgba(15, 23, 42, 0.5)',
+                                                            border: editingAbonoId === ab.id ? '1px solid var(--primary)' : '1px solid rgba(255,255,255,0.08)',
+                                                            display: 'flex',
+                                                            flexDirection: 'column',
+                                                            gap: '0.28rem'
+                                                        }}
+                                                    >
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                                                <span style={{ fontWeight: 800, fontSize: '0.88rem', color: '#34d399' }}>
+                                                                    {mc(ab.monto)}
+                                                                </span>
+                                                                <span style={{
+                                                                    padding: '0.1rem 0.42rem',
+                                                                    borderRadius: '6px',
+                                                                    fontSize: '0.67rem',
+                                                                    fontWeight: 700,
+                                                                    backgroundColor: 'rgba(99, 102, 241, 0.18)',
+                                                                    color: '#c7d2fe'
+                                                                }}>
+                                                                    {getMethodLabel(ab.metodo_pago)}
+                                                                </span>
+                                                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                                                    {formatDateShort(ab.fecha_pago)}
+                                                                </span>
+                                                            </div>
+                                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => startEditAbono(ab)}
+                                                                    style={{
+                                                                        padding: '0.24rem 0.42rem',
+                                                                        borderRadius: '6px',
+                                                                        border: '1px solid rgba(255,255,255,0.14)',
+                                                                        backgroundColor: 'rgba(255,255,255,0.06)',
+                                                                        color: 'var(--text)',
+                                                                        cursor: 'pointer',
+                                                                        display: 'inline-flex',
+                                                                        alignItems: 'center'
+                                                                    }}
+                                                                    title="Editar abono"
+                                                                >
+                                                                    <Edit size={12} />
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteAbono(ab)}
+                                                                    style={{
+                                                                        padding: '0.24rem 0.42rem',
+                                                                        borderRadius: '6px',
+                                                                        border: '1px solid rgba(239, 68, 68, 0.4)',
+                                                                        backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                                                                        color: '#fca5a5',
+                                                                        cursor: 'pointer',
+                                                                        display: 'inline-flex',
+                                                                        alignItems: 'center'
+                                                                    }}
+                                                                    title="Eliminar abono"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+
+                                                        {ab.beneficiario && (
+                                                            <div style={{ fontSize: '0.73rem', color: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                                                                <User size={12} color="#38bdf8" style={{ flexShrink: 0 }} />
+                                                                <span>A favor de: <strong>{ab.beneficiario}</strong></span>
+                                                            </div>
+                                                        )}
+
+                                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                                            {(ab.cuenta_label || ab.tarjeta_ref) && (
+                                                                <span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{ab.cuenta_label || ab.tarjeta_ref}</span>
+                                                            )}
+                                                            {ab.referencia_doc && (
+                                                                <span>Ref: <strong>{ab.referencia_doc}</strong></span>
+                                                            )}
+                                                            {ab.estado_conciliacion === 'CONCILIADO' && (
+                                                                <span style={{ color: '#34d399', fontWeight: 700 }}>✓ Conciliado</span>
+                                                            )}
+                                                            {ab.estado_conciliacion === 'PENDIENTE' && (
+                                                                <span style={{ color: '#38bdf8', fontWeight: 600 }}>• Sugerido en Conciliación</span>
+                                                            )}
+                                                        </div>
+
+                                                        {ab.notas && (
+                                                            <div style={{ fontSize: '0.71rem', color: '#cbd5e1', fontStyle: 'italic', wordBreak: 'break-word' }}>
+                                                                “{ab.notas}”
+                                                            </div>
+                                                        )}
+
+                                                        {abComps.length > 0 && (
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.12rem' }}>
+                                                                {abComps.map(c => {
+                                                                    const globalIdx = comprobantes.findIndex(x => x.id === c.id);
+                                                                    return (
+                                                                        <button
+                                                                            key={c.id}
+                                                                            type="button"
+                                                                            onClick={() => openLightbox(comprobantes, Math.max(0, globalIdx))}
+                                                                            style={{
+                                                                                display: 'inline-flex',
+                                                                                alignItems: 'center',
+                                                                                gap: '0.25rem',
+                                                                                padding: '0.16rem 0.45rem',
+                                                                                borderRadius: '6px',
+                                                                                fontSize: '0.68rem',
+                                                                                border: '1px solid rgba(56, 189, 248, 0.35)',
+                                                                                backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                                                                                color: '#bae6fd',
+                                                                                cursor: 'pointer'
+                                                                            }}
+                                                                        >
+                                                                            <Paperclip size={10} />
+                                                                            <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                                {c.nombre_original}
+                                                                            </span>
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* GALERÍA DE TODOS LOS COMPROBANTES ADJUNTOS */}
+                                <div style={{
+                                    padding: '0.8rem',
+                                    borderRadius: '10px',
+                                    backgroundColor: 'rgba(255,255,255,0.025)',
+                                    border: '1px solid var(--border-color)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.5rem',
+                                    minWidth: 0
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                        <span style={{ fontSize: '0.82rem', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                            <Paperclip size={14} color="#38bdf8" />
+                                            Comprobantes Adjuntos ({comprobantes.length})
+                                        </span>
+                                        <div>
+                                            <input
+                                                ref={extraFileInputRef}
+                                                type="file"
+                                                multiple
+                                                accept="image/*,.pdf"
+                                                style={{ display: 'none' }}
+                                                onChange={e => {
+                                                    handleProcessFiles(e.target.files, { immediateUpload: true });
+                                                    e.target.value = '';
+                                                }}
+                                            />
+                                            <button
+                                                type="button"
+                                                className="btn-secondary"
+                                                disabled={uploadingOnly || compressingFiles}
+                                                onClick={() => extraFileInputRef.current?.click()}
+                                                style={{ padding: '0.3rem 0.65rem', fontSize: '0.73rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                            >
+                                                <Upload size={12} /> {uploadingOnly ? 'Subiendo...' : 'Agregar'}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {comprobantes.length === 0 ? (
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', padding: '0.75rem' }}>
+                                            Sin comprobantes guardados aún. Puedes adjuntar múltiples fotos o PDFs.
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                            {comprobantes.map((c, idx) => {
+                                                const isPdf = c.mime_type === 'application/pdf' || /\.pdf$/i.test(c.archivo_url || c.nombre_original || '');
+                                                return (
+                                                    <div
+                                                        key={c.id}
+                                                        style={{
+                                                            flex: '1 1 125px',
+                                                            maxWidth: '185px',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid rgba(255,255,255,0.1)',
+                                                            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                                            overflow: 'hidden',
+                                                            display: 'flex',
+                                                            flexDirection: 'column'
+                                                        }}
+                                                    >
+                                                        <div
+                                                            onClick={() => openLightbox(comprobantes, idx)}
+                                                            style={{
+                                                                height: '86px',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                backgroundColor: 'rgba(0,0,0,0.35)',
+                                                                cursor: 'pointer',
+                                                                position: 'relative'
+                                                            }}
+                                                            title="Clic para ampliar y revisar"
+                                                        >
+                                                            {isPdf ? (
+                                                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem', color: '#f87171' }}>
+                                                                    <FileText size={28} />
+                                                                    <span style={{ fontSize: '0.66rem', fontWeight: 700 }}>PDF</span>
+                                                                </div>
+                                                            ) : (
+                                                                <img
+                                                                    src={c.archivo_url}
+                                                                    alt={c.nombre_original}
+                                                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                                />
+                                                            )}
+                                                            <span style={{
+                                                                position: 'absolute',
+                                                                bottom: '4px',
+                                                                right: '4px',
+                                                                padding: '2px 5px',
+                                                                borderRadius: '4px',
+                                                                backgroundColor: 'rgba(0,0,0,0.7)',
+                                                                color: '#fff',
+                                                                fontSize: '0.62rem',
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                gap: '2px'
+                                                            }}>
+                                                                <Eye size={10} /> Ver
+                                                            </span>
+                                                        </div>
+                                                        <div style={{ padding: '0.32rem 0.42rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.2rem' }}>
+                                                            <div style={{ minWidth: 0, flex: 1 }}>
+                                                                <div style={{ fontSize: '0.67rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                    {c.nombre_original}
+                                                                </div>
+                                                                <div style={{ fontSize: '0.61rem', color: 'var(--text-muted)' }}>
+                                                                    {formatBytes(c.tamano_bytes)}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                disabled={analyzingOcr}
+                                                                onClick={() => runReceiptOcr({ archivoUrl: c.archivo_url, nombreOriginal: c.nombre_original })}
+                                                                style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.4)', color: '#c7d2fe', borderRadius: '4px', cursor: 'pointer', padding: '0.15rem 0.28rem', flexShrink: 0, display: 'inline-flex' }}
+                                                                title="Leer con IA para autocompletar formulario"
+                                                            >
+                                                                <Sparkles size={11} />
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleDeleteReceipt(c)}
+                                                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.15rem', flexShrink: 0, display: 'inline-flex' }}
+                                                                title="Eliminar comprobante"
+                                                            >
+                                                                <Trash2 size={12} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </Modal>
+
+            <ReceiptViewerModal
+                open={viewerOpen}
+                onClose={() => setViewerOpen(false)}
+                comprobantes={viewerItems}
+                initialIndex={viewerIdx}
+                title={`Comprobantes — ${detail?.vencimiento?.descripcion || vencimientoRow?.descripcion || ''}`}
+                onDelete={handleDeleteReceipt}
+            />
+        </>
+    );
+}

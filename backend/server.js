@@ -77,7 +77,8 @@ const largePayloadPrefixes = [
     '/api/bancos/conciliacion/crear-masivo-y-aplicar',
     '/api/conciliacion/parse-extracto',
     '/api/conciliacion/crear-masivo-y-aplicar',
-    '/api/tickets'
+    '/api/tickets',
+    '/api/operaciones/recordatorios'
 ];
 
 app.use((req, res, next) => {
@@ -199,6 +200,7 @@ app.use('/api/login', loginLimiter);
 app.use('/api/ai/', aiLimiter);
 app.use('/api/finanzas/chat', aiLimiter);
 app.use('/api/finanzas/crecimiento/conversaciones/mensaje', aiLimiter);
+app.use('/api/operaciones/recordatorios/analizar-comprobante', aiLimiter);
 app.use('/api/onedrive', heavyProcessLimiter);
 app.use('/api/', apiLimiter);
 

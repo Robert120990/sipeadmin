@@ -1,5 +1,6 @@
 const dbModule = require('../db');
 const getDb = (...args) => dbModule.getDb(...args);
+const getExternalDb = (...args) => dbModule.getExternalDb ? dbModule.getExternalDb(...args) : null;
 const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
 const withRetry = (...args) => dbModule.withRetry(...args);
 
@@ -143,6 +144,84 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         // Fallback limpio si portal_pedidos no tiene facturas pendientes
     }
 
+    // 5b. Control de Pagos (web_rc_recordatorios_vencimientos): incorporar saldo pendiente real (descontando abonos parciales)
+    //     separando CXP/GASTO (egresos) y CXC (ingresos)
+    const recordatoriosCxcPendientes = [];
+    let compromisosControlPagosCxpUsd = 0;
+    let compromisosControlPagosCxcUsd = 0;
+    try {
+        const externalDb = await Promise.resolve(getExternalDb()).catch(() => null);
+        if (externalDb && typeof externalDb.query === 'function') {
+            const [cpRows] = await externalDb.query(`
+                SELECT a.id AS vencimiento_id, a.vencimiento AS fecha_vence,
+                       b.descripcion, b.monto, COALESCE(c.descripcion, '') AS ubicacion
+                FROM web_rc_recordatorios_vencimientos a
+                INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id
+                LEFT JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id
+                WHERE b.activo = 1
+                  AND a.estado = 'P'
+                  AND a.vencimiento BETWEEN ? AND ?
+            `, [todayStr, fechaFinHorizonteStr]);
+
+            if (Array.isArray(cpRows) && cpRows.length > 0) {
+                const venIds = cpRows.map(r => Number(r.vencimiento_id)).filter(Boolean);
+                const abonosMap = new Map();
+                const metaMap = new Map();
+                if (venIds.length > 0) {
+                    const ph = venIds.map(() => '?').join(',');
+                    try {
+                        const [abRows] = await db.query(
+                            `SELECT vencimiento_id, COALESCE(SUM(monto), 0) AS pagado, MAX(tipo_operacion) AS tipo_op
+                             FROM recordatorios_pagos_abonos
+                             WHERE vencimiento_id IN (${ph})
+                             GROUP BY vencimiento_id`,
+                            venIds
+                        );
+                        (abRows || []).forEach(r => abonosMap.set(Number(r.vencimiento_id), { pagado: Number(r.pagado || 0), tipo_op: r.tipo_op }));
+                    } catch (_eAb) { /* tabla opcional si aún no existe */ }
+                    try {
+                        const [mRows] = await db.query(
+                            `SELECT vencimiento_id, tipo_operacion FROM recordatorios_vencimientos_meta WHERE vencimiento_id IN (${ph})`,
+                            venIds
+                        );
+                        (mRows || []).forEach(r => metaMap.set(Number(r.vencimiento_id), r.tipo_operacion));
+                    } catch (_eMeta) { /* tabla opcional si aún no existe */ }
+                }
+
+                for (const row of cpRows) {
+                    const vid = Number(row.vencimiento_id);
+                    const total = Number(row.monto || 0);
+                    const abInfo = abonosMap.get(vid);
+                    const pagado = abInfo ? abInfo.pagado : 0;
+                    const saldoPendiente = Math.round(Math.max(0, total - pagado) * 100) / 100;
+                    if (saldoPendiente <= 0) continue;
+
+                    const tipoOp = metaMap.get(vid) || abInfo?.tipo_op || 'CXP';
+                    const partialTag = pagado > 0 ? ` [Parcial · resta $${saldoPendiente.toFixed(2)}]` : '';
+                    const descLabel = `${row.descripcion || 'Pago programado'}${row.ubicacion ? ` (${row.ubicacion})` : ''}${partialTag}`;
+
+                    if (tipoOp === 'CXC') {
+                        compromisosControlPagosCxcUsd += saldoPendiente;
+                        recordatoriosCxcPendientes.push({
+                            fecha_vence: row.fecha_vence,
+                            descripcion: descLabel,
+                            monto: saldoPendiente
+                        });
+                    } else {
+                        compromisosControlPagosCxpUsd += saldoPendiente;
+                        recordatoriosPendientes.push({
+                            fecha_vence: row.fecha_vence,
+                            descripcion: descLabel,
+                            monto: saldoPendiente
+                        });
+                    }
+                }
+            }
+        }
+    } catch (_errCp) {
+        // Fallback limpio si externalDb no está disponible
+    }
+
     // 6. Nómina quincenal real calculada desde rh_planillas
     let nominaQuincenalEstimada = 18000;
     try {
@@ -191,10 +270,18 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         if (diaSemana === 0) factorVenta = 1.05;
         if (diaSemana === 1) factorVenta = 0.90;
 
-        // Ingresos del día
+        // Ingresos del día (ventas + Cuentas por Cobrar programadas en Control de Pagos)
         const ingresoCombustible = promedioVentaDiariaCombustible * factorVenta;
         const ingresoTienda = promedioVentaDiariaTiendas * factorVenta;
-        const totalIngresosDia = ingresoCombustible + ingresoTienda;
+        let ingresoCxcRecordatorios = 0;
+        recordatoriosCxcPendientes.forEach(r => {
+            let rFecha = r.fecha_vence;
+            if (rFecha instanceof Date) rFecha = rFecha.toISOString().split('T')[0];
+            if (rFecha === dayStr) {
+                ingresoCxcRecordatorios += Number(r.monto || 0);
+            }
+        });
+        const totalIngresosDia = ingresoCombustible + ingresoTienda + ingresoCxcRecordatorios;
 
         // Egresos del día
         let egresoCombustible = 0;
@@ -285,7 +372,8 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
             ingresos: {
                 total: Math.round(totalIngresosDia),
                 combustible: Math.round(ingresoCombustible),
-                tienda: Math.round(ingresoTienda)
+                tienda: Math.round(ingresoTienda),
+                cxc_recordatorios: Math.round(ingresoCxcRecordatorios)
             },
             egresos: {
                 total: Math.round(totalEgresosDia),
@@ -338,6 +426,8 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
             total_ingresos_proyectados: Math.round(timeline.reduce((s, d) => s + d.ingresos.total, 0)),
             total_egresos_proyectados: Math.round(timeline.reduce((s, d) => s + d.egresos.total, 0)),
             compromisos_puma_pendientes_usd: Math.round(compromisosPumaPendientesUsd),
+            compromisos_control_pagos_cxp_usd: Math.round(compromisosControlPagosCxpUsd),
+            compromisos_control_pagos_cxc_usd: Math.round(compromisosControlPagosCxcUsd),
             dias_con_deficit: brechasDeLiquidez.length,
             salud_flujo: brechasDeLiquidez.length === 0 ? 'SALUDABLE' : (saldoMinimoProyectado < 0 ? 'CRÍTICO' : 'PRECAUCIÓN')
         },
