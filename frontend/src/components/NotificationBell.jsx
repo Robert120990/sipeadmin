@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useNotifications } from '../context/NotificationContext';
+import api from '../services/api';
 import {
     Bell,
     CheckCheck,
@@ -12,7 +13,12 @@ import {
     Info,
     X,
     ExternalLink,
-    Clock
+    Clock,
+    PlayCircle,
+    Calendar,
+    User,
+    Tag,
+    Bot
 } from 'lucide-react';
 
 /**
@@ -595,8 +601,200 @@ export function RealtimeNotificationToast() {
         }
         if (activeToast.data?.link) {
             navigate(activeToast.data.link);
+        } else if (activeToast.type === 'task_assigned') {
+            navigate('/dashboard/operaciones/tareas');
+        }
+        if (activeToast.data?.taskId) {
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('sipe:open-task-detail', {
+                    detail: { taskId: activeToast.data.taskId }
+                }));
+            }, 150);
         }
     };
+
+    const handleStartAssignedTask = async () => {
+        if (activeToast.data?.taskId) {
+            try {
+                await api.patch(`/tasks/${activeToast.data.taskId}/status`, { estado: 'en_proceso' });
+            } catch (_) {
+                // ignore if already in progress
+            }
+        }
+        handleClickAction();
+    };
+
+    const isTaskAssignedCard = activeToast.type === 'task_assigned';
+    const taskData = activeToast.data || {};
+    const prioRaw = String(taskData.prioridad || taskData.priority || 'media').toLowerCase();
+    const prioBadge = prioRaw === 'urgente'
+        ? { label: 'URGENTE', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.16)', border: 'rgba(239, 68, 68, 0.4)' }
+        : prioRaw === 'alta'
+            ? { label: 'ALTA', color: '#f97316', bg: 'rgba(249, 115, 22, 0.16)', border: 'rgba(249, 115, 22, 0.4)' }
+            : prioRaw === 'baja'
+                ? { label: 'BAJA', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.14)', border: 'rgba(148, 163, 184, 0.3)' }
+                : { label: 'MEDIA', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.16)', border: 'rgba(56, 189, 248, 0.4)' };
+
+    if (isTaskAssignedCard) {
+        return (
+            <div
+                className="notif-toast-banner"
+                style={{
+                    position: 'fixed',
+                    top: '1.25rem',
+                    right: '1.25rem',
+                    zIndex: 9999,
+                    width: '415px',
+                    maxWidth: 'calc(100vw - 1.5rem)',
+                    background: 'var(--bg-card)',
+                    border: `1px solid ${prioRaw === 'urgente' ? '#ef4444' : 'var(--primary)'}`,
+                    borderLeft: `4px solid ${prioBadge.color}`,
+                    borderRadius: '12px',
+                    boxShadow: '0 14px 32px rgba(0, 0, 0, 0.45), 0 0 18px rgba(37, 99, 235, 0.25)',
+                    padding: '0.9rem 1.05rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.6rem'
+                }}
+            >
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        <div style={{
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '7px',
+                            background: styleInfo.bg,
+                            color: styleInfo.color,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0
+                        }}>
+                            {styleInfo.icon}
+                        </div>
+                        <span style={{ fontSize: '0.73rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#38bdf8' }}>
+                            📋 Tarjeta de Tarea / Actividad Asignada
+                        </span>
+                        <span style={{
+                            fontSize: '0.66rem',
+                            fontWeight: 700,
+                            padding: '0.1rem 0.45rem',
+                            borderRadius: '5px',
+                            background: prioBadge.bg,
+                            color: prioBadge.color,
+                            border: `1px solid ${prioBadge.border}`
+                        }}>
+                            {prioBadge.label}
+                        </span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={dismissToast}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px', display: 'flex' }}
+                        title="Cerrar tarjeta"
+                    >
+                        <X size={15} />
+                    </button>
+                </div>
+
+                {/* Title & Description */}
+                <div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
+                        {taskData.titulo || activeToast.title}
+                    </div>
+                    <div style={{ fontSize: '0.77rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: 1.35 }}>
+                        {taskData.descripcion || activeToast.message}
+                    </div>
+                </div>
+
+                {/* Metadata Grid */}
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                    gap: '0.35rem 0.6rem',
+                    padding: '0.5rem 0.65rem',
+                    borderRadius: '8px',
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-color)',
+                    fontSize: '0.73rem'
+                }}>
+                    {taskData.assigned_user_name && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <User size={12} color="var(--primary)" />
+                            <span>Resp: <strong style={{ color: 'var(--text-primary)' }}>{taskData.assigned_user_name}</strong></span>
+                        </div>
+                    )}
+                    {taskData.created_user_name && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <User size={12} color="#10b981" />
+                            <span>Por: <strong style={{ color: 'var(--text-primary)' }}>{taskData.created_user_name}</strong></span>
+                        </div>
+                    )}
+                    {taskData.categoria && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)' }}>
+                            <Tag size={12} color="#a78bfa" />
+                            <span>Área: <strong style={{ color: 'var(--text-primary)' }}>{taskData.categoria}</strong></span>
+                        </div>
+                    )}
+                    {taskData.fecha_vencimiento && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)' }}>
+                            <Calendar size={12} color="#f59e0b" />
+                            <span>Plazo: <strong style={{ color: '#fbbf24' }}>{String(taskData.fecha_vencimiento).slice(0, 10)}{taskData.hora_limite ? ` · ${String(taskData.hora_limite).slice(0, 5)}` : ''}</strong></span>
+                        </div>
+                    )}
+                    {taskData.mibot_status_label && (
+                        <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#38bdf8', fontWeight: 600, marginTop: '0.1rem' }}>
+                            <Bot size={13} />
+                            <span>{taskData.mibot_status_label}</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Quick Actions */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    {taskData.taskId && (
+                        <button
+                            type="button"
+                            onClick={handleStartAssignedTask}
+                            className="btn-secondary"
+                            style={{
+                                height: '29px',
+                                padding: '0 0.7rem',
+                                fontSize: '0.75rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                borderRadius: '6px',
+                                color: '#38bdf8',
+                                borderColor: 'rgba(56, 189, 248, 0.35)'
+                            }}
+                        >
+                            <PlayCircle size={13} />
+                            <span>Iniciar Tarea</span>
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        onClick={handleClickAction}
+                        className="btn-primary"
+                        style={{
+                            height: '29px',
+                            padding: '0 0.8rem',
+                            fontSize: '0.75rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            borderRadius: '6px'
+                        }}
+                    >
+                        <span>Ver Actividad en Tablero</span>
+                        <ExternalLink size={12} />
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div

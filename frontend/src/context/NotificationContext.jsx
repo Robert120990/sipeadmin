@@ -45,8 +45,18 @@ export function NotificationProvider({ children }) {
         try {
             setLoading(true);
             const res = await api.get('/notifications');
-            setNotifications(res.data.notifications || []);
+            const list = res.data.notifications || [];
+            setNotifications(list);
             setUnreadCount(res.data.unreadCount || 0);
+
+            // Mostrar Tarjeta Informativa en sistema si existe una tarea/actividad asignada no leída
+            const unreadTaskNotif = list.find(n => !n.is_read && n.type === 'task_assigned');
+            if (unreadTaskNotif) {
+                const dismissKey = `sipe_dismissed_task_card_${unreadTaskNotif.id}`;
+                if (!sessionStorage.getItem(dismissKey)) {
+                    setActiveToast(prev => prev || unreadTaskNotif);
+                }
+            }
         } catch (err) {
             console.warn('[NotificationContext] Error fetching notifications:', err.message);
         } finally {
@@ -80,32 +90,63 @@ export function NotificationProvider({ children }) {
             setTimeout(() => setBellRinging(false), 3000);
 
             // 3. Update state
-            setNotifications(prev => [notification, ...prev]);
+            setNotifications(prev => [notification, ...prev.filter(x => x.id !== notification.id)]);
             setUnreadCount(prev => prev + 1);
 
-            // 4. Show real-time floating visual toast
+            // 4. Show real-time floating visual toast / informative card
             setActiveToast(notification);
         };
 
+        const handleTaskAssignedCard = (payload) => {
+            const nd = payload?.notificationData;
+            if (!nd) return;
+            const isAssignedToMe = Number(nd.assigned_to) === Number(currentUser.id);
+            const isCreatedByMe = Number(nd.created_by) === Number(currentUser.id);
+            if (!isAssignedToMe && !isCreatedByMe) return;
+
+            // Si ya llegó por notification:new al destinatario, evitar duplicar pero asegurar tarjeta visible
+            setActiveToast(prev => {
+                if (prev && prev.data?.taskId && Number(prev.data.taskId) === Number(nd.taskId)) {
+                    return prev;
+                }
+                return {
+                    id: `task_card_${nd.taskId || Date.now()}`,
+                    user_id: currentUser.id,
+                    type: 'task_assigned',
+                    title: isAssignedToMe ? 'Nueva Tarea / Actividad Asignada' : 'Tarea / Actividad Asignada en Sistema',
+                    message: `${nd.created_user_name || 'Sistema'} asignó a ${nd.assigned_user_name || 'Colaborador'}: "${nd.titulo}"`,
+                    data: nd,
+                    is_read: false,
+                    is_transient: !isAssignedToMe,
+                    created_at: new Date().toISOString()
+                };
+            });
+        };
+
         socket.on('notification:new', handleNewNotification);
+        socket.on('tasks:assigned_card', handleTaskAssignedCard);
 
         return () => {
             socket.off('notification:new', handleNewNotification);
+            socket.off('tasks:assigned_card', handleTaskAssignedCard);
         };
     }, [currentUser.id]);
 
-    // Auto-dismiss active toast after 6 seconds
+    // Auto-dismiss active toast (15s for task assignment cards, 6s for standard notifications)
     useEffect(() => {
         if (!activeToast) return undefined;
+        const duration = activeToast.type === 'task_assigned' ? 15000 : 6000;
         const timer = setTimeout(() => {
             setActiveToast(null);
-        }, 6000);
+        }, duration);
         return () => clearTimeout(timer);
     }, [activeToast]);
 
     // Mark single notification as read
     const markAsRead = async (id) => {
+        if (!id || String(id).startsWith('task_card_')) return;
         try {
+            sessionStorage.setItem(`sipe_dismissed_task_card_${id}`, '1');
             setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
             setUnreadCount(prev => Math.max(0, prev - 1));
             await api.patch(`/notifications/${id}/read`);
@@ -154,7 +195,12 @@ export function NotificationProvider({ children }) {
         }
     };
 
-    const dismissToast = () => setActiveToast(null);
+    const dismissToast = () => {
+        if (activeToast?.id) {
+            sessionStorage.setItem(`sipe_dismissed_task_card_${activeToast.id}`, '1');
+        }
+        setActiveToast(null);
+    };
 
     const value = {
         notifications,

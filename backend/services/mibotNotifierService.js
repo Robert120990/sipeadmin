@@ -244,6 +244,7 @@ async function ensureMibotSchema(db) {
                 mensaje TEXT NOT NULL,
                 vencimiento_id INT NULL,
                 recordatorio_id INT NULL,
+                task_id INT NULL,
                 ubicacion VARCHAR(120) NULL,
                 monto_total DECIMAL(14,2) NULL,
                 monto_pendiente DECIMAL(14,2) NULL,
@@ -260,9 +261,27 @@ async function ensureMibotSchema(db) {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 INDEX idx_mibot_prog_estado_prox (estado, proximo_envio_at),
                 INDEX idx_mibot_prog_ven (vencimiento_id, estado),
+                INDEX idx_mibot_prog_task (task_id, estado),
                 INDEX idx_mibot_prog_tipo (tipo)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         `);
+
+        try {
+            const [progCols] = await db.query(
+                `SELECT COLUMN_NAME
+                 FROM INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mibot_programaciones'`
+            );
+            const progColSet = new Set((progCols || []).map(c => String(c.COLUMN_NAME || '').toLowerCase()));
+            if (!progColSet.has('task_id')) {
+                await db.query('ALTER TABLE mibot_programaciones ADD COLUMN task_id INT NULL AFTER recordatorio_id');
+                await db.query('ALTER TABLE mibot_programaciones ADD INDEX idx_mibot_prog_task (task_id, estado)').catch(() => {});
+            }
+        } catch (progColErr) {
+            if (!/Duplicate column/i.test(String(progColErr.message || ''))) {
+                console.warn('[MiBot] Aviso verificando task_id en mibot_programaciones:', progColErr.message);
+            }
+        }
 
         // 3. Tabla de destinatarios individuales por programación
         await db.query(`
@@ -341,14 +360,29 @@ function formatMibotPersonalMessage({
         lines.push(cuerpo);
     }
 
-    // Contexto financiero en tiempo real si está vinculado a Control de Pagos
-    const hasPaymentInfo = Boolean(
+    // Contexto financiero en tiempo real si está vinculado a Control de Pagos o contexto de Tarea/Actividad
+    const isTaskContext = Boolean(programacion?.task_id) ||
+        (['TAREA', 'VALIDACION', 'REUNION'].includes(tipo) && !programacion?.vencimiento_id && (programacion?.monto_pendiente === null || programacion?.monto_pendiente === undefined));
+
+    const hasPaymentInfo = !isTaskContext && Boolean(
         programacion?.vencimiento_id ||
         programacion?.ubicacion ||
-        programacion?.monto_pendiente !== null && programacion?.monto_pendiente !== undefined
+        (programacion?.monto_pendiente !== null && programacion?.monto_pendiente !== undefined)
     );
 
-    if (hasPaymentInfo) {
+    if (isTaskContext && (programacion?.task_id || programacion?.ubicacion || programacion?.fecha_vencimiento)) {
+        lines.push('');
+        lines.push(`📋 <b>Detalle de Tarea / Actividad:</b>`);
+        if (programacion.task_id) {
+            lines.push(`• <b>Tarea en SIPE Admin:</b> #${Number(programacion.task_id)}`);
+        }
+        if (programacion.ubicacion) {
+            lines.push(`• <b>Categoría / Área:</b> ${escapeHtml(programacion.ubicacion)}`);
+        }
+        if (programacion.fecha_vencimiento) {
+            lines.push(`• <b>Fecha Límite:</b> ${escapeHtml(formatDateOnlyDMY(programacion.fecha_vencimiento))}`);
+        }
+    } else if (hasPaymentInfo) {
         lines.push('');
         lines.push(`💼 <b>Detalle de Control de Pagos:</b>`);
         if (programacion.ubicacion) {
@@ -595,6 +629,7 @@ function hydrateProgramacionRow(prog, destRows = []) {
         id: Number(prog.id),
         vencimiento_id: prog.vencimiento_id ? Number(prog.vencimiento_id) : null,
         recordatorio_id: prog.recordatorio_id ? Number(prog.recordatorio_id) : null,
+        task_id: prog.task_id ? Number(prog.task_id) : null,
         monto_total: prog.monto_total !== null && prog.monto_total !== undefined ? Number(prog.monto_total) : null,
         monto_pendiente: prog.monto_pendiente !== null && prog.monto_pendiente !== undefined ? Number(prog.monto_pendiente) : null,
         total_envios: Number(prog.total_envios || 0),
@@ -609,9 +644,9 @@ function hydrateProgramacionRow(prog, destRows = []) {
 }
 
 /**
- * Lista programaciones MiBot filtrables por vencimiento, tipo y estado
+ * Lista programaciones MiBot filtrables por vencimiento, tarea, tipo y estado
  */
-async function listMibotProgramaciones(db, { vencimientoId = null, estado = null, tipo = null, limit = 100 } = {}) {
+async function listMibotProgramaciones(db, { vencimientoId = null, taskId = null, estado = null, tipo = null, limit = 100 } = {}) {
     await ensureMibotSchema(db);
 
     const where = [];
@@ -620,6 +655,10 @@ async function listMibotProgramaciones(db, { vencimientoId = null, estado = null
     if (vencimientoId) {
         where.push('vencimiento_id = ?');
         params.push(Number(vencimientoId));
+    }
+    if (taskId) {
+        where.push('task_id = ?');
+        params.push(Number(taskId));
     }
     if (estado && estado !== 'ALL' && MIBOT_ESTADOS.includes(String(estado).toUpperCase())) {
         where.push('estado = ?');
@@ -666,14 +705,16 @@ async function listMibotProgramaciones(db, { vencimientoId = null, estado = null
 
 /**
  * Crea una nueva programación MiBot (para 1 o múltiples usuarios registrados en Telegram)
- * y opcionalmente la despacha de inmediato.
+ * y opcionalmente la despacha de inmediato y/o crea la tarea vinculada en el tablero de Tareas.
  */
 async function createMibotProgramacion({
     db,
     externalDb = null,
     payload = {},
     actorUser = null,
-    sendTelegramFn = sendTelegramMessage
+    sendTelegramFn = sendTelegramMessage,
+    io = null,
+    skipSystemNotification = false
 }) {
     await ensureMibotSchema(db);
 
@@ -711,7 +752,7 @@ async function createMibotProgramacion({
 
     const placeholders = uniqueDestIds.map(() => '?').join(',');
     const [tgUsers] = await db.query(
-        `SELECT tu.id, tu.telegram_user_id, tu.telegram_username, tu.first_name, tu.last_name,
+        `SELECT tu.id, tu.user_id, tu.telegram_user_id, tu.telegram_username, tu.first_name, tu.last_name,
                 tu.cargo, tu.activo, tu.recibir_mibot, u.nombre AS sipe_nombre, r.name AS sipe_role_name
          FROM telegram_usuarios tu
          LEFT JOIN users u ON tu.user_id = u.id
@@ -741,6 +782,7 @@ async function createMibotProgramacion({
 
     const vencimientoId = payload.vencimiento_id ? parseInt(payload.vencimiento_id, 10) : null;
     let recordatorioId = payload.recordatorio_id ? parseInt(payload.recordatorio_id, 10) : null;
+    let taskId = payload.task_id ? parseInt(payload.task_id, 10) : null;
     let ubicacion = payload.ubicacion ? String(payload.ubicacion).trim().slice(0, 120) : null;
     let montoTotal = payload.monto_total !== undefined && payload.monto_total !== null && payload.monto_total !== ''
         ? Number(payload.monto_total) : null;
@@ -762,12 +804,62 @@ async function createMibotProgramacion({
     const createdByUserId = actorUser?.id ? Number(actorUser.id) : null;
     const createdByName = String(actorUser?.nombre || actorUser?.username || 'SIPE Admin').trim().slice(0, 120);
 
+    // Si es una Tarea, Validación o Reunión agendada desde MiBot y solicita crear tarea en el tablero de Tareas
+    let autoCreatedTask = null;
+    const shouldCreateSystemTask = !taskId && !vencimientoId &&
+        Boolean(payload.crear_tarea_sistema) &&
+        ['TAREA', 'VALIDACION', 'REUNION'].includes(tipo);
+
+    if (shouldCreateSystemTask) {
+        try {
+            const firstLinkedUser = eligibleUsers.find(u => Number(u.user_id) > 0);
+            const assignedUserId = payload.assigned_to
+                ? Number(payload.assigned_to)
+                : (firstLinkedUser?.user_id ? Number(firstLinkedUser.user_id) : (createdByUserId || 1));
+            const taskDueDate = fechaVencimiento || String(programadoPara).slice(0, 10);
+            const taskHora = payload.hora_limite || String(programadoPara).slice(11, 16) || '17:00';
+            const taskPrioridad = ['baja', 'media', 'alta', 'urgente'].includes(String(payload.prioridad || '').toLowerCase())
+                ? String(payload.prioridad).toLowerCase()
+                : 'media';
+            const taskCategoria = ubicacion || payload.categoria || (tipo === 'REUNION' ? 'General' : 'Operaciones');
+            const cleanTaskTitle = titulo.replace(/^(?:Nueva Tarea Asignada|Tarea|Validación de Actividad|Recordatorio de Reunión)\s*:\s*/i, '').trim().toUpperCase() || titulo.toUpperCase();
+
+            const [tRes] = await db.query(
+                `INSERT INTO tasks
+                    (titulo, descripcion, tipo_plazo, fecha_vencimiento, hora_limite, prioridad, estado, categoria, assigned_to, created_by, checklist)
+                 VALUES (?, ?, 'dia_especifico', ?, ?, ?, 'pendiente', ?, ?, ?, '[]')`,
+                [cleanTaskTitle, mensaje, taskDueDate, taskHora, taskPrioridad, taskCategoria, assignedUserId, createdByUserId || assignedUserId]
+            );
+            taskId = Number(tRes.insertId);
+            fechaVencimiento = fechaVencimiento || taskDueDate;
+            ubicacion = ubicacion || taskCategoria;
+
+            const [tRows] = await db.query(
+                `SELECT t.*,
+                        DATE_FORMAT(t.fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
+                        DATE_FORMAT(t.fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento,
+                        COALESCE(u1.nombre, u1.username) AS assigned_user_name,
+                        COALESCE(u2.nombre, u2.username) AS created_user_name
+                 FROM tasks t
+                 LEFT JOIN users u1 ON t.assigned_to = u1.id
+                 LEFT JOIN users u2 ON t.created_by = u2.id
+                 WHERE t.id = ?`,
+                [taskId]
+            );
+            if (tRows && tRows[0]) {
+                autoCreatedTask = { ...tRows[0], checklist: [] };
+            }
+        } catch (taskErr) {
+            console.warn('[MiBot] Aviso creando tarea vinculada en tasks:', taskErr.message);
+        }
+    }
+
     const [insertRes] = await db.query(
         `INSERT INTO mibot_programaciones
             (tipo, titulo, mensaje, vencimiento_id, recordatorio_id, ubicacion, monto_total, monto_pendiente,
              fecha_vencimiento, programado_para, proximo_envio_at, frecuencia, estado,
-             created_by_user_id, created_by_name)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROGRAMADO', ?, ?)`,
+             created_by_user_id, created_by_name, task_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROGRAMADO', ?, ?, ?)`,
         [
             tipo,
             titulo,
@@ -782,7 +874,8 @@ async function createMibotProgramacion({
             programadoPara,
             frecuencia,
             createdByUserId,
-            createdByName
+            createdByName,
+            taskId || null
         ]
     );
 
@@ -815,9 +908,76 @@ async function createMibotProgramacion({
     }
 
     const fullProgramacion = await getMibotProgramacionById(db, programacionId);
+
+    // Emitir eventos de actualización de tablero y tarjeta informativa en sistema para destinatarios vinculados
+    if (!skipSystemNotification && ['TAREA', 'VALIDACION', 'REUNION'].includes(tipo)) {
+        try {
+            const notifiedUserIds = new Set();
+            const recipientNames = eligibleUsers.map(u => resolveRecipientDisplayName(u)).join(', ');
+            for (const u of eligibleUsers) {
+                const targetSipeUserId = u.user_id ? Number(u.user_id) : null;
+                if (targetSipeUserId && !notifiedUserIds.has(targetSipeUserId)) {
+                    notifiedUserIds.add(targetSipeUserId);
+                    const notifTitle = tipo === 'REUNION'
+                        ? 'Nueva Reunión Agendada (MiBot)'
+                        : tipo === 'VALIDACION'
+                            ? 'Actividad Asignada para Validación'
+                            : 'Nueva Tarea / Actividad Asignada';
+                    const notifData = {
+                        taskId: taskId || null,
+                        programacionId,
+                        tipo,
+                        titulo,
+                        descripcion: mensaje,
+                        categoria: ubicacion || 'Operaciones',
+                        priority: payload.prioridad || 'media',
+                        fecha_vencimiento: fechaVencimiento || String(programadoPara).slice(0, 10),
+                        hora_limite: String(programadoPara).slice(11, 16),
+                        created_user_name: createdByName,
+                        assigned_user_name: resolveRecipientDisplayName(u),
+                        mibot_status_label: enviarAhora ? `Enviado por Telegram a ${recipientNames}` : `Programado en MiBot (${formatDisplayDateTimeSv(programadoPara)})`,
+                        link: '/dashboard/operaciones/tareas'
+                    };
+                    const [nRes] = await db.query(
+                        `INSERT INTO notifications (user_id, type, title, message, data)
+                         VALUES (?, 'task_assigned', ?, ?, ?)`,
+                        [
+                            targetSipeUserId,
+                            notifTitle,
+                            `${createdByName} te asignó vía MiBot: "${titulo}"`,
+                            JSON.stringify(notifData)
+                        ]
+                    );
+                    if (io) {
+                        io.to(`user_${targetSipeUserId}`).emit('notification:new', {
+                            id: nRes.insertId,
+                            user_id: targetSipeUserId,
+                            type: 'task_assigned',
+                            title: notifTitle,
+                            message: `${createdByName} te asignó vía MiBot: "${titulo}"`,
+                            data: notifData,
+                            is_read: false,
+                            created_at: new Date().toISOString()
+                        });
+                    }
+                }
+            }
+            if (io) {
+                if (autoCreatedTask) {
+                    io.emit('tasks:changed', { action: 'created', task: autoCreatedTask });
+                } else if (taskId) {
+                    io.emit('tasks:changed', { action: 'mibot_scheduled', taskId, programacion: fullProgramacion });
+                }
+            }
+        } catch (notifErr) {
+            console.warn('[MiBot] Aviso enviando notificación en sistema:', notifErr.message);
+        }
+    }
+
     return {
         programacion: fullProgramacion,
-        dispatch: dispatchResult
+        dispatch: dispatchResult,
+        task: autoCreatedTask
     };
 }
 
@@ -994,7 +1154,7 @@ async function handleMibotCallbackQuery({
     await ensureMibotSchema(db);
 
     const [destRows] = await db.query(
-        `SELECT d.*, p.tipo, p.titulo, p.frecuencia, p.estado AS prog_estado
+        `SELECT d.*, p.tipo, p.titulo, p.frecuencia, p.estado AS prog_estado, p.task_id
          FROM mibot_programaciones_destinatarios d
          INNER JOIN mibot_programaciones p ON d.programacion_id = p.id
          WHERE d.id = ?
@@ -1073,6 +1233,42 @@ async function handleMibotCallbackQuery({
                  WHERE id = ?`,
                 [dest.programacion_id]
             );
+        }
+    }
+
+    // Sincronización bidireccional con Tablero de Tareas si está vinculado a task_id
+    if (dest.task_id) {
+        try {
+            const linkedTaskId = Number(dest.task_id);
+            const actorUserId = tgUser?.user_id ? Number(tgUser.user_id) : null;
+            const actorName = dest.nombre_destinatario || tgUser?.first_name || 'Colaborador Telegram';
+            if (newEstadoEntrega === 'VISTO') {
+                await db.query(
+                    `UPDATE tasks SET estado = 'en_proceso' WHERE id = ? AND estado = 'pendiente'`,
+                    [linkedTaskId]
+                );
+                if (actorUserId) {
+                    await db.query(
+                        `INSERT INTO task_comments (task_id, user_id, comentario)
+                         VALUES (?, ?, ?)`,
+                        [linkedTaskId, actorUserId, `👀 [MiBot Telegram] ${actorName} confirmó de recibido la tarea desde Telegram.`]
+                    ).catch(() => {});
+                }
+            } else if (newEstadoEntrega === 'VALIDADO') {
+                await db.query(
+                    `UPDATE tasks SET estado = 'completada', completada_en = NOW() WHERE id = ? AND estado <> 'completada'`,
+                    [linkedTaskId]
+                );
+                if (actorUserId) {
+                    await db.query(
+                        `INSERT INTO task_comments (task_id, user_id, comentario)
+                         VALUES (?, ?, ?)`,
+                        [linkedTaskId, actorUserId, `✔️ [MiBot Telegram] ${actorName} validó y completó la actividad desde Telegram.`]
+                    ).catch(() => {});
+                }
+            }
+        } catch (syncTaskErr) {
+            console.warn('[MiBot] Aviso sincronizando estado de tarea desde Telegram:', syncTaskErr.message);
         }
     }
 
@@ -1172,6 +1368,72 @@ async function getActiveMibotCountsByVencimientos(db, vencimientoIds = []) {
         }
     } catch (_) {
         // Defensivo: nunca bloquear la lista principal de Control de Pagos
+    }
+    return map;
+}
+
+/**
+ * Devuelve resumen de programaciones y estados de entrega MiBot agrupados por task_id
+ */
+async function getActiveMibotSummaryByTaskIds(db, taskIds = []) {
+    const map = new Map();
+    if (!db || !Array.isArray(taskIds) || taskIds.length === 0) return map;
+    try {
+        await ensureMibotSchema(db);
+        const cleanIds = [...new Set(taskIds.map(Number).filter(n => Number.isFinite(n) && n > 0))];
+        if (cleanIds.length === 0) return map;
+        const placeholders = cleanIds.map(() => '?').join(',');
+        const [rows] = await db.query(
+            `SELECT p.id AS programacion_id, p.task_id, p.tipo, p.estado AS prog_estado,
+                    p.programado_para, p.proximo_envio_at, p.frecuencia, p.total_envios,
+                    d.id AS dest_id, d.telegram_usuario_id, d.nombre_destinatario, d.cargo,
+                    d.estado_entrega, d.enviado_at, d.respondido_at
+             FROM mibot_programaciones p
+             LEFT JOIN mibot_programaciones_destinatarios d ON d.programacion_id = p.id
+             WHERE p.task_id IN (${placeholders}) AND p.estado <> 'CANCELADO'
+             ORDER BY p.id DESC, d.id ASC`,
+            cleanIds
+        );
+
+        for (const r of (rows || [])) {
+            const tid = Number(r.task_id);
+            if (!map.has(tid)) {
+                map.set(tid, {
+                    has_mibot: true,
+                    programacion_id: Number(r.programacion_id),
+                    tipo: r.tipo,
+                    ultimo_estado: r.prog_estado,
+                    proximo_envio_at: r.proximo_envio_at || r.programado_para,
+                    frecuencia: r.frecuencia,
+                    total_envios: Number(r.total_envios || 0),
+                    programaciones_ids: new Set([Number(r.programacion_id)]),
+                    destinatarios: []
+                });
+            } else {
+                map.get(tid).programaciones_ids.add(Number(r.programacion_id));
+            }
+            const entry = map.get(tid);
+            if (r.dest_id && !entry.destinatarios.some(d => d.id === Number(r.dest_id))) {
+                entry.destinatarios.push({
+                    id: Number(r.dest_id),
+                    programacion_id: Number(r.programacion_id),
+                    telegram_usuario_id: Number(r.telegram_usuario_id),
+                    nombre_destinatario: r.nombre_destinatario,
+                    cargo: r.cargo,
+                    estado_entrega: r.estado_entrega,
+                    enviado_at: r.enviado_at,
+                    respondido_at: r.respondido_at
+                });
+            }
+        }
+
+        for (const [tid, entry] of map.entries()) {
+            entry.programaciones_count = entry.programaciones_ids.size;
+            delete entry.programaciones_ids;
+            map.set(tid, entry);
+        }
+    } catch (_) {
+        // Defensivo: nunca bloquear la lista principal de Tareas
     }
     return map;
 }
@@ -1316,6 +1578,7 @@ module.exports = {
     handleMibotCallbackQuery,
     formatUserPersonalMibotInbox,
     getActiveMibotCountsByVencimientos,
+    getActiveMibotSummaryByTaskIds,
     processDueMibotSchedules,
     initMibotScheduler
 };

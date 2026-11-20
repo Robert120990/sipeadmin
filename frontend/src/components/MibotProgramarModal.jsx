@@ -124,6 +124,7 @@ export default function MibotProgramarModal({
     open,
     onClose,
     vencimientoRow = null,
+    taskRow = null,
     defaultTipo = null,
     onSaved = null
 }) {
@@ -142,6 +143,9 @@ export default function MibotProgramarModal({
     const [fechaProg, setFechaProg] = useState('');
     const [horaProg, setHoraProg] = useState('08:00');
     const [frecuencia, setFrecuencia] = useState('UNA_VEZ');
+    const [crearTareaSistema, setCrearTareaSistema] = useState(true);
+    const [prioridadTarea, setPrioridadTarea] = useState('media');
+    const [categoriaTarea, setCategoriaTarea] = useState('Operaciones');
 
     const [saving, setSaving] = useState(false);
     const [existingList, setExistingList] = useState([]);
@@ -192,6 +196,24 @@ export default function MibotProgramarModal({
         }
     }, []);
 
+    const loadExistingForTask = useCallback(async (tId) => {
+        if (!tId) {
+            setExistingList([]);
+            return;
+        }
+        setLoadingExisting(true);
+        try {
+            const res = await api.get('/telegram/mibot/programaciones', {
+                params: { task_id: tId, limit: 25 }
+            });
+            setExistingList(Array.isArray(res.data?.programaciones) ? res.data.programaciones : []);
+        } catch (_) {
+            setExistingList([]);
+        } finally {
+            setLoadingExisting(false);
+        }
+    }, []);
+
     useEffect(() => {
         if (!open) return;
 
@@ -221,11 +243,42 @@ export default function MibotProgramarModal({
             setFechaProg(inOneHour.date);
             setHoraProg(inOneHour.time);
             setFrecuencia(saldoVal > 0 ? 'DIARIO_HASTA_PAGAR' : 'UNA_VEZ');
+            setCrearTareaSistema(false);
             loadExistingForVencimiento(vencimientoRow.id);
+        } else if (taskRow) {
+            const prioTxt = String(taskRow.prioridad || 'media').toUpperCase();
+            const catTxt = taskRow.categoria || 'General';
+            const dueTxt = formatDateDMY(taskRow.fecha_vencimiento);
+            const horaTxt = taskRow.hora_limite ? ` a las ${String(taskRow.hora_limite).slice(0, 5)}` : '';
+            const checklistArr = Array.isArray(taskRow.checklist) ? taskRow.checklist : [];
+            const subTxt = checklistArr.length > 0
+                ? `\nSub-tareas (${checklistArr.length}):\n` + checklistArr.map(c => `• ${c.texto}`).join('\n')
+                : '';
+
+            setTipo(defaultTipo || 'TAREA');
+            setTitulo(`Tarea #${taskRow.id}: ${taskRow.titulo}`);
+            setMensaje(
+                `${taskRow.descripcion ? `${taskRow.descripcion}\n` : 'Se te ha asignado esta actividad en SIPE Admin.\n'}` +
+                `Prioridad: ${prioTxt} · Categoría: ${catTxt} · Plazo límite: ${dueTxt}${horaTxt}${subTxt}`
+            );
+            setEnviarAhora(true);
+            setFechaProg(taskRow.fecha_vencimiento ? String(taskRow.fecha_vencimiento).slice(0, 10) : inOneHour.date);
+            setHoraProg(taskRow.hora_limite ? String(taskRow.hora_limite).slice(0, 5) : inOneHour.time);
+            setFrecuencia('UNA_VEZ');
+            setCrearTareaSistema(false);
+            loadExistingForTask(taskRow.id);
         } else {
             const initTipo = defaultTipo || 'REUNION';
             setTipo(initTipo);
-            setTitulo(initTipo === 'REUNION' ? 'Recordatorio de Reunión' : '');
+            setTitulo(
+                initTipo === 'REUNION'
+                    ? 'Recordatorio de Reunión'
+                    : initTipo === 'TAREA'
+                        ? 'Nueva Tarea Asignada'
+                        : initTipo === 'VALIDACION'
+                            ? 'Validación de Actividad'
+                            : ''
+            );
             setMensaje(
                 initTipo === 'REUNION'
                     ? 'Se les recuerda nuestra reunión programada. Por favor confirmar asistencia desde este mensaje.'
@@ -235,9 +288,23 @@ export default function MibotProgramarModal({
             setFechaProg(inOneHour.date);
             setHoraProg(inOneHour.time);
             setFrecuencia('UNA_VEZ');
+            setCrearTareaSistema(initTipo === 'TAREA' || initTipo === 'VALIDACION');
+            setPrioridadTarea('media');
+            setCategoriaTarea('Operaciones');
             setExistingList([]);
         }
-    }, [open, vencimientoRow, defaultTipo, loadRecipients, loadExistingForVencimiento]);
+    }, [open, vencimientoRow, taskRow, defaultTipo, loadRecipients, loadExistingForVencimiento, loadExistingForTask]);
+
+    // Auto-seleccionar el usuario de Telegram vinculado al colaborador asignado de la tarea
+    useEffect(() => {
+        if (!open || !taskRow || recipients.length === 0) return;
+        const assignedUserId = Number(taskRow.assigned_to || 0);
+        if (!assignedUserId) return;
+        const matched = recipients.find(r => Number(r.user_id) === assignedUserId);
+        if (matched) {
+            setSelectedIds(prev => (prev.length === 0 ? [matched.id] : prev));
+        }
+    }, [open, taskRow, recipients]);
 
     const currentTipoMeta = useMemo(() => {
         return MIBOT_TIPO_OPTIONS.find(t => t.id === tipo) || MIBOT_TIPO_OPTIONS[0];
@@ -298,11 +365,14 @@ export default function MibotProgramarModal({
 
     const handleSelectTipo = (newTipo) => {
         setTipo(newTipo);
-        if (!vencimientoRow && (!titulo.trim() || titulo === 'Recordatorio de Reunión' || titulo === 'Validación de Actividad' || titulo === 'Nueva Tarea Asignada' || titulo === 'Recordatorio de Pago')) {
+        if (!vencimientoRow && !taskRow && (!titulo.trim() || titulo === 'Recordatorio de Reunión' || titulo === 'Validación de Actividad' || titulo === 'Nueva Tarea Asignada' || titulo === 'Recordatorio de Pago')) {
             if (newTipo === 'REUNION') setTitulo('Recordatorio de Reunión');
             else if (newTipo === 'VALIDACION') setTitulo('Validación de Actividad');
             else if (newTipo === 'TAREA') setTitulo('Nueva Tarea Asignada');
             else setTitulo('Recordatorio de Pago');
+        }
+        if (!vencimientoRow && !taskRow) {
+            setCrearTareaSistema(newTipo === 'TAREA' || newTipo === 'VALIDACION');
         }
         if (newTipo !== 'RECORDATORIO_PAGO' && frecuencia === 'DIARIO_HASTA_PAGAR') {
             setFrecuencia('UNA_VEZ');
@@ -346,16 +416,31 @@ export default function MibotProgramarModal({
                     monto_total: paymentTotal,
                     monto_pendiente: paymentSaldo,
                     fecha_vencimiento: vencimientoRow.vence ? String(vencimientoRow.vence).slice(0, 10) : null
-                } : {})
+                } : taskRow ? {
+                    task_id: taskRow.id,
+                    ubicacion: taskRow.categoria || 'Operaciones',
+                    fecha_vencimiento: taskRow.fecha_vencimiento ? String(taskRow.fecha_vencimiento).slice(0, 10) : null,
+                    prioridad: taskRow.prioridad || 'media'
+                } : {
+                    crear_tarea_sistema: Boolean(crearTareaSistema && ['TAREA', 'VALIDACION', 'REUNION'].includes(tipo)),
+                    prioridad: prioridadTarea,
+                    categoria: categoriaTarea,
+                    ubicacion: categoriaTarea,
+                    fecha_vencimiento: fechaProg || null,
+                    hora_limite: horaProg || '17:00'
+                })
             };
 
             const res = await api.post('/telegram/mibot/programaciones', payload);
             addToast(res.data?.message || 'Aviso MiBot guardado con éxito', 'success');
 
-            if (onSaved) onSaved();
+            if (onSaved) onSaved(res.data);
 
             if (vencimientoRow) {
                 await loadExistingForVencimiento(vencimientoRow.id);
+                setEnviarAhora(false);
+            } else if (taskRow) {
+                await loadExistingForTask(taskRow.id);
                 setEnviarAhora(false);
             } else {
                 onClose();
@@ -373,7 +458,8 @@ export default function MibotProgramarModal({
             const res = await api.post(`/telegram/mibot/programaciones/${prog.id}/enviar-ahora`);
             addToast(res.data?.message || 'Aviso enviado por Telegram', 'success');
             if (vencimientoRow?.id) await loadExistingForVencimiento(vencimientoRow.id);
-            if (onSaved) onSaved();
+            if (taskRow?.id) await loadExistingForTask(taskRow.id);
+            if (onSaved) onSaved(res.data);
         } catch (err) {
             addToast(err.response?.data?.message || 'Error enviando aviso MiBot', 'error');
         } finally {
@@ -387,6 +473,7 @@ export default function MibotProgramarModal({
             await api.patch(`/telegram/mibot/programaciones/${prog.id}/estado`, { estado: 'CANCELADO' });
             addToast('Programación MiBot cancelada', 'success');
             if (vencimientoRow?.id) await loadExistingForVencimiento(vencimientoRow.id);
+            if (taskRow?.id) await loadExistingForTask(taskRow.id);
             if (onSaved) onSaved();
         } catch (err) {
             addToast(err.response?.data?.message || 'Error cancelando programación', 'error');
@@ -399,6 +486,7 @@ export default function MibotProgramarModal({
             await api.delete(`/telegram/mibot/programaciones/${prog.id}`);
             addToast('Programación MiBot eliminada', 'success');
             if (vencimientoRow?.id) await loadExistingForVencimiento(vencimientoRow.id);
+            if (taskRow?.id) await loadExistingForTask(taskRow.id);
             if (onSaved) onSaved();
         } catch (err) {
             addToast(err.response?.data?.message || 'Error eliminando programación', 'error');
@@ -412,7 +500,9 @@ export default function MibotProgramarModal({
             title={
                 vencimientoRow
                     ? `MiBot Telegram — Programar Aviso (#${vencimientoRow.id_recordatorio || vencimientoRow.id})`
-                    : 'MiBot Telegram — Programar Aviso, Tarea, Validación o Reunión'
+                    : taskRow
+                        ? `MiBot Telegram — Agendar / Notificar Tarea (#${taskRow.id})`
+                        : 'MiBot Telegram — Programar Aviso, Tarea, Validación o Reunión'
             }
             size="lg"
             footer={
@@ -488,6 +578,34 @@ export default function MibotProgramarModal({
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Saldo Pendiente</div>
                             <div style={{ fontSize: '1.05rem', fontWeight: 800, color: paymentSaldo > 0 ? '#fbbf24' : '#34d399' }}>
                                 {formatMoney(paymentSaldo)}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Contexto de la tarea vinculada si viene del Tablero de Tareas */}
+                {taskRow && (
+                    <div style={{
+                        padding: '0.65rem 0.85rem',
+                        borderRadius: '9px',
+                        backgroundColor: 'rgba(56, 189, 248, 0.08)',
+                        border: '1px solid rgba(56, 189, 248, 0.3)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '0.5rem'
+                    }}>
+                        <div style={{ minWidth: 0, flex: '1 1 200px' }}>
+                            <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text)', wordBreak: 'break-word', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <ClipboardList size={15} color="#38bdf8" />
+                                <span>Tarea #{taskRow.id}: {taskRow.titulo}</span>
+                            </div>
+                            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', marginTop: '0.2rem' }}>
+                                <span>Responsable: <strong style={{ color: 'var(--text)' }}>{taskRow.assigned_user_name || 'Sin asignar'}</strong></span>
+                                <span>Categoría: <strong style={{ color: 'var(--text)' }}>{taskRow.categoria || 'General'}</strong></span>
+                                <span>Plazo: <strong style={{ color: '#fbbf24' }}>{formatDateDMY(taskRow.fecha_vencimiento)}{taskRow.hora_limite ? ` · ${String(taskRow.hora_limite).slice(0, 5)}` : ''}</strong></span>
+                                <span>Prioridad: <strong style={{ color: taskRow.prioridad === 'urgente' ? '#ef4444' : '#38bdf8' }}>{String(taskRow.prioridad || 'media').toUpperCase()}</strong></span>
                             </div>
                         </div>
                     </div>
@@ -805,10 +923,71 @@ export default function MibotProgramarModal({
                             </div>
                         )}
                     </div>
+
+                    {/* 5. SINCRONIZACIÓN CON TABLERO DE TAREAS Y TARJETA INFORMATIVA EN SISTEMA */}
+                    {!vencimientoRow && !taskRow && ['TAREA', 'VALIDACION', 'REUNION'].includes(tipo) && (
+                        <div style={{
+                            padding: '0.7rem 0.85rem',
+                            borderRadius: '9px',
+                            border: crearTareaSistema ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid var(--border)',
+                            backgroundColor: crearTareaSistema ? 'rgba(56, 189, 248, 0.08)' : 'rgba(255,255,255,0.02)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.55rem'
+                        }}>
+                            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)', cursor: 'pointer', userSelect: 'none' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={crearTareaSistema}
+                                    onChange={e => setCrearTareaSistema(e.target.checked)}
+                                    style={{ width: '16px', height: '16px' }}
+                                />
+                                <span>📋 Registrar también en el Tablero de Tareas y mostrar Tarjeta Informativa en el sistema</span>
+                            </label>
+                            {crearTareaSistema && (
+                                <div className="form-grid form-grid-2" style={{ gap: '0.55rem' }}>
+                                    <div>
+                                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '0.18rem' }}>
+                                            Prioridad en Tablero
+                                        </label>
+                                        <select
+                                            className="form-control"
+                                            value={prioridadTarea}
+                                            onChange={e => setPrioridadTarea(e.target.value)}
+                                            style={{ height: '34px', fontSize: '0.78rem' }}
+                                        >
+                                            <option value="baja">Baja</option>
+                                            <option value="media">Media</option>
+                                            <option value="alta">Alta</option>
+                                            <option value="urgente">Urgente 🔥</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '0.18rem' }}>
+                                            Categoría Operativa
+                                        </label>
+                                        <select
+                                            className="form-control"
+                                            value={categoriaTarea}
+                                            onChange={e => setCategoriaTarea(e.target.value)}
+                                            style={{ height: '34px', fontSize: '0.78rem' }}
+                                        >
+                                            <option value="Operaciones">Operaciones</option>
+                                            <option value="General">General</option>
+                                            <option value="Mantenimiento">Mantenimiento</option>
+                                            <option value="Administrativo">Administrativo</option>
+                                            <option value="Finanzas">Finanzas</option>
+                                            <option value="Sistemas">Sistemas</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </form>
 
-                {/* HISTORIAL DE AVISOS PROGRAMADOS PARA ESTE PAGO */}
-                {vencimientoRow && (
+                {/* HISTORIAL DE AVISOS PROGRAMADOS PARA ESTE PAGO O TAREA */}
+                {(vencimientoRow || taskRow) && (
                     <div style={{
                         padding: '0.75rem',
                         borderRadius: '9px',
@@ -821,12 +1000,12 @@ export default function MibotProgramarModal({
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
                             <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                                 <CalendarClock size={14} color="#38bdf8" />
-                                Avisos MiBot de este pago ({existingList.length})
+                                {taskRow ? `Avisos MiBot de esta tarea (${existingList.length})` : `Avisos MiBot de este pago (${existingList.length})`}
                             </span>
                             <button
                                 type="button"
                                 className="btn-secondary"
-                                onClick={() => loadExistingForVencimiento(vencimientoRow.id)}
+                                onClick={() => taskRow ? loadExistingForTask(taskRow.id) : loadExistingForVencimiento(vencimientoRow.id)}
                                 disabled={loadingExisting}
                                 style={{ height: '26px', padding: '0 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                             >

@@ -1,8 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { getDb } = require('../db');
+const { getDb, getExternalDb } = require('../db');
 const { authenticateToken, requirePermission, isAdminUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const {
+    ensureMibotSchema,
+    createMibotProgramacion,
+    getActiveMibotSummaryByTaskIds,
+    listMibotProgramaciones
+} = require('../services/mibotNotifierService');
 
 const taskPerms = ['manage_tasks', '/dashboard/operaciones/tareas'];
 
@@ -69,6 +75,7 @@ const hasTaskManagePermission = (user) => {
 router.get('/collaborators', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
+        await ensureMibotSchema(db).catch(() => {});
         const [rows] = await db.query(`
             SELECT 
                 u.id, 
@@ -77,9 +84,18 @@ router.get('/collaborators', authenticateToken, async (req, res) => {
                 u.email, 
                 u.status, 
                 u.role_id, 
-                r.name as role_name 
+                r.name as role_name,
+                tu.id AS telegram_usuario_id,
+                tu.telegram_user_id,
+                tu.telegram_username,
+                tu.cargo AS telegram_cargo,
+                tu.recibir_mibot,
+                tu.mibot_tareas,
+                tu.mibot_validaciones,
+                tu.mibot_reuniones
             FROM users u 
             LEFT JOIN roles r ON u.role_id = r.id
+            LEFT JOIN telegram_usuarios tu ON tu.user_id = u.id AND tu.activo = 1
             WHERE u.status = 'active' OR u.status IS NULL
             ORDER BY COALESCE(NULLIF(u.nombre, ''), u.username) ASC
         `);
@@ -182,11 +198,13 @@ router.get('/', authenticateToken, async (req, res) => {
         `;
 
         const [rows] = await db.query(query, params);
+        const mibotMap = await getActiveMibotSummaryByTaskIds(db, rows.map(r => r.id));
 
-        // Normalize checklist JSON
+        // Normalize checklist JSON & attach MiBot summary
         const tasks = rows.map(t => ({
             ...t,
-            checklist: typeof t.checklist === 'string' ? JSON.parse(t.checklist) : (t.checklist || [])
+            checklist: typeof t.checklist === 'string' ? JSON.parse(t.checklist) : (t.checklist || []),
+            mibot_summary: mibotMap.get(Number(t.id)) || null
         }));
 
         res.json(tasks);
@@ -194,6 +212,60 @@ router.get('/', authenticateToken, async (req, res) => {
         sendSafeError(res, error, 'Error al consultar tareas');
     }
 });
+
+/**
+ * Helper para construir y programar aviso MiBot vinculado a una tarea del tablero
+ */
+async function scheduleMibotForTask({ db, req, task, mibotConfig }) {
+    if (!mibotConfig || !mibotConfig.enabled) return null;
+    const destIds = Array.isArray(mibotConfig.destinatario_ids)
+        ? mibotConfig.destinatario_ids.map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0)
+        : [];
+    if (destIds.length === 0) return null;
+
+    const tipo = ['TAREA', 'VALIDACION', 'REUNION', 'RECORDATORIO_PAGO'].includes(String(mibotConfig.tipo || '').toUpperCase())
+        ? String(mibotConfig.tipo).toUpperCase()
+        : 'TAREA';
+    const prioLabel = String(task.prioridad || 'media').toUpperCase();
+    const catLabel = task.categoria || 'General';
+    const dueLabel = task.fecha_vencimiento || '';
+    const horaLabel = task.hora_limite ? ` (${String(task.hora_limite).slice(0, 5)})` : '';
+    const checklistArr = Array.isArray(task.checklist) ? task.checklist : [];
+    const checklistTxt = checklistArr.length > 0
+        ? `\n\nSub-tareas (${checklistArr.length}):\n` + checklistArr.map(c => `• ${c.texto}`).join('\n')
+        : '';
+    const extraMsg = mibotConfig.mensaje && String(mibotConfig.mensaje).trim()
+        ? String(mibotConfig.mensaje).trim()
+        : [
+            task.descripcion ? String(task.descripcion).trim() : `Se te ha asignado la actividad "${task.titulo}".`,
+            `Prioridad: ${prioLabel} · Categoría: ${catLabel}${dueLabel ? ` · Plazo: ${dueLabel}${horaLabel}` : ''}`,
+            checklistTxt
+        ].filter(Boolean).join('\n');
+
+    const io = req.app?.get('io') || req.io || null;
+    const externalDb = getExternalDb();
+
+    return createMibotProgramacion({
+        db,
+        externalDb,
+        payload: {
+            tipo,
+            titulo: mibotConfig.titulo ? String(mibotConfig.titulo).trim() : `Tarea #${task.id}: ${task.titulo}`,
+            mensaje: extraMsg,
+            task_id: task.id,
+            ubicacion: catLabel,
+            fecha_vencimiento: task.fecha_vencimiento || null,
+            destinatario_ids: destIds,
+            enviar_ahora: Boolean(mibotConfig.enviar_ahora),
+            programado_para: mibotConfig.enviar_ahora ? undefined : mibotConfig.programado_para,
+            frecuencia: mibotConfig.frecuencia || 'UNA_VEZ',
+            prioridad: task.prioridad || 'media'
+        },
+        actorUser: req.user,
+        io,
+        skipSystemNotification: true
+    });
+}
 
 /**
  * GET /api/tasks/kpis/summary
@@ -281,21 +353,28 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
         task.checklist = typeof task.checklist === 'string' ? JSON.parse(task.checklist) : (task.checklist || []);
 
-        // Fetch comments
-        const [comments] = await db.query(`
-            SELECT 
-                tc.*,
-                COALESCE(u.nombre, u.username) AS user_name,
-                u.username
-            FROM task_comments tc
-            JOIN users u ON tc.user_id = u.id
-            WHERE tc.task_id = ?
-            ORDER BY tc.created_at ASC
-        `, [taskId]);
+        // Fetch comments & MiBot schedules
+        const [commentsResult, mibotMap, mibotProgramaciones] = await Promise.all([
+            db.query(`
+                SELECT 
+                    tc.*,
+                    COALESCE(u.nombre, u.username) AS user_name,
+                    u.username
+                FROM task_comments tc
+                JOIN users u ON tc.user_id = u.id
+                WHERE tc.task_id = ?
+                ORDER BY tc.created_at ASC
+            `, [taskId]),
+            getActiveMibotSummaryByTaskIds(db, [taskId]),
+            listMibotProgramaciones(db, { taskId: Number(taskId), limit: 25 }).catch(() => [])
+        ]);
+        const [comments] = commentsResult;
 
         res.json({
             ...task,
-            comments
+            comments,
+            mibot_summary: mibotMap.get(Number(taskId)) || null,
+            mibot_programaciones: mibotProgramaciones || []
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al consultar detalle de tarea');
@@ -304,7 +383,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/tasks
- * Create a new task
+ * Create a new task (and optionally schedule/dispatch MiBot Telegram notification)
  */
 router.post('/', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
@@ -319,7 +398,8 @@ router.post('/', authenticateToken, requirePermission(taskPerms), async (req, re
             prioridad = 'media',
             categoria = 'General',
             assigned_to,
-            checklist = []
+            checklist = [],
+            mibot = null
         } = req.body;
 
         if (!titulo || !titulo.trim()) {
@@ -381,30 +461,79 @@ router.post('/', authenticateToken, requirePermission(taskPerms), async (req, re
             WHERE t.id = ?
         `, [newTaskId]);
 
-        const createdTask = {
+        let createdTask = {
             ...rows[0],
             checklist: Array.isArray(checklist) ? checklist : []
         };
 
+        // Si se configuró MiBot Telegram al crear la tarea, programarlo/enviarlo de inmediato
+        let mibotResult = null;
+        let mibotStatusLabel = null;
+        if (mibot && mibot.enabled) {
+            try {
+                mibotResult = await scheduleMibotForTask({
+                    db,
+                    req,
+                    task: createdTask,
+                    mibotConfig: mibot
+                });
+                if (mibotResult?.programacion) {
+                    const mibotMap = await getActiveMibotSummaryByTaskIds(db, [newTaskId]);
+                    createdTask = {
+                        ...createdTask,
+                        mibot_summary: mibotMap.get(Number(newTaskId)) || null
+                    };
+                    const destNames = (mibotResult.programacion.destinatarios || []).map(d => d.nombre_destinatario).join(', ');
+                    mibotStatusLabel = mibotResult.dispatch
+                        ? `Enviado por Telegram (${mibotResult.dispatch.sent}/${mibotResult.dispatch.total}) a: ${destNames}`
+                        : `Programado en MiBot Telegram para: ${destNames}`;
+                }
+            } catch (mibotErr) {
+                console.warn('[Tasks MiBot] Aviso programando MiBot en creación de tarea:', mibotErr.message);
+            }
+        }
+
         emitTaskEvent(req, 'tasks:changed', { action: 'created', task: createdTask });
 
-        // Notify assigned user
+        // Notify assigned user with rich informative card data
         const creatorName = req.user.nombre || req.user.username || 'Un usuario';
+        const notificationData = {
+            taskId: newTaskId,
+            titulo: createdTask.titulo,
+            descripcion: createdTask.descripcion || '',
+            categoria: createdTask.categoria || 'General',
+            priority: prioridad || 'media',
+            prioridad: prioridad || 'media',
+            fecha_vencimiento: createdTask.fecha_vencimiento,
+            hora_limite: createdTask.hora_limite || null,
+            assigned_to: Number(assigned_to),
+            assigned_user_name: createdTask.assigned_user_name || 'Colaborador',
+            created_by: Number(req.user.id),
+            created_user_name: creatorName,
+            mibot_status_label: mibotStatusLabel,
+            link: '/dashboard/operaciones/tareas'
+        };
+
         await createAndEmitNotification(req, {
             userId: assigned_to,
             type: 'task_assigned',
-            title: 'Nueva Tarea Asignada',
+            title: 'Nueva Tarea / Actividad Asignada',
             message: `${creatorName} te ha asignado: "${titulo.trim().toUpperCase()}"`,
-            data: {
-                taskId: newTaskId,
-                link: '/dashboard/operaciones/tareas',
-                priority: prioridad || 'media'
-            }
+            data: notificationData
+        });
+
+        emitTaskEvent(req, 'tasks:assigned_card', {
+            task: createdTask,
+            mibot: mibotResult ? { programacion: mibotResult.programacion, dispatch: mibotResult.dispatch, label: mibotStatusLabel } : null,
+            notificationData
         });
 
         res.status(201).json({
-            message: 'Tarea creada con éxito',
-            task: createdTask
+            message: mibotStatusLabel
+                ? `Tarea creada con éxito · ${mibotStatusLabel}`
+                : 'Tarea creada con éxito',
+            task: createdTask,
+            mibot: mibotResult
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al crear la tarea');
@@ -413,7 +542,7 @@ router.post('/', authenticateToken, requirePermission(taskPerms), async (req, re
 
 /**
  * PUT /api/tasks/:id
- * Full update of task
+ * Full update of task (and optionally schedule/dispatch MiBot Telegram notification)
  */
 router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
@@ -440,7 +569,8 @@ router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
             prioridad = 'media',
             categoria = 'General',
             assigned_to,
-            checklist
+            checklist,
+            mibot = null
         } = req.body;
 
         if (!titulo || !titulo.trim()) {
@@ -506,12 +636,74 @@ router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
             WHERE t.id = ?
         `, [taskId]);
 
-        const updatedTask = {
+        let updatedTask = {
             ...rows[0],
             checklist: typeof rows[0]?.checklist === 'string' ? JSON.parse(rows[0].checklist) : (rows[0]?.checklist || [])
         };
 
+        let mibotResult = null;
+        let mibotStatusLabel = null;
+        if (mibot && mibot.enabled) {
+            try {
+                mibotResult = await scheduleMibotForTask({
+                    db,
+                    req,
+                    task: updatedTask,
+                    mibotConfig: mibot
+                });
+                if (mibotResult?.programacion) {
+                    const destNames = (mibotResult.programacion.destinatarios || []).map(d => d.nombre_destinatario).join(', ');
+                    mibotStatusLabel = mibotResult.dispatch
+                        ? `Enviado por Telegram (${mibotResult.dispatch.sent}/${mibotResult.dispatch.total}) a: ${destNames}`
+                        : `Programado en MiBot Telegram para: ${destNames}`;
+                }
+            } catch (mibotErr) {
+                console.warn('[Tasks MiBot] Aviso programando MiBot en actualización de tarea:', mibotErr.message);
+            }
+        }
+
+        const mibotMap = await getActiveMibotSummaryByTaskIds(db, [taskId]);
+        updatedTask = {
+            ...updatedTask,
+            mibot_summary: mibotMap.get(Number(taskId)) || null
+        };
+
         emitTaskEvent(req, 'tasks:changed', { action: 'updated', task: updatedTask });
+
+        // Si cambió el responsable asignado o se solicitó aviso MiBot, enviar tarjeta informativa de asignación
+        if (Number(taskRow.assigned_to) !== Number(assigned_to) || mibotResult) {
+            const creatorName = req.user.nombre || req.user.username || 'Un usuario';
+            const notificationData = {
+                taskId: Number(taskId),
+                titulo: updatedTask.titulo,
+                descripcion: updatedTask.descripcion || '',
+                categoria: updatedTask.categoria || 'General',
+                priority: prioridad || 'media',
+                prioridad: prioridad || 'media',
+                fecha_vencimiento: updatedTask.fecha_vencimiento,
+                hora_limite: updatedTask.hora_limite || null,
+                assigned_to: Number(assigned_to),
+                assigned_user_name: updatedTask.assigned_user_name || 'Colaborador',
+                created_by: Number(req.user.id),
+                created_user_name: creatorName,
+                mibot_status_label: mibotStatusLabel,
+                link: '/dashboard/operaciones/tareas'
+            };
+
+            await createAndEmitNotification(req, {
+                userId: assigned_to,
+                type: 'task_assigned',
+                title: Number(taskRow.assigned_to) !== Number(assigned_to) ? 'Nueva Tarea / Actividad Asignada' : 'Tarea Actualizada y Agendada',
+                message: `${creatorName} te ha asignado: "${updatedTask.titulo}"`,
+                data: notificationData
+            });
+
+            emitTaskEvent(req, 'tasks:assigned_card', {
+                task: updatedTask,
+                mibot: mibotResult ? { programacion: mibotResult.programacion, dispatch: mibotResult.dispatch, label: mibotStatusLabel } : null,
+                notificationData
+            });
+        }
 
         if (updatedTask.estado === 'completada' && updatedTask.created_by) {
             const completedByName = req.user.nombre || req.user.username || 'Un usuario';
@@ -528,8 +720,11 @@ router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
         }
 
         res.json({
-            message: 'Tarea actualizada con éxito',
-            task: updatedTask
+            message: mibotStatusLabel
+                ? `Tarea actualizada con éxito · ${mibotStatusLabel}`
+                : 'Tarea actualizada con éxito',
+            task: updatedTask,
+            mibot: mibotResult
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar la tarea');

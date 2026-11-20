@@ -4,6 +4,11 @@ import socket from '../services/socket';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import MibotProgramarModal, {
+    MIBOT_TIPO_OPTIONS,
+    formatMibotDateTime,
+    getDeliveryBadgeStyle
+} from '../components/MibotProgramarModal';
 import * as XLSX from 'xlsx';
 import {
     ClipboardCheck,
@@ -27,7 +32,12 @@ import {
     PlayCircle,
     PauseCircle,
     Download,
-    Flame
+    Flame,
+    Bot,
+    Bell,
+    XCircle,
+    Users,
+    X
 } from 'lucide-react';
 
 const COLUMNS = [
@@ -60,7 +70,7 @@ export default function Tareas() {
     const [usersLoading, setUsersLoading] = useState(false);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [viewMode, setViewMode] = useState('kanban'); // 'kanban' | 'table'
+    const [viewMode, setViewMode] = useState('kanban'); // 'kanban' | 'table' | 'mibot'
 
     // Filters
     const [searchTerm, setSearchTerm] = useState('');
@@ -68,6 +78,21 @@ export default function Tareas() {
     const [filterCategoria, setFilterCategoria] = useState('todas');
     const [filterUser, setFilterUser] = useState('');
     const [soloMias, setSoloMias] = useState(false);
+
+    // MiBot Telegram Immersed State
+    const [mibotRecipients, setMibotRecipients] = useState([]);
+    const [mibotProgramaciones, setMibotProgramaciones] = useState([]);
+    const [loadingMibot, setLoadingMibot] = useState(false);
+    const [mibotTipoFilter, setMibotTipoFilter] = useState('ALL');
+    const [mibotEstadoFilter, setMibotEstadoFilter] = useState('ALL');
+    const [sendingMibotId, setSendingMibotId] = useState(null);
+    const [mibotModalOpen, setMibotModalOpen] = useState(false);
+    const [mibotTargetTask, setMibotTargetTask] = useState(null);
+    const [mibotDefaultTipo, setMibotDefaultTipo] = useState('TAREA');
+
+    // Tarjeta Informativa de Asignación en Sistema
+    const [recentAssignedCard, setRecentAssignedCard] = useState(null);
+    const [showMyAssignedBanner, setShowMyAssignedBanner] = useState(true);
 
     // Modals
     const [showModalForm, setShowModalForm] = useState(false);
@@ -82,7 +107,14 @@ export default function Tareas() {
         prioridad: 'media',
         categoria: 'General',
         assigned_to: '',
-        checklist: []
+        checklist: [],
+        mibot_enabled: false,
+        mibot_tipo: 'TAREA',
+        mibot_destinatario_ids: [],
+        mibot_enviar_ahora: true,
+        mibot_fecha: '',
+        mibot_hora: '08:00',
+        mibot_frecuencia: 'UNA_VEZ'
     });
     const [newSubtaskText, setNewSubtaskText] = useState('');
 
@@ -96,6 +128,30 @@ export default function Tareas() {
     // Drag & Drop State
     const [draggedTaskId, setDraggedTaskId] = useState(null);
     const [dragOverColumn, setDragOverColumn] = useState(null);
+
+    const fetchMibotRecipients = useCallback(async () => {
+        try {
+            const res = await api.get('/telegram/mibot/destinatarios');
+            setMibotRecipients(Array.isArray(res.data?.destinatarios) ? res.data.destinatarios : []);
+        } catch (_) {
+            setMibotRecipients([]);
+        }
+    }, []);
+
+    const fetchMibotProgramaciones = useCallback(async () => {
+        setLoadingMibot(true);
+        try {
+            const params = { limit: 80 };
+            if (mibotTipoFilter && mibotTipoFilter !== 'ALL') params.tipo = mibotTipoFilter;
+            if (mibotEstadoFilter && mibotEstadoFilter !== 'ALL') params.estado = mibotEstadoFilter;
+            const res = await api.get('/telegram/mibot/programaciones', { params });
+            setMibotProgramaciones(Array.isArray(res.data?.programaciones) ? res.data.programaciones : []);
+        } catch (_) {
+            setMibotProgramaciones([]);
+        } finally {
+            setLoadingMibot(false);
+        }
+    }, [mibotTipoFilter, mibotEstadoFilter]);
 
     // Load initial data
     const fetchTasks = useCallback(async (isSilent = false) => {
@@ -165,16 +221,22 @@ export default function Tareas() {
 
     useEffect(() => {
         fetchUsers();
-    }, [fetchUsers]);
+        fetchMibotRecipients();
+    }, [fetchUsers, fetchMibotRecipients]);
 
     useEffect(() => {
         fetchTasks();
     }, [fetchTasks]);
 
-    // Socket real-time synchronization
+    useEffect(() => {
+        fetchMibotProgramaciones();
+    }, [fetchMibotProgramaciones]);
+
+    // Socket real-time synchronization & informative card listener
     useEffect(() => {
         const handleTasksChanged = () => {
             fetchTasks(true);
+            fetchMibotProgramaciones();
         };
 
         const handleCommentAdded = (data) => {
@@ -184,14 +246,60 @@ export default function Tareas() {
             fetchTasks(true);
         };
 
+        const handleTaskAssignedCard = (payload) => {
+            if (payload?.task) {
+                setRecentAssignedCard({
+                    task: payload.task,
+                    mibot: payload.mibot || null,
+                    timestamp: new Date().toISOString()
+                });
+            }
+            fetchTasks(true);
+            fetchMibotProgramaciones();
+        };
+
         socket.on('tasks:changed', handleTasksChanged);
         socket.on('tasks:comment_added', handleCommentAdded);
+        socket.on('tasks:assigned_card', handleTaskAssignedCard);
 
         return () => {
             socket.off('tasks:changed', handleTasksChanged);
             socket.off('tasks:comment_added', handleCommentAdded);
+            socket.off('tasks:assigned_card', handleTaskAssignedCard);
         };
-    }, [fetchTasks, selectedTask]);
+    }, [fetchTasks, fetchMibotProgramaciones, selectedTask]);
+
+    // Listener for opening a task detail directly from system notification card
+    useEffect(() => {
+        const onOpenTaskDetail = (e) => {
+            const taskId = e.detail?.taskId;
+            if (!taskId) return;
+            const found = tasks.find(t => Number(t.id) === Number(taskId));
+            if (found) {
+                handleOpenDetail(found);
+            } else {
+                api.get(`/tasks/${taskId}`).then(res => {
+                    if (res.data) {
+                        setSelectedTask(res.data);
+                        setTaskComments(res.data.comments || []);
+                        setShowDetailModal(true);
+                    }
+                }).catch(() => {});
+            }
+        };
+        window.addEventListener('sipe:open-task-detail', onOpenTaskDetail);
+        return () => window.removeEventListener('sipe:open-task-detail', onOpenTaskDetail);
+    }, [tasks]);
+
+    // Mis Tareas y Actividades Asignadas Activas para la Tarjeta Informativa
+    const myAssignedTasks = useMemo(() => {
+        if (!currentUser?.id) return [];
+        return (tasks || []).filter(t =>
+            Number(t.assigned_to) === Number(currentUser.id) &&
+            t.estado !== 'completada' &&
+            t.estado !== 'cancelada'
+        );
+    }, [tasks, currentUser]);
 
     // Helper: Calculate deadline status
     const getDeadlineBadge = (task) => {
@@ -400,12 +508,124 @@ export default function Tareas() {
         }
     };
 
+    // Helper: Find linked Telegram recipient ID for a SIPE Admin userId
+    const getLinkedTelegramIdForUser = useCallback((sipeUserId) => {
+        if (!sipeUserId) return null;
+        const numId = Number(sipeUserId);
+        const fromRecipients = mibotRecipients.find(r => Number(r.user_id) === numId);
+        if (fromRecipients) return Number(fromRecipients.id);
+        const fromUsers = usersList.find(u => Number(u.id) === numId && u.telegram_usuario_id);
+        if (fromUsers) return Number(fromUsers.telegram_usuario_id);
+        return null;
+    }, [mibotRecipients, usersList]);
+
+    // Helper: Get MiBot status badge for a task
+    const getTaskMibotBadge = (task) => {
+        const ms = task?.mibot_summary;
+        if (!ms || !ms.has_mibot) return null;
+        const dests = Array.isArray(ms.destinatarios) ? ms.destinatarios : [];
+        const hasValidado = dests.some(d => d.estado_entrega === 'VALIDADO') || ms.ultimo_estado === 'COMPLETADO';
+        const hasVisto = dests.some(d => d.estado_entrega === 'VISTO');
+        const hasEnviado = dests.some(d => d.estado_entrega === 'ENVIADO') || ms.ultimo_estado === 'ENVIADO';
+        if (hasValidado) {
+            return { label: '🤖 MiBot: ✔️ Validado', color: '#34d399', bg: 'rgba(16, 185, 129, 0.16)', border: 'rgba(16, 185, 129, 0.4)' };
+        }
+        if (hasVisto) {
+            return { label: '🤖 MiBot: 👀 Visto', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.16)', border: 'rgba(56, 189, 248, 0.4)' };
+        }
+        if (hasEnviado) {
+            return { label: '🤖 MiBot: 📩 Enviado', color: '#a5b4fc', bg: 'rgba(99, 102, 241, 0.18)', border: 'rgba(99, 102, 241, 0.4)' };
+        }
+        return { label: '🤖 MiBot: ⏰ Agendado', color: '#38bdf8', bg: 'rgba(14, 165, 233, 0.14)', border: 'rgba(14, 165, 233, 0.35)' };
+    };
+
+    // Open MiBot scheduling modal (either for a specific task or general activity/meeting)
+    const handleOpenMibotModal = (task = null, defaultTipo = 'TAREA') => {
+        setMibotTargetTask(task);
+        setMibotDefaultTipo(defaultTipo);
+        setMibotModalOpen(true);
+    };
+
+    const handleSendMibotNow = async (prog) => {
+        setSendingMibotId(prog.id);
+        try {
+            const res = await api.post(`/telegram/mibot/programaciones/${prog.id}/enviar-ahora`);
+            addToast(res.data?.message || 'Aviso enviado personalmente por Telegram', 'success');
+            fetchMibotProgramaciones();
+            fetchTasks(true);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al enviar aviso MiBot', 'error');
+        } finally {
+            setSendingMibotId(null);
+        }
+    };
+
+    const handleChangeMibotEstado = async (prog, nuevoEstado) => {
+        const msg = nuevoEstado === 'CANCELADO'
+            ? `¿Cancelar la programación MiBot "${prog.titulo}"?`
+            : `¿Cambiar estado de "${prog.titulo}" a ${nuevoEstado}?`;
+        if (!await confirm(msg, nuevoEstado === 'CANCELADO' ? { variant: 'danger' } : {})) return;
+        try {
+            await api.patch(`/telegram/mibot/programaciones/${prog.id}/estado`, { estado: nuevoEstado });
+            addToast(`Programación MiBot actualizada a ${nuevoEstado}`, 'success');
+            fetchMibotProgramaciones();
+            fetchTasks(true);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al actualizar programación MiBot', 'error');
+        }
+    };
+
+    const handleDeleteMibotProg = async (prog) => {
+        if (!await confirm(`¿Eliminar definitivamente la programación MiBot "${prog.titulo}"?`, { variant: 'danger' })) return;
+        try {
+            await api.delete(`/telegram/mibot/programaciones/${prog.id}`);
+            addToast('Programación MiBot eliminada', 'success');
+            fetchMibotProgramaciones();
+            fetchTasks(true);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al eliminar programación MiBot', 'error');
+        }
+    };
+
+    // Handle collaborator change in form (auto-select linked Telegram user for MiBot)
+    const handleAssignedUserChange = (newAssignedUserId) => {
+        const linkedTgId = getLinkedTelegramIdForUser(newAssignedUserId);
+        setFormData(prev => ({
+            ...prev,
+            assigned_to: newAssignedUserId,
+            mibot_enabled: linkedTgId ? true : prev.mibot_enabled,
+            mibot_destinatario_ids: linkedTgId
+                ? [...new Set([linkedTgId, ...prev.mibot_destinatario_ids])]
+                : prev.mibot_destinatario_ids
+        }));
+    };
+
+    const toggleFormMibotDestinatario = (tgId) => {
+        setFormData(prev => {
+            const exists = prev.mibot_destinatario_ids.includes(tgId);
+            const nextIds = exists
+                ? prev.mibot_destinatario_ids.filter(x => x !== tgId)
+                : [...prev.mibot_destinatario_ids, tgId];
+            return {
+                ...prev,
+                mibot_destinatario_ids: nextIds,
+                mibot_enabled: nextIds.length > 0 ? true : prev.mibot_enabled
+            };
+        });
+    };
+
     // Open Modal Form for Create or Edit
     const handleOpenForm = (task = null) => {
         if (usersList.length === 0) {
             fetchUsers();
         }
+        if (mibotRecipients.length === 0) {
+            fetchMibotRecipients();
+        }
+        const today = new Date().toISOString().split('T')[0];
         if (task) {
+            const linkedTgId = getLinkedTelegramIdForUser(task.assigned_to);
+            const existingDests = (task.mibot_summary?.destinatarios || []).map(d => Number(d.telegram_usuario_id)).filter(Boolean);
             setEditingTask(task);
             setFormData({
                 titulo: task.titulo || '',
@@ -417,10 +637,18 @@ export default function Tareas() {
                 prioridad: task.prioridad || 'media',
                 categoria: task.categoria || 'General',
                 assigned_to: task.assigned_to || '',
-                checklist: Array.isArray(task.checklist) ? [...task.checklist] : []
+                checklist: Array.isArray(task.checklist) ? [...task.checklist] : [],
+                mibot_enabled: false,
+                mibot_tipo: task.mibot_summary?.tipo || 'TAREA',
+                mibot_destinatario_ids: existingDests.length > 0 ? existingDests : (linkedTgId ? [linkedTgId] : []),
+                mibot_enviar_ahora: true,
+                mibot_fecha: task.fecha_vencimiento ? String(task.fecha_vencimiento).split('T')[0] : today,
+                mibot_hora: task.hora_limite ? String(task.hora_limite).substring(0, 5) : '08:00',
+                mibot_frecuencia: 'UNA_VEZ'
             });
         } else {
-            const today = new Date().toISOString().split('T')[0];
+            const defaultAssigned = currentUser.id || '';
+            const linkedTgId = getLinkedTelegramIdForUser(defaultAssigned);
             setEditingTask(null);
             setFormData({
                 titulo: '',
@@ -431,8 +659,15 @@ export default function Tareas() {
                 hora_limite: '17:00',
                 prioridad: 'media',
                 categoria: 'Operaciones',
-                assigned_to: currentUser.id || '',
-                checklist: []
+                assigned_to: defaultAssigned,
+                checklist: [],
+                mibot_enabled: Boolean(linkedTgId),
+                mibot_tipo: 'TAREA',
+                mibot_destinatario_ids: linkedTgId ? [linkedTgId] : [],
+                mibot_enviar_ahora: true,
+                mibot_fecha: today,
+                mibot_hora: '08:00',
+                mibot_frecuencia: 'UNA_VEZ'
             });
         }
         setNewSubtaskText('');
@@ -454,17 +689,49 @@ export default function Tareas() {
             addToast('Debe indicar la fecha de vencimiento', 'warning');
             return;
         }
+        if (formData.mibot_enabled && formData.mibot_destinatario_ids.length === 0) {
+            addToast('Selecciona al menos un destinatario de Telegram para MiBot o desmarca la opción de envío por Telegram', 'warning');
+            return;
+        }
+
+        const payload = {
+            ...formData,
+            mibot: formData.mibot_enabled ? {
+                enabled: true,
+                tipo: formData.mibot_tipo || 'TAREA',
+                destinatario_ids: formData.mibot_destinatario_ids,
+                enviar_ahora: Boolean(formData.mibot_enviar_ahora),
+                programado_para: formData.mibot_enviar_ahora
+                    ? undefined
+                    : `${formData.mibot_fecha || formData.fecha_vencimiento} ${formData.mibot_hora || '08:00'}:00`,
+                frecuencia: formData.mibot_frecuencia || 'UNA_VEZ'
+            } : null
+        };
 
         try {
+            let savedTask = null;
+            let savedMibot = null;
             if (editingTask) {
-                await api.put(`/tasks/${editingTask.id}`, formData);
-                addToast('Tarea actualizada con éxito', 'success');
+                const res = await api.put(`/tasks/${editingTask.id}`, payload);
+                savedTask = res.data?.task;
+                savedMibot = res.data?.mibot;
+                addToast(res.data?.message || 'Tarea actualizada con éxito', 'success');
             } else {
-                await api.post('/tasks', formData);
-                addToast('Tarea asignada y creada con éxito', 'success');
+                const res = await api.post('/tasks', payload);
+                savedTask = res.data?.task;
+                savedMibot = res.data?.mibot;
+                addToast(res.data?.message || 'Tarea asignada y creada con éxito', 'success');
+            }
+            if (savedTask) {
+                setRecentAssignedCard({
+                    task: savedTask,
+                    mibot: savedMibot,
+                    timestamp: new Date().toISOString()
+                });
             }
             setShowModalForm(false);
             fetchTasks(true);
+            fetchMibotProgramaciones();
         } catch (err) {
             console.error('Error saving task:', err);
             addToast(err.response?.data?.message || 'Error al guardar tarea', 'error');
@@ -595,10 +862,10 @@ export default function Tareas() {
                     </div>
                     <div>
                         <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-                            Gestión y Asignación de Tareas
+                            Gestión y Asignación de Tareas · MiBot Telegram
                         </h1>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
-                            Control de actividades, asignación de plazos a colaboradores y seguimiento ágil
+                            Control de actividades, agendamiento directo con MiBot Telegram (@SIPE_IA_BOT) y seguimiento en tiempo real
                         </p>
                     </div>
                 </div>
@@ -657,6 +924,31 @@ export default function Tareas() {
                             <List size={15} />
                             <span>Lista</span>
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setViewMode('mibot');
+                                fetchMibotProgramaciones();
+                            }}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.3rem 0.7rem',
+                                border: 'none',
+                                borderRadius: '6px',
+                                fontSize: '0.8rem',
+                                fontWeight: viewMode === 'mibot' ? 700 : 500,
+                                cursor: 'pointer',
+                                background: viewMode === 'mibot' ? '#0088cc' : 'transparent',
+                                color: viewMode === 'mibot' ? '#ffffff' : '#38bdf8',
+                                transition: 'all 0.15s ease'
+                            }}
+                            title="Agenda MiBot Telegram (Avisos, Tareas, Validaciones y Reuniones)"
+                        >
+                            <Bot size={15} />
+                            <span>MiBot Telegram ({mibotProgramaciones.length})</span>
+                        </button>
                     </div>
 
                     <button
@@ -672,13 +964,38 @@ export default function Tareas() {
 
                     <button
                         type="button"
-                        onClick={() => fetchTasks(false)}
+                        onClick={() => {
+                            fetchTasks(false);
+                            fetchMibotProgramaciones();
+                        }}
                         className="btn-secondary"
                         style={{ height: '36px', padding: '0 0.75rem', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
                         title="Actualizar datos"
-                        disabled={refreshing}
+                        disabled={refreshing || loadingMibot}
                     >
-                        <RefreshCw size={15} className={refreshing ? 'spin' : ''} />
+                        <RefreshCw size={15} className={(refreshing || loadingMibot) ? 'spin' : ''} />
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => handleOpenMibotModal(null, 'TAREA')}
+                        className="btn-secondary"
+                        style={{
+                            height: '36px',
+                            padding: '0 0.95rem',
+                            fontSize: '0.825rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            borderColor: 'rgba(0, 136, 204, 0.5)',
+                            backgroundColor: 'rgba(0, 136, 204, 0.14)',
+                            color: '#38bdf8',
+                            fontWeight: 600
+                        }}
+                        title="Agendar Tarea, Validación o Reunión con MiBot de Telegram"
+                    >
+                        <Bot size={16} />
+                        <span>Agendar MiBot</span>
                     </button>
 
                     <button
@@ -734,7 +1051,249 @@ export default function Tareas() {
                         {kpis.vencidas}
                     </span>
                 </div>
+                <div
+                    className="card glass"
+                    onClick={() => setViewMode('mibot')}
+                    style={{
+                        padding: '0.75rem 1rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.2rem',
+                        borderLeft: '3px solid #0088cc',
+                        cursor: 'pointer'
+                    }}
+                    title="Click para ver Agenda de Avisos, Tareas y Reuniones en MiBot Telegram"
+                >
+                    <span style={{ fontSize: '0.72rem', color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+                        🤖 Agenda MiBot
+                    </span>
+                    <span style={{ fontSize: '1.4rem', fontWeight: 700, color: '#38bdf8' }}>
+                        {mibotProgramaciones.filter(p => p.estado !== 'CANCELADO').length}
+                    </span>
+                </div>
             </div>
+
+            {/* TARJETA INFORMATIVA EN SISTEMA: TAREA / ACTIVIDAD RECIÉN ASIGNADA O AGENDADA */}
+            {recentAssignedCard && recentAssignedCard.task && (
+                <div
+                    className="card glass"
+                    style={{
+                        padding: '0.85rem 1.15rem',
+                        borderLeft: '4px solid #10b981',
+                        border: '1px solid rgba(16, 185, 129, 0.35)',
+                        background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(56, 189, 248, 0.06) 100%)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.6rem'
+                    }}
+                >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <span style={{
+                                fontSize: '0.72rem',
+                                fontWeight: 800,
+                                padding: '0.18rem 0.55rem',
+                                borderRadius: '6px',
+                                background: 'rgba(16, 185, 129, 0.2)',
+                                color: '#34d399',
+                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.04em'
+                            }}>
+                                ✅ Tarjeta Informativa · Tarea / Actividad Asignada
+                            </span>
+                            <span style={{
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                padding: '0.14rem 0.45rem',
+                                borderRadius: '5px',
+                                background: getPriorityBadge(recentAssignedCard.task.prioridad).bg,
+                                color: getPriorityBadge(recentAssignedCard.task.prioridad).color,
+                                border: `1px solid ${getPriorityBadge(recentAssignedCard.task.prioridad).border}`
+                            }}>
+                                Prioridad: {getPriorityBadge(recentAssignedCard.task.prioridad).label}
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                Categoría: <strong style={{ color: 'var(--text-primary)' }}>{recentAssignedCard.task.categoria || 'General'}</strong>
+                            </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => handleOpenDetail(recentAssignedCard.task)}
+                                style={{ height: '28px', padding: '0 0.65rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                            >
+                                <Eye size={13} /> Ver Detalle
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => handleOpenMibotModal(recentAssignedCard.task, 'TAREA')}
+                                style={{ height: '28px', padding: '0 0.65rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.35)' }}
+                            >
+                                <Bot size={13} /> MiBot Telegram
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setRecentAssignedCard(null)}
+                                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', display: 'flex' }}
+                                title="Cerrar tarjeta informativa"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                #{recentAssignedCard.task.id} · {recentAssignedCard.task.titulo}
+                            </div>
+                            {recentAssignedCard.task.descripcion && (
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.18rem', lineHeight: 1.35 }}>
+                                    {recentAssignedCard.task.descripcion}
+                                </div>
+                            )}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.85rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <User size={14} color="var(--primary)" />
+                                <span>Asignado a: <strong style={{ color: 'var(--text-primary)' }}>{recentAssignedCard.task.assigned_user_name || 'Colaborador'}</strong></span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <Calendar size={14} color="#f59e0b" />
+                                <span>Plazo: <strong style={{ color: '#fbbf24' }}>{formatDateSpanish(recentAssignedCard.task.fecha_vencimiento)}{recentAssignedCard.task.hora_limite ? ` · ${formatTimeSpanish(recentAssignedCard.task.hora_limite)}` : ''}</strong></span>
+                            </div>
+                            {(recentAssignedCard.mibot?.programacion || recentAssignedCard.task.mibot_summary?.has_mibot) && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: '#38bdf8', fontWeight: 600 }}>
+                                    <Bot size={14} />
+                                    <span>
+                                        {recentAssignedCard.mibot?.label ||
+                                            (recentAssignedCard.mibot?.dispatch
+                                                ? `Telegram MiBot enviado (${recentAssignedCard.mibot.dispatch.sent}/${recentAssignedCard.mibot.dispatch.total})`
+                                                : 'Agendado en MiBot Telegram')}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* TARJETA INFORMATIVA EN SISTEMA: MIS TAREAS Y ACTIVIDADES ASIGNADAS ACTIVAS */}
+            {showMyAssignedBanner && myAssignedTasks.length > 0 && (
+                <div
+                    className="card glass"
+                    style={{
+                        padding: '0.85rem 1.15rem',
+                        borderLeft: '4px solid #38bdf8',
+                        border: '1px solid rgba(56, 189, 248, 0.3)',
+                        background: 'rgba(14, 165, 233, 0.05)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.6rem'
+                    }}
+                >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <Bell size={16} color="#38bdf8" />
+                            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                Mis Tareas y Actividades Asignadas Activas ({myAssignedTasks.length})
+                            </span>
+                            <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                                Actividades asignadas a tu usuario pendientes de ejecución o validación
+                            </span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setShowMyAssignedBanner(false)}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                        >
+                            <span>Ocultar tarjeta</span>
+                            <X size={14} />
+                        </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(275px, 1fr))', gap: '0.6rem' }}>
+                        {myAssignedTasks.slice(0, 4).map(t => {
+                            const pBadge = getPriorityBadge(t.prioridad);
+                            const dBadge = getDeadlineBadge(t);
+                            const mBadge = getTaskMibotBadge(t);
+                            return (
+                                <div
+                                    key={t.id}
+                                    style={{
+                                        padding: '0.6rem 0.75rem',
+                                        borderRadius: '8px',
+                                        background: 'var(--bg-card)',
+                                        border: dBadge.isOverdue ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid var(--border-color)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '0.38rem'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: '4px', background: pBadge.bg, color: pBadge.color, border: `1px solid ${pBadge.border}` }}>
+                                            {pBadge.label}
+                                        </span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                            {mBadge && (
+                                                <span style={{ fontSize: '0.66rem', fontWeight: 600, padding: '0.1rem 0.4rem', borderRadius: '4px', background: mBadge.bg, color: mBadge.color, border: `1px solid ${mBadge.border}` }}>
+                                                    {mBadge.label}
+                                                </span>
+                                            )}
+                                            <span style={{ fontSize: '0.68rem', fontWeight: 600, padding: '0.1rem 0.4rem', borderRadius: '4px', background: dBadge.bg, color: dBadge.color, border: `1px solid ${dBadge.border}` }}>
+                                                {dBadge.label}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div
+                                        onClick={() => handleOpenDetail(t)}
+                                        style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', lineHeight: 1.3 }}
+                                    >
+                                        {t.titulo}
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                        <span>Por: <strong style={{ color: 'var(--text-secondary)' }}>{t.created_user_name || 'Sistema'}</strong> · {formatDateSpanish(t.fecha_vencimiento)}</span>
+                                        <div style={{ display: 'inline-flex', gap: '0.3rem' }}>
+                                            {t.estado === 'pendiente' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleQuickStatusChange(t.id, 'en_proceso')}
+                                                    className="btn-secondary"
+                                                    style={{ height: '24px', padding: '0 0.45rem', fontSize: '0.69rem', color: '#38bdf8' }}
+                                                    title="Iniciar tarea"
+                                                >
+                                                    ▶ Iniciar
+                                                </button>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() => handleQuickStatusChange(t.id, 'completada')}
+                                                className="btn-secondary"
+                                                style={{ height: '24px', padding: '0 0.45rem', fontSize: '0.69rem', color: '#10b981' }}
+                                                title="Marcar completada"
+                                            >
+                                                ✔️ Completar
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleOpenMibotModal(t, 'TAREA')}
+                                                className="btn-secondary"
+                                                style={{ height: '24px', padding: '0 0.45rem', fontSize: '0.69rem', color: '#38bdf8' }}
+                                                title="Agendar o notificar en MiBot Telegram"
+                                            >
+                                                🤖
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
 
             {/* Filter Card */}
             <div className="card glass" style={{ padding: '0.85rem 1.15rem' }}>
@@ -1023,17 +1582,37 @@ export default function Tareas() {
                                                             </span>
                                                         </div>
 
-                                                        <span style={{
-                                                            fontSize: '0.68rem',
-                                                            fontWeight: 600,
-                                                            padding: '0.12rem 0.4rem',
-                                                            borderRadius: '4px',
-                                                            background: dBadge.bg,
-                                                            color: dBadge.color,
-                                                            border: `1px solid ${dBadge.border}`
-                                                        }}>
-                                                            {dBadge.label}
-                                                        </span>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                                                            {getTaskMibotBadge(task) && (
+                                                                <span
+                                                                    onClick={() => handleOpenMibotModal(task, 'TAREA')}
+                                                                    style={{
+                                                                        fontSize: '0.66rem',
+                                                                        fontWeight: 600,
+                                                                        padding: '0.1rem 0.38rem',
+                                                                        borderRadius: '4px',
+                                                                        background: getTaskMibotBadge(task).bg,
+                                                                        color: getTaskMibotBadge(task).color,
+                                                                        border: `1px solid ${getTaskMibotBadge(task).border}`,
+                                                                        cursor: 'pointer'
+                                                                    }}
+                                                                    title="Click para gestionar aviso en MiBot Telegram"
+                                                                >
+                                                                    {getTaskMibotBadge(task).label}
+                                                                </span>
+                                                            )}
+                                                            <span style={{
+                                                                fontSize: '0.68rem',
+                                                                fontWeight: 600,
+                                                                padding: '0.12rem 0.4rem',
+                                                                borderRadius: '4px',
+                                                                background: dBadge.bg,
+                                                                color: dBadge.color,
+                                                                border: `1px solid ${dBadge.border}`
+                                                            }}>
+                                                                {dBadge.label}
+                                                            </span>
+                                                        </div>
                                                     </div>
 
                                                     {/* Card Bottom: User, Comments & Quick Actions */}
@@ -1082,6 +1661,15 @@ export default function Tareas() {
 
                                                             <button
                                                                 type="button"
+                                                                onClick={() => handleOpenMibotModal(task, 'TAREA')}
+                                                                style={{ background: 'none', border: 'none', padding: '3px', cursor: 'pointer', color: '#38bdf8' }}
+                                                                title="Agendar / Enviar por MiBot Telegram"
+                                                            >
+                                                                <Bot size={14} />
+                                                            </button>
+
+                                                            <button
+                                                                type="button"
                                                                 onClick={() => handleOpenDetail(task)}
                                                                 style={{ background: 'none', border: 'none', padding: '3px', cursor: 'pointer', color: 'var(--text-muted)' }}
                                                                 title="Ver detalle"
@@ -1117,10 +1705,10 @@ export default function Tareas() {
                         );
                     })}
                 </div>
-            ) : (
+            ) : viewMode === 'table' ? (
                 /* TABLA LISTA COMPACTA */
                 <div className="card glass table-responsive">
-                    <table className="table" style={{ width: '100%', minWidth: '950px', borderCollapse: 'collapse' }}>
+                    <table className="table" style={{ width: '100%', minWidth: '1020px', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Título</th>
@@ -1128,6 +1716,7 @@ export default function Tareas() {
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Prioridad</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Estado</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Plazo / Vencimiento</th>
+                                <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>MiBot Telegram</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Categoría</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', textAlign: 'center' }}>Subtareas</th>
                                 <th style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', textAlign: 'center' }}>Acciones</th>
@@ -1136,7 +1725,7 @@ export default function Tareas() {
                         <tbody>
                             {tasks.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                    <td colSpan={9} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                         No se encontraron tareas con los filtros seleccionados.
                                     </td>
                                 </tr>
@@ -1144,6 +1733,7 @@ export default function Tareas() {
                                 tasks.map((task, idx) => {
                                     const pBadge = getPriorityBadge(task.prioridad);
                                     const dBadge = getDeadlineBadge(task);
+                                    const mBadge = getTaskMibotBadge(task);
                                     const checklist = Array.isArray(task.checklist) ? task.checklist : [];
                                     const completedCount = checklist.filter(c => c.completado).length;
 
@@ -1239,6 +1829,36 @@ export default function Tareas() {
                                                 </div>
                                             </td>
 
+                                            <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.75rem' }}>
+                                                {mBadge ? (
+                                                    <span
+                                                        onClick={() => handleOpenMibotModal(task, 'TAREA')}
+                                                        style={{
+                                                            fontSize: '0.7rem',
+                                                            fontWeight: 600,
+                                                            padding: '0.14rem 0.45rem',
+                                                            borderRadius: '5px',
+                                                            background: mBadge.bg,
+                                                            color: mBadge.color,
+                                                            border: `1px solid ${mBadge.border}`,
+                                                            cursor: 'pointer',
+                                                            display: 'inline-block'
+                                                        }}
+                                                    >
+                                                        {mBadge.label}
+                                                    </span>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleOpenMibotModal(task, 'TAREA')}
+                                                        className="btn-secondary"
+                                                        style={{ height: '25px', padding: '0 0.5rem', fontSize: '0.7rem', color: '#38bdf8' }}
+                                                    >
+                                                        🤖 Agendar
+                                                    </button>
+                                                )}
+                                            </td>
+
                                             <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                                                 {task.categoria || 'General'}
                                             </td>
@@ -1262,6 +1882,15 @@ export default function Tareas() {
 
                                             <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', textAlign: 'center' }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleOpenMibotModal(task, 'TAREA')}
+                                                        className="btn-secondary"
+                                                        style={{ height: '26px', padding: '0 0.45rem', fontSize: '0.72rem', color: '#38bdf8' }}
+                                                        title="Agendar / Enviar por MiBot Telegram"
+                                                    >
+                                                        <Bot size={13} />
+                                                    </button>
                                                     <button
                                                         type="button"
                                                         onClick={() => handleOpenDetail(task)}
@@ -1297,6 +1926,224 @@ export default function Tareas() {
                             )}
                         </tbody>
                     </table>
+                </div>
+            ) : (
+                /* VISTA INMERSA: MIBOT TELEGRAM (AVISOS, TAREAS, VALIDACIONES Y REUNIONES) */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', width: '100%' }}>
+                    <div className="card glass" style={{ padding: '0.85rem 1.15rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                            {[
+                                { id: 'ALL', label: 'Todos' },
+                                ...MIBOT_TIPO_OPTIONS.map(t => ({ id: t.id, label: `${t.emoji} ${t.short}` }))
+                            ].map(opt => (
+                                <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setMibotTipoFilter(opt.id)}
+                                    style={{
+                                        height: '32px',
+                                        padding: '0 0.75rem',
+                                        borderRadius: '16px',
+                                        fontSize: '0.76rem',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                        border: mibotTipoFilter === opt.id ? '1px solid #0088cc' : '1px solid var(--border-color)',
+                                        backgroundColor: mibotTipoFilter === opt.id ? 'rgba(0, 136, 204, 0.2)' : 'transparent',
+                                        color: mibotTipoFilter === opt.id ? '#38bdf8' : 'var(--text-muted)'
+                                    }}
+                                >
+                                    {opt.label}
+                                </button>
+                            ))}
+
+                            <select
+                                className="form-control"
+                                value={mibotEstadoFilter}
+                                onChange={e => setMibotEstadoFilter(e.target.value)}
+                                style={{ height: '32px', fontSize: '0.78rem', width: '145px', padding: '0 0.5rem' }}
+                            >
+                                <option value="ALL">Estado: Todos</option>
+                                <option value="PROGRAMADO">Programados</option>
+                                <option value="ENVIADO">Enviados</option>
+                                <option value="COMPLETADO">Completados</option>
+                                <option value="CANCELADO">Cancelados</option>
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={fetchMibotProgramaciones}
+                                disabled={loadingMibot}
+                                style={{ height: '36px', fontSize: '0.78rem', padding: '0 0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                            >
+                                <RefreshCw size={13} className={loadingMibot ? 'spin' : ''} /> Actualizar
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-primary"
+                                onClick={() => handleOpenMibotModal(null, 'TAREA')}
+                                style={{ height: '36px', fontSize: '0.8rem', padding: '0 0.95rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                            >
+                                <Plus size={15} /> + Agendar Tarea / Actividad / Reunión en MiBot
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '940px' }}>
+                            <thead>
+                                <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '135px' }}>Tipo</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)' }}>Asunto, Mensaje y Tarea Vinculada</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '310px' }}>Destinatarios Personales (Confirmación Telegram)</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '155px' }}>Programación</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '105px' }}>Estado</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', width: '115px' }}>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loadingMibot ? (
+                                    <tr>
+                                        <td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                            Cargando programaciones de MiBot Telegram...
+                                        </td>
+                                    </tr>
+                                ) : mibotProgramaciones.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                            No hay tareas, actividades ni reuniones agendadas en MiBot con los filtros actuales. Usa <strong>&quot;+ Agendar Tarea / Actividad / Reunión en MiBot&quot;</strong> para comenzar.
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    mibotProgramaciones.map(p => {
+                                        const tipoMeta = MIBOT_TIPO_OPTIONS.find(t => t.id === p.tipo) || MIBOT_TIPO_OPTIONS[1];
+                                        return (
+                                            <tr key={p.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.78rem', verticalAlign: 'top' }}>
+                                                    <span style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.3rem',
+                                                        padding: '0.16rem 0.45rem',
+                                                        borderRadius: '6px',
+                                                        fontSize: '0.72rem',
+                                                        fontWeight: 700,
+                                                        backgroundColor: tipoMeta.bg,
+                                                        color: tipoMeta.color
+                                                    }}>
+                                                        {tipoMeta.emoji} {tipoMeta.short}
+                                                    </span>
+                                                    {p.task_id && (
+                                                        <div style={{ fontSize: '0.68rem', color: '#38bdf8', marginTop: '0.2rem', fontWeight: 600 }}>
+                                                            📋 Tarea #{p.task_id}
+                                                        </div>
+                                                    )}
+                                                    {p.vencimiento_id && (
+                                                        <div style={{ fontSize: '0.67rem', color: '#fbbf24', marginTop: '0.2rem', fontWeight: 600 }}>
+                                                            💳 Pago #{p.recordatorio_id || p.vencimiento_id}
+                                                        </div>
+                                                    )}
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', verticalAlign: 'top' }}>
+                                                    <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{p.titulo}</div>
+                                                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.35, wordBreak: 'break-word' }}>
+                                                        {p.mensaje}
+                                                    </div>
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.75rem', verticalAlign: 'top' }}>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem' }}>
+                                                        {(p.destinatarios || []).map(d => {
+                                                            const st = getDeliveryBadgeStyle(d.estado_entrega);
+                                                            return (
+                                                                <span
+                                                                    key={d.id}
+                                                                    title={d.respuesta_nota || d.error_msg || `${d.nombre_destinatario}: ${d.estado_entrega}`}
+                                                                    style={{
+                                                                        fontSize: '0.7rem',
+                                                                        padding: '0.12rem 0.45rem',
+                                                                        borderRadius: '6px',
+                                                                        backgroundColor: st.bg,
+                                                                        color: st.color,
+                                                                        border: st.border,
+                                                                        fontWeight: 600
+                                                                    }}
+                                                                >
+                                                                    {d.nombre_destinatario}{d.cargo ? ` (${d.cargo})` : ''} · {st.label}
+                                                                </span>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)', verticalAlign: 'top' }}>
+                                                    <div style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+                                                        {formatMibotDateTime(p.proximo_envio_at || p.programado_para)}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.69rem', marginTop: '0.12rem' }}>
+                                                        {p.frecuencia === 'DIARIO_HASTA_PAGAR' ? '🔁 Diario hasta pagar' : p.frecuencia === 'DIARIO' ? '🔁 Diario' : p.frecuencia === 'SEMANAL' ? '🔁 Semanal' : '1 vez'}
+                                                    </div>
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', verticalAlign: 'top' }}>
+                                                    <span style={{
+                                                        fontSize: '0.7rem',
+                                                        fontWeight: 700,
+                                                        padding: '0.16rem 0.5rem',
+                                                        borderRadius: '10px',
+                                                        backgroundColor: p.estado === 'PROGRAMADO' ? 'rgba(56, 189, 248, 0.16)' : p.estado === 'COMPLETADO' ? 'rgba(16, 185, 129, 0.16)' : p.estado === 'CANCELADO' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(99, 102, 241, 0.16)',
+                                                        color: p.estado === 'PROGRAMADO' ? '#38bdf8' : p.estado === 'COMPLETADO' ? '#34d399' : p.estado === 'CANCELADO' ? '#f87171' : '#a5b4fc'
+                                                    }}>
+                                                        {p.estado}
+                                                    </span>
+                                                </td>
+
+                                                <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', verticalAlign: 'top' }}>
+                                                    <div style={{ display: 'inline-flex', gap: '0.28rem', alignItems: 'center' }}>
+                                                        {p.estado !== 'CANCELADO' && (
+                                                            <button
+                                                                type="button"
+                                                                className="btn-secondary"
+                                                                disabled={sendingMibotId === p.id}
+                                                                onClick={() => handleSendMibotNow(p)}
+                                                                title="Enviar mensaje personal ahora mismo en Telegram"
+                                                                style={{ height: '26px', padding: '0 0.45rem', fontSize: '0.7rem' }}
+                                                            >
+                                                                <Send size={12} color="#0088cc" />
+                                                            </button>
+                                                        )}
+                                                        {p.estado === 'PROGRAMADO' && (
+                                                            <button
+                                                                type="button"
+                                                                className="btn-secondary"
+                                                                onClick={() => handleChangeMibotEstado(p, 'CANCELADO')}
+                                                                title="Cancelar programación"
+                                                                style={{ height: '26px', padding: '0 0.45rem', fontSize: '0.7rem' }}
+                                                            >
+                                                                <XCircle size={12} color="#f59e0b" />
+                                                            </button>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            className="btn-secondary"
+                                                            onClick={() => handleDeleteMibotProg(p)}
+                                                            title="Eliminar programación"
+                                                            style={{ height: '26px', padding: '0 0.45rem', fontSize: '0.7rem' }}
+                                                        >
+                                                            <Trash2 size={12} color="#ef4444" />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             )}
 
@@ -1355,7 +2202,7 @@ export default function Tareas() {
                             required
                             className="form-control"
                             value={formData.assigned_to}
-                            onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
+                            onChange={(e) => handleAssignedUserChange(e.target.value)}
                             style={{ height: '36px', fontSize: '0.825rem' }}
                         >
                             <option value="">-- Seleccionar colaborador --</option>
@@ -1366,7 +2213,7 @@ export default function Tareas() {
                             ) : (
                                 usersList.map(u => (
                                     <option key={u.id} value={u.id}>
-                                        {u.nombre || u.username} {u.role_name ? `(${u.role_name})` : ''}
+                                        {u.nombre || u.username} {u.role_name ? `(${u.role_name})` : ''}{u.telegram_usuario_id ? ' · 🤖 Telegram' : ''}
                                     </option>
                                 ))
                             )}
@@ -1545,6 +2392,174 @@ export default function Tareas() {
                         )}
                     </div>
 
+                    {/* MIBOT TELEGRAM IMMERSED SCHEDULING & NOTIFICATION SECTION */}
+                    <div
+                        className="span-2"
+                        style={{
+                            padding: '0.75rem 0.9rem',
+                            borderRadius: '9px',
+                            border: formData.mibot_enabled ? '1px solid rgba(0, 136, 204, 0.45)' : '1px solid var(--border-color)',
+                            background: formData.mibot_enabled ? 'rgba(0, 136, 204, 0.08)' : 'var(--bg-secondary)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.6rem'
+                        }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(formData.mibot_enabled)}
+                                    onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        const linkedTgId = getLinkedTelegramIdForUser(formData.assigned_to);
+                                        setFormData(prev => ({
+                                            ...prev,
+                                            mibot_enabled: checked,
+                                            mibot_destinatario_ids: checked && prev.mibot_destinatario_ids.length === 0 && linkedTgId
+                                                ? [linkedTgId]
+                                                : prev.mibot_destinatario_ids
+                                        }));
+                                    }}
+                                    style={{ width: '16px', height: '16px' }}
+                                />
+                                <Bot size={16} color="#38bdf8" />
+                                <span>Agendar y notificar por MiBot de Telegram (@SIPE_IA_BOT)</span>
+                            </label>
+                            {formData.mibot_enabled && (
+                                <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 600 }}>
+                                    {formData.mibot_destinatario_ids.length} destinatario(s) en Telegram
+                                </span>
+                            )}
+                        </div>
+
+                        {formData.mibot_enabled && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                                {/* Selección de Destinatarios de Telegram */}
+                                <div>
+                                    <span style={{ fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>
+                                        Destinatarios en Telegram (Confirmación personal Visto / Validado):
+                                    </span>
+                                    {mibotRecipients.length === 0 ? (
+                                        <div style={{ fontSize: '0.74rem', color: '#fbbf24' }}>
+                                            No hay usuarios activos de Telegram con MiBot habilitado.
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', maxHeight: '115px', overflowY: 'auto' }}>
+                                            {mibotRecipients.map(r => {
+                                                const isSel = formData.mibot_destinatario_ids.includes(r.id);
+                                                return (
+                                                    <label
+                                                        key={r.id}
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.35rem',
+                                                            padding: '0.28rem 0.55rem',
+                                                            borderRadius: '6px',
+                                                            fontSize: '0.75rem',
+                                                            cursor: 'pointer',
+                                                            userSelect: 'none',
+                                                            border: isSel ? '1px solid #0088cc' : '1px solid var(--border-color)',
+                                                            background: isSel ? 'rgba(0, 136, 204, 0.18)' : 'var(--bg-card)',
+                                                            color: isSel ? '#38bdf8' : 'var(--text-secondary)',
+                                                            fontWeight: isSel ? 700 : 500
+                                                        }}
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isSel}
+                                                            onChange={() => toggleFormMibotDestinatario(r.id)}
+                                                            style={{ width: '14px', height: '14px' }}
+                                                        />
+                                                        <span>{r.nombre_completo}{r.cargo ? ` (${r.cargo})` : ''}</span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Configuración de Tipo, Momento de Envío y Frecuencia */}
+                                <div className="form-grid form-grid-3" style={{ gap: '0.55rem' }}>
+                                    <div>
+                                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.15rem' }}>
+                                            Tipo en MiBot
+                                        </label>
+                                        <select
+                                            className="form-control"
+                                            value={formData.mibot_tipo}
+                                            onChange={e => setFormData({ ...formData, mibot_tipo: e.target.value })}
+                                            style={{ height: '34px', fontSize: '0.78rem' }}
+                                        >
+                                            <option value="TAREA">📋 Tarea Asignada</option>
+                                            <option value="VALIDACION">✅ Validar Actividad</option>
+                                            <option value="REUNION">📅 Reunión</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.15rem' }}>
+                                            Momento de Envío
+                                        </label>
+                                        <select
+                                            className="form-control"
+                                            value={formData.mibot_enviar_ahora ? 'NOW' : 'SCHEDULE'}
+                                            onChange={e => setFormData({ ...formData, mibot_enviar_ahora: e.target.value === 'NOW' })}
+                                            style={{ height: '34px', fontSize: '0.78rem' }}
+                                        >
+                                            <option value="NOW">⚡ Enviar ahora mismo al guardar</option>
+                                            <option value="SCHEDULE">🗓️ Agendar fecha y hora</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.15rem' }}>
+                                            Frecuencia Recordatorio
+                                        </label>
+                                        <select
+                                            className="form-control"
+                                            value={formData.mibot_frecuencia}
+                                            onChange={e => setFormData({ ...formData, mibot_frecuencia: e.target.value })}
+                                            style={{ height: '34px', fontSize: '0.78rem' }}
+                                        >
+                                            <option value="UNA_VEZ">Una sola vez</option>
+                                            <option value="DIARIO">Todos los días</option>
+                                            <option value="SEMANAL">Cada semana</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                {!formData.mibot_enviar_ahora && (
+                                    <div className="form-grid form-grid-2" style={{ gap: '0.55rem' }}>
+                                        <div>
+                                            <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.15rem' }}>
+                                                Fecha Programada (Telegram)
+                                            </label>
+                                            <input
+                                                type="date"
+                                                className="form-control"
+                                                value={formData.mibot_fecha}
+                                                onChange={e => setFormData({ ...formData, mibot_fecha: e.target.value })}
+                                                style={{ height: '34px', fontSize: '0.78rem' }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.15rem' }}>
+                                                Hora Programada (El Salvador)
+                                            </label>
+                                            <input
+                                                type="time"
+                                                className="form-control"
+                                                value={formData.mibot_hora}
+                                                onChange={e => setFormData({ ...formData, mibot_hora: e.target.value })}
+                                                style={{ height: '34px', fontSize: '0.78rem' }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
                     {/* Actions */}
                     <div className="span-2" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
                         <button
@@ -1558,9 +2573,14 @@ export default function Tareas() {
                         <button
                             type="submit"
                             className="btn-primary"
-                            style={{ height: '36px', padding: '0 1.25rem', fontSize: '0.825rem' }}
+                            style={{ height: '36px', padding: '0 1.25rem', fontSize: '0.825rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
                         >
-                            {editingTask ? 'Guardar Cambios' : 'Asignar Tarea'}
+                            {formData.mibot_enabled && <Bot size={15} />}
+                            <span>
+                                {editingTask
+                                    ? (formData.mibot_enabled ? 'Guardar y Notificar en MiBot' : 'Guardar Cambios')
+                                    : (formData.mibot_enabled ? 'Asignar Tarea y Enviar MiBot' : 'Asignar Tarea')}
+                            </span>
                         </button>
                     </div>
                 </form>
@@ -1596,32 +2616,43 @@ export default function Tareas() {
                             </div>
 
                             {/* Status Quick Select */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.35rem' }}>
-                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Estado actual:</span>
-                                <select
-                                    value={selectedTask.estado}
-                                    onChange={(e) => handleQuickStatusChange(selectedTask.id, e.target.value)}
-                                    style={{
-                                        height: '34px',
-                                        padding: '0 2rem 0 0.75rem',
-                                        fontSize: '0.825rem',
-                                        fontWeight: 600,
-                                        width: '160px',
-                                        borderRadius: '6px',
-                                        border: '1px solid var(--border-color)',
-                                        backgroundColor: 'var(--bg-card)',
-                                        color: 'var(--text-primary)',
-                                        boxSizing: 'border-box',
-                                        cursor: 'pointer',
-                                        lineHeight: '34px'
-                                    }}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.6rem', marginTop: '0.35rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Estado actual:</span>
+                                    <select
+                                        value={selectedTask.estado}
+                                        onChange={(e) => handleQuickStatusChange(selectedTask.id, e.target.value)}
+                                        style={{
+                                            height: '34px',
+                                            padding: '0 2rem 0 0.75rem',
+                                            fontSize: '0.825rem',
+                                            fontWeight: 600,
+                                            width: '160px',
+                                            borderRadius: '6px',
+                                            border: '1px solid var(--border-color)',
+                                            backgroundColor: 'var(--bg-card)',
+                                            color: 'var(--text-primary)',
+                                            boxSizing: 'border-box',
+                                            cursor: 'pointer',
+                                            lineHeight: '34px'
+                                        }}
+                                    >
+                                        <option value="pendiente">🟡 Pendiente</option>
+                                        <option value="en_proceso">🔵 En Proceso</option>
+                                        <option value="en_revision">🟣 En Revisión</option>
+                                        <option value="completada">🟢 Completada</option>
+                                        <option value="cancelada">⚪ Cancelada</option>
+                                    </select>
+                                </div>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => handleOpenMibotModal(selectedTask, 'TAREA')}
+                                    style={{ height: '32px', padding: '0 0.75rem', fontSize: '0.76rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.4)' }}
                                 >
-                                    <option value="pendiente">🟡 Pendiente</option>
-                                    <option value="en_proceso">🔵 En Proceso</option>
-                                    <option value="en_revision">🟣 En Revisión</option>
-                                    <option value="completada">🟢 Completada</option>
-                                    <option value="cancelada">⚪ Cancelada</option>
-                                </select>
+                                    <Bot size={14} />
+                                    <span>Agendar / Notificar MiBot</span>
+                                </button>
                             </div>
                         </div>
 
@@ -1667,6 +2698,49 @@ export default function Tareas() {
                                 </span>
                             </div>
                         </div>
+
+                        {/* Seguimiento en Telegram (MiBot) */}
+                        {selectedTask.mibot_summary?.has_mibot && (
+                            <div style={{
+                                padding: '0.65rem 0.85rem',
+                                borderRadius: '8px',
+                                background: 'rgba(0, 136, 204, 0.08)',
+                                border: '1px solid rgba(0, 136, 204, 0.3)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.4rem'
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                    <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <Bot size={14} /> Seguimiento Personal en MiBot Telegram
+                                    </span>
+                                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                        Estado: <strong style={{ color: 'var(--text-primary)' }}>{selectedTask.mibot_summary.ultimo_estado}</strong>
+                                    </span>
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                    {(selectedTask.mibot_summary.destinatarios || []).map(d => {
+                                        const st = getDeliveryBadgeStyle(d.estado_entrega);
+                                        return (
+                                            <span
+                                                key={d.id}
+                                                style={{
+                                                    fontSize: '0.7rem',
+                                                    padding: '0.12rem 0.45rem',
+                                                    borderRadius: '6px',
+                                                    backgroundColor: st.bg,
+                                                    color: st.color,
+                                                    border: st.border,
+                                                    fontWeight: 600
+                                                }}
+                                            >
+                                                {d.nombre_destinatario}{d.cargo ? ` (${d.cargo})` : ''} · {st.label}
+                                            </span>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Description */}
                         {selectedTask.descripcion && (
@@ -1802,6 +2876,34 @@ export default function Tareas() {
                     </div>
                 </Modal>
             )}
+
+            {/* MODAL COMPARTIDO MIBOT TELEGRAM PARA AGENDAR / NOTIFICAR TAREAS, ACTIVIDADES Y REUNIONES */}
+            <MibotProgramarModal
+                open={mibotModalOpen}
+                onClose={() => {
+                    setMibotModalOpen(false);
+                    setMibotTargetTask(null);
+                }}
+                taskRow={mibotTargetTask}
+                defaultTipo={mibotDefaultTipo}
+                onSaved={(resData) => {
+                    fetchTasks(true);
+                    fetchMibotProgramaciones();
+                    if (resData?.task) {
+                        setRecentAssignedCard({
+                            task: resData.task,
+                            mibot: { programacion: resData.programacion, dispatch: resData.dispatch },
+                            timestamp: new Date().toISOString()
+                        });
+                    } else if (mibotTargetTask && resData?.programacion) {
+                        setRecentAssignedCard({
+                            task: mibotTargetTask,
+                            mibot: { programacion: resData.programacion, dispatch: resData.dispatch },
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                }}
+            />
         </div>
     );
 }

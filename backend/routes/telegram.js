@@ -59,6 +59,8 @@ const mibotAccessPerms = [
     ...telegramPerms,
     'manage_recordatorios',
     '/dashboard/operaciones/recordatorios',
+    'manage_tasks',
+    '/dashboard/operaciones/tareas',
     '/dashboard',
     'view_dashboard',
     '/dashboard/finanzas/resumen'
@@ -1434,12 +1436,14 @@ router.get('/mibot/programaciones', authenticateToken, requirePermission(mibotAc
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
 
         const vencimientoId = req.query.vencimiento_id ? parseInt(req.query.vencimiento_id, 10) : null;
+        const taskId = req.query.task_id ? parseInt(req.query.task_id, 10) : null;
         const estado = req.query.estado ? String(req.query.estado).trim().toUpperCase() : null;
         const tipo = req.query.tipo ? String(req.query.tipo).trim().toUpperCase() : null;
         const limit = req.query.limit ? parseInt(req.query.limit, 10) : 100;
 
         const programaciones = await listMibotProgramaciones(db, {
             vencimientoId: Number.isFinite(vencimientoId) ? vencimientoId : null,
+            taskId: Number.isFinite(taskId) ? taskId : null,
             estado,
             tipo,
             limit
@@ -1465,13 +1469,15 @@ router.post('/mibot/programaciones', authenticateToken, requirePermission(mibotA
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
         const externalDb = getExternalDb();
+        const io = req.app?.get('io') || req.io || null;
 
         const result = await createMibotProgramacion({
             db,
             externalDb,
             payload: req.body || {},
             actorUser: req.user,
-            sendTelegramFn: sendTelegramMessage
+            sendTelegramFn: sendTelegramMessage,
+            io
         });
 
         const totalDest = result.programacion?.destinatarios?.length || 0;
@@ -1483,7 +1489,8 @@ router.post('/mibot/programaciones', authenticateToken, requirePermission(mibotA
             ok: true,
             message: sentMsg,
             programacion: result.programacion,
-            dispatch: result.dispatch
+            dispatch: result.dispatch,
+            task: result.task || null
         });
     } catch (error) {
         if (error.status === 400 || error.status === 404) {

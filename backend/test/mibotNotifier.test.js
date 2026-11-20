@@ -76,10 +76,19 @@ function createMockMibotDb({ tgUsers = [], abonos = [] } = {}) {
                     ultimo_envio_at: null,
                     total_envios: 0,
                     created_by_user_id: params[12],
-                    created_by_name: params[13]
+                    created_by_name: params[13],
+                    task_id: params[14] || null
                 };
                 programaciones.push(row);
                 return [{ insertId: id, affectedRows: 1 }];
+            }
+
+            if (/^INSERT INTO notifications\b/i.test(q) || /^INSERT INTO tasks\b/i.test(q) || /^UPDATE tasks\b/i.test(q) || /^INSERT INTO task_comments\b/i.test(q)) {
+                return [{ insertId: 99, affectedRows: 1 }];
+            }
+
+            if (/FROM tasks t/i.test(q) && /WHERE t\.id = \?/i.test(q)) {
+                return [[{ id: params[0], titulo: 'TAREA VINCULADA', estado: 'pendiente', prioridad: 'media', categoria: 'Operaciones' }]];
             }
 
             if (/^INSERT INTO mibot_programaciones_destinatarios\b/i.test(q)) {
@@ -115,7 +124,7 @@ function createMockMibotDb({ tgUsers = [], abonos = [] } = {}) {
                 return [found.map(x => ({ ...x }))];
             }
 
-            if (/^SELECT d\.\*, p\.tipo, p\.titulo, p\.frecuencia, p\.estado AS prog_estado FROM mibot_programaciones_destinatarios d/i.test(q)) {
+            if (/^SELECT d\.\*, p\.tipo, p\.titulo, p\.frecuencia, p\.estado AS prog_estado(?:, p\.task_id)? FROM mibot_programaciones_destinatarios d/i.test(q)) {
                 const dest = destinatarios.find(d => Number(d.id) === Number(params[0]));
                 if (!dest) return [[]];
                 const prog = programaciones.find(p => Number(p.id) === Number(dest.programacion_id));
@@ -125,7 +134,8 @@ function createMockMibotDb({ tgUsers = [], abonos = [] } = {}) {
                     tipo: prog.tipo,
                     titulo: prog.titulo,
                     frecuencia: prog.frecuencia,
-                    prog_estado: prog.estado
+                    prog_estado: prog.estado,
+                    task_id: prog.task_id || null
                 }]];
             }
 
@@ -529,4 +539,56 @@ test('dispatchMibotProgramacion reporta error limpio si un destinatario falla si
     assert.equal(d1.estado_entrega, 'ENVIADO');
     assert.equal(d2.estado_entrega, 'ERROR');
     assert.match(d2.error_msg, /blocked by the user/i);
+});
+
+test('createMibotProgramacion vincula task_id, formatea Detalle de Tarea y emite notificación para tarjeta informativa en sistema', async () => {
+    const tgUsers = [
+        { id: 1, user_id: 5, telegram_user_id: '1001', first_name: 'Raul', last_name: 'Sosa', cargo: 'Gerente General', activo: 1, recibir_mibot: 1 }
+    ];
+    const db = createMockMibotDb({ tgUsers });
+    const sentMessages = [];
+    const emittedRooms = [];
+    const mockIo = {
+        to(room) {
+            return {
+                emit(event, payload) {
+                    emittedRooms.push({ room, event, payload });
+                }
+            };
+        },
+        emit(event, payload) {
+            emittedRooms.push({ room: 'all', event, payload });
+        }
+    };
+
+    const created = await createMibotProgramacion({
+        db,
+        payload: {
+            tipo: 'TAREA',
+            titulo: 'Tarea #42: VERIFICAR CIERRE DE PISTA',
+            mensaje: 'Revisar diferencias de galonaje y arqueo.',
+            task_id: 42,
+            ubicacion: 'Operaciones',
+            fecha_vencimiento: '2026-11-22',
+            destinatario_ids: [1],
+            enviar_ahora: true,
+            prioridad: 'alta'
+        },
+        actorUser: { id: 1, nombre: 'Administrador SIPE' },
+        sendTelegramFn: async (chatId, html) => {
+            sentMessages.push({ chatId, html });
+            return { message_id: 901 };
+        },
+        io: mockIo
+    });
+
+    assert.equal(created.programacion.task_id, 42);
+    assert.equal(sentMessages.length, 1);
+    assert.match(sentMessages[0].html, /Detalle de Tarea \/ Actividad:/);
+    assert.match(sentMessages[0].html, /Tarea en SIPE Admin:<\/b> #42/);
+    assert.ok(emittedRooms.some(e => e.room === 'user_5' && e.event === 'notification:new'));
+    const notifPayload = emittedRooms.find(e => e.event === 'notification:new').payload;
+    assert.equal(notifPayload.type, 'task_assigned');
+    assert.equal(notifPayload.data.taskId, 42);
+    assert.match(notifPayload.data.mibot_status_label, /Enviado por Telegram/i);
 });

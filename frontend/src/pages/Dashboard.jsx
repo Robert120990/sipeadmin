@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
     AlertCircle, ArrowRight, Clock, Fuel, Landmark, ShieldAlert,
-    TrendingUp, FileText, RefreshCw, CheckSquare, Ticket, Truck
+    TrendingUp, FileText, RefreshCw, CheckSquare, Ticket, Truck, Bot, Calendar
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import socket from '../services/socket';
 import CalendarGrid from '../components/CalendarGrid';
 import ColorIcon from '../components/ColorIcon';
 import ReportPreviewModal from '../components/ReportPreviewModal';
@@ -19,6 +20,15 @@ const Dashboard = () => {
     const [monthPayments, setMonthPayments] = useState([]);
     const [calendarLoading, setCalendarLoading] = useState(true);
     const [calendarMonth, setCalendarMonth] = useState(new Date());
+    const [assignedTasks, setAssignedTasks] = useState([]);
+
+    const currentUser = useMemo(() => {
+        try {
+            return JSON.parse(localStorage.getItem('user')) || {};
+        } catch {
+            return {};
+        }
+    }, []);
 
     // Vista Previa Dossier Ejecutivo PDF (Tamaño Carta)
     const [dossierOpen, setDossierOpen] = useState(false);
@@ -32,15 +42,20 @@ const Dashboard = () => {
         setLoading(true);
         setLoadingIntel(true);
         try {
-            const [vencRes, intelRes] = await Promise.allSettled([
+            const [vencRes, intelRes, tasksRes] = await Promise.allSettled([
                 api.get('/dashboard/vencimientos'),
-                api.get('/inteligencia/home-resumen')
+                api.get('/inteligencia/home-resumen'),
+                api.get('/tasks', { params: { solo_mias: 'true' } })
             ]);
             if (vencRes.status === 'fulfilled') {
                 setWeeklyPayments(vencRes.value.data || []);
             }
             if (intelRes.status === 'fulfilled') {
                 setHomeIntel(intelRes.value.data || null);
+            }
+            if (tasksRes.status === 'fulfilled') {
+                const list = Array.isArray(tasksRes.value.data) ? tasksRes.value.data : [];
+                setAssignedTasks(list.filter(t => t.estado !== 'completada' && t.estado !== 'cancelada'));
             }
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
@@ -69,6 +84,18 @@ const Dashboard = () => {
 
     useEffect(() => {
         fetchDashboardData();
+        const refreshAssigned = () => {
+            api.get('/tasks', { params: { solo_mias: 'true' } }).then(res => {
+                const list = Array.isArray(res.data) ? res.data : [];
+                setAssignedTasks(list.filter(t => t.estado !== 'completada' && t.estado !== 'cancelada'));
+            }).catch(() => {});
+        };
+        socket.on('tasks:changed', refreshAssigned);
+        socket.on('tasks:assigned_card', refreshAssigned);
+        return () => {
+            socket.off('tasks:changed', refreshAssigned);
+            socket.off('tasks:assigned_card', refreshAssigned);
+        };
     }, []);
 
     useEffect(() => {
@@ -335,6 +362,95 @@ const Dashboard = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Tarjeta Informativa en Sistema: Tareas y Actividades Asignadas al Usuario */}
+            {assignedTasks.length > 0 && (
+                <div
+                    className="card glass"
+                    style={{
+                        padding: '0.85rem 1.1rem',
+                        borderLeft: '4px solid #38bdf8',
+                        border: '1px solid rgba(56, 189, 248, 0.32)',
+                        background: 'linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(139, 92, 246, 0.05) 100%)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.6rem'
+                    }}
+                >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <CheckSquare size={16} color="#38bdf8" />
+                            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text)' }}>
+                                Tarjeta Informativa · Tareas y Actividades Asignadas ({assignedTasks.length})
+                            </span>
+                            <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                                Actividades activas vinculadas a tu perfil y MiBot Telegram
+                            </span>
+                        </div>
+                        <button
+                            onClick={() => navigate('/dashboard/operaciones/tareas')}
+                            style={{ background: 'transparent', border: 'none', color: '#38bdf8', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                        >
+                            Ir a Tablero y MiBot <ArrowRight size={13} />
+                        </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(265px, 1fr))', gap: '0.6rem' }}>
+                        {assignedTasks.slice(0, 3).map(t => {
+                            const isAssignedToMe = Number(t.assigned_to) === Number(currentUser.id);
+                            return (
+                                <div
+                                    key={t.id}
+                                    onClick={() => {
+                                        navigate('/dashboard/operaciones/tareas');
+                                        setTimeout(() => {
+                                            window.dispatchEvent(new CustomEvent('sipe:open-task-detail', { detail: { taskId: t.id } }));
+                                        }, 180);
+                                    }}
+                                    style={{
+                                        padding: '0.6rem 0.8rem',
+                                        borderRadius: '8px',
+                                        background: 'var(--card-bg)',
+                                        border: '1px solid var(--border)',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '0.32rem'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                        <span style={{
+                                            fontSize: '0.66rem',
+                                            fontWeight: 700,
+                                            padding: '0.1rem 0.4rem',
+                                            borderRadius: '4px',
+                                            background: t.prioridad === 'urgente' ? 'rgba(239, 68, 68, 0.16)' : 'rgba(56, 189, 248, 0.14)',
+                                            color: t.prioridad === 'urgente' ? '#ef4444' : '#38bdf8',
+                                            textTransform: 'uppercase'
+                                        }}>
+                                            {t.prioridad || 'MEDIA'} · {t.categoria || 'General'}
+                                        </span>
+                                        {t.mibot_summary?.has_mibot && (
+                                            <span style={{ fontSize: '0.66rem', fontWeight: 700, color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+                                                <Bot size={11} /> MiBot ({t.mibot_summary.ultimo_estado})
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>
+                                        #{t.id} · {t.titulo}
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                        <span>{isAssignedToMe ? `Asignada por: ${t.created_user_name || 'Sistema'}` : `Responsable: ${t.assigned_user_name || 'Colaborador'}`}</span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.22rem', color: '#fbbf24', fontWeight: 600 }}>
+                                            <Calendar size={11} /> {formatDateDMY(t.fecha_vencimiento)}
+                                        </span>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
 
             {/* Banda Compacta de Tanques Críticos con Cruce de Pedidos Puma */}
             {permisos.abastecimiento && alertasTanques.length > 0 && (
