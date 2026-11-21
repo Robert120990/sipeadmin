@@ -8,6 +8,7 @@ const energyLatamService = require('../services/energyLatamService');
 const solarEnergyService = require('../services/solarEnergyService');
 const salesHourlyService = require('../services/salesHourlyService');
 const recordatoriosPagosService = require('../services/recordatoriosPagosService');
+const { signUploadUrl } = require('../utils/uploadSigner');
 
 const vencimientosViewPerms = [
     '/dashboard',
@@ -1765,7 +1766,11 @@ router.post('/operaciones/recordatorios/vencimiento/:id/comprobantes', authentic
                     actor
                 ]
             );
-            inserted.push({ id: ins.insertId, ...saved });
+            inserted.push({
+                id: ins.insertId,
+                ...saved,
+                signed_url: signUploadUrl(saved.archivo_url)
+            });
         }
 
         const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: venId });

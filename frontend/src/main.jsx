@@ -14,7 +14,20 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 // Manejar automáticamente errores de precarga de chunks de Vite al desplegar nueva versión
+// Con guarda en sessionStorage para evitar bucles infinitos de recarga si un asset falta temporalmente
 window.addEventListener('vite:preloadError', () => {
+    try {
+        const key = 'sipe_vite_preload_reload_at';
+        const lastReload = Number(sessionStorage.getItem(key) || '0');
+        const now = Date.now();
+        if (lastReload && now - lastReload < 30000) {
+            console.warn('Vite preload error: recarga omitida por cooldown de 30s para evitar bucle.');
+            return;
+        }
+        sessionStorage.setItem(key, String(now));
+    } catch (_) {
+        // Ignorar si sessionStorage no está disponible
+    }
     console.warn('Vite preload error: recargando para obtener la versión más reciente.');
     window.location.reload();
 });

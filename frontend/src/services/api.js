@@ -3,13 +3,17 @@ import { recordApiError } from '../utils/errorDiagnostics';
 import { recordNetworkErrorForTicket } from '../utils/ticketDiagnostics';
 
 const api = axios.create({
-    baseURL: '/api'
+    baseURL: '/api',
+    timeout: 45000
 });
 
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem('token');
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
+    }
+    if ((!config.timeout || config.timeout === 45000) && typeof config.url === 'string' && /(\/ai\/|\/sync|\/analizar-comprobante|\/ocr|\/pdf|\/backup|\/operaciones\/portal\/)/i.test(config.url)) {
+        config.timeout = 120000;
     }
     return config;
 });

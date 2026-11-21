@@ -1571,14 +1571,44 @@ let configCache = {
     accounting: { data: null, expiresAt: 0 }
 };
 
+const closeExternalPools = async (type = null) => {
+    const matchingEntries = Object.entries(externalPools).filter(([key]) => (
+        !type || key.startsWith(`${type}:`)
+    ));
+    if (matchingEntries.length === 0) return;
+
+    const poolsToClose = [];
+    for (const [key, extPool] of matchingEntries) {
+        delete externalPools[key];
+        if (extPool && typeof extPool.end === 'function') {
+            poolsToClose.push(extPool.end().catch(() => {}));
+        }
+    }
+    if (poolsToClose.length > 0) {
+        await Promise.allSettled(poolsToClose);
+    }
+};
+
+const closeAllPools = async () => {
+    await closeExternalPools();
+    if (pool && typeof pool.end === 'function') {
+        const currentPool = pool;
+        pool = null;
+        dbInitialized = false;
+        await currentPool.end().catch(() => {});
+    }
+};
+
 const invalidateConfigCache = (type = null) => {
     if (type && configCache[type]) {
         configCache[type] = { data: null, expiresAt: 0 };
+        closeExternalPools(type).catch(() => {});
     } else {
         configCache = {
             main: { data: null, expiresAt: 0 },
             accounting: { data: null, expiresAt: 0 }
         };
+        closeExternalPools().catch(() => {});
     }
 };
 
@@ -1692,4 +1722,4 @@ const withTransaction = async (callback) => {
     }
 };
 
-module.exports = { initDB, getDb, getDbIfReady, getExternalDb, getAccountingDb, withRetry, withTransaction, invalidateConfigCache };
+module.exports = { initDB, getDb, getDbIfReady, getExternalDb, getAccountingDb, withRetry, withTransaction, invalidateConfigCache, closeExternalPools, closeAllPools };

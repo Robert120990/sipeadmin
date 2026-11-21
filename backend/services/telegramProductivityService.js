@@ -81,6 +81,33 @@ function clearProductivityWizards(telegramUserId) {
     pendingEventWizards.delete(key);
 }
 
+function pruneWizardMap(map, maxEntries = 500, nowMs = Date.now()) {
+    let removed = 0;
+    for (const [key, entry] of map.entries()) {
+        const ts = entry?.updatedAt || entry?.timestamp || 0;
+        if (nowMs - ts > WIZARD_TTL_MS) {
+            map.delete(key);
+            removed += 1;
+        }
+    }
+    const cap = Math.max(1, Number(maxEntries) || 500);
+    while (map.size > cap) {
+        const oldestKey = map.keys().next().value;
+        if (oldestKey === undefined) break;
+        map.delete(oldestKey);
+        removed += 1;
+    }
+    return removed;
+}
+
+function pruneProductivityWizards(maxEntries = 500) {
+    const now = Date.now();
+    return (
+        pruneWizardMap(pendingTaskWizards, maxEntries, now) +
+        pruneWizardMap(pendingEventWizards, maxEntries, now)
+    );
+}
+
 function formatShortDM(ymd) {
     const clean = String(ymd || '').slice(0, 10);
     const m = clean.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -2642,6 +2669,7 @@ module.exports = {
     pendingTaskWizards,
     pendingEventWizards,
     clearProductivityWizards,
+    pruneProductivityWizards,
     resolveCollaboratorCandidates,
     extractDateAndTimeFromSpanish,
     parseMultiUserTaskInput,

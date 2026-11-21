@@ -9,10 +9,10 @@ module.exports = {
       watch: false,
       env: {
         NODE_ENV: 'production',
-        PORT: 5001,
-        SYNC_API_KEY: 'sipe_orchestrator_2026_secure_token'
+        PORT: 5001
       },
       env_file: './backend/.env',
+      kill_timeout: 12000,
       max_restarts: 10,
       restart_delay: 3000,
       error_file: './logs/backend-error.log',

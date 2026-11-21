@@ -29,7 +29,7 @@ export default function ReceiptViewerModal({
 
     const current = comprobantes[activeIdx] || null;
     const isPdf = current && (current.mime_type === 'application/pdf' || /\.pdf$/i.test(current.archivo_url || current.nombre_original || ''));
-    const fileUrl = current?.archivo_url || current?.data_url || '';
+    const fileUrl = current?.signed_url || current?.archivo_url || current?.data_url || '';
 
     const handlePrev = () => {
         if (comprobantes.length <= 1) return;
@@ -282,7 +282,7 @@ export default function ReceiptViewerModal({
                                             <FileText size={20} style={{ color: '#f87171' }} />
                                         ) : (
                                             <img
-                                                src={c.archivo_url || c.data_url}
+                                                src={c.signed_url || c.archivo_url || c.data_url}
                                                 alt=""
                                                 style={{ width: '32px', height: '32px', objectFit: 'cover', borderRadius: '4px' }}
                                             />

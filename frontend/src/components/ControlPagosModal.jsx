@@ -1660,7 +1660,7 @@ export default function ControlPagosModal({
                                                                 </div>
                                                             ) : (
                                                                 <img
-                                                                    src={c.archivo_url}
+                                                                    src={c.signed_url || c.archivo_url}
                                                                     alt={c.nombre_original}
                                                                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                                                                 />

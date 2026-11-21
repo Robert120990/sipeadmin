@@ -2187,6 +2187,13 @@ const initTicketRealtimeWatcher = (io) => {
     if (watcherIntervalId.unref) watcherIntervalId.unref();
 };
 
+const stopTicketRealtimeWatcher = () => {
+    if (watcherIntervalId) {
+        clearInterval(watcherIntervalId);
+        watcherIntervalId = null;
+    }
+};
+
 module.exports = {
     DEFAULT_AGY_MODEL,
     AVAILABLE_AGY_MODELS,
@@ -2222,5 +2229,6 @@ module.exports = {
     executeApprovedPlan,
     rejectPlan,
     syncRealtimeTicketUpdates,
-    initTicketRealtimeWatcher
+    initTicketRealtimeWatcher,
+    stopTicketRealtimeWatcher
 };

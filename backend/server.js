@@ -3,7 +3,8 @@ const cors = require('cors');
 const http = require('http');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
-const { initDB } = require('./db');
+const { initDB, getDbIfReady, closeAllPools } = require('./db');
+const { requireSignedOrAuthenticatedUpload } = require('./utils/uploadSigner');
 
 dotenv.config();
 
@@ -11,6 +12,8 @@ const app = express();
 // Enable trust proxy for reverse proxy environments (Caddy on VPS) to accurately read client IP
 app.set('trust proxy', 1);
 const server = http.createServer(app);
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
 const helmet = require('helmet');
 
 // Hardened CORS allowed origins
@@ -236,7 +239,7 @@ const githubChangesRoutes = require('./routes/githubChanges').router;
 const rrhhRoutes = require('./routes/rrhh');
 const telegramRoutes = require('./routes/telegram');
 const ticketsRoutes = require('./routes/tickets');
-const { UPLOADS_DIR, SIBLING_SAAS_UPLOADS, initTicketRealtimeWatcher } = require('./services/ticketService');
+const { UPLOADS_DIR, SIBLING_SAAS_UPLOADS, initTicketRealtimeWatcher, stopTicketRealtimeWatcher } = require('./services/ticketService');
 const fs = require('fs');
 const path = require('path');
 
@@ -261,6 +264,7 @@ app.use('/api', bitacoraRoutes);
 app.use('/api/check-designer', checkDesignerRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/tickets', ticketsRoutes);
+app.use('/api/uploads/pagos', requireSignedOrAuthenticatedUpload);
 app.use('/api/uploads', express.static(UPLOADS_DIR, { dotfiles: 'deny', index: false, maxAge: '7d' }));
 app.get('/api/uploads/:filename', (req, res) => {
     const safeName = path.basename(req.params.filename || '');
@@ -279,6 +283,26 @@ app.get('/api/uploads/:filename', (req, res) => {
 });
 
 // Health Check público
+// Health Check público con verificación activa de MySQL para deploy/monitoreo
+app.get('/api/health', async (req, res) => {
+    const basePayload = {
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    };
+    const db = getDbIfReady();
+    if (!db) {
+        return res.status(503).json({ ...basePayload, status: 'degraded', db: 'initializing' });
+    }
+    try {
+        await db.query('SELECT 1 AS ok');
+        return res.status(200).json({ ...basePayload, status: 'ok', db: 'connected' });
+    } catch (err) {
+        console.error('[Health] Fallo en verificación MySQL:', err.message);
+        return res.status(503).json({ ...basePayload, status: 'degraded', db: 'disconnected' });
+    }
+});
+
+// Health Check público ligero
 app.get('/api/debug-ping', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
 // Endpoint de diagnóstico protegido (solo administradores autenticados)
@@ -319,16 +343,77 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars -- Expr
 // Initialize DB, Schedulers, Telegram Bot and Start Server
 const { initBirthdayScheduler } = require('./services/birthdayNotifier');
 const { initPaymentScheduler } = require('./services/paymentNotifier');
-const { initMibotScheduler } = require('./services/mibotNotifierService');
-const { initTelegramBot } = require('./services/telegramBotService');
+const { initMibotScheduler, stopMibotScheduler } = require('./services/mibotNotifierService');
+const { initTelegramBot, stopTelegramBot } = require('./services/telegramBotService');
 const { initAutoSyncScheduler } = require('./services/autoSyncScheduler');
 const { runInitialServiceSeeds } = require('./services/dbBootstrapSeeds');
+
+let isShuttingDown = false;
+const gracefulShutdown = async (signal, exitCode = 0) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`[Shutdown] Señal ${signal} recibida. Cerrando servicios de forma ordenada...`);
+
+    const forceTimer = setTimeout(() => {
+        console.error('[Shutdown] Tiempo límite alcanzado; forzando salida.');
+        process.exit(exitCode || 1);
+    }, 10000);
+    if (forceTimer && typeof forceTimer.unref === 'function') forceTimer.unref();
+
+    try { stopTelegramBot(); } catch (_) { /* noop */ }
+    try { stopMibotScheduler(); } catch (_) { /* noop */ }
+    try { stopTicketRealtimeWatcher(); } catch (_) { /* noop */ }
+
+    await new Promise((resolve) => {
+        let finished = false;
+        const done = () => {
+            if (!finished) {
+                finished = true;
+                resolve();
+            }
+        };
+        try {
+            if (io && typeof io.close === 'function') {
+                io.close(() => done());
+            } else if (server.listening) {
+                server.close(() => done());
+            } else {
+                done();
+            }
+        } catch (_) {
+            done();
+        }
+        setTimeout(done, 4000).unref();
+    });
+
+    try {
+        await closeAllPools();
+    } catch (poolErr) {
+        console.error('[Shutdown] Error cerrando pools MySQL:', poolErr.message);
+    }
+
+    clearTimeout(forceTimer);
+    console.log('[Shutdown] Cierre limpio completado.');
+    process.exit(exitCode);
+};
+
+if (process.env.NODE_ENV !== 'test') {
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM', 0));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT', 0));
+    process.on('unhandledRejection', (reason) => {
+        console.error('[Process] Unhandled Rejection capturado:', reason instanceof Error ? reason.stack || reason.message : reason);
+    });
+    process.on('uncaughtException', (err) => {
+        console.error('[Process] Uncaught Exception crítico:', err instanceof Error ? err.stack || err.message : err);
+        gracefulShutdown('uncaughtException', 1);
+    });
+}
 
 initDB().then(async () => {
     await runInitialServiceSeeds();
     initBirthdayScheduler();
     initPaymentScheduler();
-    initMibotScheduler();
+    initMibotScheduler(io);
     initTelegramBot();
     initAutoSyncScheduler(io);
     initTicketRealtimeWatcher(io);

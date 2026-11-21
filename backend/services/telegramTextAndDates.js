@@ -61,12 +61,27 @@ const toDisplayDate = (ymd) => {
 /**
  * Obtener fecha YYYY-MM-DD con desplazamiento en días
  */
+const EL_SALVADOR_DATE_FMT = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/El_Salvador',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+});
+
 const getDateStr = (offsetDays = 0) => {
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
+    const parts = EL_SALVADOR_DATE_FMT.formatToParts(new Date());
+    const map = {};
+    for (const part of parts) {
+        if (part.type !== 'literal') map[part.type] = part.value;
+    }
+    const utcDate = new Date(Date.UTC(
+        Number(map.year),
+        Number(map.month) - 1,
+        Number(map.day) + (Number(offsetDays) || 0)
+    ));
+    const year = utcDate.getUTCFullYear();
+    const month = String(utcDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(utcDate.getUTCDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
 };
 

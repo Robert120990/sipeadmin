@@ -118,7 +118,7 @@ describe('Integridad Arquitectónica: Cero Ciclos CJS y Contratos de Módulos (F
         }
     });
 
-    it('services/telegramBotService.js debe preservar sus 99 exportaciones y compartir estado con submódulos', async () => {
+    it('services/telegramBotService.js debe preservar sus exportaciones principales y compartir estado con submódulos', async () => {
         const botService = require('../services/telegramBotService');
         const transportService = require('../services/telegramTransportService');
         const dataService = require('../services/telegramDataService');
@@ -126,7 +126,20 @@ describe('Integridad Arquitectónica: Cero Ciclos CJS y Contratos de Módulos (F
         const formattersService = require('../services/telegramFormatters');
         const pdfService = require('../services/telegramPdfService');
 
-        assert.strictEqual(Object.keys(botService).length, 99);
+        assert.ok(Object.keys(botService).length >= 99, `Se esperaban >= 99 exportaciones y hay ${Object.keys(botService).length}`);
+        for (const key of [
+            'initTelegramBot',
+            'stopTelegramBot',
+            'handleIncomingMessage',
+            'handleCallbackQuery',
+            'handleSmartNaturalLanguageQuery',
+            'getUserEffectivePermissions',
+            'getPagosProgramadosData',
+            'formatPagosProgramadosMessage',
+            'parseNaturalLanguageQuery'
+        ]) {
+            assert.strictEqual(typeof botService[key], 'function', `Falta exportación clave de telegramBotService: ${key}`);
+        }
         assert.strictEqual(botService.sendTelegramMessage, transportService.sendTelegramMessage);
         assert.strictEqual(botService.getBotStatus, transportService.getBotStatus);
         assert.strictEqual(botService.queryMemoryCache, dataService.queryMemoryCache);

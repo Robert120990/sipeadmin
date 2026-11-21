@@ -51,6 +51,7 @@ const {
 const {
     pendingTaskWizards,
     clearProductivityWizards,
+    pruneProductivityWizards,
     resolveCollaboratorCandidates,
     parseMultiUserTaskInput,
     createMultiUserTasksFromTelegram,
@@ -236,6 +237,65 @@ const clearUserConversationContext = (userId) => {
  * key: telegram_user_id (string) -> { date, stationId, stationName, timestamp }
  */
 const pendingAlertJustifications = new Map();
+const PENDING_ACTION_TTL_MS = 30 * 60 * 1000; // 30 minutos
+const MAX_BOT_MAP_ENTRIES = 500;
+const BOT_MEMORY_SWEEP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutos
+let memorySweeperInterval = null;
+
+function pruneTimedMap(map, ttlMs, tsField = 'timestamp', maxEntries = MAX_BOT_MAP_ENTRIES, nowMs = Date.now()) {
+    let removed = 0;
+    for (const [key, entry] of map.entries()) {
+        const ts = entry && typeof entry === 'object' ? (entry[tsField] || entry.updatedAt || entry.timestamp || 0) : 0;
+        if (nowMs - ts > ttlMs) {
+            map.delete(key);
+            removed += 1;
+        }
+    }
+    const cap = Math.max(1, Number(maxEntries) || MAX_BOT_MAP_ENTRIES);
+    while (map.size > cap) {
+        const oldestKey = map.keys().next().value;
+        if (oldestKey === undefined) break;
+        map.delete(oldestKey);
+        removed += 1;
+    }
+    return removed;
+}
+
+const pruneBotMemoryMaps = (maxEntries = MAX_BOT_MAP_ENTRIES) => {
+    const now = Date.now();
+    const removedContext = pruneTimedMap(userConversationContext, CONVERSATION_CONTEXT_TTL, 'updatedAt', maxEntries, now);
+    const removedFeedback = pruneTimedMap(pendingFeedbackUsers, PENDING_ACTION_TTL_MS, 'timestamp', maxEntries, now);
+    const removedJustifications = pruneTimedMap(pendingAlertJustifications, PENDING_ACTION_TTL_MS, 'timestamp', maxEntries, now);
+    const removedWizards = typeof pruneProductivityWizards === 'function' ? pruneProductivityWizards(maxEntries) : 0;
+    return {
+        removedContext,
+        removedFeedback,
+        removedJustifications,
+        removedWizards,
+        totalRemoved: removedContext + removedFeedback + removedJustifications + removedWizards
+    };
+};
+
+const startBotMemorySweeper = () => {
+    if (process.env.NODE_ENV === 'test' || memorySweeperInterval) return;
+    memorySweeperInterval = setInterval(() => {
+        try {
+            pruneBotMemoryMaps(MAX_BOT_MAP_ENTRIES);
+        } catch (_) {
+            // Ignorar errores transitorios en limpieza periódica
+        }
+    }, BOT_MEMORY_SWEEP_INTERVAL_MS);
+    if (memorySweeperInterval && typeof memorySweeperInterval.unref === 'function') {
+        memorySweeperInterval.unref();
+    }
+};
+
+const stopBotMemorySweeper = () => {
+    if (memorySweeperInterval) {
+        clearInterval(memorySweeperInterval);
+        memorySweeperInterval = null;
+    }
+};
 
 /**
  * Registrar un nuevo evento de consulta para retroalimentación en telegram_feedback
@@ -3643,6 +3703,7 @@ const initTelegramBot = async () => {
         runtimeState.pollingGeneration = (runtimeState.pollingGeneration || 0) + 1;
         const activeGen = runtimeState.pollingGeneration;
         runtimeState.isPollingActive = true;
+        startBotMemorySweeper();
         setTelegramBotCommands([
             { command: 'tareas', description: 'Ver y gestionar tareas activas' },
             { command: 'asignar', description: 'Asignar tarea a uno o más usuarios' },
@@ -3667,6 +3728,7 @@ const initTelegramBot = async () => {
 const stopTelegramBot = () => {
     runtimeState.isPollingActive = false;
     runtimeState.pollingGeneration = (runtimeState.pollingGeneration || 0) + 1;
+    stopBotMemorySweeper();
 };
 
 /**
@@ -4269,6 +4331,7 @@ module.exports = {
     setUserConversationContext,
     clearUserConversationContext,
     pendingAlertJustifications,
+    pruneBotMemoryMaps,
     getDiscrepancyInlineMarkup,
     handleIncomingMessage,
     shiftDate,

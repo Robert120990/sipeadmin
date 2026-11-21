@@ -40,15 +40,27 @@ echo "Directorio: $PROJECT_DIR" >> "$DEBUG_FILE"
 echo "PATH: $PATH" >> "$DEBUG_FILE"
 
 echo ">> 1. Actualizando código desde git..."
-git fetch origin main >> "$DEBUG_FILE" 2>&1
-git reset --hard origin/main >> "$DEBUG_FILE" 2>&1
+if ! git fetch origin main >> "$DEBUG_FILE" 2>&1; then
+    echo "ERROR: Falló git fetch origin main. Abortando despliegue antes de tocar PM2." | tee -a "$DEBUG_FILE"
+    exit 1
+fi
+if ! git reset --hard origin/main >> "$DEBUG_FILE" 2>&1; then
+    echo "ERROR: Falló git reset --hard origin/main. Abortando despliegue antes de tocar PM2." | tee -a "$DEBUG_FILE"
+    exit 1
+fi
 echo "Git HEAD: $(git rev-parse --short HEAD)" >> "$DEBUG_FILE"
 
 echo ">> 2. Instalando dependencias con pnpm..."
-pnpm install >> "$DEBUG_FILE" 2>&1 || true
+if ! pnpm install >> "$DEBUG_FILE" 2>&1; then
+    echo "ERROR: Falló pnpm install. Abortando despliegue para preservar instancia activa." | tee -a "$DEBUG_FILE"
+    exit 1
+fi
 
 echo ">> 3. Compilando frontend SPA para producción..."
-pnpm --filter frontend run build >> "$DEBUG_FILE" 2>&1
+if ! pnpm --filter frontend run build >> "$DEBUG_FILE" 2>&1; then
+    echo "ERROR: Falló pnpm --filter frontend run build. Abortando despliegue para preservar instancia activa." | tee -a "$DEBUG_FILE"
+    exit 1
+fi
 
 echo ">> 4. Reiniciando backend..."
 set +e
@@ -70,34 +82,51 @@ done
 echo "PM2 detectado: ${PM2_BIN:-ninguno}" >> "$DEBUG_FILE"
 
 if [ -n "$PM2_BIN" ]; then
-    echo "--- Detención y recreación limpia de sipeadmin-backend ---" >> "$DEBUG_FILE"
-    $PM2_BIN delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
-    if command -v sudo >/dev/null 2>&1; then
+    echo "--- Detención elegante y recreación de sipeadmin-backend ---" >> "$DEBUG_FILE"
+    if $PM2_BIN describe sipeadmin-backend >/dev/null 2>&1; then
+        $PM2_BIN stop sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
+        $PM2_BIN delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
+    elif command -v sudo >/dev/null 2>&1 && sudo -n "$PM2_BIN" describe sipeadmin-backend >/dev/null 2>&1; then
+        sudo -n "$PM2_BIN" stop sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
         sudo -n "$PM2_BIN" delete sipeadmin-backend >> "$DEBUG_FILE" 2>&1 || true
     fi
 
-    # Liberar puerto 5001 si queda algún proceso zombie
-    PORT_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
-    if [ -z "$PORT_PIDS" ] && command -v sudo >/dev/null 2>&1; then
-        PORT_PIDS=$(sudo -n lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || sudo -n ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
-    fi
-    for pid in $PORT_PIDS; do
-        if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
-            echo "Terminando proceso en 5001: $pid..." >> "$DEBUG_FILE"
-            kill -9 "$pid" 2>/dev/null || sudo -n kill -9 "$pid" 2>/dev/null || true
+    # Esperar hasta 10s a que el puerto 5001 se libere de forma elegante tras SIGTERM
+    WAIT_PORT=0
+    while [ $WAIT_PORT -lt 10 ]; do
+        PORT_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+        if [ -z "$PORT_PIDS" ] && command -v sudo >/dev/null 2>&1; then
+            PORT_PIDS=$(sudo -n lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || sudo -n ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
         fi
+        [ -z "$PORT_PIDS" ] && break
+        sleep 1
+        WAIT_PORT=$((WAIT_PORT + 1))
     done
 
-    if command -v fuser >/dev/null 2>&1; then
-        fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || sudo -n fuser -k -9 5001/tcp >> "$DEBUG_FILE" 2>&1 || true
+    # Escalar a SIGTERM y, solo como último recurso, SIGKILL si quedó algún proceso huérfano en 5001
+    if [ -n "$PORT_PIDS" ]; then
+        for pid in $PORT_PIDS; do
+            if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
+                echo "Enviando SIGTERM a proceso remanente en 5001: $pid..." >> "$DEBUG_FILE"
+                kill -TERM "$pid" 2>/dev/null || sudo -n kill -TERM "$pid" 2>/dev/null || true
+            fi
+        done
+        sleep 2
+        REM_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+        for pid in $REM_PIDS; do
+            if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
+                echo "Último recurso SIGKILL a proceso en 5001: $pid..." >> "$DEBUG_FILE"
+                kill -9 "$pid" 2>/dev/null || sudo -n kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
+        sleep 1
     fi
 
-    sleep 1
-
-    echo "--- Iniciando sipeadmin-backend con código nuevo y variables actualizadas ---" >> "$DEBUG_FILE"
-    $PM2_BIN start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
-    if command -v sudo >/dev/null 2>&1; then
-        sudo -n "$PM2_BIN" start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+    echo "--- Iniciando única instancia de sipeadmin-backend ---" >> "$DEBUG_FILE"
+    if ! $PM2_BIN start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1; then
+        if command -v sudo >/dev/null 2>&1; then
+            sudo -n "$PM2_BIN" start "$PROJECT_DIR/ecosystem.config.cjs" --only sipeadmin-backend --update-env >> "$DEBUG_FILE" 2>&1 || true
+        fi
     fi
 
     echo "--- Asegurando sipeadmin-webhook activo en puerto 7778 ---" >> "$DEBUG_FILE"
@@ -106,18 +135,30 @@ if [ -n "$PM2_BIN" ]; then
     fi
 
     $PM2_BIN save >> "$DEBUG_FILE" 2>&1 || true
-    if command -v sudo >/dev/null 2>&1; then
-        sudo -n "$PM2_BIN" save >> "$DEBUG_FILE" 2>&1 || true
-    fi
 fi
 
-# Esperar a que el backend inicialice
-sleep 3
+# Esperar y verificar salud del backend contra /api/health (hasta 10 intentos x 2s = 20s)
+echo "--- Verificando salud del backend en http://127.0.0.1:5001/api/health ---" >> "$DEBUG_FILE"
+HEALTH_OK=0
+HEALTH_STATUS="000"
+ATTEMPT=1
+while [ $ATTEMPT -le 10 ]; do
+    HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5001/api/health 2>/dev/null || echo "000")
+    if [ "$HEALTH_STATUS" = "200" ]; then
+        HEALTH_OK=1
+        break
+    fi
+    echo "Intento $ATTEMPT/10: /api/health devolvió HTTP $HEALTH_STATUS; esperando 2s..." >> "$DEBUG_FILE"
+    sleep 2
+    ATTEMPT=$((ATTEMPT + 1))
+done
 
-# Verificación de salud y respuesta de endpoints
-echo "--- Verificando respuesta del backend en puerto 5001 ---" >> "$DEBUG_FILE"
-SYSTEM_USERS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5001/api/telegram/system-users 2>/dev/null || true)
-echo "HTTP telegram/system-users inicial: $SYSTEM_USERS_STATUS (401 o 200 esperado)" >> "$DEBUG_FILE"
+echo "HTTP /api/health final: $HEALTH_STATUS (ok=$HEALTH_OK)" >> "$DEBUG_FILE"
+if [ "$HEALTH_OK" -ne 1 ]; then
+    echo "ERROR CRÍTICO: Backend no respondió 200 OK en /api/health después de reiniciar PM2 (último status: $HEALTH_STATUS)." | tee -a "$DEBUG_FILE"
+    chmod 600 "$DEBUG_FILE" 2>/dev/null || true
+    exit 1
+fi
 
 echo ">> 5. Verificando estado del proxy Caddy..." >> "$DEBUG_FILE"
 if ! systemctl is-active --quiet caddy 2>/dev/null; then

@@ -1786,6 +1786,21 @@ function initMibotScheduler(io = null) {
     return mibotCronTask;
 }
 
+/**
+ * Detiene los cron jobs de MiBot para un cierre elegante del servidor.
+ */
+function stopMibotScheduler() {
+    if (mibotCronTask && typeof mibotCronTask.stop === 'function') {
+        mibotCronTask.stop();
+    }
+    mibotCronTask = null;
+
+    if (mibotDigestCronTask && typeof mibotDigestCronTask.stop === 'function') {
+        mibotDigestCronTask.stop();
+    }
+    mibotDigestCronTask = null;
+}
+
 module.exports = {
     MIBOT_TIMEZONE,
     MIBOT_TIPOS,
@@ -1818,5 +1833,6 @@ module.exports = {
     getActiveMibotSummaryByTaskIds,
     processDueMibotSchedules,
     processMorningAgendaDigest,
-    initMibotScheduler
+    initMibotScheduler,
+    stopMibotScheduler
 };

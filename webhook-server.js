@@ -39,23 +39,87 @@ if (!SECRET) {
     console.error('ADVERTENCIA CRÍTICA: WEBHOOK_SECRET no está configurado en las variables de entorno. Los despliegues automáticos requerirán autenticación obligatoria.');
 }
 
+const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
+
 let isDeploying = false;
+let pendingDeploy = false;
+
+function runDeploy() {
+    isDeploying = true;
+    const deployEnv = {
+        ...process.env,
+        HOME: process.env.HOME || '/home/sistemas',
+        PATH: `/home/sistemas/.local/share/pnpm:/home/sistemas/.pnpm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}`
+    };
+
+    exec(
+        `bash "${path.join(PROJECT_DIR, 'deploy.sh')}"`,
+        {
+            env: deployEnv,
+            cwd: PROJECT_DIR,
+            maxBuffer: 25 * 1024 * 1024,
+            timeout: DEPLOY_TIMEOUT_MS,
+            killSignal: 'SIGTERM'
+        },
+        (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Deploy error: ${error.message}`);
+                if (stderr) console.error(stderr);
+            } else {
+                console.log(`Deploy stdout: ${stdout}`);
+            }
+
+            if (pendingDeploy) {
+                pendingDeploy = false;
+                console.log(`[${new Date().toISOString()}] Running queued follow-up deploy for ${BRANCH}...`);
+                runDeploy();
+                return;
+            }
+            isDeploying = false;
+        }
+    );
+}
 
 const server = http.createServer((req, res) => {
+    const reqPath = (req.url || '/').split('?')[0];
+    if (req.method === 'GET' && reqPath === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+            status: 'ok',
+            isDeploying,
+            pendingDeploy,
+            uptime: process.uptime()
+        }));
+    }
+
     if (req.method !== 'POST') {
         res.writeHead(405, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'Method Not Allowed' }));
     }
 
-    let body = '';
+    const chunks = [];
+    let totalBytes = 0;
+    let payloadTooLarge = false;
+
     req.on('data', chunk => {
-        body += chunk;
-        if (body.length > 2 * 1024 * 1024) {
+        if (payloadTooLarge) return;
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_PAYLOAD_BYTES) {
+            payloadTooLarge = true;
+            if (!res.headersSent) {
+                res.writeHead(413, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Payload Too Large' }));
+            }
             req.destroy();
+            return;
         }
+        chunks.push(chunk);
     });
 
     req.on('end', () => {
+        if (payloadTooLarge) return;
+        const body = Buffer.concat(chunks).toString('utf8');
         const sig = req.headers['x-hub-signature-256'] || '';
 
         if (!SECRET) {
@@ -94,38 +158,31 @@ const server = http.createServer((req, res) => {
             }
 
             if (isDeploying) {
-                res.writeHead(429, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ message: 'Deployment already in progress' }));
+                pendingDeploy = true;
+                res.writeHead(202, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ message: 'Deployment in progress; follow-up deploy queued' }));
             }
 
-            isDeploying = true;
             res.writeHead(202, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ message: 'Deployment started' }));
 
             console.log(`[${new Date().toISOString()}] GitHub Webhook triggered for ${BRANCH}. Running deploy.sh...`);
-
-            const deployEnv = {
-                ...process.env,
-                HOME: process.env.HOME || '/home/sistemas',
-                PATH: `/home/sistemas/.local/share/pnpm:/home/sistemas/.pnpm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}`
-            };
-
-            exec(`bash "${path.join(PROJECT_DIR, 'deploy.sh')}"`, { env: deployEnv, cwd: PROJECT_DIR, maxBuffer: 25 * 1024 * 1024 }, (error, stdout, stderr) => {
-                isDeploying = false;
-                if (error) {
-                    console.error(`Deploy error: ${error.message}`);
-                    console.error(stderr);
-                    return;
-                }
-                console.log(`Deploy stdout: ${stdout}`);
-            });
-
+            runDeploy();
         } catch (err) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: `Bad Request: ${err.message}` }));
         }
     });
 });
+
+const shutdownWebhook = (signal) => {
+    console.log(`[Webhook] Señal ${signal} recibida, cerrando servidor...`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+};
+
+process.on('SIGTERM', () => shutdownWebhook('SIGTERM'));
+process.on('SIGINT', () => shutdownWebhook('SIGINT'));
 
 server.listen(PORT, '127.0.0.1', () => {
     console.log(`SIPE Admin Webhook listening on 127.0.0.1:${PORT}`);

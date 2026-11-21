@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { getActiveMibotCountsByVencimientos } = require('./mibotNotifierService');
+const { signUploadUrl } = require('../utils/uploadSigner');
 
 const PAGOS_UPLOADS_DIR = path.join(__dirname, '..', 'uploads', 'pagos');
 
@@ -437,10 +438,11 @@ function parseReceiptDataUrl(dataUrl) {
  * Lee un comprobante ya guardado en backend/uploads/pagos/ con validación anti path-traversal.
  */
 function readSavedReceiptAsBuffer(archivoUrl = '') {
-    if (!archivoUrl || !String(archivoUrl).startsWith('/api/uploads/pagos/')) {
+    const cleanUrl = String(archivoUrl || '').split('?')[0];
+    if (!cleanUrl || !cleanUrl.startsWith('/api/uploads/pagos/')) {
         throw new Error('Ruta de comprobante inválida');
     }
-    const filename = path.basename(String(archivoUrl));
+    const filename = path.basename(cleanUrl);
     if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) {
         throw new Error('Nombre de archivo de comprobante inválido');
     }
@@ -487,8 +489,9 @@ function saveReceiptBase64({ dataUrl, nombreOriginal = 'comprobante.webp', venci
 
 function deleteReceiptFile(archivoUrl = '') {
     try {
-        if (!archivoUrl || !String(archivoUrl).startsWith('/api/uploads/pagos/')) return;
-        const filename = path.basename(String(archivoUrl));
+        const cleanUrl = String(archivoUrl || '').split('?')[0];
+        if (!cleanUrl || !cleanUrl.startsWith('/api/uploads/pagos/')) return;
+        const filename = path.basename(cleanUrl);
         if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) return;
         const resolved = path.resolve(PAGOS_UPLOADS_DIR, filename);
         if (!resolved.startsWith(path.resolve(PAGOS_UPLOADS_DIR))) return;
@@ -960,6 +963,11 @@ async function getVencimientoDetail({ db, externalDb, vencimientoId }) {
         notas_control: null
     };
 
+    const signedComprobantes = (comprobantes || []).map(c => ({
+        ...c,
+        signed_url: c.archivo_url ? signUploadUrl(c.archivo_url) : c.archivo_url
+    }));
+
     return {
         vencimiento: {
             ...ven,
@@ -968,7 +976,7 @@ async function getVencimientoDetail({ db, externalDb, vencimientoId }) {
         },
         meta,
         abonos,
-        comprobantes,
+        comprobantes: signedComprobantes,
         resumen: balance,
         sugerencias
     };
