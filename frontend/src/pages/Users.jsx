@@ -3,7 +3,7 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
-import { UserPlus, Edit2, Trash2, Save, AlertTriangle } from 'lucide-react';
+import { UserPlus, Edit2, Trash2, Save, AlertTriangle, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 export default function Users() {
     const [users, setUsers] = useState([]);
@@ -12,6 +12,9 @@ export default function Users() {
     const [showModal, setShowModal] = useState(false);
     const [editingUser, setEditingUser] = useState(null);
     const [formData, setFormData] = useState({ username: '', nombre: '', email: '', password: '', role_id: '', status: 'active' });
+    const [formError, setFormError] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
     const { addToast } = useToast();
     const { confirm } = useConfirm();
 
@@ -36,6 +39,8 @@ export default function Users() {
     };
 
     const handleOpenModal = (user = null) => {
+        setFormError('');
+        setShowPassword(false);
         if (user) {
             setEditingUser(user);
             const userRoleId = user.role_id ? String(user.role_id) : (roles.find(r => r.name === user.role_name)?.id ? String(roles.find(r => r.name === user.role_name).id) : '');
@@ -75,27 +80,44 @@ export default function Users() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (submitting) return;
+        setFormError('');
         const trimmedUser = formData.username.trim();
         const trimmedNombre = formData.nombre.trim();
 
+        const failValidation = (msg) => {
+            setFormError(msg);
+            addToast(msg, 'warning');
+        };
+
         if (!trimmedUser) {
-            addToast('El nombre de usuario es requerido', 'warning');
+            failValidation('El nombre de usuario es requerido.');
             return;
         }
         if (!trimmedNombre) {
-            addToast('El nombre completo es requerido', 'warning');
+            failValidation('El nombre completo es requerido.');
             return;
         }
-        if (!editingUser && (!formData.password || formData.password.length < 8)) {
-            addToast('La contraseña debe tener al menos 8 caracteres', 'warning');
+        if (!editingUser && (!formData.password || !formData.password.trim())) {
+            failValidation('La contraseña es requerida y debe tener al menos 8 caracteres.');
             return;
         }
-        if (editingUser && formData.password && formData.password.length < 8) {
-            addToast('La nueva contraseña debe tener al menos 8 caracteres', 'warning');
-            return;
+        if (formData.password) {
+            if (!formData.password.trim()) {
+                failValidation('La contraseña no puede contener solo espacios en blanco.');
+                return;
+            }
+            if (formData.password !== formData.password.trim()) {
+                failValidation('La contraseña no debe tener espacios al inicio ni al final.');
+                return;
+            }
+            if (formData.password.length < 8) {
+                failValidation('La contraseña debe tener al menos 8 caracteres.');
+                return;
+            }
         }
         if (!formData.role_id) {
-            addToast('Debe seleccionar un rol para el usuario', 'warning');
+            failValidation('Debe seleccionar un rol para el usuario.');
             return;
         }
 
@@ -108,9 +130,10 @@ export default function Users() {
         };
 
         try {
+            setSubmitting(true);
             if (editingUser) {
-                await api.put(`/users/${editingUser.id}`, payload);
-                addToast('Usuario actualizado con éxito', 'success');
+                const res = await api.put(`/users/${editingUser.id}`, payload);
+                addToast(res?.data?.message || 'Usuario actualizado con éxito', 'success');
             } else {
                 await api.post('/users', payload);
                 addToast('Usuario creado con éxito', 'success');
@@ -119,7 +142,10 @@ export default function Users() {
             fetchData();
         } catch (err) {
             const errorMsg = err.response?.data?.message || err.response?.data?.detail || 'Error al guardar usuario';
+            setFormError(errorMsg);
             addToast(errorMsg, 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -206,14 +232,31 @@ export default function Users() {
             </div>
 
             <Modal open={showModal} onClose={() => setShowModal(false)} title={editingUser ? 'Editar Usuario' : 'Nuevo Usuario'} size="md">
-                <form onSubmit={handleSubmit} className="form-grid">
+                <form onSubmit={handleSubmit} className="form-grid" autoComplete="off">
+                    {formError && (
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            padding: '0.65rem 0.85rem',
+                            borderRadius: '8px',
+                            background: 'rgba(239, 68, 68, 0.12)',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            color: 'var(--danger)',
+                            fontSize: '0.84rem'
+                        }}>
+                            <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                            <span>{formError}</span>
+                        </div>
+                    )}
                     <div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Nombre de Usuario</label>
                         <input 
                             type="text" 
                             value={formData.username} 
-                            onChange={e => setFormData({...formData, username: e.target.value})}
+                            onChange={e => { setFormError(''); setFormData({...formData, username: e.target.value}); }}
                             required 
+                            autoComplete="off"
                             placeholder="ej. jsosa"
                         />
                     </div>
@@ -222,7 +265,7 @@ export default function Users() {
                         <input 
                             type="text" 
                             value={formData.nombre} 
-                            onChange={e => setFormData({...formData, nombre: e.target.value})}
+                            onChange={e => { setFormError(''); setFormData({...formData, nombre: e.target.value}); }}
                             required 
                             placeholder="ej. Juan Sosa"
                         />
@@ -232,33 +275,57 @@ export default function Users() {
                         <input 
                             type="email" 
                             value={formData.email} 
-                            onChange={e => setFormData({...formData, email: e.target.value})}
+                            onChange={e => { setFormError(''); setFormData({...formData, email: e.target.value}); }}
                             placeholder="usuario@ejemplo.com"
                         />
                     </div>
                     <div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
                             Contraseña {editingUser ? (
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(dejar en blanco para conservar actual)</span>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(mínimo 8 caracteres; dejar en blanco para conservar actual)</span>
                             ) : (
                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(mínimo 8 caracteres)</span>
                             )}
                         </label>
-                        <input 
-                            type="password" 
-                            value={formData.password} 
-                            onChange={e => setFormData({...formData, password: e.target.value})}
-                            required={!editingUser}
-                            minLength={editingUser ? undefined : 8}
-                            placeholder={editingUser ? 'Dejar en blanco para conservar' : 'Mínimo 8 caracteres'}
-                        />
+                        <div style={{ position: 'relative' }}>
+                            <input 
+                                type={showPassword ? 'text' : 'password'}
+                                value={formData.password} 
+                                onChange={e => { setFormError(''); setFormData({...formData, password: e.target.value}); }}
+                                required={!editingUser}
+                                minLength={editingUser ? (formData.password ? 8 : undefined) : 8}
+                                autoComplete="new-password"
+                                style={{ paddingRight: '40px' }}
+                                placeholder={editingUser ? 'Dejar en blanco para conservar (mín. 8 si cambia)' : 'Mínimo 8 caracteres'}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(prev => !prev)}
+                                title={showPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                                style={{
+                                    position: 'absolute',
+                                    right: '8px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    background: 'none',
+                                    border: 'none',
+                                    color: 'var(--text-muted)',
+                                    cursor: 'pointer',
+                                    padding: '4px',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                }}
+                            >
+                                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                        </div>
                     </div>
                     <div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Rol</label>
                         <select 
                             style={{ width: '100%', padding: '0.65rem 0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text)' }}
                             value={formData.role_id}
-                            onChange={e => setFormData({...formData, role_id: e.target.value})}
+                            onChange={e => { setFormError(''); setFormData({...formData, role_id: e.target.value}); }}
                             required
                         >
                             <option value="" disabled>-- Seleccione un rol --</option>
@@ -276,15 +343,15 @@ export default function Users() {
                         <select 
                             style={{ width: '100%', padding: '0.65rem 0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text)' }}
                             value={formData.status}
-                            onChange={e => setFormData({...formData, status: e.target.value})}
+                            onChange={e => { setFormError(''); setFormData({...formData, status: e.target.value}); }}
                         >
                             <option value="active">Activo</option>
                             <option value="inactive">Inactivo</option>
                         </select>
                     </div>
-                    <button type="submit" className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                    <button type="submit" disabled={submitting} className="btn-primary" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center', opacity: submitting ? 0.7 : 1 }}>
                         <Save size={18} />
-                        {editingUser ? 'Actualizar' : 'Crear Usuario'}
+                        {submitting ? 'Guardando...' : (editingUser ? 'Actualizar' : 'Crear Usuario')}
                     </button>
                 </form>
             </Modal>

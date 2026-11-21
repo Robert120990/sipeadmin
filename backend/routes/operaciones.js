@@ -2132,7 +2132,7 @@ const getValidSyncKeys = () => [
     process.env.PORTAL_SYNC_API_KEY,
     process.env.TELEGRAM_API_KEY,
     process.env.TELEGRAM_BROADCAST_KEY,
-    'sipe_orchestrator_2026_secure_token'
+    process.env.NODE_ENV !== 'production' ? 'sipe_orchestrator_2026_secure_token' : null
 ].filter(Boolean);
 
 const authenticateSyncOrAdmin = (req, res, next) => {

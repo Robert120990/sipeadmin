@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
-import { Lock, User, AlertCircle } from 'lucide-react';
+import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '../components/Toast';
 
 export default function Login() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState('');
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -33,6 +35,9 @@ export default function Login() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (isSubmitting) return;
+        setError('');
+        setIsSubmitting(true);
         try {
             const res = await api.post('/login', { username, password });
             localStorage.setItem('token', res.data.token);
@@ -47,6 +52,8 @@ export default function Login() {
             } else {
                 setError(data?.message || err.message || 'Error de conexión');
             }
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -81,9 +88,10 @@ export default function Login() {
                         <User size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
                         <input
                             type="text"
-                            placeholder="Usuario"
+                            placeholder="Usuario o correo"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
+                            autoComplete="username"
                             style={{ paddingLeft: '40px' }}
                             required
                         />
@@ -91,16 +99,37 @@ export default function Login() {
                     <div style={{ position: 'relative' }}>
                         <Lock size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
                         <input
-                            type="password"
+                            type={showPassword ? 'text' : 'password'}
                             placeholder="Contraseña"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            style={{ paddingLeft: '40px' }}
+                            autoComplete="current-password"
+                            style={{ paddingLeft: '40px', paddingRight: '40px' }}
                             required
                         />
+                        <button
+                            type="button"
+                            onClick={() => setShowPassword(prev => !prev)}
+                            title={showPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                            style={{
+                                position: 'absolute',
+                                right: '8px',
+                                top: '50%',
+                                transform: 'translateY(-50%)',
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--text-muted)',
+                                cursor: 'pointer',
+                                padding: '4px',
+                                display: 'flex',
+                                alignItems: 'center'
+                            }}
+                        >
+                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
                     </div>
-                    <button type="submit" className="btn-primary" style={{ padding: '0.75rem' }}>
-                        Entrar
+                    <button type="submit" disabled={isSubmitting} className="btn-primary" style={{ padding: '0.75rem', opacity: isSubmitting ? 0.7 : 1 }}>
+                        {isSubmitting ? 'Ingresando...' : 'Entrar'}
                     </button>
                 </form>
             </div>

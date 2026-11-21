@@ -51,6 +51,7 @@ const getDbConfig = () => {
 const dbConfig = getDbConfig();
 
 let pool;
+let dbInitialized = false;
 let externalPools = {};
 
 const initDB = async () => {
@@ -59,6 +60,7 @@ const initDB = async () => {
         if (process.env.VERCEL) {
             console.log('Vercel Environment Detected: Bypassing local init schemas.');
             pool = mysql.createPool(dbConfig);
+            dbInitialized = true;
             // Test connection but don't crash if it fails (db might be warming up)
             try {
                 const conn = await pool.getConnection();
@@ -88,6 +90,7 @@ const initDB = async () => {
 
         // Connect with the database
         pool = mysql.createPool(dbConfig);
+        dbInitialized = true;
         console.log('Connected to MySQL database!');
 
         // Create tables
@@ -108,6 +111,7 @@ const initDB = async () => {
                 password VARCHAR(255) NOT NULL,
                 role_id INT,
                 status ENUM('active', 'inactive') DEFAULT 'active',
+                token_version INT NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (role_id) REFERENCES roles(id)
             );
@@ -116,6 +120,7 @@ const initDB = async () => {
         // Migrations for existing DB
         try { await pool.query('ALTER TABLE users ADD COLUMN nombre VARCHAR(100)'); } catch(e) { if(e.code !== 'ER_DUP_FIELDNAME') console.error(e); }
         try { await pool.query('ALTER TABLE users ADD COLUMN email VARCHAR(100)'); } catch(e) { if(e.code !== 'ER_DUP_FIELDNAME') console.error(e); }
+        try { await pool.query('ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 1'); } catch(e) { if(e.code !== 'ER_DUP_FIELDNAME') console.error(e); }
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS permissions (
@@ -1559,6 +1564,8 @@ const getDb = () => {
     return pool;
 };
 
+const getDbIfReady = () => (dbInitialized && pool ? pool : null);
+
 let configCache = {
     main: { data: null, expiresAt: 0 },
     accounting: { data: null, expiresAt: 0 }
@@ -1685,4 +1692,4 @@ const withTransaction = async (callback) => {
     }
 };
 
-module.exports = { initDB, getDb, getExternalDb, getAccountingDb, withRetry, withTransaction, invalidateConfigCache };
+module.exports = { initDB, getDb, getDbIfReady, getExternalDb, getAccountingDb, withRetry, withTransaction, invalidateConfigCache };

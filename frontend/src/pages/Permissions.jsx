@@ -97,7 +97,9 @@ export default function Permissions() {
     };
 
     const deleteRole = async (id, name) => {
-        if (name === 'Administrator') return addToast('No puedes eliminar el rol principal', 'warning');
+        if (Number(id) === 1 || String(name || '').toLowerCase() === 'administrator') {
+            return addToast('No puedes eliminar el rol principal', 'warning');
+        }
         if (saving || deletingId) return;
         if (!await confirm(`¿Estás seguro de eliminar el rol ${name}?`, { variant: 'danger' })) return;
         setDeletingId(id);
@@ -236,7 +238,7 @@ export default function Permissions() {
                                     onChange={e => setSelectedRole({...selectedRole, name: e.target.value})} 
                                     className="form-control" 
                                     placeholder="Ej. Gerente de Estación"
-                                    disabled={saving || selectedRole.name === 'Administrator'}
+                                    disabled={saving || Number(selectedRole.id) === 1 || String(selectedRole.name || '').toLowerCase() === 'administrator'}
                                 />
                             </div>
                             <div className="form-group" style={{ flex: '2 1 280px' }}>

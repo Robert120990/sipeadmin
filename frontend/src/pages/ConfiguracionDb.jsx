@@ -73,7 +73,7 @@ export default function ConfiguracionDb() {
                                 type="number" 
                                 className="form-control" 
                                 value={config.port} 
-                                onChange={(e) => setConfig({ ...config, port: parseInt(e.target.value) })} 
+                                onChange={(e) => setConfig({ ...config, port: parseInt(e.target.value, 10) || 3306 })} 
                                 placeholder="3306" 
                             />
                         </div>

@@ -108,10 +108,11 @@ const { autoLogMiddleware } = require('./middleware/bitacora');
 app.use(autoLogMiddleware());
 
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
 const jwt = require('jsonwebtoken');
-const { authenticateToken, requireRole, isAdminUser, JWT_SECRET, isUserRevoked } = require('./middleware/auth');
+const { authenticateToken, requireRole, isAdminUser, JWT_SECRET, isUserRevoked, resolveLiveUserAuthState } = require('./middleware/auth');
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
     const rawToken = socket.handshake.auth?.token ||
         (socket.handshake.headers?.authorization ? socket.handshake.headers.authorization.replace(/^Bearer\s+/i, '') : null);
     if (!rawToken) {
@@ -122,7 +123,11 @@ io.use((socket, next) => {
         if (!decoded || decoded.status === 'inactive' || isUserRevoked(decoded.id)) {
             return next(new Error('Usuario inactivo o suspendido'));
         }
-        socket.user = decoded;
+        const liveResult = await resolveLiveUserAuthState(decoded);
+        if (!liveResult.ok) {
+            return next(new Error(liveResult.message || 'Sesión inválida o expirada'));
+        }
+        socket.user = liveResult.user;
         return next();
     } catch (_) {
         return next(new Error('Token inválido o expirado'));
@@ -169,10 +174,16 @@ const apiLimiter = rateLimit({
     message: { message: 'Demasiadas solicitudes desde esta IP, por favor intente nuevamente en un momento.' }
 });
 
-// Rate limiting estricto para Login (10 intentos / 15 min por IP)
+// Rate limiting estricto para Login (15 intentos fallidos / 15 min por IP + usuario)
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 15,
+    skipSuccessfulRequests: true,
+    keyGenerator: (req) => {
+        const ip = ipKeyGenerator(req.ip || '');
+        const userKey = String(req.body?.username || '').trim().toLowerCase().slice(0, 80);
+        return `${ip}:${userKey || 'anonymous'}`;
+    },
     standardHeaders: true,
     legacyHeaders: false,
     message: { message: 'Demasiados intentos fallidos de inicio de sesión. Por favor espere 15 minutos.' }
