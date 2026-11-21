@@ -4369,6 +4369,8 @@ module.exports = {
     formatReceiptAnalysisMessage,
     generateExecutiveReportPdf,
     sendTelegramDocument,
-    buildAndSendTopicPdf
+    buildAndSendTopicPdf,
+    escapeHtml,
+    resolveTelegramUser
 };
 

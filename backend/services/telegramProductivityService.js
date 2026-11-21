@@ -2222,6 +2222,7 @@ async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawTe
                     frecuencia: evtWiz.frecuencia
                 },
                 actorUser,
+                sendTelegramFn: sendFn,
                 io: io || getRealtimeIo(),
                 skipSystemNotification: true
             });
@@ -2401,7 +2402,8 @@ async function handleProductivityCallbackQuery({
                     hora_limite: wiz.hora_limite,
                     prioridad: wiz.prioridad,
                     categoria: wiz.categoria,
-                    enviar_ahora: sendMode === 'now'
+                    enviar_ahora: sendMode === 'now',
+                    sendTelegramFn: sendFn
                 });
                 if (chatId && messageId) {
                     await editMarkupFn(chatId, messageId, { inline_keyboard: [[{ text: '✅ Tarea asignada y notificada', callback_data: 'noop' }]] });
@@ -2629,6 +2631,7 @@ async function handleProductivityCallbackQuery({
                         frecuencia: 'DIARIO_HASTA_PAGAR'
                     },
                     actorUser,
+                    sendTelegramFn: sendFn,
                     io: io || getRealtimeIo(),
                     skipSystemNotification: true
                 });

@@ -7,6 +7,10 @@ const {
     processMorningAgendaDigest
 } = require('../services/mibotNotifierService');
 const {
+    escapeHtml,
+    resolveTelegramUser
+} = require('../services/telegramBotService');
+const {
     pendingTaskWizards,
     pendingEventWizards,
     parseMultiUserTaskInput,
@@ -280,8 +284,8 @@ function createMockProductivityDb({
 
 describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pagos y Cumpleaños', () => {
     const sampleCandidates = [
-        { key: 'u_1', user_id: 1, telegram_usuario_id: 10, telegram_user_id: '1651970576', nombre: 'Raul Sosa', username: 'rsosa', has_telegram: true, recibir_mibot: true },
-        { key: 'u_2', user_id: 2, telegram_usuario_id: 11, telegram_user_id: '7937148374', nombre: 'Corina Mendoza', username: 'cmendoza', has_telegram: true, recibir_mibot: true },
+        { key: 'u_1', user_id: 1, telegram_usuario_id: 10, telegram_user_id: '999000101', nombre: 'Raul Sosa', username: 'rsosa', has_telegram: true, recibir_mibot: true },
+        { key: 'u_2', user_id: 2, telegram_usuario_id: 11, telegram_user_id: '999000102', nombre: 'Corina Sosa', username: 'csosa', has_telegram: true, recibir_mibot: true },
         { key: 'u_3', user_id: 3, telegram_usuario_id: null, telegram_user_id: null, nombre: 'Marcela Diaz', username: 'mdiaz', has_telegram: false, recibir_mibot: false }
     ];
 
@@ -314,13 +318,13 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
 
     it('2. Crea N tareas, emite tarjetas informativas Socket.io, despacha MiBot y aplica fail-closed en permisos', async () => {
         const tgUsers = [
-            { id: 10, user_id: 1, telegram_user_id: '1651970576', first_name: 'Raul', last_name: 'Sosa', activo: 1, recibir_mibot: 1 },
-            { id: 11, user_id: 2, telegram_user_id: '7937148374', first_name: 'Corina', last_name: 'Mendoza', activo: 1, recibir_mibot: 1 }
+            { id: 10, user_id: 1, telegram_user_id: '999000101', first_name: 'Raul', last_name: 'Sosa', activo: 1, recibir_mibot: 1 },
+            { id: 11, user_id: 2, telegram_user_id: '999000102', first_name: 'Corina', last_name: 'Sosa', activo: 1, recibir_mibot: 1 }
         ];
         const mockDb = createMockProductivityDb({
             users: [
                 { id: 1, nombre: 'Raul Sosa', username: 'rsosa', role_id: 1 },
-                { id: 2, nombre: 'Corina Mendoza', username: 'cmendoza', role_id: 2 }
+                { id: 2, nombre: 'Corina Sosa', username: 'csosa', role_id: 2 }
             ],
             tgUsers
         });
@@ -395,9 +399,9 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
         await handleProductivityCallbackQuery({
             db: mockDb,
             io: fakeIo,
-            cq: { id: 'cq2', data: 'tg_tsk:d:2', from: { id: 7937148374 }, message: { chat: { id: 7937148374 }, message_id: 11 } },
+            cq: { id: 'cq2', data: 'tg_tsk:d:2', from: { id: 999000102 }, message: { chat: { id: 999000102 }, message_id: 11 } },
             tgUser: tgUsers[1],
-            effPerms: { isAdmin: false, tareas: false, linkedUser: { id: 2, nombre: 'Corina Mendoza' } },
+            effPerms: { isAdmin: false, tareas: false, linkedUser: { id: 2, nombre: 'Corina Sosa' } },
             transport: {
                 answerCallbackQuery: async (_id, text) => answers.push(text),
                 sendTelegramMessage: async () => ({ message_id: 2 }),
@@ -410,19 +414,19 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
     });
 
     it('3. Flujo de asistente interactivo multi-selección para asignar tarea paso a paso', async () => {
-        const tgUser = { id: 10, user_id: 1, telegram_user_id: '1651970576', first_name: 'Raul', activo: 1 };
+        const tgUser = { id: 10, user_id: 1, telegram_user_id: '999000101', first_name: 'Raul', activo: 1 };
         const mockDb = createMockProductivityDb({
             users: [
                 { id: 1, nombre: 'Raul Sosa', username: 'rsosa', role_id: 1 },
-                { id: 2, nombre: 'Corina Mendoza', username: 'cmendoza', role_id: 2 }
+                { id: 2, nombre: 'Corina Sosa', username: 'csosa', role_id: 2 }
             ],
-            tgUsers: [tgUser, { id: 11, user_id: 2, telegram_user_id: '7937148374', first_name: 'Corina', activo: 1, recibir_mibot: 1 }]
+            tgUsers: [tgUser, { id: 11, user_id: 2, telegram_user_id: '999000102', first_name: 'Corina', last_name: 'Sosa', activo: 1, recibir_mibot: 1 }]
         });
 
         const outgoing = [];
         const transport = {
             sendTelegramMessage: async (_cid, html, markup) => {
-                outgoing.push({ html, markup });
+                outgoing.push({ chatId: String(_cid), html, markup });
                 return { message_id: outgoing.length };
             },
             answerCallbackQuery: async () => {},
@@ -432,30 +436,30 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
 
         await startTaskAssignmentWizard({
             db: mockDb,
-            chatId: '1651970576',
+            chatId: '999000101',
             tgUser,
             effPerms: { isAdmin: true, tareas: true },
             transport
         });
-        assert.ok(pendingTaskWizards.has('1651970576'));
+        assert.ok(pendingTaskWizards.has('999000101'));
 
         await handleProductivityCallbackQuery({
             db: mockDb,
-            cq: { id: 'w1', data: 'tg_tsk:wt:u_1', message: { chat: { id: '1651970576' }, message_id: 1 } },
+            cq: { id: 'w1', data: 'tg_tsk:wt:u_1', message: { chat: { id: '999000101' }, message_id: 1 } },
             tgUser,
             effPerms: { isAdmin: true, tareas: true },
             transport
         });
         await handleProductivityCallbackQuery({
             db: mockDb,
-            cq: { id: 'w2', data: 'tg_tsk:wt:u_2', message: { chat: { id: '1651970576' }, message_id: 1 } },
+            cq: { id: 'w2', data: 'tg_tsk:wt:u_2', message: { chat: { id: '999000101' }, message_id: 1 } },
             tgUser,
             effPerms: { isAdmin: true, tareas: true },
             transport
         });
         await handleProductivityCallbackQuery({
             db: mockDb,
-            cq: { id: 'w3', data: 'tg_tsk:wn', message: { chat: { id: '1651970576' }, message_id: 1 } },
+            cq: { id: 'w3', data: 'tg_tsk:wn', message: { chat: { id: '999000101' }, message_id: 1 } },
             tgUser,
             effPerms: { isAdmin: true, tareas: true },
             transport
@@ -464,7 +468,7 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
         const handledStep2 = await handleActiveProductivityWizardMessage({
             db: mockDb,
             rawText: 'Auditar remesas pendientes mañana 9am urgente',
-            chatId: '1651970576',
+            chatId: '999000101',
             user: tgUser,
             effectivePerms: { isAdmin: true, tareas: true, linkedUser: { id: 1, nombre: 'Raul Sosa' } },
             transport
@@ -473,15 +477,26 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
 
         await handleProductivityCallbackQuery({
             db: mockDb,
-            cq: { id: 'w4', data: 'tg_tsk:wgo:now', message: { chat: { id: '1651970576' }, message_id: 2 } },
+            cq: { id: 'w4', data: 'tg_tsk:wgo:now', message: { chat: { id: '999000101' }, message_id: 2 } },
             tgUser,
             effPerms: { isAdmin: true, tareas: true, linkedUser: { id: 1, nombre: 'Raul Sosa' } },
             transport
         });
 
-        assert.equal(pendingTaskWizards.has('1651970576'), false);
+        assert.equal(pendingTaskWizards.has('999000101'), false);
         assert.equal(mockDb._state.tasks.length, 2);
         assert.equal(mockDb._state.tasks[0].prioridad, 'urgente');
+
+        const mibotDispatches = outgoing.filter(m => /MiBot SIPE/i.test(m.html));
+        assert.equal(mibotDispatches.length, 2);
+        assert.deepEqual(
+            mibotDispatches.map(m => m.chatId).sort(),
+            ['999000101', '999000102']
+        );
+        for (const msg of mibotDispatches) {
+            assert.match(msg.html, /AUDITAR REMESAS PENDIENTES/i);
+            assert.match(msg.html, /Corina Sosa/i);
+        }
     });
 
     it('4. Agenda unificada y programación de eventos MiBot respetando permisos de Control de Pagos', async () => {
@@ -526,7 +541,7 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
             db: mockDb,
             externalDb: mockExtDb,
             accountingDb: mockAccDb,
-            telegramUserId: '1651970576',
+            telegramUserId: '999000101',
             sipeUserId: 1,
             range: 'semana',
             includeControlPagos: false,
@@ -542,7 +557,7 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
             db: mockDb,
             externalDb: mockExtDb,
             accountingDb: mockAccDb,
-            telegramUserId: '1651970576',
+            telegramUserId: '999000101',
             sipeUserId: 1,
             range: 'semana',
             includeControlPagos: true,
@@ -628,10 +643,10 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
     it('7. Digest matutino proactivo envía 1 resumen consolidado y no duplica en el mismo día', async () => {
         const mockDb = createMockProductivityDb({
             users: [{ id: 1, nombre: 'Raul Sosa', role_id: 1, role_name: 'Administrator' }],
-            tgUsers: [{ id: 10, user_id: 1, telegram_user_id: '1651970576', first_name: 'Raul', last_name: 'Sosa', activo: 1, recibir_mibot: 1, mibot_tareas: 1, mibot_pagos: 1, permiso_saldos_banco: 1 }],
+            tgUsers: [{ id: 10, user_id: 1, telegram_user_id: '999000101', first_name: 'Raul', last_name: 'Sosa', activo: 1, recibir_mibot: 1, mibot_tareas: 1, mibot_pagos: 1, permiso_saldos_banco: 1 }],
             existingTasks: [{ id: 12, titulo: 'REVISAR CONCILIACION', prioridad: 'alta', estado: 'pendiente', fecha_vencimiento: '2026-11-20', hora_limite: '11:00', assigned_to: 1, created_by: 1 }],
             existingMibotProgs: [{ id: 4, tipo: 'REUNION', titulo: 'Comité Semanal', proximo_envio_at: '2026-11-20 09:00:00', programado_para: '2026-11-20 09:00:00' }],
-            existingMibotDests: [{ id: 40, programacion_id: 4, telegram_usuario_id: 10, telegram_user_id: '1651970576', nombre_destinatario: 'Raul Sosa' }]
+            existingMibotDests: [{ id: 40, programacion_id: 4, telegram_usuario_id: 10, telegram_user_id: '999000101', nombre_destinatario: 'Raul Sosa' }]
         });
         const mockExtDb = {
             async query() {
@@ -705,5 +720,11 @@ describe('Telegram Productividad: Tareas Multi-Usuario, Eventos, Control de Pago
         pendingEventWizards.clear();
         assert.equal(pendingTaskWizards.size, 0);
         assert.equal(pendingEventWizards.size, 0);
+    });
+
+    it('10. Exporta escapeHtml y resolveTelegramUser correctamente en telegramBotService', () => {
+        assert.equal(typeof escapeHtml, 'function');
+        assert.equal(typeof resolveTelegramUser, 'function');
+        assert.equal(escapeHtml('<b>Test & "OK"</b>'), '&lt;b&gt;Test &amp; &quot;OK&quot;&lt;/b&gt;');
     });
 });
