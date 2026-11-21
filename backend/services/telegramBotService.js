@@ -39,6 +39,8 @@ const {
     sendTelegramMessage,
     sendChatAction,
     sendTelegramDocument,
+    sendTelegramPhoto,
+    sendTelegramAudio,
     setTelegramWebhook,
     deleteTelegramWebhook,
     getTelegramWebhookInfo,
@@ -156,6 +158,47 @@ const {
     buildAndSendTopicPdf
 } = require('./telegramPdfService');
 
+const {
+    pendingReceiptPayments,
+    prunePendingReceiptPayments,
+    prepareReceiptPaymentDraft,
+    applyReceiptDraftToVencimiento,
+    handleReceiptPaymentCallback
+} = require('./telegramReceiptPaymentService');
+
+const {
+    evaluateSentinelAlerts,
+    formatSentinelMessage,
+    getSentinelInlineMarkup,
+    runProactiveSentinelDispatch
+} = require('./telegramSentinelService');
+
+const {
+    buildAndSendExecutiveAudio,
+    buildAndSendTopicChart
+} = require('./telegramMediaInsightsService');
+
+const {
+    getFlujoResumenData,
+    formatFlujoMessage,
+    getFlujoInlineMarkup,
+    getPrestamosResumenData,
+    formatPrestamosMessage,
+    getPrestamosInlineMarkup,
+    getCreditosResumenData,
+    formatCreditosMessage,
+    getCreditosInlineMarkup,
+    canUserApproveFinancialOp,
+    createAndNotifyApprovalRequest,
+    listApprovalsData,
+    formatApprovalsListMessage,
+    getApprovalsListMarkup,
+    resolveApprovalAction,
+    handleFinanceApprovalCallback
+} = require('./telegramFinanceApprovalService');
+
+let runtimeIo = null;
+
 /**
  * Mapa en memoria para seguimiento de comentarios de mejora pendientes por usuario
  * key: telegramUserId (string) -> { feedbackId, timestamp }
@@ -267,12 +310,14 @@ const pruneBotMemoryMaps = (maxEntries = MAX_BOT_MAP_ENTRIES) => {
     const removedFeedback = pruneTimedMap(pendingFeedbackUsers, PENDING_ACTION_TTL_MS, 'timestamp', maxEntries, now);
     const removedJustifications = pruneTimedMap(pendingAlertJustifications, PENDING_ACTION_TTL_MS, 'timestamp', maxEntries, now);
     const removedWizards = typeof pruneProductivityWizards === 'function' ? pruneProductivityWizards(maxEntries) : 0;
+    const removedReceipts = typeof prunePendingReceiptPayments === 'function' ? prunePendingReceiptPayments(Math.min(150, maxEntries)) : 0;
     return {
         removedContext,
         removedFeedback,
         removedJustifications,
         removedWizards,
-        totalRemoved: removedContext + removedFeedback + removedJustifications + removedWizards
+        removedReceipts,
+        totalRemoved: removedContext + removedFeedback + removedJustifications + removedWizards + removedReceipts
     };
 };
 
@@ -625,6 +670,94 @@ const handleCallbackQuery = async (cq) => {
             if (handled) return;
         } catch (prodCbErr) {
             console.error('[TelegramBot] Error en callback de Productividad:', prodCbErr.message);
+            await answerCallbackQuery(cq.id, '⚠️ Error procesando tu solicitud.');
+            return;
+        }
+    }
+
+    // Callbacks ejecutivos: Abonos por comprobante (tg_rcp), Centinela (tg_sent), Gráficas PNG (tg_chr), Finanzas (tg_fin), Aprobaciones (tg_apr) - fail-closed
+    if (
+        data.startsWith('tg_rcp:') ||
+        data.startsWith('tg_sent:') ||
+        data.startsWith('tg_chr:') ||
+        data.startsWith('tg_fin:') ||
+        data.startsWith('tg_apr:')
+    ) {
+        try {
+            const db = getDb();
+            if (!db || !cq.from) {
+                await answerCallbackQuery(cq.id, '⛔ No fue posible verificar tu autorización.');
+                return;
+            }
+            const tgUser = await resolveTelegramUser(cq.from);
+            if (!tgUser || !tgUser.activo) {
+                await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                return;
+            }
+            const effPerms = await getUserEffectivePermissions(tgUser);
+            if (effPerms.inactiveInSipe) {
+                await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                return;
+            }
+
+            const transport = {
+                sendTelegramMessage,
+                sendTelegramPhoto,
+                sendTelegramAudio,
+                answerCallbackQuery,
+                editMessageReplyMarkup,
+                sendChatAction,
+                getMainReplyKeyboard
+            };
+
+            if (data.startsWith('tg_rcp:')) {
+                const externalDb = await getExternalDb().catch(() => null);
+                const handled = await handleReceiptPaymentCallback({ db, externalDb, cq, tgUser, effPerms, transport });
+                if (handled) return;
+            }
+
+            if (data.startsWith('tg_sent:')) {
+                if (!effPerms.alertas && !effPerms.saldos_banco && !effPerms.isAdmin) {
+                    await answerCallbackQuery(cq.id, '⛔ Sin permiso para consultar el Centinela de Liquidez.');
+                    return;
+                }
+                await answerCallbackQuery(cq.id, '🛡️ Evaluando liquidez y tránsito...');
+                sendChatAction(chatId, 'typing').catch(() => {});
+                const externalDb = await getExternalDb().catch(() => null);
+                const accountingDb = await getAccountingDb().catch(() => null);
+                const sentinelRes = await evaluateSentinelAlerts({ db, externalDb, accountingDb });
+                await sendTelegramMessage(chatId, formatSentinelMessage(sentinelRes), getSentinelInlineMarkup());
+                return;
+            }
+
+            if (data.startsWith('tg_chr:')) {
+                const topic = data.split(':')[1] || 'ventas';
+                const ctx = fromId ? getUserConversationContext(fromId) : null;
+                const targetDate = ctx?.lastDate || getDateStr(-1);
+                await answerCallbackQuery(cq.id, `📊 Generando gráfica (${topic})...`);
+                await buildAndSendTopicChart({
+                    chatId,
+                    topic,
+                    targetDate,
+                    effectivePerms: effPerms,
+                    transport
+                });
+                return;
+            }
+
+            if (data.startsWith('tg_fin:') || data.startsWith('tg_apr:')) {
+                const handled = await handleFinanceApprovalCallback({
+                    db,
+                    cq,
+                    tgUser,
+                    effPerms,
+                    io: runtimeIo,
+                    transport
+                });
+                if (handled) return;
+            }
+        } catch (execCbErr) {
+            console.error('[TelegramBot] Error en callback ejecutivo:', execCbErr.message);
             await answerCallbackQuery(cq.id, '⚠️ Error procesando tu solicitud.');
             return;
         }
@@ -1103,7 +1236,9 @@ const getUserEffectivePermissions = async (user) => {
             precios_competencia: false,
             tareas: false,
             control_pagos: false,
-            cumpleanos: false
+            cumpleanos: false,
+            finanzas_prestamos: false,
+            aprobaciones: false
         };
     }
 
@@ -1119,7 +1254,9 @@ const getUserEffectivePermissions = async (user) => {
             precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
             tareas: false,
             control_pagos: Boolean(user.permiso_saldos_banco),
-            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
+            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas),
+            finanzas_prestamos: Boolean(user.permiso_saldos_banco),
+            aprobaciones: false
         };
     }
 
@@ -1138,7 +1275,9 @@ const getUserEffectivePermissions = async (user) => {
             precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
             tareas: false,
             control_pagos: Boolean(user.permiso_saldos_banco),
-            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
+            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas),
+            finanzas_prestamos: Boolean(user.permiso_saldos_banco),
+            aprobaciones: false
         };
     }
 
@@ -1168,7 +1307,9 @@ const getUserEffectivePermissions = async (user) => {
                 precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
                 tareas: false,
                 control_pagos: Boolean(user.permiso_saldos_banco),
-                cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
+                cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas),
+                finanzas_prestamos: Boolean(user.permiso_saldos_banco),
+                aprobaciones: false
             };
         }
 
@@ -1187,7 +1328,9 @@ const getUserEffectivePermissions = async (user) => {
                 precios_competencia: false,
                 tareas: false,
                 control_pagos: false,
-                cumpleanos: false
+                cumpleanos: false,
+                finanzas_prestamos: false,
+                aprobaciones: false
             };
         }
 
@@ -1230,6 +1373,15 @@ const getUserEffectivePermissions = async (user) => {
             hasVentas ||
             hasAlertas ||
             permsList.includes('/dashboard/consultas/otras/cumpleanos');
+        const hasPrestamos = isAdmin ||
+            hasBancos ||
+            permsList.includes('/dashboard/finanzas/prestamos');
+        const hasAprobaciones = canUserApproveFinancialOp({
+            isAdmin,
+            inactiveInSipe: false,
+            linkedUser: su,
+            sipePermissions: permsList
+        });
 
         return {
             isLinked: true,
@@ -1244,7 +1396,9 @@ const getUserEffectivePermissions = async (user) => {
             precios_competencia: hasPreciosCompetencia,
             tareas: hasTareas,
             control_pagos: hasControlPagos,
-            cumpleanos: hasCumpleanos
+            cumpleanos: hasCumpleanos,
+            finanzas_prestamos: hasPrestamos,
+            aprobaciones: hasAprobaciones
         };
     } catch (err) {
         console.error('[TelegramBot] Error resolviendo permisos heredados:', err.message);
@@ -1260,7 +1414,9 @@ const getUserEffectivePermissions = async (user) => {
             precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
             tareas: false,
             control_pagos: Boolean(user.permiso_saldos_banco),
-            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
+            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas),
+            finanzas_prestamos: Boolean(user.permiso_saldos_banco),
+            aprobaciones: false
         };
     }
 };
@@ -1566,6 +1722,152 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         } catch (bErr) {
             await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error consultando cumpleaños: ' + escapeHtml(bErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.04 Gráfica Visual PNG por Tema (prioridad antes de consultas de texto genéricas)
+    if (parsed.isGrafica) {
+        try {
+            await logTelegramQuery(user.telegram_user_id, rawText, `Gráfica PNG (${parsed.graficaTopic || 'ventas'})`, 1);
+            await buildAndSendTopicChart({
+                chatId,
+                topic: parsed.graficaTopic || 'ventas',
+                targetDate: parsed.targetDate,
+                effectivePerms,
+                transport: { sendTelegramMessage, sendChatAction, sendTelegramPhoto }
+            });
+            return true;
+        } catch (chrErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error generando gráfica: ' + escapeHtml(chrErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.03 Briefing Ejecutivo en Audio TTS (Gemini 3.8 Flash TTS)
+    if (parsed.isAudioResumen) {
+        try {
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Resumen Ejecutivo Audio TTS', 1);
+            await buildAndSendExecutiveAudio({
+                chatId,
+                user,
+                effectivePerms,
+                targetDate: parsed.targetDate,
+                transport: { sendTelegramMessage, sendChatAction, sendTelegramAudio }
+            });
+            return true;
+        } catch (audErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error generando audio ejecutivo: ' + escapeHtml(audErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.02 Centinela 24/7 de Liquidez y Tránsito
+    if (parsed.isCentinela) {
+        if (!effectivePerms.alertas && !effectivePerms.saldos_banco && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para consultar el Centinela de Liquidez.', keyboard);
+            return true;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const db = getDb();
+            const externalDb = await getExternalDb().catch(() => null);
+            const accountingDb = await getAccountingDb().catch(() => null);
+            const sentinelRes = await evaluateSentinelAlerts({ db, externalDb, accountingDb });
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Centinela Liquidez NLU', 1);
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + formatSentinelMessage(sentinelRes), getSentinelInlineMarkup());
+            return true;
+        } catch (sentErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error ejecutando Centinela: ' + escapeHtml(sentErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.015 Bandeja de Aprobaciones Gerenciales
+    if (parsed.isAprobaciones) {
+        if (!canUserApproveFinancialOp(effectivePerms)) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⛔ Solo Gerencia o Administración puede consultar y resolver aprobaciones.', keyboard);
+            return true;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const rows = await listApprovalsData({ db: getDb(), estado: 'PENDIENTE' });
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Aprobaciones Pendientes', 1);
+            await sendTelegramMessage(
+                chatId,
+                (contextOptions.voicePrefix || '') + formatApprovalsListMessage(rows, 'PENDIENTE'),
+                getApprovalsListMarkup(rows) || keyboard
+            );
+            return true;
+        } catch (aprErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error cargando aprobaciones: ' + escapeHtml(aprErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.01 Flujo de Caja Proyectado 30/60 días
+    if (parsed.isFlujoCaja) {
+        if (!effectivePerms.saldos_banco && !effectivePerms.control_pagos && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para consultar flujo de caja.', keyboard);
+            return true;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const flujoData = await getFlujoResumenData({ horizon: parsed.flujoHorizon || 30 });
+            await logTelegramQuery(user.telegram_user_id, rawText, `Flujo de Caja ${flujoData.horizon}d`, 1);
+            await sendFeedback(chatId, formatFlujoMessage(flujoData), {
+                user,
+                query: rawText,
+                reply_markup: getFlujoInlineMarkup(flujoData.horizon)
+            });
+            return true;
+        } catch (flErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error proyectando flujo de caja: ' + escapeHtml(flErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.008 Préstamos Bancarios
+    if (parsed.isPrestamos) {
+        if (!effectivePerms.saldos_banco && !effectivePerms.finanzas_prestamos && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para consultar préstamos bancarios.', keyboard);
+            return true;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const prestData = await getPrestamosResumenData({ db: getDb(), estado: 'activo' });
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Préstamos Bancarios', 1);
+            await sendFeedback(chatId, formatPrestamosMessage(prestData), {
+                user,
+                query: rawText,
+                reply_markup: getPrestamosInlineMarkup('activo')
+            });
+            return true;
+        } catch (prErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error consultando préstamos: ' + escapeHtml(prErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.006 Créditos de Flotas y Riesgo Crediticio
+    if (parsed.isCreditosFlota) {
+        if (!effectivePerms.ventas && !effectivePerms.saldos_banco && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para consultar créditos de flotas.', keyboard);
+            return true;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const filter = /\b(mora|vencid|critico|riesgo|bloque)\b/i.test(parsed.normalized) ? 'critico' : 'todos';
+            const credData = await getCreditosResumenData({ filter });
+            await logTelegramQuery(user.telegram_user_id, rawText, `Créditos Flotas (${filter})`, 1);
+            await sendFeedback(chatId, formatCreditosMessage(credData), {
+                user,
+                query: rawText,
+                reply_markup: getCreditosInlineMarkup(filter)
+            });
+            return true;
+        } catch (crErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error consultando créditos de flotas: ' + escapeHtml(crErr.message), keyboard);
             return true;
         }
     }
@@ -2678,6 +2980,15 @@ const attemptSelfHealingCorrection = async ({
     return Boolean(sentCorrected);
 };
 
+const isSupportedReceiptDocument = (doc) => {
+    if (!doc || !doc.file_id) return false;
+    const mime = String(doc.mime_type || '').toLowerCase();
+    const name = String(doc.file_name || '').toLowerCase();
+    return mime === 'application/pdf' ||
+        mime.startsWith('image/') ||
+        /\.(pdf|jpe?g|png|webp)$/i.test(name);
+};
+
 /**
  * Procesar un mensaje entrante de Telegram
  */
@@ -2687,7 +2998,12 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
     const chatId = msg.chat.id;
     const rawText = (msg.text || '').trim();
     const voicePrefix = contextOptions.voicePrefix || '';
-    const hasMedia = Boolean(msg.voice || msg.audio || (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0));
+    const hasMedia = Boolean(
+        msg.voice ||
+        msg.audio ||
+        (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) ||
+        isSupportedReceiptDocument(msg.document)
+    );
     if (!rawText && !hasMedia) return;
 
     // 1. Resolver y autenticar usuario ANTES de procesar voz, fotos OCR o consultas (fail-closed)
@@ -2835,13 +3151,15 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         }, { voicePrefix: newVoicePrefix });
     }
 
-    // Detección de fotografías / comprobantes bancarios / facturas (OCR con Gemini Vision)
-    if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
+    // Detección de fotografías o documentos PDF/imagen de comprobantes bancarios / facturas (OCR + Control de Pagos)
+    const isPhotoReceipt = Boolean(msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0);
+    const receiptDoc = !isPhotoReceipt && isSupportedReceiptDocument(msg.document) ? msg.document : null;
+    if (isPhotoReceipt || receiptDoc) {
         sendChatAction(chatId, 'typing').catch(() => {});
 
-        const bestPhoto = msg.photo[msg.photo.length - 1];
+        const bestPhoto = isPhotoReceipt ? msg.photo[msg.photo.length - 1] : receiptDoc;
         if (Number(bestPhoto?.file_size || 0) > MAX_TELEGRAM_MEDIA_BYTES) {
-            await sendTelegramMessage(chatId, '⚠️ La imagen supera el límite permitido de 10 MB.');
+            await sendTelegramMessage(chatId, '⚠️ El comprobante supera el límite permitido de 10 MB.');
             return;
         }
 
@@ -2857,14 +3175,39 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             return;
         }
 
-        await sendTelegramMessage(chatId, '📸 Analizando imagen / comprobante con IA...');
+        let detectedMime = 'image/jpeg';
+        let fileName = 'comprobante_telegram.jpg';
+        if (receiptDoc) {
+            const rawMime = String(receiptDoc.mime_type || '').toLowerCase().split(';')[0].trim();
+            const origName = String(receiptDoc.file_name || '');
+            if (rawMime === 'application/pdf' || /\.pdf$/i.test(origName)) {
+                detectedMime = 'application/pdf';
+                fileName = origName || 'comprobante_telegram.pdf';
+            } else if (rawMime === 'image/png' || /\.png$/i.test(origName)) {
+                detectedMime = 'image/png';
+                fileName = origName || 'comprobante_telegram.png';
+            } else if (rawMime === 'image/webp' || /\.webp$/i.test(origName)) {
+                detectedMime = 'image/webp';
+                fileName = origName || 'comprobante_telegram.webp';
+            } else {
+                detectedMime = 'image/jpeg';
+                fileName = origName || 'comprobante_telegram.jpg';
+            }
+        }
+
+        await sendTelegramMessage(
+            chatId,
+            detectedMime === 'application/pdf'
+                ? '📄 Analizando comprobante PDF con IA...'
+                : '📸 Analizando imagen / comprobante con IA...'
+        );
 
         try {
             const fileId = bestPhoto.file_id;
             const { token } = await getBotToken();
             const fileRes = await axios.get(`${TELEGRAM_API_BASE}${token}/getFile?file_id=${encodeURIComponent(fileId)}`, { timeout: 15000 });
             const filePath = fileRes.data?.result?.file_path;
-            if (!isSafeTelegramFilePath(filePath)) throw new Error('Ruta de archivo de imagen inválida');
+            if (!isSafeTelegramFilePath(filePath)) throw new Error('Ruta de archivo de comprobante inválida');
 
             sendChatAction(chatId, 'typing').catch(() => {});
             const imgRes = await axios.get(`https://api.telegram.org/file/bot${token}/${filePath}`, {
@@ -2875,34 +3218,61 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             });
             const imageBuffer = Buffer.from(imgRes.data);
 
-            const analysis = await analyzeTelegramImageReceipt(imageBuffer, 'image/jpeg', msg.caption || '');
+            const analysis = await analyzeTelegramImageReceipt(imageBuffer, detectedMime, msg.caption || '');
             // Solo consultar movimientos_bancarios si el usuario tiene permiso de bancos o es Admin
             const canVerifyBank = Boolean(effectivePerms.saldos_banco || effectivePerms.isAdmin);
             const verification = canVerifyBank
                 ? await verifyReceiptInBankMovements(analysis)
                 : { found: false, matches: [], restrictedByPermission: true };
-            const reportMsg = formatReceiptAnalysisMessage(analysis, verification);
+            let reportMsg = formatReceiptAnalysisMessage(analysis, verification);
+
+            let receiptDraft = null;
+            try {
+                const isUnmockedExtInTest = Boolean(
+                    (process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT) &&
+                    dbModule.getExternalDb?.name === 'getExternalDb'
+                );
+                const extDb = isUnmockedExtInTest ? null : await getExternalDb().catch(() => null);
+                receiptDraft = extDb ? await prepareReceiptPaymentDraft({
+                    db: getDb(),
+                    externalDb: extDb,
+                    user,
+                    effectivePerms,
+                    fileBuffer: imageBuffer,
+                    mimeType: detectedMime,
+                    fileName,
+                    analysis,
+                    caption: msg.caption || ''
+                }) : null;
+            } catch (draftErr) {
+                console.warn('[TelegramBot] Aviso buscando coincidencia Control de Pagos:', draftErr.message);
+            }
 
             await logTelegramQuery(
                 user.telegram_user_id,
-                'OCR_COMPROBANTE_FOTO',
+                detectedMime === 'application/pdf' ? 'OCR_COMPROBANTE_PDF' : 'OCR_COMPROBANTE_FOTO',
                 `${analysis.tipo_documento || 'Comprobante'} - ${analysis.banco || ''} - $${analysis.monto_usd || 0}`,
                 1
             );
 
-            await sendTelegramResponseWithFeedback(chatId, reportMsg, {
-                user,
-                query: msg.caption || 'Análisis de comprobante por imagen',
-                responseSummary: `OCR: ${analysis.banco || 'Doc'} $${analysis.monto_usd || 0} (Ref: ${analysis.referencia || 'S/N'})`
-            });
+            if (receiptDraft?.sectionHtml && receiptDraft?.inlineMarkup) {
+                reportMsg += receiptDraft.sectionHtml;
+                await sendTelegramMessage(chatId, reportMsg, receiptDraft.inlineMarkup);
+            } else {
+                await sendTelegramResponseWithFeedback(chatId, reportMsg, {
+                    user,
+                    query: msg.caption || 'Análisis de comprobante por imagen',
+                    responseSummary: `OCR: ${analysis.banco || 'Doc'} $${analysis.monto_usd || 0} (Ref: ${analysis.referencia || 'S/N'})`
+                });
+            }
             return;
         } catch (imgErr) {
-            console.error('[TelegramBot] Error en análisis de imagen/comprobante:', imgErr.message);
+            console.error('[TelegramBot] Error en análisis de comprobante:', imgErr.message);
             await sendTelegramMessage(
                 chatId,
-                '📸 <b>No se pudo procesar la imagen del comprobante</b>\n\n' +
-                'Ocurrió un inconveniente al analizar la fotografía.\n' +
-                'Por favor, asegúrate de que la imagen sea legible e intenta nuevamente.',
+                '📸 <b>No se pudo procesar el comprobante</b>\n\n' +
+                'Ocurrió un inconveniente al analizar la imagen o PDF.\n' +
+                'Por favor, asegúrate de que el archivo sea legible e intenta nuevamente.',
                 getMainReplyKeyboard()
             );
             return;
@@ -3309,6 +3679,157 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         return;
     }
 
+    // Comandos ejecutivos directos (/centinela, /audio, /grafica, /flujo, /prestamos, /creditos, /aprobaciones)
+    if (cleanLower === 'centinela' || cleanLower === 'liquidez') {
+        if (!effectivePerms.alertas && !effectivePerms.saldos_banco && !effectivePerms.isAdmin) {
+            await logTelegramQuery(user.telegram_user_id, '/centinela', 'Permiso denegado centinela', 0);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar el Centinela de Liquidez.', keyboard);
+            return;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const db = getDb();
+            const externalDb = await getExternalDb().catch(() => null);
+            const accountingDb = await getAccountingDb().catch(() => null);
+            const sentinelRes = await evaluateSentinelAlerts({ db, externalDb, accountingDb });
+            await logTelegramQuery(user.telegram_user_id, '/centinela', `Alertas: ${sentinelRes.alertKeys.length}`, 1);
+            await sendTelegramMessage(chatId, voicePrefix + formatSentinelMessage(sentinelRes), getSentinelInlineMarkup());
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error ejecutando Centinela: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
+    if (cleanLower === 'audio' || cleanLower === 'voz') {
+        try {
+            await logTelegramQuery(user.telegram_user_id, '/audio', 'Resumen ejecutivo en audio TTS', 1);
+            const ctx = getUserConversationContext(user.telegram_user_id);
+            await buildAndSendExecutiveAudio({
+                chatId,
+                user,
+                effectivePerms,
+                targetDate: ctx?.lastDate || getDateStr(-1),
+                transport: { sendTelegramMessage, sendChatAction, sendTelegramAudio }
+            });
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error generando nota de audio: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
+    if (cleanLower === 'grafica' || cleanLower.startsWith('grafica ')) {
+        const arg = cleanLower.replace(/^grafica\s*/i, '').trim();
+        let topic = 'ventas';
+        if (arg.includes('banco')) topic = 'bancos';
+        else if (arg.includes('flujo')) topic = 'flujo';
+        else if (arg.includes('solar')) topic = 'solar';
+        try {
+            const ctx = getUserConversationContext(user.telegram_user_id);
+            await logTelegramQuery(user.telegram_user_id, '/grafica', `Gráfica PNG (${topic})`, 1);
+            await buildAndSendTopicChart({
+                chatId,
+                topic,
+                targetDate: ctx?.lastDate || getDateStr(-1),
+                effectivePerms,
+                transport: { sendTelegramMessage, sendChatAction, sendTelegramPhoto }
+            });
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error generando gráfica PNG: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
+    if (cleanLower === 'flujo' || cleanLower.startsWith('flujo ')) {
+        if (!effectivePerms.saldos_banco && !effectivePerms.control_pagos && !effectivePerms.isAdmin) {
+            await logTelegramQuery(user.telegram_user_id, '/flujo', 'Permiso denegado flujo', 0);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar flujo de caja.', keyboard);
+            return;
+        }
+        const horizon = cleanLower.includes('60') ? 60 : 30;
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const flujoData = await getFlujoResumenData({ horizon });
+            await logTelegramQuery(user.telegram_user_id, '/flujo', `Flujo ${horizon}d`, 1);
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatFlujoMessage(flujoData), {
+                user,
+                query: rawText,
+                responseSummary: `Flujo ${horizon}d: ${flujoData?.kpi?.salud_flujo || 'OK'}`,
+                reply_markup: getFlujoInlineMarkup(horizon)
+            });
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error consultando flujo de caja: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
+    if (cleanLower === 'prestamos' || cleanLower.startsWith('prestamos ')) {
+        if (!effectivePerms.saldos_banco && !effectivePerms.finanzas_prestamos && !effectivePerms.isAdmin) {
+            await logTelegramQuery(user.telegram_user_id, '/prestamos', 'Permiso denegado préstamos', 0);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar préstamos.', keyboard);
+            return;
+        }
+        const estado = cleanLower.includes('todos') ? 'todos' : 'activo';
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const prestData = await getPrestamosResumenData({ db: getDb(), estado });
+            await logTelegramQuery(user.telegram_user_id, '/prestamos', `Préstamos (${estado})`, 1);
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatPrestamosMessage(prestData), {
+                user,
+                query: rawText,
+                responseSummary: `Préstamos: $${prestData.saldo_total_usd}`,
+                reply_markup: getPrestamosInlineMarkup(estado)
+            });
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error consultando préstamos: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
+    if (cleanLower === 'creditos' || cleanLower.startsWith('creditos ')) {
+        if (!effectivePerms.ventas && !effectivePerms.saldos_banco && !effectivePerms.isAdmin) {
+            await logTelegramQuery(user.telegram_user_id, '/creditos', 'Permiso denegado créditos', 0);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar créditos de flotas.', keyboard);
+            return;
+        }
+        const filter = cleanLower.includes('critico') || cleanLower.includes('mora') ? 'critico' : 'todos';
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const credData = await getCreditosResumenData({ filter });
+            await logTelegramQuery(user.telegram_user_id, '/creditos', `Créditos flotas (${filter})`, 1);
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatCreditosMessage(credData), {
+                user,
+                query: rawText,
+                responseSummary: `Cartera: $${credData?.resumen_cartera?.total_cartera_activa_usd || 0}`,
+                reply_markup: getCreditosInlineMarkup(filter)
+            });
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error consultando créditos de flotas: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
+    if (cleanLower === 'aprobaciones' || cleanLower.startsWith('aprobaciones ')) {
+        if (!canUserApproveFinancialOp(effectivePerms)) {
+            await logTelegramQuery(user.telegram_user_id, '/aprobaciones', 'Permiso denegado aprobaciones', 0);
+            await sendTelegramMessage(chatId, voicePrefix + '⛔ Solo Gerencia o Administración puede consultar y resolver aprobaciones.', keyboard);
+            return;
+        }
+        const filtroEstado = cleanLower.includes('todas') ? 'TODAS' : 'PENDIENTE';
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const rows = await listApprovalsData({ db: getDb(), estado: filtroEstado });
+            await logTelegramQuery(user.telegram_user_id, '/aprobaciones', `Aprobaciones (${filtroEstado})`, 1);
+            await sendTelegramMessage(
+                chatId,
+                voicePrefix + formatApprovalsListMessage(rows, filtroEstado),
+                getApprovalsListMarkup(rows) || keyboard
+            );
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error consultando aprobaciones: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
     // 0. Comandos o solicitudes de exportación de Reporte Ejecutivo en PDF Tamaño Carta
     const normForPdf = normalizeText(rawText);
     const isDossierCommand = cleanLower === 'dossier' || cleanLower === '/dossier' ||
@@ -3671,7 +4192,10 @@ const runPollingLoop = async (generation) => {
 /**
  * Iniciar el servicio de Telegram Bot
  */
-const initTelegramBot = async () => {
+const initTelegramBot = async (io = null) => {
+    if (io) {
+        runtimeIo = io;
+    }
     if (runtimeState.isPollingActive) {
         console.log('[TelegramBot] Polling ya se encuentra activo.');
         return;
@@ -3710,6 +4234,13 @@ const initTelegramBot = async () => {
             { command: 'agenda', description: 'Agenda de eventos, reuniones y pagos' },
             { command: 'agendar', description: 'Programar recordatorio o reunión MiBot' },
             { command: 'pagos', description: 'Control de Pagos (vencidos, hoy, parciales)' },
+            { command: 'centinela', description: 'Centinela de liquidez 72h y remesas >48h' },
+            { command: 'flujo', description: 'Flujo de caja proyectado a 30 o 60 días' },
+            { command: 'prestamos', description: 'Cartera de préstamos bancarios' },
+            { command: 'creditos', description: 'Riesgo y mora en créditos de flotas' },
+            { command: 'grafica', description: 'Gráfica visual PNG (ventas, bancos, flujo, solar)' },
+            { command: 'audio', description: 'Resumen ejecutivo en nota de audio' },
+            { command: 'aprobaciones', description: 'Bandeja de aprobaciones gerenciales' },
             { command: 'cumpleanos', description: 'Cumpleaños del personal' },
             { command: 'mibot', description: 'Tus avisos personales MiBot' },
             { command: 'ventas', description: 'Resumen de ventas de estaciones' },
@@ -4369,8 +4900,19 @@ module.exports = {
     formatReceiptAnalysisMessage,
     generateExecutiveReportPdf,
     sendTelegramDocument,
+    sendTelegramPhoto,
+    sendTelegramAudio,
     buildAndSendTopicPdf,
     escapeHtml,
-    resolveTelegramUser
+    resolveTelegramUser,
+    pendingReceiptPayments,
+    prepareReceiptPaymentDraft,
+    applyReceiptDraftToVencimiento,
+    evaluateSentinelAlerts,
+    runProactiveSentinelDispatch,
+    buildAndSendExecutiveAudio,
+    buildAndSendTopicChart,
+    createAndNotifyApprovalRequest,
+    resolveApprovalAction
 };
 

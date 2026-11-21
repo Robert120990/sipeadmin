@@ -346,6 +346,7 @@ const { initPaymentScheduler } = require('./services/paymentNotifier');
 const { initMibotScheduler, stopMibotScheduler } = require('./services/mibotNotifierService');
 const { initTelegramBot, stopTelegramBot } = require('./services/telegramBotService');
 const { initAutoSyncScheduler } = require('./services/autoSyncScheduler');
+const { initTelegramSentinelScheduler, stopTelegramSentinelScheduler } = require('./services/telegramSentinelService');
 const { runInitialServiceSeeds } = require('./services/dbBootstrapSeeds');
 
 let isShuttingDown = false;
@@ -362,6 +363,7 @@ const gracefulShutdown = async (signal, exitCode = 0) => {
 
     try { stopTelegramBot(); } catch (_) { /* noop */ }
     try { stopMibotScheduler(); } catch (_) { /* noop */ }
+    try { stopTelegramSentinelScheduler(); } catch (_) { /* noop */ }
     try { stopTicketRealtimeWatcher(); } catch (_) { /* noop */ }
 
     await new Promise((resolve) => {
@@ -414,7 +416,8 @@ initDB().then(async () => {
     initBirthdayScheduler();
     initPaymentScheduler();
     initMibotScheduler(io);
-    initTelegramBot();
+    initTelegramBot(io);
+    initTelegramSentinelScheduler();
     initAutoSyncScheduler(io);
     initTicketRealtimeWatcher(io);
     server.listen(PORT, () => {

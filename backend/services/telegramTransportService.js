@@ -234,6 +234,142 @@ const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE
 };
 
 /**
+ * Enviar una imagen (PNG/JPEG, ej. gráficas ejecutivas) a un chat de Telegram
+ */
+const sendTelegramPhoto = async (chatId, imageBuffer, caption = '', replyMarkup = null, filename = 'Grafica_SIPE.png') => {
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+        throw new Error('Buffer de imagen inválido o vacío');
+    }
+
+    const { token } = await getBotToken();
+    if (!token) return null;
+
+    const safeCaption = caption ? String(caption).slice(0, 1020) : '';
+    const buildForm = (useHtml) => {
+        const formData = new FormData();
+        formData.append('chat_id', String(chatId));
+        if (safeCaption) {
+            const cap = useHtml ? safeCaption : safeCaption.replace(/<[^>]*>?/gm, '');
+            formData.append('caption', cap);
+            if (useHtml) formData.append('parse_mode', 'HTML');
+        }
+        if (replyMarkup && typeof replyMarkup === 'object') {
+            formData.append('reply_markup', JSON.stringify(replyMarkup));
+        }
+        const mimeType = String(filename || '').toLowerCase().endsWith('.jpg') || String(filename || '').toLowerCase().endsWith('.jpeg')
+            ? 'image/jpeg'
+            : 'image/png';
+        const blob = new Blob([imageBuffer], { type: mimeType });
+        formData.append('photo', blob, filename || 'Grafica_SIPE.png');
+
+        formData.chat_id = chatId;
+        formData.caption = safeCaption;
+        formData.parse_mode = useHtml ? 'HTML' : null;
+        formData.filename = filename || 'Grafica_SIPE.png';
+        formData.fileBuffer = imageBuffer;
+        formData.reply_markup = replyMarkup || null;
+        return formData;
+    };
+
+    try {
+        const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendPhoto`, buildForm(true), {
+            timeout: 30000
+        });
+        return res.data?.result || res.data || null;
+    } catch (err) {
+        if (err.response?.data?.description?.includes("can't parse entities") && safeCaption) {
+            try {
+                const fbRes = await axios.post(`${TELEGRAM_API_BASE}${token}/sendPhoto`, buildForm(false), {
+                    timeout: 30000
+                });
+                return fbRes.data?.result || fbRes.data || null;
+            } catch (fbErr) {
+                console.error('[TelegramBot] Error enviando foto fallback:', redactSecrets(fbErr.message));
+                return null;
+            }
+        }
+        console.error('[TelegramBot] Error enviando foto a chat:', chatId, redactSecrets(err.message));
+        return null;
+    }
+};
+
+/**
+ * Enviar una nota de audio (WAV/MP3/OGG, ej. resumen ejecutivo TTS) a un chat de Telegram
+ */
+const sendTelegramAudio = async (chatId, audioBuffer, options = {}) => {
+    if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0) {
+        throw new Error('Buffer de audio inválido o vacío');
+    }
+
+    const { token } = await getBotToken();
+    if (!token) return null;
+
+    const {
+        caption = '',
+        title = 'Resumen Ejecutivo SIPE',
+        performer = 'SIPE Admin IA',
+        filename = 'Resumen_SIPE.wav',
+        mimeType = 'audio/wav',
+        duration = null,
+        replyMarkup = null
+    } = options || {};
+
+    const safeCaption = caption ? String(caption).slice(0, 1020) : '';
+    const buildForm = (useHtml) => {
+        const formData = new FormData();
+        formData.append('chat_id', String(chatId));
+        if (safeCaption) {
+            const cap = useHtml ? safeCaption : safeCaption.replace(/<[^>]*>?/gm, '');
+            formData.append('caption', cap);
+            if (useHtml) formData.append('parse_mode', 'HTML');
+        }
+        if (title) formData.append('title', String(title).slice(0, 120));
+        if (performer) formData.append('performer', String(performer).slice(0, 120));
+        const intDuration = parseInt(duration, 10);
+        if (Number.isFinite(intDuration) && intDuration > 0) {
+            formData.append('duration', String(intDuration));
+        }
+        if (replyMarkup && typeof replyMarkup === 'object') {
+            formData.append('reply_markup', JSON.stringify(replyMarkup));
+        }
+        const blob = new Blob([audioBuffer], { type: mimeType || 'audio/wav' });
+        formData.append('audio', blob, filename || 'Resumen_SIPE.wav');
+
+        formData.chat_id = chatId;
+        formData.caption = safeCaption;
+        formData.title = title;
+        formData.performer = performer;
+        formData.filename = filename || 'Resumen_SIPE.wav';
+        formData.mimeType = mimeType || 'audio/wav';
+        formData.duration = Number.isFinite(intDuration) && intDuration > 0 ? intDuration : null;
+        formData.fileBuffer = audioBuffer;
+        formData.reply_markup = replyMarkup || null;
+        return formData;
+    };
+
+    try {
+        const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendAudio`, buildForm(true), {
+            timeout: 45000
+        });
+        return res.data?.result || res.data || null;
+    } catch (err) {
+        if (err.response?.data?.description?.includes("can't parse entities") && safeCaption) {
+            try {
+                const fbRes = await axios.post(`${TELEGRAM_API_BASE}${token}/sendAudio`, buildForm(false), {
+                    timeout: 45000
+                });
+                return fbRes.data?.result || fbRes.data || null;
+            } catch (fbErr) {
+                console.error('[TelegramBot] Error enviando audio fallback:', redactSecrets(fbErr.message));
+                return null;
+            }
+        }
+        console.error('[TelegramBot] Error enviando audio a chat:', chatId, redactSecrets(err.message));
+        return null;
+    }
+};
+
+/**
  * Configurar webhook HTTPS para Telegram Bot API
  */
 const setTelegramWebhook = async (options) => {
@@ -353,6 +489,8 @@ module.exports = {
     sendTelegramMessage,
     sendChatAction,
     sendTelegramDocument,
+    sendTelegramPhoto,
+    sendTelegramAudio,
     setTelegramWebhook,
     deleteTelegramWebhook,
     getTelegramWebhookInfo,

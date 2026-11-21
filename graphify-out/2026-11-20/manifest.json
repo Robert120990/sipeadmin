@@ -282,9 +282,9 @@
     "semantic_hash": "658a4a96f73d8246e71d0df5ecae7561"
   },
   "backend/services/telegramBotService.js": {
-    "mtime": 1795228669.8122244,
-    "seen": 1795228834.9154415,
-    "ast_hash": "322adc45ae308557fef82845db5e57b9",
+    "mtime": 1795229995.2451184,
+    "seen": 1795230105.7478642,
+    "ast_hash": "7557d7965b80ec1973f484e68d4664cd",
     "semantic_hash": ""
   },
   "backend/sync-dgehm-direct.js": {
@@ -1638,15 +1638,15 @@
     "semantic_hash": ""
   },
   "backend/services/telegramProductivityService.js": {
-    "mtime": 1795228658.915482,
-    "seen": 1795228834.9154415,
-    "ast_hash": "725ff80b77f2b44491d2be43b05eba08",
+    "mtime": 1795229993.4345522,
+    "seen": 1795230105.7478642,
+    "ast_hash": "d61a1f994251db9cace68bb89fcf5916",
     "semantic_hash": ""
   },
   "backend/test/telegramProductivityAndPagos.test.js": {
-    "mtime": 1795227274.4326718,
-    "seen": 1795227499.5311565,
-    "ast_hash": "afbc1e0cdc9b6b0b4851a5a0ff77da4a",
+    "mtime": 1795230057.7732136,
+    "seen": 1795230105.7478642,
+    "ast_hash": "4da928bea15208db7bf355f2414a6172",
     "semantic_hash": ""
   },
   "backend/test/operationalRobustness.test.js": {

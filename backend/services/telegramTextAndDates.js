@@ -1001,11 +1001,42 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         /\b(rentabilidad|ebitda|margen\s+neto|margen\s+operativo|margen\s+bruto|utilidad\s+operativa|utilidad\s+por\s+estacion|ganancia\s+por\s+estacion|estado\s+de\s+resultados|p&l)\b/i.test(normalized)
     );
 
+    // 9.5 Nuevos Intents Ejecutivos: Centinela, Audio TTS, Gráficas PNG, Flujo de Caja, Préstamos, Créditos y Aprobaciones
+    const isCentinela = !isProductivityCommand && !isPagosProgramados && (
+        /\b(centinela|liquidez\s+72h?|riesgo\s+de\s+liquidez|alerta\s+de\s+liquidez|auditoria\s+de\s+liquidez|liquidez\s+vs\s+compromisos)\b/i.test(normalized)
+    );
+    const isAudioResumen = !isProductivityCommand && !isPagosProgramados && (
+        /\b(resumen\s+en\s+audio|nota\s+de\s+voz\s+ejecutiva|mandame\s+(?:un\s+)?audio|enviame\s+(?:un\s+)?audio|dame\s+(?:un\s+)?audio|resumen\s+hablado|briefing\s+de\s+voz)\b/i.test(normalized)
+    );
+    const isGrafica = !isProductivityCommand && !isPagosProgramados && (
+        /\b(grafica|grafico|chart|muestrame\s+la\s+grafica|enviame\s+la\s+grafica)\b/i.test(normalized)
+    );
+    let graficaTopic = 'ventas';
+    if (isGrafica) {
+        if (/\b(bancos?|saldos?\s+bancarios?)\b/i.test(normalized)) graficaTopic = 'bancos';
+        else if (/\b(flujo|caja|cashflow|liquidez)\b/i.test(normalized)) graficaTopic = 'flujo';
+        else if (/\b(solar|paneles|energia|bateria)\b/i.test(normalized)) graficaTopic = 'solar';
+    }
+    const isFlujoCaja = !isProductivityCommand && !isPagosProgramados && !isGrafica && (
+        /\b(flujo\s+de\s+caja|cashflow|proyeccion\s+de\s+(?:caja|liquidez|efectivo)|brecha\s+de\s+liquidez)\b/i.test(normalized)
+    );
+    const flujoHorizon = /\b60\b/.test(normalized) ? 60 : 30;
+    const isPrestamos = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && !isFlujoCaja && (
+        /\b(prestamos?|amortizacion(?:es)?|cuotas?\s+de\s+prestamos?|deuda\s+bancaria|saldos?\s+de\s+prestamos?)\b/i.test(normalized)
+    );
+    const isCreditosFlota = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && (
+        /\b(creditos?\s+(?:de\s+)?flotas?|riesgo\s+de\s+credito|morosidad\s+(?:de\s+)?flotas?|cartera\s+de\s+flotas?|clientes?\s+en\s+mora)\b/i.test(normalized)
+    );
+    const isAprobaciones = !isProductivityCommand && !isPagosProgramados && (
+        /\b(aprobaciones?\s+pendientes?|cheques?\s+por\s+aprobar|planillas?\s+por\s+aprobar|bandeja\s+de\s+aprobaciones?)\b/i.test(normalized)
+    );
+    const hasNewFinanceOrMediaIntent = isCentinela || isAudioResumen || isGrafica || isFlujoCaja || isPrestamos || isCreditosFlota || isAprobaciones;
+
     // 10. Detección de auditoría / descuadres (excluyendo consultas de diferencia de precios de competencia)
-    const isAlertas = !isProductivityCommand && !isPagosProgramados && !isCompetencia && !isTransitoVales && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
+    const isAlertas = !isProductivityCommand && !isPagosProgramados && !isCompetencia && !isTransitoVales && !hasNewFinanceOrMediaIntent && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
 
     // 11. Detección de rankings o comparativas de ventas (excluyendo comparativas de precios, tanques o rentabilidad)
-    const isRanking = !isProductivityCommand && !isPagosProgramados && !isCompetencia && !isTanques && !isRentabilidad && (
+    const isRanking = !isProductivityCommand && !isPagosProgramados && !isCompetencia && !isTanques && !isRentabilidad && !hasNewFinanceOrMediaIntent && (
         /\b(cual|quien|que estacion|estacion que|estaciones que)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
         /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized)
     );
@@ -1170,7 +1201,16 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         isMensual: isMonthly,
         targetMonth,
         targetYear,
-        targetPeriod
+        targetPeriod,
+        isCentinela,
+        isAudioResumen,
+        isGrafica,
+        graficaTopic,
+        isFlujoCaja,
+        flujoHorizon,
+        isPrestamos,
+        isCreditosFlota,
+        isAprobaciones
     };
 };
 

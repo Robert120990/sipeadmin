@@ -3,6 +3,7 @@ const router = express.Router();
 const { getDb, getExternalDb, withTransaction } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { CHEQUE_APPROVAL_THRESHOLD_USD, createAndNotifyApprovalRequest } = require('../services/telegramFinanceApprovalService');
 
 const chequeViewPerms = [
     'manage_cheques',
@@ -243,6 +244,21 @@ router.post('/', authenticateToken, requirePermission(['manage_cheques', '/dashb
         });
 
         res.status(201).json({ message: 'Cheque registrado exitosamente', llave, id: insertId });
+
+        if (!cheque_anulado && !es_reservado && Number(valor || 0) >= CHEQUE_APPROVAL_THRESHOLD_USD) {
+            createAndNotifyApprovalRequest({
+                db,
+                tipo: 'CHEQUE',
+                entidadId: insertId,
+                titulo: `Cheque #${cheque || llave}`,
+                resumen: `A favor de ${a_nombre || 'Beneficiario'} — ${(concepto || '').toUpperCase().slice(0, 120)}`,
+                montoUsd: Number(valor || 0),
+                empresaNombre: id_empresa,
+                requestedByUser: req.user,
+                metadata: { cheque_id: insertId, llave, cheque, numero_cuenta, a_nombre, fecha: dbFecha },
+                io: req.io
+            }).catch(err => console.warn('[Cheques][TgApproval]:', err.message));
+        }
     } catch (error) {
         sendSafeError(res, error, 'Error al registrar cheque');
     }

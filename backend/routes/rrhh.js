@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken, requirePermission } = require('../middleware/auth');
+const { getDb } = require('../db');
 const { sendSafeError } = require('../utils/errorHandler');
 const rhPlanillaService = require('../services/rhPlanillaService');
+const { createAndNotifyApprovalRequest } = require('../services/telegramFinanceApprovalService');
 
 const PERMISSION_REQUIRED = ['/dashboard/rrhh/planillas', 'view_rrhh_planillas'];
 
@@ -267,6 +269,20 @@ router.post('/planillas/pagar', authenticateToken, requirePermission(['pay_rrhh_
         });
 
         res.status(201).json(resultado);
+
+        const montoTotalPlanilla = pagos.reduce((s, p) => s + Number(p?.monto || 0), 0);
+        createAndNotifyApprovalRequest({
+            db: getDb(),
+            tipo: 'PLANILLA',
+            entidadId: `${company_id}-${anio}-${mes}-${quincena}`,
+            titulo: `Pago Planilla ${anio}-${String(mes).padStart(2, '0')} (${quincena})`,
+            resumen: `${pagos.length} desembolso(s) registrados por RRHH`,
+            montoUsd: montoTotalPlanilla,
+            empresaNombre: resultado?.empresa_nombre || `Empresa #${company_id}`,
+            requestedByUser: req.user,
+            metadata: { company_id, anio, mes, quincena, pagos_count: pagos.length },
+            io: req.io
+        }).catch(err => console.warn('[RRHH][TgApproval]:', err.message));
     } catch (error) {
         sendSafeError(res, error, error.message || 'Error al registrar el pago de la planilla');
     }
