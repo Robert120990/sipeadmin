@@ -1139,7 +1139,14 @@ const formatTransitoValesMessage = (payload) => {
  */
 const formatIntelligentGuidanceMessage = () => {
     let msg = `❓ No pude identificar con certeza tu consulta específica.\n\n`;
-    msg += `💡 <b>Preguntas que puedes hacerme directamente:</b>\n`;
+    msg += `💡 <b>Preguntas y acciones que puedes hacerme directamente:</b>\n`;
+    msg += `• 📋 <b>Tareas, MiBot y Eventos:</b>\n`;
+    msg += `   <i>"Asignar tarea a Corina y Raul revisar arqueo mañana 10am"</i>\n`;
+    msg += `   <i>"/asignar" · "/tareas" · "/agenda" · "/agendar" · "/mibot"</i>\n`;
+    msg += `• 💳 <b>Control de Pagos:</b>\n`;
+    msg += `   <i>"Pagos vencidos" · "Pagos de hoy" · "Pagos parciales" · "/pagos"</i>\n`;
+    msg += `• 🎂 <b>Personal:</b>\n`;
+    msg += `   <i>"¿Quién cumple años esta semana?" · "/cumpleanos"</i>\n`;
     msg += `• ⛽ <b>Por estación y producto:</b>\n`;
     msg += `   <i>"¿Cuánto diesel vendió Costa del Sol?"</i>\n`;
     msg += `   <i>"Ventas de Miraflores"</i>\n`;
@@ -1173,26 +1180,29 @@ const formatIntelligentGuidanceMessage = () => {
 const formatHelpMessage = () => {
     let msg = `🤖 <b>ASISTENTE DE CONSULTAS SIPE ADMIN</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
-    msg += `Puedes usar los botones del teclado o enviar los siguientes comandos:\n\n`;
-    msg += `⛽ <b>/ventas</b> - Ventas de ayer (o escribe <i>/ventas YYYY-MM-DD</i> para otra fecha)\n`;
-    msg += `⛽ <b>Ventas de Hoy</b> - Consultar ventas del día actual\n`;
-    msg += `⛽ <b>Ventas de Ayer</b> - Consultar ventas cerradas de ayer\n`;
-    msg += `📊 <b>/competencia</b> - Comparativo de precios de la competencia (DGEHM)\n`;
-    msg += `🏦 <b>/bancos</b> - Saldos consolidados en cuentas de bancos\n`;
-    msg += `🧾 <b>/chequera</b> - Saldos disponibles en cuentas de cheques\n`;
-    msg += `🚨 <b>/alertas</b> - Descuadres de pista, cortes y gastos de tiendas\n`;
-    msg += `📄 <b>/pdf</b> - Exportar reporte ejecutivo tamaño Carta (ventas, competencia, bancos)\n`;
-    msg += `ℹ️ <b>/perfil</b> o <b>/id</b> - Ver tu ID y permisos asignados\n`;
-    msg += `❓ <b>/ayuda</b> - Ver esta guía de comandos\n\n`;
-    msg += `💡 <b>¡También puedes hacerme preguntas específicas en texto libre!</b>\n`;
-    msg += `• <i>"Revisar los precios de la competencia"</i>\n`;
-    msg += `• <i>"¿Quién tiene más barato el diésel?"</i>\n`;
+    msg += `Puedes usar los botones del teclado, notas de voz o comandos:\n\n`;
+    msg += `📋 <b>Productividad, Tareas &amp; Agenda:</b>\n`;
+    msg += `• <b>/tareas</b> o <b>/mistareas</b> - Ver y gestionar tareas activas\n`;
+    msg += `• <b>/asignar</b> - Asignar tarea a uno o varios usuarios\n`;
+    msg += `• <b>/agenda</b> o <b>/eventos</b> - Eventos programados (MiBot, tareas, pagos, cumpleaños)\n`;
+    msg += `• <b>/agendar</b>, <b>/reunion</b> o <b>/recordatorio</b> - Programar aviso/reunión MiBot\n`;
+    msg += `• <b>/mibot</b> - Tus avisos personales de MiBot\n`;
+    msg += `• 💳 <b>/pagos</b> o <b>/controlpagos</b> - Control de Pagos (vencidos, hoy, parciales, saldos)\n`;
+    msg += `• 🎂 <b>/cumpleanos</b> - Cumpleaños de hoy, esta semana y del mes\n\n`;
+    msg += `📊 <b>Operaciones y Finanzas:</b>\n`;
+    msg += `• ⛽ <b>/ventas</b> - Ventas de ayer (o escribe <i>/ventas YYYY-MM-DD</i> para otra fecha)\n`;
+    msg += `• 📊 <b>/competencia</b> - Comparativo de precios de la competencia (DGEHM)\n`;
+    msg += `• 🏦 <b>/bancos</b> - Saldos consolidados en cuentas de bancos\n`;
+    msg += `• 🧾 <b>/chequera</b> - Saldos disponibles en cuentas de cheques\n`;
+    msg += `• 🚨 <b>/alertas</b> - Descuadres de pista, cortes y gastos de tiendas\n`;
+    msg += `• 📄 <b>/pdf</b> - Exportar reporte ejecutivo tamaño Carta\n`;
+    msg += `• ℹ️ <b>/perfil</b> o <b>/id</b> - Ver tu ID y permisos asignados\n\n`;
+    msg += `💡 <b>¡También puedes hablar o escribir en texto libre!</b>\n`;
+    msg += `• <i>"Asigna tarea a Raul y Corina revisar cierres mañana 9am"</i>\n`;
+    msg += `• <i>"Recuérdame hoy a las 4pm aprobar planilla"</i>\n`;
+    msg += `• <i>"Pagos vencidos de Miraflores"</i> o <i>"¿Quién cumple años esta semana?"</i>\n`;
     msg += `• <i>"¿Cuánto diesel vendió Costa del Sol?"</i>\n`;
-    msg += `• <i>"Ventas de Miraflores"</i>\n`;
-    msg += `• <i>"¿Cuál estación vendió más ayer?"</i>\n`;
-    msg += `• <i>"¿Cuánto tenemos en Promerica?"</i>\n`;
-    msg += `• <i>"¿Cuánto vendieron las tiendas?"</i>\n`;
-    msg += `• <i>"¿Hubo algún descuadre ayer?"</i>\n\n`;
+    msg += `• <i>"¿Cuánto tenemos en Promerica?"</i>\n\n`;
     msg += `<i>Acceso restringido a usuarios autorizados por el Administrador.</i>`;
     return msg;
 };
@@ -1352,7 +1362,10 @@ const formatPagosProgramadosMessage = (data) => {
     if (urgentes.length > 0) {
         msg += `🔴 <b>COMPROMISOS PARA HOY O VENCIDOS (${urgentes.length}):</b>\n`;
         urgentes.slice(0, 8).forEach(p => {
-            msg += `• <b>${escapeHtml(p.descripcion)}:</b> <b>${moneyFmt(p.monto)}</b> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
+            const montoShow = p.saldo_pendiente !== undefined ? p.saldo_pendiente : p.monto;
+            const ubi = p.ubicacion ? ` (${escapeHtml(p.ubicacion)})` : '';
+            const parcialTag = p.estado_pago === 'PARCIAL' ? ` <i>[Parcial: abonado ${moneyFmt(p.monto_pagado || 0)}]</i>` : '';
+            msg += `• <b>${escapeHtml(p.descripcion)}</b>${ubi}: <b>${moneyFmt(montoShow)}</b> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)${parcialTag}\n`;
         });
         msg += `\n`;
     }
@@ -1360,7 +1373,9 @@ const formatPagosProgramadosMessage = (data) => {
     if (prox7.length > 0) {
         msg += `🟡 <b>PRÓXIMOS 7 DÍAS (${prox7.length}):</b>\n`;
         prox7.slice(0, 8).forEach(p => {
-            msg += `• <b>${escapeHtml(p.descripcion)}:</b> <b>${moneyFmt(p.monto)}</b> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
+            const montoShow = p.saldo_pendiente !== undefined ? p.saldo_pendiente : p.monto;
+            const ubi = p.ubicacion ? ` (${escapeHtml(p.ubicacion)})` : '';
+            msg += `• <b>${escapeHtml(p.descripcion)}</b>${ubi}: <b>${moneyFmt(montoShow)}</b> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
         });
         msg += `\n`;
     }
@@ -1368,7 +1383,9 @@ const formatPagosProgramadosMessage = (data) => {
     if (posteriores.length > 0) {
         msg += `🟢 <b>PROGRAMADOS POSTERIORES (${posteriores.length}):</b>\n`;
         posteriores.slice(0, 6).forEach(p => {
-            msg += `• <b>${escapeHtml(p.descripcion)}:</b> <code>${moneyFmt(p.monto)}</code> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
+            const montoShow = p.saldo_pendiente !== undefined ? p.saldo_pendiente : p.monto;
+            const ubi = p.ubicacion ? ` (${escapeHtml(p.ubicacion)})` : '';
+            msg += `• <b>${escapeHtml(p.descripcion)}</b>${ubi}: <code>${moneyFmt(montoShow)}</code> (Vence: <code>${toDisplayDate(p.fecha_vencimiento)}</code>)\n`;
         });
         msg += `\n`;
     }

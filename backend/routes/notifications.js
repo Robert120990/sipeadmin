@@ -3,6 +3,13 @@ const router = express.Router();
 const { getDb } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { setRealtimeIo } = require('../services/mibotNotifierService');
+
+router.use((req, _res, next) => {
+    const io = req.app?.get('io') || req.io;
+    if (io) setRealtimeIo(io);
+    next();
+});
 
 /**
  * GET /api/notifications

@@ -703,7 +703,46 @@ const findFuelByKey = (key) => {
  */
 const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     if (!rawText) return null;
+    const rawTrimmed = String(rawText || '').trim();
+    const rawLower = rawTrimmed.toLowerCase();
     const normalized = normalizeText(rawText);
+
+    // 0. Detección temprana de Intents de Productividad (Tareas, Agenda, Cumpleaños) para aislar de ventas/competencia
+    const isAsignarTarea =
+        /^\/?(?:asignar(?:_?tarea)?|nueva_?tarea|crear_?tarea)\b/i.test(rawLower) ||
+        /\b(?:asigna(?:le|les|me)?|asignar|pon(?:le|les|er)?|manda(?:le|les)?|crea(?:r|le)?)\s+(?:una\s+|la\s+|estas?\s+)?(?:nueva\s+)?(?:tarea|tareas|actividad|pendiente)\b/i.test(normalized) ||
+        /\b(?:asignale|asignales|asignar)\s+(?:a|para)\s+[a-z0-9@]+\b/i.test(normalized);
+
+    const isAgendarEvento = !isAsignarTarea && (
+        /^\/?(?:agendar|reunion|recordatorio)\b/i.test(rawLower) ||
+        /\b(?:recuerdame|recordarme|programa(?:r|me)?|agenda(?:r|me)?|agendar)\s+(?:una?\s+)?(?:reunion|junta|llamada|cita|evento|recordatorio|aviso)\b/i.test(normalized) ||
+        /\b(?:recuerdame|recordarme)\s+(?:que\s+|de\s+|el\s+|hoy|manana|a\s+las|[a-z]{3,})\b/i.test(normalized)
+    );
+
+    const isConsultaTareas = !isAsignarTarea && !isAgendarEvento && (
+        /^\/?(?:tareas|mistareas|mis_?tareas)\b/i.test(rawLower) ||
+        /\b(?:mis\s+tareas|tareas\s+pendientes|tareas\s+vencidas|tareas\s+atrasadas|tareas\s+activas|tareas\s+del\s+equipo|que\s+tareas\s+(?:tengo|tiene|tenemos|hay)|cuales\s+son\s+(?:mis|las)\s+tareas|estado\s+de\s+(?:mis\s+|las\s+)?tareas|tareas\s+de\s+[a-z0-9]+)\b/i.test(normalized)
+    );
+
+    const isEventosAgenda = !isAsignarTarea && !isAgendarEvento && !isConsultaTareas && (
+        /^\/?(?:agenda|eventos)\b/i.test(rawLower) ||
+        /\b(?:eventos?\s+programados?|agenda\s+(?:de\s+hoy|de\s+manana|de\s+esta\s+semana|semanal|del\s+mes|completa|mibot)?|que\s+eventos?\s+(?:hay|tengo|tenemos|vienen)|que\s+reuniones?\s+(?:hay|tengo|tenemos)|proximas?\s+reuniones?|proximos?\s+eventos?|mis\s+eventos?|mis\s+reuniones?|mis\s+recordatorios?|mis\s+avisos?)\b/i.test(normalized)
+    );
+
+    const isCumpleanos = !isAsignarTarea && !isAgendarEvento && (
+        /^\/?cumplea(?:nos|ños)\b/i.test(rawLower) ||
+        /\b(?:cumpleanos|cumple\s+anos|quien\s+cumple|quienes\s+cumplen|cumpleaneros?|cumple\s+hoy|cumple\s+esta\s+semana|cumple\s+este\s+mes)\b/i.test(normalized)
+    );
+
+    const isProductivityCommand = isAsignarTarea || isAgendarEvento || isConsultaTareas || isEventosAgenda || isCumpleanos;
+
+    // 0.1 Detección temprana de Pagos Programados / Control de Pagos (antes de Solar/Competencia/Andelsa)
+    const isAndelsaCxcWords = /\b(?:cuentas?\s+por\s+cobrar|cxc|clientes?\s+andelsa|cartera\s+de\s+clientes?)\b/i.test(normalized);
+    const isPagosProgramados = !isProductivityCommand && !isAndelsaCxcWords && (
+        /^\/?(?:pagos|controlpagos|control_?pagos)\b/i.test(rawLower) ||
+        /\b(pagos?\s+programados?|pagos?\s+pendientes?|pagos?\s+vencidos?|pagos?\s+atrasados?|pagos?\s+parciales?|pagos?\s+cancelados?|pagos?\s+de\s+(?:hoy|esta\s+semana|este\s+mes)|cuales\s+son\s+los\s+pagos?|que\s+pagos?\s+(?:hay|tenemos|vienen|tocan)|recordatorios?\s+de\s+pagos?|control\s+de\s+pagos?|vencimientos?\s+de\s+pagos?|proximos?\s+pagos?|cuanto\s+(?:debemos|falta\s+(?:por\s+)?pagar)\s+en\s+(?:control\s+de\s+)?pagos?|ya\s+se\s+pago\s+[a-z0-9]+)\b/i.test(normalized) ||
+        (/\bpagos?\s+de\s+(?!tarjetas?\b|clientes?\b)[a-z0-9]{3,}\b/i.test(normalized) && !/\b(banco|bancos|chequera|cheques?|remesa|remesas|planilla|venta|ventas)\b/i.test(normalized))
+    );
 
     // 1. Detección de periodo o fecha en español natural
     const period = parseSpanishPeriodOrDate(rawText);
@@ -848,32 +887,31 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     // 6. Detección de consultas de energía solar / batería (evitando colisión con autonomía de tanques de combustible)
     const hasExplicitTankNoun = /\b(tanques?|cisternas?|pipas?|ullage)\b/i.test(normalized);
     const hasFuelTankContext = hasExplicitTankNoun || /\b(combustible|gasolina|diesel|regular|super|ion|galon(?:es|aje)?|descargas?|stock\s+de\s+combustible|nivel\s+de\s+combustible)\b/i.test(normalized);
-    const isSolar = !hasExplicitTankNoun && (
+    const isSolar = !isProductivityCommand && !isPagosProgramados && !hasExplicitTankNoun && (
         /\b(solar|solares|panel|paneles|fotovoltaic[oa]s?|bateria|baterias|bess|inversor|kwh|kwp|ahorro\s+solar|energia\s+solar)\b/i.test(normalized) ||
         (/\bautonomia\b/i.test(normalized) && !hasFuelTankContext && /\b(electrica|energia|respaldo|apagon|luz|carga)\b/i.test(normalized))
     );
 
     // 7. Detección de consultas de horas pico / horario de ventas
-    const isHourlyPeak = /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
-                         (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized));
+    const isHourlyPeak = !isProductivityCommand && !isPagosProgramados && (
+        /\b(a que hora[s]?|hora[s]? pico|horas de mayor venta|momento de mayor venta|horario[s]? de venta|hora con mas venta|pico[s]? de venta|mayor cantidad de venta)\b/i.test(normalized) ||
+        (/\b(hora|horas|horario)\b/i.test(normalized) && /\b(venta|ventas|pico|mayor|mas)\b/i.test(normalized))
+    );
 
     // 7.1 Detección de Día de Mayor / Menor Venta del Mes, Rango o Día de la Semana
     // Ej. "En mes de octubre que dia fue el de mayor venta?", "Que dia de la semana vendió mas miraflores"
-    const isPeakDay = !isHourlyPeak && !isSolar && !hasExplicitTankNoun && (
+    const isPeakDay = !isProductivityCommand && !isPagosProgramados && !isHourlyPeak && !isSolar && !hasExplicitTankNoun && (
         /\b(que\s+dia|cual\s+dia|cual\s+fue\s+el\s+dia|dia\s+de\s+la\s+semana|dias?\s+de\s+la\s+semana|dias?\s+de\s+mayor|dias?\s+de\s+menor|dia\s+con\s+mas|dia\s+con\s+menos|mejor\s+dia|peor\s+dia|dia\s+record|dia\s+pico|dia\s+que\s+mas|dia\s+que\s+menos)\b/i.test(normalized) &&
         /\b(venta|ventas|vendio|vendieron|mayor|menor|mas|menos|mejor|peor|record|pico|galon(?:es|aje)?)\b/i.test(normalized)
     );
     const peakDayOrder = /\b(menor|menos|peor|baja|minima)\b/i.test(normalized) ? 'ASC' : 'DESC';
-
-    // 7.2 Detección de Pagos Programados / Control de Pagos y Vencimientos
-    const isPagosProgramados = /\b(pagos?\s+programados?|pagos?\s+pendientes?|cuales\s+son\s+los\s+pagos?|que\s+pagos?\s+(?:hay|tenemos|vienen|tocan)|recordatorios?\s+de\s+pagos?|control\s+de\s+pagos?|vencimientos?\s+de\s+pagos?|proximos?\s+pagos?)\b/i.test(normalized);
 
     // 8. Detección de consultas administrativas y financieras de Andelsa / Nova SaaS (sys.sipesv.com)
     const hasExplicitBankOrChequeraWords = /\b(chequera|chequeras|cheques?\s+disponibles?|saldo\s+en\s+chequeras?|cuentas?\s+de\s+cheques?|saldos?\s+(?:en\s+|de\s+)?bancos?|saldos?\s+bancarios?|cuentas?\s+bancarias?)\b/i.test(normalized);
     const isAndelsaMention = /\b(andelsa|planta andelsa|empresa andelsa)\b/i.test(normalized) ||
                              (matchedStation && matchedStation.id === 'ANDELSA');
     const isSysSaasMention = /\b(sys\.sipesv|sistema saas|nova saas|saas)\b/i.test(normalized);
-    const isAndelsaRelated = (isAndelsaMention || isSysSaasMention) && !hasExplicitBankOrChequeraWords;
+    const isAndelsaRelated = !isProductivityCommand && !isPagosProgramados && (isAndelsaMention || isSysSaasMention) && !hasExplicitBankOrChequeraWords;
 
     const isAndelsaInventario = isAndelsaRelated && /\b(inventario|inventarios|stock|existencia|existencias|kardex|almacen)\b/i.test(normalized);
     const isAndelsaCostos = isAndelsaRelated && /\b(costo|costos|margen|margenes|utilidad|ganancia)\b/i.test(normalized);
@@ -886,30 +924,30 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     );
 
     // 8.1 Nuevos Intents Ejecutivos Deterministas: Tanques, Pedidos Puma, Rentabilidad EBITDA, Tránsito/Vales y Chequera
-    let isPedidosPuma = !isAndelsaRelated && !isPagosProgramados && (
+    let isPedidosPuma = !isProductivityCommand && !isAndelsaRelated && !isPagosProgramados && (
         /\b(pedidos?\s+puma|ordenes?\s+puma|portal\s+puma|pedidos?\s+de\s+combustible|pipas?\s+en\s+(?:ruta|transito|camino)|cisternas?\s+en\s+(?:ruta|transito|camino)|pedidos?\s+retenidos?|ordenes?\s+retenidas?|estado\s+de\s+(?:los\s+)?pedidos?|que\s+pedidos?\s+hay|pipas?\s+pendientes?|pedidos?\s+programados?)\b/i.test(normalized)
     );
 
-    let isTanques = !isAndelsaRelated && !isSolar && !isPedidosPuma && (
+    let isTanques = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && !isSolar && !isPedidosPuma && (
         /\b(tanques?|nivel\s+de\s+combustible|niveles\s+de\s+combustible|inventario\s+de\s+combustible|inventario\s+en\s+tanques?|stock\s+de\s+combustible|stock\s+en\s+tanques?|ullage|espacio\s+vacio|capacidad\s+de\s+descarga|quiebre\s+de\s+stock|falta\s+combustible|urge\s+pedir|emergencia\s+de\s+combustible)\b/i.test(normalized) ||
         (/\bautonomia\b/i.test(normalized) && !isSolar)
     );
 
-    let isTransitoVales = !isAndelsaRelated && (
+    let isTransitoVales = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && (
         /\b(dinero\s+en\s+transito|efectivo\s+en\s+transito|remesas?\s+en\s+transito|remesas?\s+pendientes?|remesas?\s+sin\s+abonar|vales?\s+sin\s+facturar|vales?\s+pendientes?|creditos?\s+sin\s+dte|creditos?\s+sin\s+facturar|vales?\s+vencidos?)\b/i.test(normalized)
     );
 
-    let isChequera = /\b(chequera|chequeras|cheques?\s+disponibles?|saldos?\s+(?:en\s+|de\s+)?chequeras?|cuentas?\s+de\s+cheques?)\b/i.test(normalized);
-    const hasAccountFilterIntent = !isTransitoVales && !isAndelsaCxc && (Boolean(matchedAccountHolder) || Boolean(matchedAccountNumber)) &&
+    let isChequera = !isProductivityCommand && !isPagosProgramados && /\b(chequera|chequeras|cheques?\s+disponibles?|saldos?\s+(?:en\s+|de\s+)?chequeras?|cuentas?\s+de\s+cheques?)\b/i.test(normalized);
+    const hasAccountFilterIntent = !isProductivityCommand && !isPagosProgramados && !isTransitoVales && !isAndelsaCxc && (Boolean(matchedAccountHolder) || Boolean(matchedAccountNumber)) &&
         /\b(saldos?|cuentas?|bancos?|chequeras?|cheques?|disponible)\b/i.test(normalized);
-    const isBancosGlobal = !isChequera && !isTransitoVales && !isAndelsaRelated && (
+    const isBancosGlobal = !isProductivityCommand && !isPagosProgramados && !isChequera && !isTransitoVales && !isAndelsaRelated && (
         (!matchedBank && /\b(saldos?\s+(?:en\s+|de\s+)?bancos?|saldos?\s+bancarios?|cuentas?\s+bancarias?|cuanto\s+(?:dinero\s+)?hay\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|cuanto\s+tenemos\s+en\s+(?:los\s+|las\s+)?(?:bancos?|cuentas?)|disponible\s+en\s+bancos?|total\s+en\s+bancos?|liquidez\s+bancaria)\b/i.test(normalized)) ||
         (hasAccountFilterIntent && !matchedBank)
     );
 
     // 8.2 Detección de Venta de Tienda por Línea / Producto o Detalle de Tienda de Estación Específica
     // Ej. "Vent cigarros la loma", "Detalle venta de tienda la loma", "ventas por linea super 7 costa del sol"
-    const isTiendaLinea = !isAndelsaRelated && !isChequera && !isBancosGlobal && !matchedBank && (
+    const isTiendaLinea = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && !isChequera && !isBancosGlobal && !matchedBank && (
         Boolean(matchedStoreLine) ||
         (isTiendas && Boolean(matchedStation)) ||
         (isTiendas && /\b(detalle|desglose|linea|lineas|categoria|categorias|rubro|rubros|producto|productos)\b/i.test(normalized))
@@ -931,34 +969,34 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
 
     const hasExplicitCompetenciaWord = /\b(competencia|competidores|competidor|dgehm|precios?\s+competencia|precios?\s+de\s+(?:la\s+)?competencia|precios?\s+del?\s+mercado|comparativo\s+de\s+precios|comparar\s+precios|monitoreo\s+de\s+precios)\b/i.test(normalized);
     const hasAuditCashWords = /\b(descuadre|descuadres|merma|mermas|faltante|sobrante|cuadrado|cierre|cierres)\b/i.test(normalized);
-    const hasFuelPriceIntent = !isAndelsaRelated && !isSolar && !isTanques && !isPedidosPuma && !matchedBank && !hasAuditCashWords && (
+    const hasFuelPriceIntent = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && !isSolar && !isTanques && !isPedidosPuma && !matchedBank && !hasAuditCashWords && (
         /\b(precios?|tarifas?|a\s+como\s+esta|a\s+como\s+tienen|cuanto\s+cuesta|cuanto\s+vale)\b/i.test(normalized) ||
         /\b(mas\s+barat[oa]s?|mas\s+car[oa]s?|menor\s+precio|mayor\s+precio|mejor\s+precio|precios?\s+bajos?)\b/i.test(normalized)
     );
-    const hasCompetitorBrandIntent = !isAndelsaRelated && !matchedBank && Boolean(matchedCompetitorBrand) &&
+    const hasCompetitorBrandIntent = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && !matchedBank && Boolean(matchedCompetitorBrand) &&
         !/\b(bancos?|chequera|cheques?|saldo)\b/i.test(normalized);
 
-    let isCompetencia = hasExplicitCompetenciaWord || hasFuelPriceIntent || hasCompetitorBrandIntent;
+    let isCompetencia = !isProductivityCommand && !isPagosProgramados && (hasExplicitCompetenciaWord || hasFuelPriceIntent || hasCompetitorBrandIntent);
     const onlyCheaper = /\b(mas\s+barat[oa]s?|menor\s+precio|precios?\s+mas\s+bajos?|abajo\s+de\s+nosotros|debajo\s+de\s+nosotros|mejor\s+precio|solo\s+barat[oa]s?)\b/i.test(normalized);
     const competenciaServiceType = /\b(servicio\s+completo|completo|full\s+service)\b/i.test(normalized)
         ? 'SC'
         : (/\b(autoservicio|auto\s+servicio)\b/i.test(normalized) ? 'AS' : 'ALL');
 
-    let isRentabilidad = !isAndelsaRelated && !isCompetencia && (
+    let isRentabilidad = !isProductivityCommand && !isPagosProgramados && !isAndelsaRelated && !isCompetencia && (
         /\b(rentabilidad|ebitda|margen\s+neto|margen\s+operativo|margen\s+bruto|utilidad\s+operativa|utilidad\s+por\s+estacion|ganancia\s+por\s+estacion|estado\s+de\s+resultados|p&l)\b/i.test(normalized)
     );
 
     // 10. Detección de auditoría / descuadres (excluyendo consultas de diferencia de precios de competencia)
-    const isAlertas = !isCompetencia && !isTransitoVales && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
+    const isAlertas = !isProductivityCommand && !isPagosProgramados && !isCompetencia && !isTransitoVales && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
 
     // 11. Detección de rankings o comparativas de ventas (excluyendo comparativas de precios, tanques o rentabilidad)
-    const isRanking = !isCompetencia && !isTanques && !isRentabilidad && (
+    const isRanking = !isProductivityCommand && !isPagosProgramados && !isCompetencia && !isTanques && !isRentabilidad && (
         /\b(cual|quien|que estacion|estacion que|estaciones que)\b.*(mas|menos|mayor|menor|lider|top|primer)/.test(normalized) ||
         /\b(top ventas|ranking|mayor venta|mas vendio|menos vendio)\b/.test(normalized)
     );
 
     // RESOLUCIÓN DE CONTEXTO CONVERSACIONAL MULTI-TURNO
-    if (userContext) {
+    if (userContext && !isProductivityCommand && !isPagosProgramados) {
         const wantsGlobalScope = /\b(toda\s+la\s+red|todas\s+las\s+estaciones|en\s+general|global|red\s+completa|todas)\b/i.test(normalized);
         const mentionsExplicitSalesWords = /\b(venta|ventas|vendio|vendieron|galon|galones|galonaje|cierre|cierres|chequera|bancos?|saldo)\b/i.test(normalized);
 
@@ -1079,6 +1117,11 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         isPeakDay,
         peakDayOrder,
         isPagosProgramados,
+        isAsignarTarea,
+        isConsultaTareas,
+        isAgendarEvento,
+        isEventosAgenda,
+        isCumpleanos,
         matchedCompetitorBrand,
         isCompetencia,
         onlyCheaper,

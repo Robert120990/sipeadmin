@@ -174,15 +174,15 @@
     "semantic_hash": ""
   },
   "backend/routes/tasks.js": {
-    "mtime": 1792116150.2222943,
-    "seen": 1792116550.1589253,
-    "ast_hash": "098e5735112e4fa85a7987ac51a6fb91",
+    "mtime": 1795216494.1290803,
+    "seen": 1795217774.702939,
+    "ast_hash": "8605bb68bc586e31719914c430e2106b",
     "semantic_hash": ""
   },
   "backend/routes/telegram.js": {
-    "mtime": 1795215039.3527617,
-    "seen": 1795215774.6791563,
-    "ast_hash": "4c05e10387bbba0474d7629d99510caa",
+    "mtime": 1795216349.613799,
+    "seen": 1795217774.702939,
+    "ast_hash": "f00403f8dc7c6451a53576e7e13a2796",
     "semantic_hash": ""
   },
   "backend/scripts/backup-db.js": {
@@ -414,9 +414,9 @@
     "semantic_hash": "24b627d2d3bd35d6b635f2dc41da149b"
   },
   "frontend/package.json": {
-    "mtime": 1795215759.267828,
-    "seen": 1795215774.6791563,
-    "ast_hash": "5a091609c08d19b124065e89220d91c5",
+    "mtime": 1795217759.4947066,
+    "seen": 1795217774.702939,
+    "ast_hash": "6f08ffaed4b0e9eb773013c142ba0895",
     "semantic_hash": ""
   },
   "frontend/public/sw.js": {
@@ -474,9 +474,9 @@
     "semantic_hash": "5c1de52681d97ce9e7b1f5f1815b3585"
   },
   "frontend/src/components/NotificationBell.jsx": {
-    "mtime": 1792453208.3158095,
-    "seen": 1792453416.2319262,
-    "ast_hash": "e97bf3837c064f4534f928115cd1cb2c",
+    "mtime": 1795216940.6087196,
+    "seen": 1795217774.702939,
+    "ast_hash": "7566e141b67ea41d876efdde5cce20e1",
     "semantic_hash": ""
   },
   "frontend/src/components/ReportPreviewModal.jsx": {
@@ -540,9 +540,9 @@
     "semantic_hash": ""
   },
   "frontend/src/context/NotificationContext.jsx": {
-    "mtime": 1794616991.3397255,
-    "seen": 1794617441.5500395,
-    "ast_hash": "fa83abca83d871dd49976728a93460c0",
+    "mtime": 1795216765.651141,
+    "seen": 1795217774.702939,
+    "ast_hash": "13343c024ac795103f20519f2d89d163",
     "semantic_hash": ""
   },
   "frontend/src/data/dgehm_estaciones.json": {
@@ -750,9 +750,9 @@
     "semantic_hash": "1088d63d992d35fd46867954e9977fe4"
   },
   "frontend/src/pages/Dashboard.jsx": {
-    "mtime": 1795206981.4705026,
-    "seen": 1795207125.2273111,
-    "ast_hash": "45ad86b52fbef6d120f3adca670becc8",
+    "mtime": 1795217574.1180558,
+    "seen": 1795217774.702939,
+    "ast_hash": "f5642f841cf4292397649dfbf6617cce",
     "semantic_hash": ""
   },
   "frontend/src/pages/DashboardLayout.jsx": {
@@ -918,10 +918,10 @@
     "semantic_hash": "f493e315d56660ea737fb398c0052599"
   },
   "frontend/src/pages/Tareas.jsx": {
-    "mtime": 1791408358.561739,
-    "seen": 1791822880.7085679,
-    "ast_hash": "4f19518f5045ed51d3fdfa818e2f1a92",
-    "semantic_hash": "4f19518f5045ed51d3fdfa818e2f1a92"
+    "mtime": 1795217465.6888025,
+    "seen": 1795217774.702939,
+    "ast_hash": "f53d0cd1a420514a61f04cd190e58e0f",
+    "semantic_hash": ""
   },
   "frontend/src/pages/TelegramUsers.jsx": {
     "mtime": 1795215069.5808294,
@@ -1614,21 +1614,21 @@
     "semantic_hash": ""
   },
   "backend/services/mibotNotifierService.js": {
-    "mtime": 1795209006.8926215,
-    "seen": 1795212593.8326213,
-    "ast_hash": "a0343b711129e0df119d631e16382211",
+    "mtime": 1795217631.9592516,
+    "seen": 1795217774.702939,
+    "ast_hash": "2b1cec5be3437c1805ce37c4a8db9e2b",
     "semantic_hash": ""
   },
   "backend/test/mibotNotifier.test.js": {
-    "mtime": 1795209565.7416222,
-    "seen": 1795212593.8326213,
-    "ast_hash": "4c15ebb082fa35539db42f33c25947c1",
+    "mtime": 1795217720.2711039,
+    "seen": 1795217774.702939,
+    "ast_hash": "03dacb6408b9603ce71802fc20438524",
     "semantic_hash": ""
   },
   "frontend/src/components/MibotProgramarModal.jsx": {
-    "mtime": 1795209240.125213,
-    "seen": 1795212593.8326213,
-    "ast_hash": "c86c5d200f67307c9e1c38d912689490",
+    "mtime": 1795216668.9442704,
+    "seen": 1795217774.702939,
+    "ast_hash": "a05e82d5fbea9085f02cf85d7e90c667",
     "semantic_hash": ""
   },
   "backend/test/telegramFeedbackImprovements.test.js": {

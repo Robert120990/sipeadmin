@@ -11,6 +11,14 @@ const {
 
 const MIBOT_TIMEZONE = 'America/El_Salvador';
 
+let realtimeIo = null;
+function setRealtimeIo(ioInstance) {
+    if (ioInstance) realtimeIo = ioInstance;
+}
+function getRealtimeIo() {
+    return realtimeIo;
+}
+
 const MIBOT_TIPOS = ['RECORDATORIO_PAGO', 'TAREA', 'VALIDACION', 'REUNION'];
 const MIBOT_FRECUENCIAS = ['UNA_VEZ', 'DIARIO_HASTA_PAGAR', 'DIARIO', 'SEMANAL'];
 const MIBOT_ESTADOS = ['PROGRAMADO', 'ENVIADO', 'COMPLETADO', 'CANCELADO'];
@@ -1267,6 +1275,13 @@ async function handleMibotCallbackQuery({
                     ).catch(() => {});
                 }
             }
+            if (realtimeIo && (newEstadoEntrega === 'VISTO' || newEstadoEntrega === 'VALIDADO')) {
+                realtimeIo.emit('tasks:changed', {
+                    action: 'updated',
+                    taskId: linkedTaskId,
+                    source: 'telegram_mibot'
+                });
+            }
         } catch (syncTaskErr) {
             console.warn('[MiBot] Aviso sincronizando estado de tarea desde Telegram:', syncTaskErr.message);
         }
@@ -1518,11 +1533,213 @@ async function processDueMibotSchedules({
 
 let mibotCronTask = null;
 let isMibotTickRunning = false;
+let mibotDigestCronTask = null;
+let isMibotDigestRunning = false;
+const digestTableInitPromises = new WeakMap();
+
+/**
+ * Asegura la tabla idempotente de control de envíos del resumen matutino de agenda
+ */
+async function ensureMibotDigestTable(db) {
+    if (!db) return;
+    if (digestTableInitPromises.has(db)) {
+        return digestTableInitPromises.get(db);
+    }
+    const p = db.query(`
+        CREATE TABLE IF NOT EXISTS mibot_daily_digest_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            telegram_usuario_id INT NOT NULL,
+            digest_date DATE NOT NULL,
+            items_count INT NOT NULL DEFAULT 0,
+            sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_mibot_digest_user_day (telegram_usuario_id, digest_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `).catch((err) => {
+        digestTableInitPromises.delete(db);
+        throw err;
+    });
+    digestTableInitPromises.set(db, p);
+    return p;
+}
+
+/**
+ * Envía un resumen matutino proactivo (1 vez por día y usuario, deduplicado) con tareas pendientes,
+ * eventos programados del día y alertas de Control de Pagos (si el usuario tiene acceso).
+ */
+async function processMorningAgendaDigest({
+    db = null,
+    externalDb = null,
+    sendTelegramFn = sendTelegramMessage,
+    nowSqlOverride = null
+} = {}) {
+    const conn = db || getDb();
+    if (!conn) return { sent: 0, skipped: 0 };
+    const extConn = externalDb !== undefined ? externalDb : getExternalDb();
+
+    await ensureMibotSchema(conn);
+    await ensureMibotDigestTable(conn);
+
+    const nowSv = nowSqlOverride || getElSalvadorNowSql();
+    const todaySv = String(nowSv).slice(0, 10);
+
+    const [candidates] = await conn.query(
+        `SELECT tu.id, tu.telegram_user_id, tu.first_name, tu.last_name, tu.user_id,
+                tu.permiso_saldos_banco, tu.mibot_pagos, tu.mibot_tareas, tu.mibot_reuniones,
+                u.nombre AS sipe_nombre, u.role_id, r.name AS role_name
+         FROM telegram_usuarios tu
+         LEFT JOIN users u ON tu.user_id = u.id
+         LEFT JOIN roles r ON u.role_id = r.id
+         LEFT JOIN mibot_daily_digest_log dl
+                ON dl.telegram_usuario_id = tu.id AND dl.digest_date = ?
+         WHERE tu.activo = 1
+           AND COALESCE(tu.recibir_mibot, 1) = 1
+           AND dl.id IS NULL
+           AND (u.id IS NULL OR u.status = 'active' OR u.status IS NULL)`,
+        [todaySv]
+    );
+
+    if (!candidates || candidates.length === 0) {
+        return { sent: 0, skipped: 0 };
+    }
+
+    // Precargar resumen de pagos vencidos / de hoy una sola vez para usuarios con permiso de pagos
+    let pagosDueSummary = null;
+    if (extConn) {
+        try {
+            const [pRows] = await extConn.query(
+                `SELECT COUNT(*) AS cnt, COALESCE(SUM(b.monto), 0) AS total
+                 FROM web_rc_recordatorios_vencimientos a
+                 INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id
+                 WHERE b.activo = 1 AND a.estado = 'P' AND a.vencimiento <= ?`,
+                [todaySv]
+            );
+            pagosDueSummary = {
+                cnt: Number(pRows?.[0]?.cnt || 0),
+                total: Number(pRows?.[0]?.total || 0)
+            };
+        } catch (_) {
+            pagosDueSummary = null;
+        }
+    }
+
+    let sent = 0;
+    let skipped = 0;
+
+    for (const user of candidates) {
+        try {
+            const userTasks = [];
+            if (user.user_id && Boolean(user.mibot_tareas ?? 1)) {
+                const [tRows] = await conn.query(
+                    `SELECT id, titulo, prioridad,
+                            DATE_FORMAT(fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento,
+                            TIME_FORMAT(hora_limite, '%H:%i') AS hora_limite
+                     FROM tasks
+                     WHERE assigned_to = ?
+                       AND estado NOT IN ('completada', 'cancelada')
+                       AND fecha_vencimiento <= ?
+                     ORDER BY fecha_vencimiento ASC, id DESC
+                     LIMIT 6`,
+                    [user.user_id, todaySv]
+                );
+                userTasks.push(...(tRows || []));
+            }
+
+            const [evtRows] = await conn.query(
+                `SELECT p.id, p.tipo, p.titulo,
+                        COALESCE(p.proximo_envio_at, p.programado_para) AS fecha_prog
+                 FROM mibot_programaciones_destinatarios d
+                 INNER JOIN mibot_programaciones p ON d.programacion_id = p.id
+                 WHERE d.telegram_usuario_id = ?
+                   AND p.estado IN ('PROGRAMADO', 'ENVIADO')
+                   AND DATE(COALESCE(p.proximo_envio_at, p.programado_para)) = ?
+                 ORDER BY COALESCE(p.proximo_envio_at, p.programado_para) ASC
+                 LIMIT 6`,
+                [user.id, todaySv]
+            );
+
+            const canPagosDigest = Boolean(user.mibot_pagos ?? 1) && (
+                Number(user.role_id) === 1 ||
+                user.role_name === 'Administrator' ||
+                user.role_name === 'Super Administrator' ||
+                Boolean(user.permiso_saldos_banco)
+            );
+            const hasPagos = canPagosDigest && pagosDueSummary && pagosDueSummary.cnt > 0;
+            const totalItems = userTasks.length + (evtRows?.length || 0) + (hasPagos ? 1 : 0);
+
+            if (totalItems === 0) {
+                skipped += 1;
+                continue;
+            }
+
+            const nombre = escapeHtml(
+                `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.sipe_nombre || 'Equipo SIPE'
+            );
+            const lines = [
+                `☀️ <b>Buenos días, ${nombre} · Agenda del Día (${formatDateOnlyDMY(todaySv)})</b>`,
+                `━━━━━━━━━━━━━━━━━━━━━`
+            ];
+
+            if (userTasks.length > 0) {
+                lines.push('');
+                lines.push(`📋 <b>Tareas pendientes para hoy o atrasadas (${userTasks.length}):</b>`);
+                userTasks.forEach((t) => {
+                    const due = t.fecha_vencimiento < todaySv ? `🔴 Atrasada (${formatDateOnlyDMY(t.fecha_vencimiento)})` : `📅 Hoy${t.hora_limite ? ` ${t.hora_limite}` : ''}`;
+                    lines.push(`• <b>#${t.id}</b> ${escapeHtml(t.titulo)} — <i>${due}</i>`);
+                });
+            }
+
+            if (evtRows && evtRows.length > 0) {
+                lines.push('');
+                lines.push(`🗓️ <b>Eventos y recordatorios MiBot de hoy (${evtRows.length}):</b>`);
+                evtRows.forEach((ev) => {
+                    const meta = TIPO_META[ev.tipo] || TIPO_META.RECORDATORIO_PAGO;
+                    lines.push(`• ${meta.emoji} <b>${escapeHtml(ev.titulo)}</b> — <i>${formatDisplayDateTimeSv(ev.fecha_prog)}</i>`);
+                });
+            }
+
+            if (hasPagos) {
+                lines.push('');
+                lines.push(`💳 <b>Control de Pagos:</b> <code>${pagosDueSummary.cnt}</code> compromiso(s) vencidos o de hoy por <b>${formatMoney(pagosDueSummary.total)}</b>.`);
+            }
+
+            lines.push('');
+            lines.push(`<i>Usa los botones rápidos o escribe /tareas, /agenda o /pagos para gestionar tus pendientes.</i>`);
+
+            const markup = {
+                inline_keyboard: [
+                    [
+                        { text: '📋 Ver Mis Tareas', callback_data: 'tg_tsk:l:mine' },
+                        { text: '🗓️ Agenda Hoy', callback_data: 'tg_evt:r:hoy' }
+                    ],
+                    ...(hasPagos ? [[{ text: '💳 Control de Pagos', callback_data: 'tg_pago:f:hoy' }]] : [])
+                ]
+            };
+
+            const res = await sendTelegramFn(user.telegram_user_id, lines.join('\n'), markup);
+            if (res) {
+                await conn.query(
+                    `INSERT IGNORE INTO mibot_daily_digest_log (telegram_usuario_id, digest_date, items_count)
+                     VALUES (?, ?, ?)`,
+                    [user.id, todaySv, totalItems]
+                );
+                sent += 1;
+            } else {
+                skipped += 1;
+            }
+        } catch (userErr) {
+            console.warn(`[MiBot Digest] Aviso preparando digest para usuario #${user.id}:`, userErr.message);
+            skipped += 1;
+        }
+    }
+
+    return { sent, skipped };
+}
 
 /**
  * Inicializa el planificador automático de MiBot (se ejecuta cada minuto)
  */
-function initMibotScheduler() {
+function initMibotScheduler(io = null) {
+    if (io) setRealtimeIo(io);
     if (mibotCronTask) return mibotCronTask;
 
     const db = getDb();
@@ -1549,6 +1766,23 @@ function initMibotScheduler() {
         }
     });
 
+    if (!mibotDigestCronTask) {
+        mibotDigestCronTask = cron.schedule('30 7 * * *', async () => {
+            if (isMibotDigestRunning) return;
+            isMibotDigestRunning = true;
+            try {
+                const res = await processMorningAgendaDigest();
+                if (res.sent > 0) {
+                    console.log(`[MiBot Digest] Resumen matutino enviado a ${res.sent} usuario(s).`);
+                }
+            } catch (err) {
+                console.error('[MiBot Digest] Error enviando resumen matutino:', err.message);
+            } finally {
+                isMibotDigestRunning = false;
+            }
+        }, { timezone: MIBOT_TIMEZONE });
+    }
+
     return mibotCronTask;
 }
 
@@ -1559,6 +1793,8 @@ module.exports = {
     MIBOT_ESTADOS,
     TIPO_META,
     FRECUENCIA_LABELS,
+    setRealtimeIo,
+    getRealtimeIo,
     getElSalvadorNowParts,
     getElSalvadorNowSql,
     normalizeScheduleDatetime,
@@ -1566,6 +1802,7 @@ module.exports = {
     computeNextScheduleSql,
     formatDisplayDateTimeSv,
     ensureMibotSchema,
+    ensureMibotDigestTable,
     resolveRecipientDisplayName,
     formatMibotPersonalMessage,
     buildMibotInlineKeyboard,
@@ -1580,5 +1817,6 @@ module.exports = {
     getActiveMibotCountsByVencimientos,
     getActiveMibotSummaryByTaskIds,
     processDueMibotSchedules,
+    processMorningAgendaDigest,
     initMibotScheduler
 };

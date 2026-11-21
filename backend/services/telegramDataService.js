@@ -1499,74 +1499,22 @@ const getRankingDiasVentasData = async ({
 };
 
 /**
- * Consulta de Pagos Programados y Vencimientos Pendientes (Control de Pagos)
+ * Consulta de Pagos Programados y Vencimientos Pendientes (Control de Pagos enriquecido con abonos/saldos)
  */
-const getPagosProgramadosData = async ({ limit = 20 } = {}) => {
-    const cacheKey = `pagos:programados:${limit}`;
+const getPagosProgramadosData = async ({ limit = 200, filterMode = 'resumen', ubicacionFilter = null, searchTerm = null, startDate = null, endDate = null } = {}) => {
+    const cacheKey = `pagos:programados:${limit}:${filterMode}:${ubicacionFilter || ''}:${searchTerm || ''}:${startDate || ''}:${endDate || ''}`;
     const cached = getCachedQuery(cacheKey);
     if (cached) return cached;
 
-    const today = getDateStr(0);
-    const next7 = getDateStr(7);
-    const items = [];
-
-    try {
-        const externalDb = await getExternalDb().catch(() => null);
-        if (externalDb) {
-            const [rows] = await externalDb.query(`
-                SELECT
-                    v.id,
-                    v.id_recordatorio,
-                    r.descripcion,
-                    r.monto,
-                    r.repetir_desc,
-                    DATE_FORMAT(v.vencimiento, '%Y-%m-%d') as fecha_vencimiento,
-                    v.estado,
-                    COALESCE(v.forma_pago, r.forma_pago, '') as forma_pago
-                FROM web_rc_recordatorios_vencimientos v
-                INNER JOIN web_rc_recordatorios r ON v.id_recordatorio = r.id
-                WHERE r.activo = 1
-                  AND v.estado = 'P'
-                  AND v.vencimiento >= DATE_SUB(CURDATE(), INTERVAL 15 DAY)
-                ORDER BY v.vencimiento ASC, r.monto DESC
-                LIMIT ?
-            `, [Number(limit) || 20]);
-
-            (rows || []).forEach(r => {
-                items.push({
-                    id: r.id,
-                    descripcion: String(r.descripcion || 'Pago Programado').trim(),
-                    monto: Number(r.monto || 0),
-                    fecha_vencimiento: r.fecha_vencimiento || today,
-                    frecuencia: r.repetir_desc || 'Programado',
-                    forma_pago: r.forma_pago || null,
-                    origen: 'Control de Pagos'
-                });
-            });
-        }
-    } catch (errExt) {
-        console.warn('[TelegramBot] Error consultando web_rc_recordatorios_vencimientos:', errExt.message);
-    }
-
-    const vencidosOHoy = items.filter(i => i.fecha_vencimiento <= today);
-    const proximos7Dias = items.filter(i => i.fecha_vencimiento > today && i.fecha_vencimiento <= next7);
-    const posteriores = items.filter(i => i.fecha_vencimiento > next7);
-
-    const totalPendienteUsd = items.reduce((s, i) => s + i.monto, 0);
-    const totalUrgenteUsd = vencidosOHoy.reduce((s, i) => s + i.monto, 0);
-
-    const result = {
-        fecha_consulta: today,
-        total_pendiente_usd: Math.round(totalPendienteUsd * 100) / 100,
-        total_urgente_usd: Math.round(totalUrgenteUsd * 100) / 100,
-        cantidad_total: items.length,
-        cantidad_urgentes: vencidosOHoy.length,
-        cantidad_proximos_7d: proximos7Dias.length,
-        vencidos_o_hoy: vencidosOHoy,
-        proximos_7_dias: proximos7Dias,
-        posteriores,
-        pagos: items
-    };
+    const { getControlPagosDetailedData } = require('./telegramProductivityService');
+    const result = await getControlPagosDetailedData({
+        filterMode,
+        ubicacionFilter,
+        searchTerm,
+        startDate,
+        endDate,
+        limit
+    });
 
     setCachedQuery(cacheKey, result, 30000);
     return result;

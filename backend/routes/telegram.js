@@ -13,8 +13,15 @@ const {
     getMibotProgramacionById,
     normalizeScheduleDatetime,
     getElSalvadorNowSql,
-    MIBOT_ESTADOS
+    MIBOT_ESTADOS,
+    setRealtimeIo
 } = require('../services/mibotNotifierService');
+
+router.use((req, _res, next) => {
+    const io = req.app?.get('io') || req.io;
+    if (io) setRealtimeIo(io);
+    next();
+});
 const {
     getBotStatus,
     testTelegramConnection,

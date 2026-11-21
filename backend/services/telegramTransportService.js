@@ -91,11 +91,27 @@ const getMainReplyKeyboard = () => {
             [{ text: '📊 Precios Competencia' }, { text: '🚨 Alertas en Estaciones' }],
             [{ text: '🏦 Saldo en Banco' }, { text: '🧾 Saldo en Chequera' }],
             [{ text: '☀️ Paneles Solares' }, { text: '🏛️ Andelsa (sys)' }],
+            [{ text: '📋 Tareas & Agenda' }, { text: '💳 Control de Pagos' }],
             [{ text: 'ℹ️ Mi Perfil' }, { text: '❓ Ayuda' }]
         ],
         resize_keyboard: true,
         is_persistent: true
     };
+};
+
+/**
+ * Registra la lista oficial de comandos slash (/) en Telegram Bot API (best-effort)
+ */
+const setTelegramBotCommands = async (commands = []) => {
+    try {
+        const { token } = await getBotToken();
+        if (!token || !Array.isArray(commands) || commands.length === 0) return false;
+        await axios.post(`${TELEGRAM_API_BASE}${token}/setMyCommands`, { commands }, { timeout: 10000 });
+        return true;
+    } catch (err) {
+        console.warn('[TelegramBot] Aviso registrando setMyCommands:', redactSecrets(err.message));
+        return false;
+    }
 };
 
 /**
@@ -342,5 +358,6 @@ module.exports = {
     getTelegramWebhookInfo,
     answerCallbackQuery,
     editMessageReplyMarkup,
+    setTelegramBotCommands,
     getBotStatus
 };

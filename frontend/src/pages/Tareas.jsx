@@ -107,6 +107,7 @@ export default function Tareas() {
         prioridad: 'media',
         categoria: 'General',
         assigned_to: '',
+        assigned_to_ids: [],
         checklist: [],
         mibot_enabled: false,
         mibot_tipo: 'TAREA',
@@ -600,6 +601,28 @@ export default function Tareas() {
         }));
     };
 
+    const toggleExtraAssignedUser = (rawUserId) => {
+        const uid = Number(rawUserId);
+        if (!uid) return;
+        const linkedTgId = getLinkedTelegramIdForUser(uid);
+        setFormData(prev => {
+            const currentExtras = Array.isArray(prev.assigned_to_ids) ? prev.assigned_to_ids.map(Number) : [];
+            const exists = currentExtras.includes(uid);
+            const nextExtras = exists
+                ? currentExtras.filter(x => x !== uid)
+                : [...currentExtras, uid];
+            const nextMibotDests = !exists && linkedTgId
+                ? [...new Set([...prev.mibot_destinatario_ids, linkedTgId])]
+                : prev.mibot_destinatario_ids;
+            return {
+                ...prev,
+                assigned_to_ids: nextExtras,
+                mibot_enabled: (!exists && linkedTgId) ? true : prev.mibot_enabled,
+                mibot_destinatario_ids: nextMibotDests
+            };
+        });
+    };
+
     const toggleFormMibotDestinatario = (tgId) => {
         setFormData(prev => {
             const exists = prev.mibot_destinatario_ids.includes(tgId);
@@ -637,6 +660,7 @@ export default function Tareas() {
                 prioridad: task.prioridad || 'media',
                 categoria: task.categoria || 'General',
                 assigned_to: task.assigned_to || '',
+                assigned_to_ids: [],
                 checklist: Array.isArray(task.checklist) ? [...task.checklist] : [],
                 mibot_enabled: false,
                 mibot_tipo: task.mibot_summary?.tipo || 'TAREA',
@@ -660,6 +684,7 @@ export default function Tareas() {
                 prioridad: 'media',
                 categoria: 'Operaciones',
                 assigned_to: defaultAssigned,
+                assigned_to_ids: [],
                 checklist: [],
                 mibot_enabled: Boolean(linkedTgId),
                 mibot_tipo: 'TAREA',
@@ -694,8 +719,13 @@ export default function Tareas() {
             return;
         }
 
+        const allAssignees = editingTask
+            ? undefined
+            : [...new Set([formData.assigned_to, ...(formData.assigned_to_ids || [])].map(Number).filter(Boolean))];
+
         const payload = {
             ...formData,
+            ...(allAssignees ? { assigned_to_ids: allAssignees } : {}),
             mibot: formData.mibot_enabled ? {
                 enabled: true,
                 tipo: formData.mibot_tipo || 'TAREA',
@@ -711,6 +741,8 @@ export default function Tareas() {
         try {
             let savedTask = null;
             let savedMibot = null;
+            let multiCount = 1;
+            let multiAssigneesNames = null;
             if (editingTask) {
                 const res = await api.put(`/tasks/${editingTask.id}`, payload);
                 savedTask = res.data?.task;
@@ -720,12 +752,18 @@ export default function Tareas() {
                 const res = await api.post('/tasks', payload);
                 savedTask = res.data?.task;
                 savedMibot = res.data?.mibot;
+                multiCount = Number(res.data?.count || 1);
+                if (Array.isArray(res.data?.tasks) && res.data.tasks.length > 1) {
+                    multiAssigneesNames = res.data.tasks.map(t => t.assigned_user_name).filter(Boolean).join(', ');
+                }
                 addToast(res.data?.message || 'Tarea asignada y creada con éxito', 'success');
             }
             if (savedTask) {
                 setRecentAssignedCard({
                     task: savedTask,
                     mibot: savedMibot,
+                    multiCount,
+                    multiAssigneesNames,
                     timestamp: new Date().toISOString()
                 });
             }
@@ -1159,7 +1197,14 @@ export default function Tareas() {
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.85rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                                 <User size={14} color="var(--primary)" />
-                                <span>Asignado a: <strong style={{ color: 'var(--text-primary)' }}>{recentAssignedCard.task.assigned_user_name || 'Colaborador'}</strong></span>
+                                <span>
+                                    Asignado a:{' '}
+                                    <strong style={{ color: 'var(--text-primary)' }}>
+                                        {recentAssignedCard.multiAssigneesNames
+                                            ? `${recentAssignedCard.multiAssigneesNames} (${recentAssignedCard.multiCount} tareas)`
+                                            : (recentAssignedCard.task.assigned_user_name || 'Colaborador')}
+                                    </strong>
+                                </span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                                 <Calendar size={14} color="#f59e0b" />
@@ -2219,6 +2264,65 @@ export default function Tareas() {
                             )}
                         </select>
                     </div>
+
+                    {/* Asignación Multi-Usuario Adicional (solo en creación) */}
+                    {!editingTask && usersList.length > 1 && (
+                        <div className="span-2" style={{
+                            padding: '0.55rem 0.75rem',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border-color)',
+                            background: 'var(--bg-secondary)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.4rem'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                    <Users size={13} color="var(--primary)" />
+                                    Asignar también a más colaboradores (opcional)
+                                </span>
+                                {(formData.assigned_to_ids || []).length > 0 && (
+                                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38bdf8' }}>
+                                        +{(formData.assigned_to_ids || []).length} adicional(es)
+                                    </span>
+                                )}
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.38rem', maxHeight: '105px', overflowY: 'auto' }}>
+                                {usersList
+                                    .filter(u => Number(u.id) !== Number(formData.assigned_to))
+                                    .map(u => {
+                                        const isExtraSelected = (formData.assigned_to_ids || []).map(Number).includes(Number(u.id));
+                                        return (
+                                            <label
+                                                key={u.id}
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.35rem',
+                                                    padding: '0.24rem 0.5rem',
+                                                    borderRadius: '6px',
+                                                    fontSize: '0.74rem',
+                                                    cursor: 'pointer',
+                                                    userSelect: 'none',
+                                                    border: isExtraSelected ? '1px solid var(--primary)' : '1px solid var(--border-color)',
+                                                    background: isExtraSelected ? 'rgba(59, 130, 246, 0.14)' : 'var(--bg-card)',
+                                                    color: isExtraSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                                    fontWeight: isExtraSelected ? 600 : 400
+                                                }}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isExtraSelected}
+                                                    onChange={() => toggleExtraAssignedUser(u.id)}
+                                                    style={{ width: '14px', height: '14px' }}
+                                                />
+                                                <span>{u.nombre || u.username}{u.telegram_usuario_id ? ' 🤖' : ''}</span>
+                                            </label>
+                                        );
+                                    })}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Categoría */}
                     <div>

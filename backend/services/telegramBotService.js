@@ -44,8 +44,36 @@ const {
     getTelegramWebhookInfo,
     answerCallbackQuery,
     editMessageReplyMarkup,
+    setTelegramBotCommands,
     getBotStatus
 } = require('./telegramTransportService');
+
+const {
+    pendingTaskWizards,
+    clearProductivityWizards,
+    resolveCollaboratorCandidates,
+    parseMultiUserTaskInput,
+    createMultiUserTasksFromTelegram,
+    formatMultiTaskCreationResultMessage,
+    startTaskAssignmentWizard,
+    getTasksSummaryData,
+    formatTasksMessage,
+    getTasksInlineMarkup,
+    getEventosProgramadosData,
+    formatEventosProgramadosMessage,
+    getEventosInlineMarkup,
+    parseScheduleEventInput,
+    startEventScheduleWizard,
+    parseControlPagosQuery,
+    getControlPagosDetailedData,
+    formatControlPagosMessage,
+    getControlPagosInlineMarkup,
+    getCumpleanosData,
+    formatCumpleanosMessage,
+    getCumpleanosInlineMarkup,
+    handleActiveProductivityWizardMessage,
+    handleProductivityCallbackQuery
+} = require('./telegramProductivityService');
 
 const {
     queryMemoryCache,
@@ -490,6 +518,54 @@ const handleCallbackQuery = async (cq) => {
         } catch (mibotCbErr) {
             console.error('[TelegramBot] Error en callback de MiBot:', mibotCbErr.message);
             await answerCallbackQuery(cq.id, '⚠️ Error procesando tu respuesta en MiBot.');
+            return;
+        }
+    }
+
+    // Callbacks interactivos de Productividad (Tareas Multi-Usuario, Agenda Eventos, Control de Pagos, Cumpleaños) - fail-closed
+    if (
+        data.startsWith('tg_tsk:') ||
+        data.startsWith('tg_evt:') ||
+        data.startsWith('tg_pago:') ||
+        data.startsWith('tg_bday:')
+    ) {
+        try {
+            const db = getDb();
+            if (!db || !cq.from) {
+                await answerCallbackQuery(cq.id, '⛔ No fue posible verificar tu autorización.');
+                return;
+            }
+            const tgUser = await resolveTelegramUser(cq.from);
+            if (!tgUser || !tgUser.activo) {
+                await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                return;
+            }
+            const effPerms = await getUserEffectivePermissions(tgUser);
+            if (effPerms.inactiveInSipe) {
+                await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                return;
+            }
+            const externalDb = await getExternalDb().catch(() => null);
+            const accountingDb = await getAccountingDb().catch(() => null);
+            const handled = await handleProductivityCallbackQuery({
+                db,
+                externalDb,
+                accountingDb,
+                cq,
+                tgUser,
+                effPerms,
+                transport: {
+                    sendTelegramMessage,
+                    answerCallbackQuery,
+                    editMessageReplyMarkup,
+                    sendChatAction,
+                    getMainReplyKeyboard
+                }
+            });
+            if (handled) return;
+        } catch (prodCbErr) {
+            console.error('[TelegramBot] Error en callback de Productividad:', prodCbErr.message);
+            await answerCallbackQuery(cq.id, '⚠️ Error procesando tu solicitud.');
             return;
         }
     }
@@ -964,7 +1040,10 @@ const getUserEffectivePermissions = async (user) => {
             saldos_banco: false,
             saldos_chequera: false,
             alertas: false,
-            precios_competencia: false
+            precios_competencia: false,
+            tareas: false,
+            control_pagos: false,
+            cumpleanos: false
         };
     }
 
@@ -977,7 +1056,10 @@ const getUserEffectivePermissions = async (user) => {
             saldos_banco: Boolean(user.permiso_saldos_banco),
             saldos_chequera: Boolean(user.permiso_saldos_chequera),
             alertas: Boolean(user.permiso_alertas),
-            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
+            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
+            tareas: false,
+            control_pagos: Boolean(user.permiso_saldos_banco),
+            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
         };
     }
 
@@ -993,7 +1075,10 @@ const getUserEffectivePermissions = async (user) => {
             saldos_banco: Boolean(user.permiso_saldos_banco),
             saldos_chequera: Boolean(user.permiso_saldos_chequera),
             alertas: Boolean(user.permiso_alertas),
-            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
+            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
+            tareas: false,
+            control_pagos: Boolean(user.permiso_saldos_banco),
+            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
         };
     }
 
@@ -1020,7 +1105,10 @@ const getUserEffectivePermissions = async (user) => {
                 saldos_banco: Boolean(user.permiso_saldos_banco),
                 saldos_chequera: Boolean(user.permiso_saldos_chequera),
                 alertas: Boolean(user.permiso_alertas),
-                precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
+                precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
+                tareas: false,
+                control_pagos: Boolean(user.permiso_saldos_banco),
+                cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
             };
         }
 
@@ -1036,7 +1124,10 @@ const getUserEffectivePermissions = async (user) => {
                 saldos_banco: false,
                 saldos_chequera: false,
                 alertas: false,
-                precios_competencia: false
+                precios_competencia: false,
+                tareas: false,
+                control_pagos: false,
+                cumpleanos: false
             };
         }
 
@@ -1068,6 +1159,17 @@ const getUserEffectivePermissions = async (user) => {
             permsList.includes('/dashboard/consultas/estaciones/precios') ||
             permsList.includes('/dashboard/estrategia/combustible') ||
             permsList.includes('/dashboard/estrategia/torre-control');
+        const hasTareas = isAdmin ||
+            permsList.includes('manage_tasks') ||
+            permsList.includes('/dashboard/operaciones/tareas');
+        const hasControlPagos = isAdmin ||
+            hasBancos ||
+            permsList.includes('manage_recordatorios') ||
+            permsList.includes('/dashboard/operaciones/recordatorios');
+        const hasCumpleanos = isAdmin ||
+            hasVentas ||
+            hasAlertas ||
+            permsList.includes('/dashboard/consultas/otras/cumpleanos');
 
         return {
             isLinked: true,
@@ -1079,7 +1181,10 @@ const getUserEffectivePermissions = async (user) => {
             saldos_banco: hasBancos,
             saldos_chequera: hasChequera,
             alertas: hasAlertas,
-            precios_competencia: hasPreciosCompetencia
+            precios_competencia: hasPreciosCompetencia,
+            tareas: hasTareas,
+            control_pagos: hasControlPagos,
+            cumpleanos: hasCumpleanos
         };
     } catch (err) {
         console.error('[TelegramBot] Error resolviendo permisos heredados:', err.message);
@@ -1092,7 +1197,10 @@ const getUserEffectivePermissions = async (user) => {
             saldos_banco: Boolean(user.permiso_saldos_banco),
             saldos_chequera: Boolean(user.permiso_saldos_chequera),
             alertas: Boolean(user.permiso_alertas),
-            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas)
+            precios_competencia: Boolean(user.permiso_ventas || user.permiso_alertas),
+            tareas: false,
+            control_pagos: Boolean(user.permiso_saldos_banco),
+            cumpleanos: Boolean(user.permiso_ventas || user.permiso_alertas)
         };
     }
 };
@@ -1125,6 +1233,282 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         const fullText = (contextOptions.voicePrefix || '') + text;
         return sendTelegramResponseWithFeedback(cId, fullText, meta);
     });
+
+    // -0.4 Asignar Tareas a 1 o más colaboradores (Lenguaje Natural o Asistente Interactivo)
+    if (parsed.isAsignarTarea) {
+        const db = getDb();
+        const externalDb = await getExternalDb().catch(() => null);
+        const candidates = await resolveCollaboratorCandidates(db);
+        const parsedTask = parseMultiUserTaskInput(rawText, candidates);
+        const creatorSipeId = effectivePerms?.linkedUser?.id ? Number(effectivePerms.linkedUser.id) : (user?.user_id ? Number(user.user_id) : null);
+        const canManageTeam = Boolean(effectivePerms?.tareas || effectivePerms?.isAdmin);
+
+        if (parsedTask.isComplete) {
+            const assignsOther = parsedTask.assignees.some(a => !creatorSipeId || Number(a.user_id) !== creatorSipeId);
+            if (assignsOther && !canManageTeam) {
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Permiso denegado asignar tarea', 0);
+                await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para asignar tareas a otros colaboradores.', keyboard);
+                return true;
+            }
+            sendChatAction(chatId, 'typing').catch(() => {});
+            try {
+                const res = await createMultiUserTasksFromTelegram({
+                    db,
+                    externalDb,
+                    creatorTgUser: user,
+                    creatorEffPerms: effectivePerms,
+                    assignees: parsedTask.assignees,
+                    titulo: parsedTask.titulo,
+                    descripcion: rawText,
+                    fecha_vencimiento: parsedTask.fecha_vencimiento,
+                    hora_limite: parsedTask.hora_limite,
+                    prioridad: parsedTask.prioridad,
+                    categoria: parsedTask.categoria,
+                    enviar_ahora: true
+                });
+                await logTelegramQuery(
+                    user.telegram_user_id,
+                    rawText,
+                    `Tarea Multi-Usuario (${res.createdTasks.length}): ${parsedTask.titulo.slice(0, 80)}`,
+                    1
+                );
+                await sendTelegramMessage(
+                    chatId,
+                    (contextOptions.voicePrefix || '') + formatMultiTaskCreationResultMessage(res, parsedTask),
+                    keyboard
+                );
+                return true;
+            } catch (taskErr) {
+                await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error asignando tarea: ' + escapeHtml(taskErr.message), keyboard);
+                return true;
+            }
+        }
+
+        // Datos parciales (ej. "Asignar tarea a Corina y Raul" sin título -> abrir paso 2 directo; o abrir wizard completo)
+        if (parsedTask.assignees.length > 0 && !parsedTask.titulo) {
+            const assignsOther = parsedTask.assignees.some(a => !creatorSipeId || Number(a.user_id) !== creatorSipeId);
+            if (assignsOther && !canManageTeam) {
+                await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para asignar tareas a otros colaboradores.', keyboard);
+                return true;
+            }
+            const wiz = {
+                step: 'ENTER_TITLE',
+                candidates,
+                selectedKeys: parsedTask.assignees.map(a => a.key),
+                titulo: '',
+                descripcion: '',
+                prioridad: parsedTask.prioridad || 'media',
+                fecha_vencimiento: parsedTask.fecha_vencimiento,
+                hora_limite: parsedTask.hora_limite || '17:00',
+                categoria: parsedTask.categoria || 'Operaciones',
+                updatedAt: Date.now()
+            };
+            pendingTaskWizards.set(String(user.telegram_user_id), wiz);
+            const names = parsedTask.assignees.map(a => escapeHtml(a.nombre)).join(', ');
+            await sendTelegramMessage(
+                chatId,
+                (contextOptions.voicePrefix || '') +
+                `✍️ <b>ASIGNAR TAREA A: ${names}</b>\n\n` +
+                `Ahora escribe (o envía nota de voz con) el título de la tarea y plazo:\n` +
+                `<i>Ejemplo: "Revisar inventario de lubricantes mañana 10am"</i>\n<i>(o envía /cancelar)</i>`,
+                keyboard
+            );
+            return true;
+        }
+
+        await startTaskAssignmentWizard({
+            db,
+            chatId,
+            tgUser: user,
+            effPerms: effectivePerms,
+            transport: { sendTelegramMessage, getMainReplyKeyboard }
+        });
+        return true;
+    }
+
+    // -0.3 Programar Evento / Reunión / Recordatorio en MiBot
+    if (parsed.isAgendarEvento) {
+        const db = getDb();
+        const externalDb = await getExternalDb().catch(() => null);
+        const candidates = await resolveCollaboratorCandidates(db);
+        const parsedEvt = parseScheduleEventInput(rawText, candidates, user.id);
+
+        if (parsedEvt.isComplete) {
+            const creatorSipeId = effectivePerms?.linkedUser?.id ? Number(effectivePerms.linkedUser.id) : (user?.user_id ? Number(user.user_id) : null);
+            const includesOther = parsedEvt.participants.some(p => Number(p.telegram_usuario_id) !== Number(user.id));
+            if (includesOther && !effectivePerms?.tareas && !effectivePerms?.isAdmin) {
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Permiso denegado agendar evento grupal', 0);
+                await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso para agendar eventos a otros usuarios; solo recordatorios personales.', keyboard);
+                return true;
+            }
+            sendChatAction(chatId, 'typing').catch(() => {});
+            try {
+                const mibotService = require('./mibotNotifierService');
+                const actorUser = {
+                    id: creatorSipeId,
+                    nombre: effectivePerms?.linkedUser?.nombre || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Telegram',
+                    username: effectivePerms?.linkedUser?.username || user.telegram_username || 'telegram'
+                };
+                const res = await mibotService.createMibotProgramacion({
+                    db,
+                    externalDb,
+                    payload: {
+                        tipo: parsedEvt.tipo,
+                        titulo: parsedEvt.titulo.slice(0, 175),
+                        mensaje: rawText.trim(),
+                        destinatario_ids: parsedEvt.participants.map(p => Number(p.telegram_usuario_id)),
+                        enviar_ahora: false,
+                        programado_para: parsedEvt.programado_para,
+                        frecuencia: parsedEvt.frecuencia
+                    },
+                    actorUser,
+                    skipSystemNotification: true
+                });
+                const prog = res.programacion;
+                const meta = mibotService.TIPO_META[prog.tipo] || mibotService.TIPO_META.REUNION;
+                const destNames = (prog.destinatarios || []).map(d => escapeHtml(d.nombre_destinatario)).join(', ');
+                await logTelegramQuery(user.telegram_user_id, rawText, `Evento Programado: ${prog.titulo.slice(0, 80)}`, 1);
+                const msg = [
+                    `✅ <b>${meta.emoji} RECORDATORIO PROGRAMADO EN MIBOT</b>`,
+                    `━━━━━━━━━━━━━━━━━━━━━`,
+                    `📌 <b>${escapeHtml(prog.titulo)}</b>`,
+                    `• 🗓️ <b>Fecha / Hora:</b> ${mibotService.formatDisplayDateTimeSv(prog.programado_para)}`,
+                    `• 🔁 <b>Frecuencia:</b> ${mibotService.FRECUENCIA_LABELS[prog.frecuencia] || prog.frecuencia}`,
+                    `• 👥 <b>Destinatarios:</b> ${destNames}`,
+                    ``,
+                    `<i>MiBot te enviará el aviso personal con botones de confirmación en la fecha programada.</i>`
+                ].join('\n');
+                await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + msg, getEventosInlineMarkup('semana'));
+                return true;
+            } catch (evtErr) {
+                await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error programando evento: ' + escapeHtml(evtErr.message), keyboard);
+                return true;
+            }
+        }
+
+        const defaultTipo = /\breunion|junta|cita\b/i.test(parsed.normalized) ? 'REUNION' : 'TAREA';
+        await startEventScheduleWizard({
+            db,
+            chatId,
+            tgUser: user,
+            defaultTipo,
+            transport: { sendTelegramMessage }
+        });
+        return true;
+    }
+
+    // -0.2 Consultar Tareas Activas / Equipo / Vencidas
+    if (parsed.isConsultaTareas) {
+        const db = getDb();
+        const sipeUserId = effectivePerms?.linkedUser?.id ? Number(effectivePerms.linkedUser.id) : (user?.user_id ? Number(user.user_id) : null);
+        const canManageTeam = Boolean(effectivePerms?.tareas || effectivePerms?.isAdmin);
+        const candidates = canManageTeam ? await resolveCollaboratorCandidates(db) : [];
+        const personMatch = rawText.match(/\btareas\s+de\s+([a-záéíóúñÁÉÍÓÚÑ0-9_.-]+)/i);
+        let filterPersonQuery = null;
+        if (personMatch && canManageTeam) {
+            const pWord = normalizeText(personMatch[1]);
+            if (!['hoy', 'ayer', 'esta', 'equipo', 'todos', 'sipe'].includes(pWord)) {
+                const matchedCand = candidates.find(c => normalizeText(c.nombre).includes(pWord) || normalizeText(c.username || '').includes(pWord));
+                filterPersonQuery = matchedCand ? matchedCand.nombre.split(' ')[0] : personMatch[1];
+            }
+        }
+        const scope = /\b(vencidas?|atrasadas?)\b/i.test(parsed.normalized)
+            ? 'overdue'
+            : ((/\b(equipo|todas|todos)\b/i.test(parsed.normalized) || filterPersonQuery) && canManageTeam ? 'team' : 'mine');
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const tasksData = await getTasksSummaryData({
+                db,
+                sipeUserId,
+                canManageTeam,
+                scope,
+                filterPersonQuery
+            });
+            await logTelegramQuery(user.telegram_user_id, rawText, `Consulta Tareas (${tasksData.scope})`, 1);
+            await sendTelegramMessage(
+                chatId,
+                (contextOptions.voicePrefix || '') + formatTasksMessage(tasksData),
+                getTasksInlineMarkup(tasksData)
+            );
+            return true;
+        } catch (tErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error consultando tareas: ' + escapeHtml(tErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.1 Consultar Agenda y Eventos Programados (MiBot + Tareas + Control de Pagos + Cumpleaños)
+    if (parsed.isEventosAgenda) {
+        const db = getDb();
+        const externalDb = await getExternalDb().catch(() => null);
+        const accountingDb = await getAccountingDb().catch(() => null);
+        const sipeUserId = effectivePerms?.linkedUser?.id ? Number(effectivePerms.linkedUser.id) : (user?.user_id ? Number(user.user_id) : null);
+        const canManageTeam = Boolean(effectivePerms?.tareas || effectivePerms?.isAdmin);
+        const canControlPagos = Boolean(effectivePerms?.control_pagos || effectivePerms?.saldos_banco || effectivePerms?.isAdmin);
+
+        let range = 'semana';
+        if (/\bhoy\b/i.test(parsed.normalized)) range = 'hoy';
+        else if (/\bmanana\b/i.test(parsed.normalized)) range = 'manana';
+        else if (/\bmes\b/i.test(parsed.normalized)) range = 'mes';
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const agendaData = await getEventosProgramadosData({
+                db,
+                externalDb,
+                accountingDb,
+                telegramUserId: user.telegram_user_id,
+                sipeUserId,
+                range,
+                includeControlPagos: canControlPagos,
+                includeTeam: canManageTeam
+            });
+            await logTelegramQuery(user.telegram_user_id, rawText, `Agenda Eventos (${range})`, 1);
+            await sendTelegramMessage(
+                chatId,
+                (contextOptions.voicePrefix || '') + formatEventosProgramadosMessage(agendaData),
+                getEventosInlineMarkup(range)
+            );
+            return true;
+        } catch (agErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error consultando agenda de eventos: ' + escapeHtml(agErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.05 Consulta de Cumpleaños del Personal
+    if (parsed.isCumpleanos) {
+        const canCumpleanos = Boolean(effectivePerms?.cumpleanos ?? (effectivePerms?.ventas || effectivePerms?.alertas || effectivePerms?.isAdmin));
+        if (!canCumpleanos) {
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Permiso denegado cumpleaños', 0);
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para consultar cumpleaños del personal.', keyboard);
+            return true;
+        }
+        const accountingDb = await getAccountingDb().catch(() => null);
+        let scope = 'semana';
+        if (/\bhoy\b/i.test(parsed.normalized)) scope = 'hoy';
+        else if (parsed.isMonthly || /\b(mes|mensual)\b/i.test(parsed.normalized)) scope = 'mes';
+
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const bData = await getCumpleanosData({
+                accountingDb,
+                scope,
+                targetMonth: parsed.targetMonth || null
+            });
+            await logTelegramQuery(user.telegram_user_id, rawText, `Cumpleaños (${scope})`, 1);
+            await sendFeedback(chatId, formatCumpleanosMessage(bData), {
+                user,
+                query: rawText,
+                reply_markup: getCumpleanosInlineMarkup(scope)
+            });
+            return true;
+        } catch (bErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error consultando cumpleaños: ' + escapeHtml(bErr.message), keyboard);
+            return true;
+        }
+    }
 
     // 0.0 Consulta de Precios de la Competencia (DGEHM)
     if (parsed.isCompetencia) {
@@ -1684,27 +2068,42 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         }
     }
 
-    // 0.31 Consulta de Pagos Programados y Vencimientos Pendientes (Control de Pagos)
+    // 0.31 Consulta de Pagos Programados y Control de Pagos (enriquecido con abonos parciales, filtros y saldos)
     if (parsed.isPagosProgramados) {
-        if (!effectivePerms.saldos_banco && !effectivePerms.ventas && !effectivePerms.isAdmin) {
-            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar pagos programados.', keyboard);
+        if (!effectivePerms.control_pagos && !effectivePerms.saldos_banco && !effectivePerms.ventas && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, '⚠️ No tienes permiso asignado para consultar Control de Pagos.', keyboard);
             return true;
         }
 
         sendChatAction(chatId, 'typing').catch(() => {});
         try {
-            const pagosData = await getPagosProgramadosData();
-            const msg = formatPagosProgramadosMessage(pagosData);
-            await logTelegramQuery(user.telegram_user_id, rawText, 'Pagos Programados', 1);
+            const db = getDb();
+            const externalDb = await getExternalDb().catch(() => null);
+            const pagosQuery = parseControlPagosQuery(rawText, parsed);
+            const pagosData = await getControlPagosDetailedData({
+                db,
+                externalDb,
+                filterMode: pagosQuery.filterMode,
+                ubicacionFilter: pagosQuery.ubicacionFilter,
+                searchTerm: pagosQuery.searchTerm,
+                startDate: pagosQuery.startDate,
+                endDate: pagosQuery.endDate
+            });
+            const msg = formatControlPagosMessage(pagosData);
+            await logTelegramQuery(user.telegram_user_id, rawText, `Control de Pagos (${pagosQuery.filterMode})`, 1);
             setUserConversationContext(user?.telegram_user_id, {
                 lastTopic: 'pagos_programados',
                 query: rawText
             });
-            await sendFeedback(chatId, msg, { user, query: rawText });
+            await sendFeedback(chatId, msg, {
+                user,
+                query: rawText,
+                reply_markup: getControlPagosInlineMarkup(pagosData)
+            });
             return true;
         } catch (err) {
-            console.error('[TelegramBot] Error en consulta de pagos programados:', err);
-            await sendTelegramMessage(chatId, '❌ Error al consultar pagos programados: ' + escapeHtml(err.message), keyboard);
+            console.error('[TelegramBot] Error en consulta de Control de Pagos:', err);
+            await sendTelegramMessage(chatId, '❌ Error al consultar Control de Pagos: ' + escapeHtml(err.message), keyboard);
             return true;
         }
     }
@@ -2576,6 +2975,25 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         console.error('[TelegramBot] Error en comando de Ticket/AGY:', tCmdErr.message);
     }
 
+    // B.3 Interceptar asistentes interactivos de Tareas Multi-Usuario y Agenda de Eventos MiBot
+    try {
+        const db = getDb();
+        const externalDb = await getExternalDb().catch(() => null);
+        const handledWizard = await handleActiveProductivityWizardMessage({
+            db,
+            externalDb,
+            rawText,
+            chatId,
+            user,
+            effectivePerms,
+            voicePrefix,
+            transport: { sendTelegramMessage, getMainReplyKeyboard }
+        });
+        if (handledWizard) return;
+    } catch (wizErr) {
+        console.error('[TelegramBot] Error en asistente de productividad:', wizErr.message);
+    }
+
     // C. Detección en lenguaje natural de insatisfacción directa (ej. 'no contestaste bien', 'no me sirvio', 'esta mal')
     const isExplicitNegativeFeedback = /\b(no\s+contestaste\s+bien|no\s+respondiste\s+bien|no\s+me\s+sirvio|no\s+me\s+sirve|esta\s+mal\s+la\s+respuesta|respuesta\s+incorrecta|no\s+es\s+lo\s+que\s+pedi|eso\s+no\s+es\s+lo\s+que\s+pregunte|te\s+equivocaste)\b/i.test(normalizeText(rawText));
     if (isExplicitNegativeFeedback) {
@@ -2675,9 +3093,10 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         return;
     }
 
-    // Comandos de Saludo / Inicio (Limpia contexto multi-turno)
+    // Comandos de Saludo / Inicio (Limpia contexto multi-turno y wizards activos)
     if (cleanLower === 'start' || cleanLower === 'menu' || cleanLower === 'hola' || cleanLower === 'inicio' || cleanLower === 'cancelar') {
         clearUserConversationContext(user.telegram_user_id);
+        clearProductivityWizards(user.telegram_user_id);
         await logTelegramQuery(user.telegram_user_id, `/${cleanLower}`, 'Menú principal / Reinicio de contexto', 1);
         const name = escapeHtml(user.first_name || 'Usuario');
         const welcome = `👋 ¡Hola <b>${name}</b>!\n` +
@@ -2718,10 +3137,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         cleanLower === 'mibot' ||
         cleanLower === '/mibot' ||
         cleanLower === 'mis avisos' ||
-        cleanLower === '/misavisos' ||
-        cleanLower === 'mis recordatorios' ||
-        cleanLower === 'mis reuniones' ||
-        cleanLower === 'mis tareas'
+        cleanLower === '/misavisos'
     ) {
         await logTelegramQuery(user.telegram_user_id, '/mibot', 'Consulta de avisos personales MiBot', 1);
         try {
@@ -2729,10 +3145,61 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             const mibotService = require('./mibotNotifierService');
             const displayName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.telegram_username || 'Usuario';
             const inboxHtml = await mibotService.formatUserPersonalMibotInbox(db, user.telegram_user_id, displayName);
-            await sendTelegramMessage(chatId, voicePrefix + inboxHtml, keyboard);
+            const mibotMarkup = {
+                inline_keyboard: [
+                    [
+                        { text: '📋 Mis Tareas', callback_data: 'tg_tsk:l:mine' },
+                        { text: '🗓️ Agenda 7 Días', callback_data: 'tg_evt:r:semana' }
+                    ],
+                    [
+                        { text: '➕ Asignar Tarea', callback_data: 'tg_tsk:new' },
+                        { text: '➕ Agendar Evento', callback_data: 'tg_evt:new' }
+                    ]
+                ]
+            };
+            await sendTelegramMessage(chatId, voicePrefix + inboxHtml, mibotMarkup);
         } catch (mibotErr) {
             console.error('[TelegramBot] Error consultando MiBot inbox:', mibotErr.message);
             await sendTelegramMessage(chatId, voicePrefix + '⚠️ No fue posible consultar tus avisos de MiBot en este momento.', keyboard);
+        }
+        return;
+    }
+
+    // Acceso rápido desde botón del teclado: "📋 Tareas & Agenda"
+    if (normalizeText(rawText).replace(/^[^a-z0-9]+/, '').trim() === 'tareas & agenda') {
+        try {
+            const db = getDb();
+            const sipeUserId = effectivePerms?.linkedUser?.id ? Number(effectivePerms.linkedUser.id) : (user?.user_id ? Number(user.user_id) : null);
+            const canManageTeam = Boolean(effectivePerms?.tareas || effectivePerms?.isAdmin);
+            const tasksData = await getTasksSummaryData({ db, sipeUserId, canManageTeam, scope: 'mine' });
+            await logTelegramQuery(user.telegram_user_id, '/tareas', 'Botón Tareas & Agenda', 1);
+            await sendTelegramMessage(chatId, voicePrefix + formatTasksMessage(tasksData), getTasksInlineMarkup(tasksData));
+        } catch (tBtnErr) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error consultando tareas: ' + escapeHtml(tBtnErr.message), keyboard);
+        }
+        return;
+    }
+
+    // Acceso rápido desde botón del teclado: "💳 Control de Pagos"
+    if (normalizeText(rawText).replace(/^[^a-z0-9]+/, '').trim() === 'control de pagos') {
+        if (!effectivePerms.control_pagos && !effectivePerms.saldos_banco && !effectivePerms.ventas && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para consultar Control de Pagos.', keyboard);
+            return;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const db = getDb();
+            const externalDb = await getExternalDb().catch(() => null);
+            const pagosData = await getControlPagosDetailedData({ db, externalDb, filterMode: 'resumen' });
+            await logTelegramQuery(user.telegram_user_id, '/pagos', 'Botón Control de Pagos', 1);
+            await sendTelegramResponseWithFeedback(chatId, voicePrefix + formatControlPagosMessage(pagosData), {
+                user,
+                query: 'Control de Pagos',
+                responseSummary: `Saldo: $${pagosData.total_saldo_pendiente_usd}`,
+                reply_markup: getControlPagosInlineMarkup(pagosData)
+            });
+        } catch (pBtnErr) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error consultando Control de Pagos: ' + escapeHtml(pBtnErr.message), keyboard);
         }
         return;
     }
@@ -3176,6 +3643,18 @@ const initTelegramBot = async () => {
         runtimeState.pollingGeneration = (runtimeState.pollingGeneration || 0) + 1;
         const activeGen = runtimeState.pollingGeneration;
         runtimeState.isPollingActive = true;
+        setTelegramBotCommands([
+            { command: 'tareas', description: 'Ver y gestionar tareas activas' },
+            { command: 'asignar', description: 'Asignar tarea a uno o más usuarios' },
+            { command: 'agenda', description: 'Agenda de eventos, reuniones y pagos' },
+            { command: 'agendar', description: 'Programar recordatorio o reunión MiBot' },
+            { command: 'pagos', description: 'Control de Pagos (vencidos, hoy, parciales)' },
+            { command: 'cumpleanos', description: 'Cumpleaños del personal' },
+            { command: 'mibot', description: 'Tus avisos personales MiBot' },
+            { command: 'ventas', description: 'Resumen de ventas de estaciones' },
+            { command: 'bancos', description: 'Saldos consolidados en bancos' },
+            { command: 'ayuda', description: 'Guía completa de funciones y comandos' }
+        ]).catch(() => {});
         runPollingLoop(activeGen).catch(e => console.error('[TelegramBot] Fallo crítico en polling loop:', e));
     } catch (e) {
         console.error('[TelegramBot] Error al inicializar bot:', e.message);
