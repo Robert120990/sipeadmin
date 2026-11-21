@@ -104,10 +104,51 @@ const branchToEmpId = {
     4: '002',
     8: '008',
     6: '009',
-    7: '016'
+    7: '016',
+    12: '016'
 };
 
-const normalizeSaasBranchId = (bId) => Number(bId);
+const normalizeSaasBranchId = (bId) => {
+    const n = Number(bId);
+    return n === 12 ? 7 : n;
+};
+
+/**
+ * Calcula métricas contables reales de un turno cerrado de tienda SaaS (`pos_shifts`),
+ * corrigiendo el bug de expected_cash = 0 cuando actual_cash = venta + apertura (p. ej. Super El Pedregal)
+ * y tomando total_tarjetas cuando card_sales viene en 0.
+ */
+const computeSaasStoreShiftMetrics = (sh = {}) => {
+    const round2 = (v) => (Math.round(Number(v || 0) * 100) / 100) || 0;
+    const venta = round2(sh.total_sales || 0);
+    const ingresos = round2(sh.total_incomes || 0);
+    const tarjeta = round2(Math.max(Number(sh.total_tarjetas || 0), Number(sh.card_sales || 0)));
+    const otrosMedios = round2(Number(sh.transfer_sales || 0) + Number(sh.other_sales || 0) + Number(sh.total_puntos || 0));
+    const remesado = round2(sh.total_remesas || 0);
+    const gastos = round2(sh.total_expenses || 0);
+    const expectedCash = Number(sh.expected_cash || 0);
+    const actualCash = round2(sh.actual_cash || 0);
+    const rawDif = Number(sh.difference || 0);
+
+    const totalDescargos = remesado + tarjeta + otrosMedios + gastos;
+    const isZeroExpectedCashBug = expectedCash === 0 && actualCash > 0 && Math.abs(rawDif - actualCash) < 0.05 && totalDescargos > 0;
+
+    const dif = isZeroExpectedCashBug
+        ? round2(totalDescargos - (venta + ingresos))
+        : round2(rawDif);
+
+    return {
+        venta,
+        ingresos,
+        tarjeta,
+        otrosMedios,
+        remesado,
+        gastos,
+        saldo_f: actualCash,
+        dif,
+        adjusted_zero_expected_bug: isZeroExpectedCashBug
+    };
+};
 
 const OFFICIAL_ESTACIONES = [
     { id_empresa: '002', branch_id: 4, saas_branch_id: 4, company_id: 8, titulo: 'Puma Miraflores', orden: 1 },
@@ -167,5 +208,6 @@ module.exports = {
     OFFICIAL_ESTACIONES,
     GENERIC_TOKENS,
     isGenericDescription,
-    formatYMD
+    formatYMD,
+    computeSaasStoreShiftMetrics
 };

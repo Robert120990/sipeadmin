@@ -22,7 +22,8 @@ const {
     normalizeSaasBranchId,
     OFFICIAL_ESTACIONES,
     isGenericDescription,
-    formatYMD
+    formatYMD,
+    computeSaasStoreShiftMetrics
 } = require('../services/consultasCatalog');
 const {
     normalizeStationName,
@@ -289,7 +290,11 @@ const getTurnosPorEmpresa = async (externalDb, sysDate, accountingDb = null, dat
                     (SELECT IFNULL(SUM(d.total), 0.0) FROM gas_station_closeout_descuentos d WHERE d.closeout_id = c.id) as descuentos,
                     (SELECT IFNULL(SUM(cp.monto), 0.0) FROM gas_station_closeout_cupones cp WHERE cp.closeout_id = c.id) as cupones,
                     (SELECT IFNULL(SUM(cr.monto), 0.0) FROM gas_station_closeout_creditos cr WHERE cr.closeout_id = c.id) as creditos,
+                    (SELECT IFNULL(SUM(ch.monto), 0.0) FROM gas_station_closeout_cheques ch WHERE ch.closeout_id = c.id) as cheques,
+                    (SELECT IFNULL(SUM(vl.monto), 0.0) FROM gas_station_closeout_vales vl WHERE vl.closeout_id = c.id) as vales,
                     (SELECT IFNULL(SUM(ad.monto), 0.0) FROM gas_station_closeout_adelantos ad WHERE ad.closeout_id = c.id) as anticipos,
+                    (SELECT IFNULL(SUM(ant.monto), 0.0) FROM gas_station_closeout_anticipos_despachados ant WHERE ant.closeout_id = c.id) as anticipos_despachados,
+                    (SELECT IFNULL(SUM(tr.monto), 0.0) FROM gas_station_closeout_trupput_despachos tr WHERE tr.closeout_id = c.id) as trupput,
                     (SELECT IFNULL(SUM(l.total), 0.0) FROM gas_station_closeout_lubricant_readings l WHERE l.closeout_id = c.id) as lubricantes
                 FROM gas_station_closeouts c
                 WHERE c.fecha_turno = ? AND c.estado = 'cerrado'
@@ -297,27 +302,35 @@ const getTurnosPorEmpresa = async (externalDb, sysDate, accountingDb = null, dat
             `;
             const [shiftRows] = await withRetry(() => accountingDb.query(sqlTurnosSaas, [dateIso]));
             if (shiftRows && shiftRows.length > 0) {
+                const r2 = (v) => (Math.round(Number(v || 0) * 100) / 100) || 0;
                 shiftRows.forEach(sh => {
-                    const empId = branchToEmpId[sh.branch_id] || String(sh.branch_id).padStart(3, '0');
+                    const normBranch = normalizeSaasBranchId(sh.branch_id);
+                    const empId = branchToEmpId[normBranch] || branchToEmpId[sh.branch_id] || String(sh.branch_id).padStart(3, '0');
                     if (!turnosPorEmpresa[empId]) turnosPorEmpresa[empId] = [];
-                    const vta = Math.round(Number(sh.venta || 0) * 100) / 100;
-                    const rem = Math.round(Number(sh.remesas || 0) * 100) / 100;
-                    const tarj = Math.round(Number(sh.tarjetas || 0) * 100) / 100;
-                    const gst = Math.round(Number(sh.gastos || 0) * 100) / 100;
+                    const lub = r2(sh.lubricantes);
+                    const vtaComb = r2(sh.venta);
+                    const vta = r2(vtaComb + lub);
+                    const rem = r2(sh.remesas);
+                    const tarj = r2(sh.tarjetas);
+                    const gst = r2(sh.gastos);
                     const pag = 0;
-                    const desc = Math.round(Number(sh.descuentos || 0) * 100) / 100;
-                    const cup = Math.round(Number(sh.cupones || 0) * 100) / 100;
-                    const cred = Math.round(Number(sh.creditos || 0) * 100) / 100;
-                    const chq = 0;
-                    const ant = Math.round(Number(sh.anticipos || 0) * 100) / 100;
-                    const sumaTurno = Math.round((rem + tarj + gst + pag + desc + cup + cred + chq + ant) * 100) / 100;
-                    const difTurno = Math.round((sumaTurno - vta) * 100) / 100;
+                    const desc = r2(sh.descuentos);
+                    const cup = r2(sh.cupones);
+                    const cred = r2(sh.creditos);
+                    const chq = r2(sh.cheques);
+                    const val = r2(sh.vales);
+                    const ant = r2(sh.anticipos);
+                    const antDesp = r2(sh.anticipos_despachados);
+                    const trup = r2(sh.trupput);
+                    const sumaTurno = r2(rem + tarj + gst + pag + desc + cup + cred + chq + val + ant + antDesp + trup);
+                    const difTurno = r2(sumaTurno - vta);
 
                     turnosPorEmpresa[empId].push({
                         id: sh.id,
                         turno: Number(sh.turno) || 1,
                         responsable: sh.responsable || 'Sin asignar',
                         venta: vta,
+                        lubricantes: lub,
                         remesas: rem,
                         tarjetas: tarj,
                         gastos: gst,
@@ -326,7 +339,10 @@ const getTurnosPorEmpresa = async (externalDb, sysDate, accountingDb = null, dat
                         cupones: cup,
                         creditos: cred,
                         cheques: chq,
+                        vales: val,
                         anticipos: ant,
+                        anticipos_despachados: antDesp,
+                        trupput: trup,
                         suma: sumaTurno,
                         diferencia: difTurno
                     });
@@ -404,10 +420,13 @@ const getTurnosPorEmpresa = async (externalDb, sysDate, accountingDb = null, dat
  * Mapea una fila de resumen de cierre de turno incorporando la conciliación de efectivo y el análisis inteligente.
  */
 const mapCierreRowConExplicacion = (r, turnosPorEmpresa, sysDate) => {
-    const monto = Number(r.creditos) + Number(r.cupones) + Number(r.cheques) + Number(r.tarjetas) + Number(r.remesas) + Number(r.gastos) + Number(r.anticipos) + Number(r.pagos) + Number(r.descuentos);
-    const venta = Number(r.total_venta) + Number(r.lubricantes);
-    const diferencia = Math.round((monto - venta) * 100) / 100;
-    const gastos = Math.round(Number(r.gastos) * 100) / 100;
+    const vales = Number(r.vales || 0);
+    const anticiposDesp = Number(r.anticipos_despachados || 0);
+    const trupput = Number(r.trupput || 0);
+    const monto = Number(r.creditos || 0) + Number(r.cupones || 0) + Number(r.cheques || 0) + vales + anticiposDesp + trupput + Number(r.tarjetas || 0) + Number(r.remesas || 0) + Number(r.gastos || 0) + Number(r.anticipos || 0) + Number(r.pagos || 0) + Number(r.descuentos || 0);
+    const venta = Number(r.total_venta || 0) + Number(r.lubricantes || 0);
+    const diferencia = (Math.round((monto - venta) * 100) / 100) || 0;
+    const gastos = Math.round(Number(r.gastos || 0) * 100) / 100;
     const totVenta = Math.round(venta * 100) / 100;
 
     const alertas = [];
@@ -423,7 +442,7 @@ const mapCierreRowConExplicacion = (r, turnosPorEmpresa, sysDate) => {
         alertas.push({ tipo: 'sin_venta', nivel: 'info', texto: 'Sin venta registrada en pista' });
     }
 
-    const noEfectivo = Math.round(((Number(r.tarjetas || 0)) + (Number(r.cupones || 0)) + (Number(r.cheques || 0)) + (Number(r.creditos || 0))) * 100) / 100;
+    const noEfectivo = Math.round(((Number(r.tarjetas || 0)) + (Number(r.cupones || 0)) + (Number(r.cheques || 0)) + (Number(r.creditos || 0)) + vales + anticiposDesp + trupput) * 100) / 100;
     const efectivoEsperado = Math.round((totVenta - noEfectivo) * 100) / 100;
     const efectivoDescargado = Math.round(((Number(r.remesas || 0)) + gastos + (Number(r.pagos || 0)) + (Number(r.anticipos || 0)) + (Number(r.descuentos || 0))) * 100) / 100;
 
@@ -442,7 +461,10 @@ const mapCierreRowConExplicacion = (r, turnosPorEmpresa, sysDate) => {
         tarjetas: Math.round(Number(r.tarjetas || 0) * 100) / 100,
         cupones: Math.round(Number(r.cupones || 0) * 100) / 100,
         cheques: Math.round(Number(r.cheques || 0) * 100) / 100,
-        credito: Math.round(Number(r.creditos || 0) * 100) / 100
+        credito: Math.round(Number(r.creditos || 0) * 100) / 100,
+        vales: Math.round(vales * 100) / 100,
+        anticipos_despachados: Math.round(anticiposDesp * 100) / 100,
+        trupput: Math.round(trupput * 100) / 100
     };
 
     const analisisInteligente = generarAnalisisDescuadre({
@@ -483,16 +505,19 @@ const mapCierreRowConExplicacion = (r, turnosPorEmpresa, sysDate) => {
     return {
         id_empresa: r.id_empresa,
         empresa: cleanEmpresa,
-        credito: Math.round(Number(r.creditos) * 100) / 100,
-        cupones: Math.round(Number(r.cupones) * 100) / 100,
-        cheques: Math.round(Number(r.cheques) * 100) / 100,
-        tarjetas: Math.round(Number(r.tarjetas) * 100) / 100,
-        remesas: Math.round(Number(r.remesas) * 100) / 100,
+        credito: Math.round(Number(r.creditos || 0) * 100) / 100,
+        cupones: Math.round(Number(r.cupones || 0) * 100) / 100,
+        cheques: Math.round(Number(r.cheques || 0) * 100) / 100,
+        vales: Math.round(vales * 100) / 100,
+        anticipos_despachados: Math.round(anticiposDesp * 100) / 100,
+        trupput: Math.round(trupput * 100) / 100,
+        tarjetas: Math.round(Number(r.tarjetas || 0) * 100) / 100,
+        remesas: Math.round(Number(r.remesas || 0) * 100) / 100,
         gastos,
-        lubricantes: Math.round(Number(r.lubricantes) * 100) / 100,
-        anticipos: Math.round(Number(r.anticipos) * 100) / 100,
-        pagos: Math.round(Number(r.pagos) * 100) / 100,
-        descuentos: Math.round(Number(r.descuentos) * 100) / 100,
+        lubricantes: Math.round(Number(r.lubricantes || 0) * 100) / 100,
+        anticipos: Math.round(Number(r.anticipos || 0) * 100) / 100,
+        pagos: Math.round(Number(r.pagos || 0) * 100) / 100,
+        descuentos: Math.round(Number(r.descuentos || 0) * 100) / 100,
         suma: Math.round(monto * 100) / 100,
         tot_venta: totVenta,
         diferencia,
@@ -546,8 +571,10 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefin
         if (saasDb) {
             const [saasShifts] = await withRetry(() => saasDb.query(`
                 SELECT s.id, s.branch_id, b.nombre as branch_nombre, p.nombre as pos_nombre,
-                       s.total_sales, s.total_incomes, s.card_sales, s.total_remesas, s.total_expenses,
-                       s.actual_cash, s.difference, s.shift_number,
+                       s.total_sales, s.total_incomes, s.card_sales, s.total_tarjetas,
+                       s.transfer_sales, s.other_sales, s.total_puntos,
+                       s.total_remesas, s.total_expenses,
+                       s.opening_balance, s.expected_cash, s.actual_cash, s.difference, s.shift_number,
                        COALESCE(sel.nombre, u.nombre) as seller_nombre
                 FROM pos_shifts s
                 JOIN branches b ON s.branch_id = b.id
@@ -577,16 +604,17 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefin
                     };
                 }
                 const b = saasByBranch[sh.branch_id];
+                const metrics = computeSaasStoreShiftMetrics(sh);
                 b.shift_ids.push(sh.id);
                 if (sh.shift_number) b.shift_numbers.add(sh.shift_number);
                 if (sh.seller_nombre) b.sellers.add(sh.seller_nombre);
-                b.venta += Number(sh.total_sales || 0);
-                b.ingresos += Number(sh.total_incomes || 0);
-                b.tarjeta += Number(sh.card_sales || 0);
-                b.remesado += Number(sh.total_remesas || 0);
-                b.gastos += Number(sh.total_expenses || 0);
-                b.saldo_f += Number(sh.actual_cash || 0);
-                b.dif += Number(sh.difference || 0);
+                b.venta += metrics.venta;
+                b.ingresos += metrics.ingresos;
+                b.tarjeta += metrics.tarjeta;
+                b.remesado += metrics.remesado;
+                b.gastos += metrics.gastos;
+                b.saldo_f += metrics.saldo_f;
+                b.dif += metrics.dif;
             }
 
             // Distinguir tarjetas y remesas analizando pos_shift_remesas en una sola consulta agrupada
@@ -626,8 +654,12 @@ const getCortesTiendaData = async (externalDb, date, accountingDbParam = undefin
 
                     for (const bId of Object.keys(branchRemTotals)) {
                         if (saasByBranch[bId] && branchRemTotals[bId].count > 0) {
-                            saasByBranch[bId].tarjeta = branchRemTotals[bId].tarjeta;
-                            saasByBranch[bId].remesado = branchRemTotals[bId].remesado;
+                            if (branchRemTotals[bId].tarjeta > 0) {
+                                saasByBranch[bId].tarjeta = branchRemTotals[bId].tarjeta;
+                            }
+                            if (branchRemTotals[bId].remesado > 0 || branchRemTotals[bId].tarjeta > 0) {
+                                saasByBranch[bId].remesado = branchRemTotals[bId].remesado;
+                            }
                         }
                     }
                 } catch (remErr) {
@@ -1002,7 +1034,10 @@ const getConsolidadoVentasData = async (date) => {
                     c.branch_id,
                     SUM((SELECT IFNULL(SUM(cr.monto), 0.0) FROM gas_station_closeout_creditos cr WHERE cr.closeout_id = c.id)) as creditos,
                     SUM((SELECT IFNULL(SUM(cp.monto), 0.0) FROM gas_station_closeout_cupones cp WHERE cp.closeout_id = c.id)) as cupones,
-                    0.0 as cheques,
+                    SUM((SELECT IFNULL(SUM(ch.monto), 0.0) FROM gas_station_closeout_cheques ch WHERE ch.closeout_id = c.id)) as cheques,
+                    SUM((SELECT IFNULL(SUM(vl.monto), 0.0) FROM gas_station_closeout_vales vl WHERE vl.closeout_id = c.id)) as vales,
+                    SUM((SELECT IFNULL(SUM(ant.monto), 0.0) FROM gas_station_closeout_anticipos_despachados ant WHERE ant.closeout_id = c.id)) as anticipos_despachados,
+                    SUM((SELECT IFNULL(SUM(tr.monto), 0.0) FROM gas_station_closeout_trupput_despachos tr WHERE tr.closeout_id = c.id)) as trupput,
                     SUM((SELECT IFNULL(SUM(tar.monto), 0.0) FROM gas_station_closeout_tarjetas tar WHERE tar.closeout_id = c.id)) as tarjetas,
                     SUM((SELECT IFNULL(SUM(rem.monto), 0.0) FROM gas_station_closeout_remesas rem WHERE rem.closeout_id = c.id)) as remesas,
                     SUM((SELECT IFNULL(SUM(g.valor), 0.0) FROM gas_station_closeout_expenses g WHERE g.closeout_id = c.id)) as gastos,
@@ -1017,8 +1052,16 @@ const getConsolidadoVentasData = async (date) => {
             `;
             const [saasCierreRows] = await withRetry(() => accountingDb.query(sqlSaasCierre, [date]));
             const saasCierreMap = {};
+            const numericCierreFields = ['creditos', 'cupones', 'cheques', 'vales', 'anticipos_despachados', 'trupput', 'tarjetas', 'remesas', 'gastos', 'lubricantes', 'anticipos', 'pagos', 'descuentos', 'total_venta'];
             (saasCierreRows || []).forEach(r => {
-                saasCierreMap[normalizeSaasBranchId(r.branch_id)] = r;
+                const bId = normalizeSaasBranchId(r.branch_id);
+                if (!saasCierreMap[bId]) {
+                    saasCierreMap[bId] = { ...r, branch_id: bId };
+                } else {
+                    for (const k of numericCierreFields) {
+                        saasCierreMap[bId][k] = Number(saasCierreMap[bId][k] || 0) + Number(r[k] || 0);
+                    }
+                }
             });
 
             resumenCierreLocal = OFFICIAL_ESTACIONES.map(st => {
@@ -1026,6 +1069,9 @@ const getConsolidadoVentasData = async (date) => {
                     creditos: 0,
                     cupones: 0,
                     cheques: 0,
+                    vales: 0,
+                    anticipos_despachados: 0,
+                    trupput: 0,
                     tarjetas: 0,
                     remesas: 0,
                     gastos: 0,

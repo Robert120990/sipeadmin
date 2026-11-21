@@ -1030,7 +1030,11 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
     const isAprobaciones = !isProductivityCommand && !isPagosProgramados && (
         /\b(aprobaciones?\s+pendientes?|cheques?\s+por\s+aprobar|planillas?\s+por\s+aprobar|bandeja\s+de\s+aprobaciones?)\b/i.test(normalized)
     );
-    const hasNewFinanceOrMediaIntent = isCentinela || isAudioResumen || isGrafica || isFlujoCaja || isPrestamos || isCreditosFlota || isAprobaciones;
+    const isAuditoriaCortesRemesas = !isProductivityCommand && !isPagosProgramados && (
+        /\b(?:evalua|evaluar|audita|auditar|concilia|conciliar|valida|validar)\b.*\b(?:diferencias?|faltantes?|cortes?|remesas?)\b.*\b(?:estaciones?|enviad[oa]s?|coinciden|dinero|bancos?)\b/i.test(normalized) ||
+        /\b(?:remesas?\s+enviadas?\s+(?:si\s+)?coinciden|diferencias?\s+(?:en\s+)?cortes?\s+y\s+(?:dinero\s+enviado|remesas?)|auditoria\s+(?:de\s+)?cortes?\s+y\s+remesas?)\b/i.test(normalized)
+    );
+    const hasNewFinanceOrMediaIntent = isCentinela || isAudioResumen || isGrafica || isFlujoCaja || isPrestamos || isCreditosFlota || isAprobaciones || isAuditoriaCortesRemesas;
 
     // 10. Detección de auditoría / descuadres (excluyendo consultas de diferencia de precios de competencia)
     const isAlertas = !isProductivityCommand && !isPagosProgramados && !isCompetencia && !isTransitoVales && !hasNewFinanceOrMediaIntent && /\b(descuadre|descuadres|diferencia|diferencias|alerta|alertas|anomalia|anomalias|merma|mermas|faltante|sobrante|cuadrado)\b/.test(normalized);
@@ -1210,7 +1214,8 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         flujoHorizon,
         isPrestamos,
         isCreditosFlota,
-        isAprobaciones
+        isAprobaciones,
+        isAuditoriaCortesRemesas
     };
 };
 

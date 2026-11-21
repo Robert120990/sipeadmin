@@ -13,6 +13,10 @@ const {
     buildWeeklyExecutiveDossierPayload
 } = require('../services/operationalAuditService');
 const { generateExecutiveReportPdf } = require('../services/telegramPdfService');
+const {
+    auditStationCloseoutsAndRemesas,
+    runStationDiscrepancyAlertCheck
+} = require('../services/stationDiscrepancyAuditService');
 
 // 0. Resumen Inteligente por Rol para Inicio (/dashboard)
 router.get('/home-resumen', authenticateToken, async (req, res) => {
@@ -186,6 +190,57 @@ router.get(
             res.send(pdfBuffer);
         } catch (error) {
             sendSafeError(res, error, 'Error al generar el Dossier Ejecutivo Semanal en PDF');
+        }
+    }
+);
+
+// 10. Auditoría Cruzada de Cortes (Pista y Tienda) ↔ Remesas Enviadas ↔ Bancos
+router.get(
+    '/auditoria-cortes-remesas',
+    authenticateToken,
+    requirePermission([
+        'view_direccion_estrategica',
+        '/dashboard/estrategia/torre-control',
+        '/dashboard/consultas/estaciones/resumen-cierre',
+        '/dashboard/consultas/estaciones/diferencias-combustible',
+        '/dashboard/consultas/estaciones/ventas'
+    ]),
+    async (req, res) => {
+        const { dias = 7, closeoutDays = null, targetDate = null } = req.query;
+        try {
+            const data = await auditStationCloseoutsAndRemesas({
+                dias: parseInt(dias, 10) || 7,
+                closeoutDays: closeoutDays ? parseInt(closeoutDays, 10) : null,
+                targetDate: targetDate ? String(targetDate).slice(0, 10) : null
+            });
+            res.json(data);
+        } catch (error) {
+            sendSafeError(res, error, 'Error al ejecutar auditoría de cortes y remesas');
+        }
+    }
+);
+
+// 10B. Disparar notificación proactiva deduplicada (Telegram + in-app) de diferencias en cortes/envíos
+router.post(
+    '/auditoria-cortes-remesas/notificar',
+    authenticateToken,
+    requirePermission([
+        'view_direccion_estrategica',
+        '/dashboard/estrategia/torre-control',
+        '/dashboard/consultas/estaciones/diferencias-combustible'
+    ]),
+    async (req, res) => {
+        const { dias = 7, closeoutDays = 3, targetDate = null } = req.body || {};
+        try {
+            const result = await runStationDiscrepancyAlertCheck({
+                io: req.app?.get('io') || null,
+                dias: parseInt(dias, 10) || 7,
+                closeoutDays: parseInt(closeoutDays, 10) || 3,
+                targetDate: targetDate ? String(targetDate).slice(0, 10) : null
+            });
+            res.json(result);
+        } catch (error) {
+            sendSafeError(res, error, 'Error al notificar diferencias de cortes y remesas');
         }
     }
 );

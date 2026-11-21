@@ -13,7 +13,8 @@ const {
     normalizeSaasBranchId,
     OFFICIAL_ESTACIONES,
     isGenericDescription,
-    formatYMD
+    formatYMD,
+    computeSaasStoreShiftMetrics
 } = require('../services/consultasCatalog');
 
 function registerConsultasCierresRoutes(router, {
@@ -46,7 +47,10 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(
                         c.branch_id,
                         SUM((SELECT IFNULL(SUM(cr.monto), 0.0) FROM gas_station_closeout_creditos cr WHERE cr.closeout_id = c.id)) as creditos,
                         SUM((SELECT IFNULL(SUM(cp.monto), 0.0) FROM gas_station_closeout_cupones cp WHERE cp.closeout_id = c.id)) as cupones,
-                        0.0 as cheques,
+                        SUM((SELECT IFNULL(SUM(ch.monto), 0.0) FROM gas_station_closeout_cheques ch WHERE ch.closeout_id = c.id)) as cheques,
+                        SUM((SELECT IFNULL(SUM(vl.monto), 0.0) FROM gas_station_closeout_vales vl WHERE vl.closeout_id = c.id)) as vales,
+                        SUM((SELECT IFNULL(SUM(ant.monto), 0.0) FROM gas_station_closeout_anticipos_despachados ant WHERE ant.closeout_id = c.id)) as anticipos_despachados,
+                        SUM((SELECT IFNULL(SUM(tr.monto), 0.0) FROM gas_station_closeout_trupput_despachos tr WHERE tr.closeout_id = c.id)) as trupput,
                         SUM((SELECT IFNULL(SUM(tar.monto), 0.0) FROM gas_station_closeout_tarjetas tar WHERE tar.closeout_id = c.id)) as tarjetas,
                         SUM((SELECT IFNULL(SUM(rem.monto), 0.0) FROM gas_station_closeout_remesas rem WHERE rem.closeout_id = c.id)) as remesas,
                         SUM((SELECT IFNULL(SUM(g.valor), 0.0) FROM gas_station_closeout_expenses g WHERE g.closeout_id = c.id)) as gastos,
@@ -61,8 +65,16 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(
                 `;
                 const [saasCierreRows] = await withRetry(() => accountingDb.query(sqlSaasCierre, [date]));
                 const saasCierreMap = {};
+                const numericFields = ['creditos', 'cupones', 'cheques', 'vales', 'anticipos_despachados', 'trupput', 'tarjetas', 'remesas', 'gastos', 'lubricantes', 'anticipos', 'pagos', 'descuentos', 'total_venta'];
                 (saasCierreRows || []).forEach(r => {
-                    saasCierreMap[normalizeSaasBranchId(r.branch_id)] = r;
+                    const bId = normalizeSaasBranchId(r.branch_id);
+                    if (!saasCierreMap[bId]) {
+                        saasCierreMap[bId] = { ...r, branch_id: bId };
+                    } else {
+                        for (const k of numericFields) {
+                            saasCierreMap[bId][k] = Number(saasCierreMap[bId][k] || 0) + Number(r[k] || 0);
+                        }
+                    }
                 });
 
                 const resumenCierreLocal = OFFICIAL_ESTACIONES.map(st => {
@@ -70,6 +82,9 @@ router.get('/ventas/resumen-cierre/:date', authenticateToken, requirePermission(
                         creditos: 0,
                         cupones: 0,
                         cheques: 0,
+                        vales: 0,
+                        anticipos_despachados: 0,
+                        trupput: 0,
                         tarjetas: 0,
                         remesas: 0,
                         gastos: 0,
@@ -159,8 +174,9 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
 
             // Turnos de tienda (solo turnos cerrados)
             const [shifts] = await withRetry(() => saasDb.query(`
-                SELECT s.id, s.shift_number, s.total_sales, s.total_incomes, s.card_sales,
-                       s.total_remesas, s.total_expenses, s.actual_cash, s.difference,
+                SELECT s.id, s.shift_number, s.total_sales, s.total_incomes, s.card_sales, s.total_tarjetas,
+                       s.transfer_sales, s.other_sales, s.total_puntos,
+                       s.total_remesas, s.total_expenses, s.opening_balance, s.expected_cash, s.actual_cash, s.difference,
                        COALESCE(sel.nombre, u.nombre) as seller_nombre
                 FROM pos_shifts s
                 JOIN points_of_sale p ON s.pos_id = p.id
@@ -179,7 +195,7 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
             const totalIngresos = (shifts || []).reduce((acc, s) => acc + Number(s.total_incomes || 0), 0);
             const totalGastos = (shifts || []).reduce((acc, s) => acc + Number(s.total_expenses || 0), 0);
             const totalSaldoF = (shifts || []).reduce((acc, s) => acc + Number(s.actual_cash || 0), 0);
-            const totalDif = (shifts || []).reduce((acc, s) => acc + Number(s.difference || 0), 0);
+            const totalDif = (shifts || []).reduce((acc, s) => acc + computeSaasStoreShiftMetrics(s).dif, 0);
 
             // Detalle de movimientos (gastos, tarjetas, remesas, ingresos)
             const detallesMovimientos = [];
@@ -256,9 +272,9 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
                 });
             }
 
-            // Si pos_shift_remesas no tuvo tarjetas explícitas, usar el card_sales de pos_shifts
-            if (totalTarjetas === 0 && (shifts || []).some(s => Number(s.card_sales || 0) > 0)) {
-                totalTarjetas = (shifts || []).reduce((acc, s) => acc + Number(s.card_sales || 0), 0);
+            // Si pos_shift_remesas no tuvo tarjetas explícitas, usar total_tarjetas / card_sales de pos_shifts
+            if (totalTarjetas === 0 && (shifts || []).some(s => Math.max(Number(s.total_tarjetas || 0), Number(s.card_sales || 0)) > 0)) {
+                totalTarjetas = (shifts || []).reduce((acc, s) => acc + Math.max(Number(s.total_tarjetas || 0), Number(s.card_sales || 0)), 0);
             }
             if (totalRemesado === 0 && (shifts || []).some(s => Number(s.total_remesas || 0) > 0)) {
                 totalRemesado = (shifts || []).reduce((acc, s) => acc + Number(s.total_remesas || 0), 0);
@@ -435,7 +451,7 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
         }
         const cleanId = String(id_empresa).padStart(3, '0');
         const saasBranchId = saasBranchMap[cleanId] || saasBranchMap[id_empresa];
-        const saasBranchIds = [saasBranchId];
+        const saasBranchIds = Number(saasBranchId) === 7 ? [7, 12] : [saasBranchId];
         let saasHasClosedShifts = false;
         let accountingDb = null;
         if (saasBranchId) {
@@ -695,7 +711,104 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
                     break;
                 }
 
-                case 'cheques':
+                case 'cheques': {
+                    const [chRows] = await withRetry(() => accountingDb.query(`
+                        SELECT ch.id, ch.closeout_id, c.fecha_turno as fecha, ch.numero_cheque as documento,
+                               COALESCE(ch.banco, 'Cheque Bancario') as banco, ch.tipo_operacion, ch.monto as valor
+                        FROM gas_station_closeout_cheques ch
+                        JOIN gas_station_closeouts c ON ch.closeout_id = c.id
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY ch.id
+                    `, [saasBranchIds, date]));
+                    rows = chRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        banco: r.banco || 'Cheque Bancario',
+                        tipo_operacion: (r.tipo_operacion || 'VTA').toUpperCase(),
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100
+                    });
+                    break;
+                }
+
+                case 'vales': {
+                    const [valRows] = await withRetry(() => accountingDb.query(`
+                        SELECT v.id, v.closeout_id, c.fecha_turno as fecha, v.documento, v.tipo_documento as tipo_doc,
+                               COALESCE(v.cliente_nombre, 'Vale Estación') as cliente, v.producto_descripcion as producto,
+                               v.cantidad, v.precio, v.monto as valor, v.placa
+                        FROM gas_station_closeout_vales v
+                        JOIN gas_station_closeouts c ON v.closeout_id = c.id
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY v.id
+                    `, [saasBranchIds, date]));
+                    rows = valRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        tipo_doc: r.tipo_doc || 'VALE',
+                        cliente: r.cliente || 'Vale',
+                        producto: r.producto || '-',
+                        cantidad: Number(r.cantidad || 0),
+                        precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                        placa: r.placa || '-'
+                    });
+                    break;
+                }
+
+                case 'anticipos_despachados': {
+                    const [antDRows] = await withRetry(() => accountingDb.query(`
+                        SELECT ad.id, ad.closeout_id, c.fecha_turno as fecha, ad.documento, ad.tipo_documento as tipo_doc,
+                               COALESCE(ad.cliente_nombre, 'Cliente Anticipo') as cliente,
+                               ad.producto_descripcion as producto, ad.cantidad, ad.precio, ad.monto as valor, ad.placa
+                        FROM gas_station_closeout_anticipos_despachados ad
+                        JOIN gas_station_closeouts c ON ad.closeout_id = c.id
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY ad.id
+                    `, [saasBranchIds, date]));
+                    rows = antDRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        tipo_doc: r.tipo_doc || 'ANT',
+                        cliente: r.cliente || 'Cliente Anticipo',
+                        producto: r.producto || '-',
+                        cantidad: Number(r.cantidad || 0),
+                        precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                        placa: r.placa || '-'
+                    });
+                    break;
+                }
+
+                case 'trupput': {
+                    const [trRows] = await withRetry(() => accountingDb.query(`
+                        SELECT t.id, t.closeout_id, c.fecha_turno as fecha, t.documento,
+                               COALESCE(t.cliente_nombre, 'Cliente Trupput') as cliente,
+                               t.producto_descripcion as producto, t.galones as cantidad, t.precio, t.monto as valor, t.placa
+                        FROM gas_station_closeout_trupput_despachos t
+                        JOIN gas_station_closeouts c ON t.closeout_id = c.id
+                        WHERE c.branch_id IN (?) AND c.fecha_turno = ? AND c.estado = 'cerrado'
+                        ORDER BY t.id
+                    `, [saasBranchIds, date]));
+                    rows = trRows || [];
+                    mapFn = (r) => ({
+                        id: r.id,
+                        fecha: formatYMD(r.fecha) || date,
+                        documento: r.documento || '-',
+                        cliente: r.cliente || 'Cliente Trupput',
+                        producto: r.producto || '-',
+                        cantidad: Number(r.cantidad || 0),
+                        precio: Math.round(Number(r.precio || 0) * 1000) / 1000,
+                        valor: Math.round(Number(r.valor || 0) * 100) / 100,
+                        placa: r.placa || '-'
+                    });
+                    break;
+                }
+
                 case 'pagos':
                     rows = [];
                     break;

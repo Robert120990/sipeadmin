@@ -22,7 +22,12 @@ export function ConciliacionEfectivoCard({ station, fecha, onOpenModal, onOpenDr
     const r = station;
     const exp = r.explicacion_diferencia || {};
     const totVenta = exp.tot_venta ?? (Number(r.tot_venta) || 0);
-    const noEfectivo = exp.no_efectivo ?? ((Number(r.tarjetas || 0)) + (Number(r.cupones || 0)) + (Number(r.cheques || 0)) + (Number(r.credito || 0)));
+    const noEfectivo = exp.no_efectivo ?? ((Number(r.tarjetas || 0)) + (Number(r.cupones || 0)) + (Number(r.cheques || 0)) + (Number(r.credito || 0)) + (Number(r.vales || 0)) + (Number(r.anticipos_despachados || 0)) + (Number(r.trupput || 0)));
+    const desgloseNoEf = exp.desglose_no_efectivo || {};
+    const noEfLabels = ['Tarjetas POS', 'Vales', 'Crédito'];
+    if (Number(desgloseNoEf.trupput ?? r.trupput ?? 0) > 0) noEfLabels.push('Trupput');
+    if (Number(desgloseNoEf.anticipos_despachados ?? r.anticipos_despachados ?? 0) > 0) noEfLabels.push('Ant. Desp.');
+    if (Number(desgloseNoEf.cheques ?? r.cheques ?? 0) > 0) noEfLabels.push('Cheques');
     const efectivoEsperado = exp.efectivo_esperado ?? (totVenta - noEfectivo);
     const desgloseDesc = exp.desglose_descargos || {
         remesas: Number(r.remesas || 0),
@@ -155,7 +160,7 @@ export function ConciliacionEfectivoCard({ station, fecha, onOpenModal, onOpenDr
                         -{moneyFmt(noEfectivo)}
                     </div>
                     <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>
-                        Tarjetas POS, Vales, Crédito
+                        {noEfLabels.join(', ')}
                     </div>
                 </div>
 
@@ -283,7 +288,7 @@ export function ConciliacionEfectivoCard({ station, fecha, onOpenModal, onOpenDr
                                             <td style={{ padding: '0.4rem 0.55rem', textAlign: 'right', fontWeight: 600 }}>{moneyFmt(t.venta)}</td>
                                             <td style={{ padding: '0.4rem 0.55rem', textAlign: 'right', color: '#3b82f6' }}>{moneyFmt(t.tarjetas)}</td>
                                             <td style={{ padding: '0.4rem 0.55rem', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{moneyFmt(t.remesas)}</td>
-                                            <td style={{ padding: '0.4rem 0.55rem', textAlign: 'right' }}>{moneyFmt((t.gastos || 0) + (t.pagos || 0) + (t.descuentos || 0) + (t.cupones || 0))}</td>
+                                            <td style={{ padding: '0.4rem 0.55rem', textAlign: 'right' }}>{moneyFmt((t.gastos || 0) + (t.pagos || 0) + (t.descuentos || 0) + (t.cupones || 0) + (t.creditos || 0) + (t.cheques || 0) + (t.vales || 0) + (t.anticipos || 0) + (t.anticipos_despachados || 0) + (t.trupput || 0))}</td>
                                             <td style={{ padding: '0.4rem 0.55rem', textAlign: 'right', fontWeight: 600 }}>{moneyFmt(t.suma)}</td>
                                             <td style={{ padding: '0.4rem 0.55rem', textAlign: 'right' }}>
                                                 <span style={{

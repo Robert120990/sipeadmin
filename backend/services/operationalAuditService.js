@@ -1,12 +1,15 @@
 const dbModule = require('../db');
+const defaultGetExternalDb = dbModule.getExternalDb;
 const getDb = (...args) => dbModule.getDb(...args);
+const getExternalDb = (...args) => dbModule.getExternalDb(...args);
 const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
 const withRetry = (...args) => dbModule.withRetry(...args);
 const { isAdminUser } = require('../middleware/auth');
-const { branchToEmpId, formatYMD } = require('./consultasCatalog');
+const { branchToEmpId, formatYMD, normalizeSaasBranchId } = require('./consultasCatalog');
 const { getTanquesAutonomia } = require('./fuelIntelligence');
 const { getRentabilidadPorEstacion, getElasticidadPreciosCompetencia } = require('./profitabilityService');
 const { getSaldosBancosData } = require('./telegramDataService');
+const { buildMonthLikePatterns, parseBankDateDmyToIso } = require('./stationDiscrepancyAuditService');
 const { moneyFmt, numFmt, toDisplayDate, getDateStr } = require('./telegramTextAndDates');
 
 const resolveStationEmpCode = (rawId) => {
@@ -28,7 +31,7 @@ const userHasAnyPerm = (user, perms = []) => {
  * 1. Auditoría Cruzada de Dinero en Tránsito (Pista ↔ Bancos) y Vales sin Facturar (>72h)
  * Solo lectura estricta (SELECT) sobre db_sistema_saas y db_sipe_admin.
  */
-const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
+const getAuditoriaDineroEnTransito = async ({ dias = 14, accountingDb: accountingDbParam = null, externalDb: externalDbParam = null } = {}) => {
     const windowDays = Math.min(60, Math.max(5, parseInt(dias, 10) || 14));
     const now = new Date();
     const dFin = now.toISOString().split('T')[0];
@@ -43,20 +46,24 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
     // 1.1 Remesas y Tarjetas reportadas en turnos cerrados de pista (db_sistema_saas)
     let pistaRows = [];
     let valesSinFacturar = [];
+    let deliveredRemesasByBranchDate = new Map();
     try {
-        const accountingDb = await getAccountingDb();
+        const accountingDb = accountingDbParam || await getAccountingDb();
         if (accountingDb) {
             const [remRows] = await withRetry(() => accountingDb.query(`
                 SELECT
-                    c.branch_id as id_empresa,
-                    b.nombre as estacion,
+                    CASE WHEN c.branch_id = 12 THEN 7 ELSE c.branch_id END as id_empresa,
+                    CASE WHEN c.branch_id = 12 THEN 'Shell Poliedro' ELSE b.nombre END as estacion,
                     c.fecha_turno as fecha,
                     COALESCE(SUM(rem.total_remesa), 0.0) as remesas_pista_usd,
+                    COALESCE(SUM(rem.entregadas_remesa), 0.0) as remesas_entregadas_usd,
                     COALESCE(SUM(pos.total_tarjeta), 0.0) as tarjetas_pista_usd
                 FROM gas_station_closeouts c
                 JOIN branches b ON c.branch_id = b.id
                 LEFT JOIN (
-                    SELECT closeout_id, SUM(monto) as total_remesa
+                    SELECT closeout_id,
+                           SUM(monto) as total_remesa,
+                           SUM(CASE WHEN COALESCE(entregada, 0) = 1 OR entrega_id IS NOT NULL THEN monto ELSE 0 END) as entregadas_remesa
                     FROM gas_station_closeout_remesas
                     GROUP BY closeout_id
                 ) rem ON c.id = rem.closeout_id
@@ -65,11 +72,17 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
                     FROM gas_station_closeout_tarjetas
                     GROUP BY closeout_id
                 ) pos ON c.id = pos.closeout_id
-                WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
+                WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
                 GROUP BY id_empresa, estacion, c.fecha_turno
                 ORDER BY c.fecha_turno DESC, id_empresa ASC
             `, [dInicio, dFin]));
             pistaRows = remRows || [];
+            for (const pr of pistaRows) {
+                if (pr.remesas_entregadas_usd !== undefined) {
+                    const key = `${normalizeSaasBranchId(pr.id_empresa)}|${formatYMD(pr.fecha)}`;
+                    deliveredRemesasByBranchDate.set(key, Number(pr.remesas_entregadas_usd || 0));
+                }
+            }
 
             // 1.2 Vales / créditos de pista con antigüedad >= 3 días (72h)
             try {
@@ -118,32 +131,68 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
         pistaRows = [];
     }
 
-    // 1.3 Abonos bancarios registrados en SIPE Admin (movimientos_bancarios)
+    // 1.3 Depósitos bancarios vivos en db_system_rrs (cargo > 0) con fallback a db_sipe_admin.movimientos_bancarios
     let abonosPorFecha = {};
     let totalAbonosBancosUsd = 0;
-    try {
-        const db = getDb();
-        if (db) {
-            const dFinMas3Obj = new Date(now);
-            dFinMas3Obj.setDate(dFinMas3Obj.getDate() + 3);
-            const dFinMas3 = dFinMas3Obj.toISOString().split('T')[0];
+    let usingLiveExternalBank = false;
+    const dFinMas3Obj = new Date(now);
+    dFinMas3Obj.setDate(dFinMas3Obj.getDate() + 3);
+    const dFinMas3 = dFinMas3Obj.toISOString().split('T')[0];
 
-            const [bankMovs] = await db.query(`
-                SELECT fecha, COALESCE(SUM(abono), 0.0) as total_abono
-                FROM movimientos_bancarios
-                WHERE abono > 0 AND fecha BETWEEN ? AND ?
-                GROUP BY fecha
-            `, [dInicio, dFinMas3]);
+    const canQueryExternal = Boolean(externalDbParam) ||
+        process.env.NODE_ENV !== 'test' ||
+        dbModule.getExternalDb !== defaultGetExternalDb;
 
-            (bankMovs || []).forEach(bm => {
-                const fStr = formatYMD(bm.fecha);
-                const val = Number(bm.total_abono || 0);
-                abonosPorFecha[fStr] = (abonosPorFecha[fStr] || 0) + val;
-                totalAbonosBancosUsd += val;
-            });
+    if (canQueryExternal) {
+        try {
+            const extDb = externalDbParam || await getExternalDb().catch(() => null);
+            if (extDb && typeof extDb.query === 'function') {
+                const monthPatterns = buildMonthLikePatterns(dInicio, dFinMas3);
+                const likeClause = monthPatterns.map(() => 'fecha LIKE ?').join(' OR ');
+                const [rrsMovs] = await withRetry(() => extDb.query(
+                    `SELECT fecha, COALESCE(cargo, monto, 0.0) AS cargo
+                     FROM movimientos_bancarios
+                     WHERE (${likeClause}) AND COALESCE(cargo, monto, 0.0) > 0`,
+                    monthPatterns
+                ));
+                for (const bm of (rrsMovs || [])) {
+                    const fStr = parseBankDateDmyToIso(bm.fecha);
+                    const val = Number(bm.cargo || 0);
+                    if (fStr && fStr >= dInicio && fStr <= dFinMas3 && val > 0) {
+                        abonosPorFecha[fStr] = (abonosPorFecha[fStr] || 0) + val;
+                        totalAbonosBancosUsd += val;
+                    }
+                }
+                if (totalAbonosBancosUsd > 0) {
+                    usingLiveExternalBank = true;
+                }
+            }
+        } catch (_errExtBank) {
+            usingLiveExternalBank = false;
         }
-    } catch (_errBank) {
-        abonosPorFecha = {};
+    }
+
+    if (!usingLiveExternalBank) {
+        try {
+            const db = getDb();
+            if (db) {
+                const [bankMovs] = await db.query(`
+                    SELECT fecha, COALESCE(SUM(abono), 0.0) as total_abono
+                    FROM movimientos_bancarios
+                    WHERE abono > 0 AND fecha BETWEEN ? AND ?
+                    GROUP BY fecha
+                `, [dInicio, dFinMas3]);
+
+                (bankMovs || []).forEach(bm => {
+                    const fStr = formatYMD(bm.fecha);
+                    const val = Number(bm.total_abono || 0);
+                    abonosPorFecha[fStr] = (abonosPorFecha[fStr] || 0) + val;
+                    totalAbonosBancosUsd += val;
+                });
+            }
+        } catch (_errBank) {
+            abonosPorFecha = {};
+        }
     }
 
     // Agrupar total de pista por fecha para evaluar cobertura bancaria T+0 / T+1 / T+2
@@ -174,15 +223,36 @@ const getAuditoriaDineroEnTransito = async ({ dias = 14 } = {}) => {
         totalPosPistaUsd += posUsd;
 
         if (fStr <= cutoff48hStr && (remUsd + posUsd) > 0) {
-            // Verificar cobertura bancaria en ventana [T, T+1, T+2] proporcional a la estación
-            const bankWindow =
-                (abonosPorFecha[fStr] || 0) * 0.5 +
-                (abonosPorFecha[addDaysStr(fStr, 1)] || 0) * 0.35 +
-                (abonosPorFecha[addDaysStr(fStr, 2)] || 0) * 0.15;
+            const branchKey = `${normalizeSaasBranchId(pr.id_empresa)}|${fStr}`;
+            const deliveredCash = deliveredRemesasByBranchDate.has(branchKey)
+                ? Number(deliveredRemesasByBranchDate.get(branchKey) || 0)
+                : 0;
             const totalDayPista = pistaTotalByDate[fStr] || 1;
             const share = (remUsd + posUsd) / totalDayPista;
-            const abonoAsociado = Math.min(remUsd + posUsd, bankWindow * share);
-            const pendiente = Math.max(0, (remUsd + posUsd) - abonoAsociado);
+
+            let pendiente = 0;
+            let abonoAsociado = 0;
+            if (usingLiveExternalBank) {
+                const liveBank4d =
+                    (abonosPorFecha[fStr] || 0) +
+                    (abonosPorFecha[addDaysStr(fStr, 1)] || 0) +
+                    (abonosPorFecha[addDaysStr(fStr, 2)] || 0) +
+                    (abonosPorFecha[addDaysStr(fStr, 3)] || 0);
+                const pendingUncoveredCash = Math.max(0, remUsd - deliveredCash);
+                const amountNeedingProof = pendingUncoveredCash + (liveBank4d > 0 ? 0 : posUsd);
+                abonoAsociado = Math.min(remUsd + posUsd, (liveBank4d > 0 ? deliveredCash + posUsd : 0) + (liveBank4d * share));
+                pendiente = liveBank4d > 0
+                    ? Math.max(0, pendingUncoveredCash - Math.max(0, liveBank4d * share - posUsd))
+                    : amountNeedingProof;
+            } else {
+                // Cobertura bancaria clásica en ventana [T, T+1, T+2] proporcional a la estación
+                const bankWindow =
+                    (abonosPorFecha[fStr] || 0) * 0.5 +
+                    (abonosPorFecha[addDaysStr(fStr, 1)] || 0) * 0.35 +
+                    (abonosPorFecha[addDaysStr(fStr, 2)] || 0) * 0.15;
+                abonoAsociado = Math.min(remUsd + posUsd, bankWindow * share);
+                pendiente = Math.max(0, (remUsd + posUsd) - abonoAsociado);
+            }
 
             // Considerar comisión POS promedio saludable (~1.85%) antes de levantar alerta
             const toleranciaComisionPos = posUsd * 0.025;

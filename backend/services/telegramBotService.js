@@ -174,6 +174,12 @@ const {
 } = require('./telegramSentinelService');
 
 const {
+    auditStationCloseoutsAndRemesas,
+    formatStationDiscrepancyAuditMessage,
+    getStationAuditInlineMarkup
+} = require('./stationDiscrepancyAuditService');
+
+const {
     buildAndSendExecutiveAudio,
     buildAndSendTopicChart
 } = require('./telegramMediaInsightsService');
@@ -679,6 +685,7 @@ const handleCallbackQuery = async (cq) => {
     if (
         data.startsWith('tg_rcp:') ||
         data.startsWith('tg_sent:') ||
+        data.startsWith('tg_audit_cortes:') ||
         data.startsWith('tg_chr:') ||
         data.startsWith('tg_fin:') ||
         data.startsWith('tg_apr:')
@@ -727,6 +734,20 @@ const handleCallbackQuery = async (cq) => {
                 const accountingDb = await getAccountingDb().catch(() => null);
                 const sentinelRes = await evaluateSentinelAlerts({ db, externalDb, accountingDb });
                 await sendTelegramMessage(chatId, formatSentinelMessage(sentinelRes), getSentinelInlineMarkup());
+                return;
+            }
+
+            if (data.startsWith('tg_audit_cortes:')) {
+                if (!effPerms.alertas && !effPerms.isAdmin) {
+                    await answerCallbackQuery(cq.id, '⛔ Sin permiso para auditar cortes y remesas.');
+                    return;
+                }
+                await answerCallbackQuery(cq.id, '🔍 Auditando cortes y remesas enviadas...');
+                sendChatAction(chatId, 'typing').catch(() => {});
+                const externalDb = await getExternalDb().catch(() => null);
+                const accountingDb = await getAccountingDb().catch(() => null);
+                const auditRes = await auditStationCloseoutsAndRemesas({ dias: 7, accountingDb, externalDb });
+                await sendTelegramMessage(chatId, formatStationDiscrepancyAuditMessage(auditRes), getStationAuditInlineMarkup());
                 return;
             }
 
@@ -1758,6 +1779,26 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             return true;
         } catch (audErr) {
             await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error generando audio ejecutivo: ' + escapeHtml(audErr.message), keyboard);
+            return true;
+        }
+    }
+
+    // -0.025 Auditoría cruzada cortes ↔ remesas enviadas ↔ banco
+    if (parsed.isAuditoriaCortesRemesas) {
+        if (!effectivePerms.alertas && !effectivePerms.isAdmin) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso asignado para auditar diferencias de cortes y remesas.', keyboard);
+            return true;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const externalDb = await getExternalDb().catch(() => null);
+            const accountingDb = await getAccountingDb().catch(() => null);
+            const auditRes = await auditStationCloseoutsAndRemesas({ dias: 7, accountingDb, externalDb });
+            await logTelegramQuery(user.telegram_user_id, rawText, 'Auditoria Cortes Remesas NLU', 1);
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + formatStationDiscrepancyAuditMessage(auditRes), getStationAuditInlineMarkup());
+            return true;
+        } catch (auditErr) {
+            await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error auditando cortes y remesas: ' + escapeHtml(auditErr.message), keyboard);
             return true;
         }
     }
@@ -3679,6 +3720,25 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         return;
     }
 
+    if (cleanLower === 'auditoria_cortes' || cleanLower === 'auditoria_remesas') {
+        if (!effectivePerms.alertas && !effectivePerms.isAdmin) {
+            await logTelegramQuery(user.telegram_user_id, '/auditoria_cortes', 'Permiso denegado auditoria cortes', 0);
+            await sendTelegramMessage(chatId, voicePrefix + '⚠️ No tienes permiso asignado para auditar cortes y remesas.', keyboard);
+            return;
+        }
+        sendChatAction(chatId, 'typing').catch(() => {});
+        try {
+            const externalDb = await getExternalDb().catch(() => null);
+            const accountingDb = await getAccountingDb().catch(() => null);
+            const auditRes = await auditStationCloseoutsAndRemesas({ dias: 7, accountingDb, externalDb });
+            await logTelegramQuery(user.telegram_user_id, '/auditoria_cortes', `Alertas: ${auditRes.resumen.total_alertas}`, 1);
+            await sendTelegramMessage(chatId, voicePrefix + formatStationDiscrepancyAuditMessage(auditRes), getStationAuditInlineMarkup());
+        } catch (err) {
+            await sendTelegramMessage(chatId, voicePrefix + '❌ Error auditando cortes y remesas: ' + escapeHtml(err.message), keyboard);
+        }
+        return;
+    }
+
     // Comandos ejecutivos directos (/centinela, /audio, /grafica, /flujo, /prestamos, /creditos, /aprobaciones)
     if (cleanLower === 'centinela' || cleanLower === 'liquidez') {
         if (!effectivePerms.alertas && !effectivePerms.saldos_banco && !effectivePerms.isAdmin) {
@@ -4235,6 +4295,7 @@ const initTelegramBot = async (io = null) => {
             { command: 'agendar', description: 'Programar recordatorio o reunión MiBot' },
             { command: 'pagos', description: 'Control de Pagos (vencidos, hoy, parciales)' },
             { command: 'centinela', description: 'Centinela de liquidez 72h y remesas >48h' },
+            { command: 'auditoria_cortes', description: 'Auditoría cortes vs remesas enviadas' },
             { command: 'flujo', description: 'Flujo de caja proyectado a 30 o 60 días' },
             { command: 'prestamos', description: 'Cartera de préstamos bancarios' },
             { command: 'creditos', description: 'Riesgo y mora en créditos de flotas' },
@@ -4294,12 +4355,12 @@ const getDiscrepancyInlineMarkup = (date, stationId = '008') => {
 /**
  * Formatear mensaje de Alerta Gerencial Urgente de Discrepancias
  */
-const formatDiscrepancyAlertMessage = ({ effectiveDate, pistaDiscrepancies = [], tiendaDiscrepancies = [], mermasAnomalas = [] }, options = {}) => {
+const formatDiscrepancyAlertMessage = ({ effectiveDate, pistaDiscrepancies = [], tiendaDiscrepancies = [], mermasAnomalas = [], remesasDiscrepancies = [] }, options = {}) => {
     let msg = `🚨 <b>ALERTA GERENCIAL DE DISCREPANCIAS</b>\n`;
     msg += `📅 <b>Fecha Auditada:</b> ${toDisplayDate(effectiveDate)}\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    const totalDescuadres = pistaDiscrepancies.length + tiendaDiscrepancies.length + mermasAnomalas.length;
+    const totalDescuadres = pistaDiscrepancies.length + tiendaDiscrepancies.length + mermasAnomalas.length + remesasDiscrepancies.length;
     msg += `⚠️ <b>Se detectaron ${totalDescuadres} discrepancia(s) que superan los umbrales de control:</b>\n\n`;
 
     // 1. Descuadres en Pista (diferencia > $10)
@@ -4350,6 +4411,19 @@ const formatDiscrepancyAlertMessage = ({ effectiveDate, pistaDiscrepancies = [],
             const pct = m.porcentaje_variacion !== undefined ? `(${numFmt(m.porcentaje_variacion)}%)` : '';
             const imp = m.impacto_usd ? ` | Impacto: <code>${moneyFmt(m.impacto_usd)}</code>` : '';
             msg += `   └ Variación: ${difGal} ${pct}${imp}\n`;
+        });
+        msg += `\n`;
+    }
+
+    // 4. Diferencias en Dinero Enviado / Remesas vs Banco
+    if (remesasDiscrepancies.length > 0) {
+        msg += `🏦 <b>Diferencias en Remesas Enviadas / Bancos (&gt;$5.00):</b>\n`;
+        remesasDiscrepancies.slice(0, 6).forEach(r => {
+            const estName = escapeHtml(r.estacion || r.empresa || 'Estación');
+            const refKey = escapeHtml(r.llave_saas || r.tipo_envio || 'Envío');
+            const difVal = Number(r.diferencia_banco_vs_sistema ?? r.diferencia ?? 0);
+            msg += `• ⚠️ <b>${estName}</b> (${refKey})\n`;
+            msg += `   └ Banco vs Sistema: <code>${moneyFmt(difVal)}</code> (${escapeHtml(r.motivo || 'Descuadre en envío')})\n`;
         });
         msg += `\n`;
     }
@@ -4502,7 +4576,20 @@ const broadcastDiscrepancyAlerts = async (targetDate = null, customDataOrOptions
         }
     }
 
-    const totalDiscrepancies = pistaDiscrepancies.length + tiendaDiscrepancies.length + mermasAnomalas.length;
+    let remesasDiscrepancies = Array.isArray(data?.remesas_discrepancias) ? data.remesas_discrepancias : [];
+    const hasCustomMockData = Boolean(customDataOrOptions && (customDataOrOptions.resumen_cierre || customDataOrOptions.cortes_tienda || customDataOrOptions.estaciones || customDataOrOptions.data));
+    if (!hasCustomMockData && !Array.isArray(data?.remesas_discrepancias) && process.env.NODE_ENV !== 'test') {
+        try {
+            const auditRes = await auditStationCloseoutsAndRemesas({ targetDate: effectiveDate });
+            if (Array.isArray(auditRes?.delivery_mismatches)) {
+                remesasDiscrepancies = auditRes.delivery_mismatches;
+            }
+        } catch (_) {
+            // Silencioso en caso de falla en auditoría cruzada de remesas
+        }
+    }
+
+    const totalDiscrepancies = pistaDiscrepancies.length + tiendaDiscrepancies.length + mermasAnomalas.length + remesasDiscrepancies.length;
 
     // Si no existen discrepancias, no emitir alertas a usuarios
     if (totalDiscrepancies === 0) {
@@ -4514,6 +4601,7 @@ const broadcastDiscrepancyAlerts = async (targetDate = null, customDataOrOptions
             descuadres_pista: 0,
             descuadres_tienda: 0,
             mermas_anomalas: 0,
+            remesas_diferencias: 0,
             recipients_count: 0,
             recipients: [],
             message: 'No se detectaron descuadres ni mermas anómalas superiores a los umbrales para la fecha auditada.'
@@ -4533,7 +4621,8 @@ const broadcastDiscrepancyAlerts = async (targetDate = null, customDataOrOptions
         effectiveDate,
         pistaDiscrepancies,
         tiendaDiscrepancies,
-        mermasAnomalas
+        mermasAnomalas,
+        remesasDiscrepancies
     });
 
     const primaryStationId = pistaDiscrepancies[0]?.estacion_id || 
@@ -4585,6 +4674,7 @@ const broadcastDiscrepancyAlerts = async (targetDate = null, customDataOrOptions
         descuadres_pista: pistaDiscrepancies.length,
         descuadres_tienda: tiendaDiscrepancies.length,
         mermas_anomalas: mermasAnomalas.length,
+        remesas_diferencias: remesasDiscrepancies.length,
         recipients_count: authorizedUsers.length,
         recipients: sendResults,
         details: {

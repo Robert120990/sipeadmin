@@ -5,6 +5,7 @@ const getExternalDb = (...args) => dbModule.getExternalDb(...args);
 
 const recordatoriosPagosService = require('./recordatoriosPagosService');
 const { getAuditoriaDineroEnTransito } = require('./operationalAuditService');
+const { auditStationCloseoutsAndRemesas } = require('./stationDiscrepancyAuditService');
 const { getSaldosBancosData } = require('./telegramDataService');
 const { sendTelegramMessage } = require('./telegramTransportService');
 const {
@@ -333,6 +334,34 @@ async function evaluateSentinelAlerts({
         Number(transitoData?.resumen?.vales_sin_facturar_72h_usd || valesCriticos.reduce((s, v) => s + Number(v.monto_usd || 0), 0)) * 100
     ) / 100;
 
+    // 5B. Auditoría de cortes de pista/tienda y conciliación de dinero enviado vs banco
+    let stationAuditData = overrides?.stationAuditData || null;
+    if (!stationAuditData && !overrides && process.env.NODE_ENV !== 'test') {
+        try {
+            stationAuditData = await auditStationCloseoutsAndRemesas({
+                dias: 7,
+                closeoutDays: 2,
+                pistaThreshold: 5,
+                tiendaThreshold: 5,
+                deliveryDiffThreshold: 5,
+                undeliveredMinUsd: 50,
+                accountingDb,
+                externalDb,
+                todayOverride: todayStr
+            });
+        } catch (errAudit) {
+            console.warn('[TelegramSentinel] Error auditando cortes y remesas:', errAudit.message);
+            stationAuditData = null;
+        }
+    }
+
+    const cortesPistaDif = stationAuditData?.pista_discrepancias || [];
+    const cortesTiendaDif = stationAuditData?.tienda_discrepancias || [];
+    const enviosRemesaDif = stationAuditData?.delivery_mismatches || [];
+    const remesasSinRespaldo48h = stationAuditData?.remesas_sin_entregar_48h || [];
+    const cortesDescuadreCount = cortesPistaDif.length + cortesTiendaDif.length;
+    const remesasEnvioDifCount = enviosRemesaDif.length + remesasSinRespaldo48h.length;
+
     // 6. Claves de alertas activas
     const alertKeys = [];
     if (brechaGlobalUsd > 0) alertKeys.push('LIQ_BRECHA_GLOBAL');
@@ -341,9 +370,14 @@ async function evaluateSentinelAlerts({
     if (totalVencidoHoyUsd > 0) alertKeys.push('PAGOS_VENCIDOS_HOY');
     if (remesasCriticas.length > 0) alertKeys.push('REMESAS_48H');
     if (valesCriticos.length > 0) alertKeys.push('VALES_72H');
+    if (cortesDescuadreCount > 0) alertKeys.push('CORTES_DESCUADRE');
+    if (remesasEnvioDifCount > 0) alertKeys.push('REMESAS_ENVIADAS_DIF');
 
     const hasAlerts = alertKeys.length > 0;
-    const isCritico = brechaGlobalUsd > 0 || cuentasConDeficit.length > 0 || remesasCriticas.some(r => r.severidad === 'critico' || Number(r.dias_transito) >= 4);
+    const isCritico = brechaGlobalUsd > 0 ||
+        cuentasConDeficit.length > 0 ||
+        remesasCriticas.some(r => r.severidad === 'critico' || Number(r.dias_transito) >= 4) ||
+        stationAuditData?.severity === 'critico';
     const severity = !hasAlerts ? 'ok' : (isCritico ? 'critico' : 'alerta');
 
     return {
@@ -377,7 +411,15 @@ async function evaluateSentinelAlerts({
             total_vales_72h_usd: totalVales72hUsd,
             vales_criticos_count: valesCriticos.length,
             vales_criticos: valesCriticos.slice(0, 5)
-        }
+        },
+        cortes_y_remesas: stationAuditData ? {
+            cortes_descuadre_count: cortesDescuadreCount,
+            remesas_envio_dif_count: remesasEnvioDifCount,
+            pista_discrepancias: cortesPistaDif.slice(0, 4),
+            tienda_discrepancias: cortesTiendaDif.slice(0, 4),
+            delivery_mismatches: enviosRemesaDif.slice(0, 4),
+            remesas_sin_entregar_48h: remesasSinRespaldo48h.slice(0, 3)
+        } : null
     };
 }
 
@@ -445,6 +487,23 @@ function formatSentinelMessage(result = {}) {
         msg += `🟢 <b>Vales Pista (&gt;72h):</b> Facturación al día.\n`;
     }
 
+    const cr = result.cortes_y_remesas;
+    if (cr && ((cr.cortes_descuadre_count || 0) > 0 || (cr.remesas_envio_dif_count || 0) > 0)) {
+        msg += `\n⛽ <b>CORTES Y REMESAS ENVIADAS (DIFERENCIAS):</b>\n`;
+        (cr.pista_discrepancias || []).slice(0, 3).forEach(p => {
+            msg += `   • Pista <b>${escapeHtml(p.estacion)}</b> (${toDisplayDate(p.fecha)}): <code>${moneyFmt(p.diferencia)}</code>\n`;
+        });
+        (cr.tienda_discrepancias || []).slice(0, 3).forEach(t => {
+            msg += `   • Tienda <b>${escapeHtml(t.tienda)}</b> (${toDisplayDate(t.fecha)}): <code>${moneyFmt(t.diferencia)}</code>\n`;
+        });
+        (cr.delivery_mismatches || []).slice(0, 3).forEach(d => {
+            msg += `   • Envío <b>${escapeHtml(d.estacion)}</b> (${escapeHtml(d.llave_saas)} ${toDisplayDate(d.fecha)}): Dif <code>${moneyFmt(d.diferencia_banco_vs_sistema)}</code>\n`;
+        });
+        (cr.remesas_sin_entregar_48h || []).slice(0, 2).forEach(u => {
+            msg += `   • Sin entregar &gt;48h <b>${escapeHtml(u.estacion)}</b>: <code>${moneyFmt(u.neto_sin_respaldo_usd)}</code>\n`;
+        });
+    }
+
     msg += `\n<i>SIPE Admin • Centinela Tesorería 24/7</i>`;
     return msg;
 }
@@ -454,11 +513,11 @@ function getSentinelInlineMarkup() {
         inline_keyboard: [
             [
                 { text: '🔄 Re-evaluar Centinela', callback_data: 'tg_sent:refresh' },
-                { text: '📈 Flujo 30d', callback_data: 'tg_fin:flujo:30' }
+                { text: '🔍 Auditar Cortes/Remesas', callback_data: 'tg_audit_cortes:refresh' }
             ],
             [
                 { text: '💳 Pagos Hoy/Vencidos', callback_data: 'tg_pago:f:hoy' },
-                { text: '📊 Gráfica Flujo', callback_data: 'tg_chr:flujo' }
+                { text: '📈 Flujo 30d', callback_data: 'tg_fin:flujo:30' }
             ]
         ]
     };
