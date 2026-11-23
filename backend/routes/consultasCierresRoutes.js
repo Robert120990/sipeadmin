@@ -10,6 +10,7 @@ const {
     getCleanStationName,
     getCleanTiendaName,
     saasBranchMap,
+    branchToEmpId,
     normalizeSaasBranchId,
     OFFICIAL_ESTACIONES,
     isGenericDescription,
@@ -320,7 +321,7 @@ router.get('/ventas/corte-tienda/detalle/:id_corte', authenticateToken, requireP
                 id_corte,
                 cabecera: {
                     id: id_corte,
-                    id_empresa: String(branchId).padStart(3, '0'),
+                    id_empresa: branchToEmpId[branchId] || String(branchId).padStart(3, '0'),
                     tienda_nombre: storeName,
                     fecha: date,
                     turno: shiftNumbers || 1,
@@ -818,7 +819,7 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
             }
 
             const mapped = (rows || []).map(mapFn);
-            const total = mapped.reduce((acc, curr) => acc + Number(curr.valor || curr.total || curr.monto || curr.precio_total || 0), 0);
+            const total = mapped.reduce((acc, curr) => acc + Number(curr.total ?? curr.precio_total ?? curr.monto ?? curr.valor ?? 0), 0);
 
             return res.json({
                 id_empresa: cleanId,
@@ -1108,7 +1109,7 @@ router.get('/ventas/cierre-turno/detalle/:id_empresa/:date/:rubro', authenticate
 
         const [rows] = await externalDb.query(query, queryParams);
         const mapped = (rows || []).map(mapFn);
-        const total = mapped.reduce((acc, curr) => acc + Number(curr.valor || curr.total || curr.monto || curr.precio_total || 0), 0);
+        const total = mapped.reduce((acc, curr) => acc + Number(curr.total ?? curr.precio_total ?? curr.monto ?? curr.valor ?? 0), 0);
 
         res.json({
             id_empresa: cleanId,
@@ -1219,8 +1220,9 @@ Emite un dictamen pericial forense riguroso, objetivo y en español profesional.
             turnos: turnosList
         });
 
+        const absDif = Math.abs(dif);
         const fallbackData = {
-            nivel_criticidad: dif < -1000 ? 'CRITICO' : (dif < -300 ? 'ALTO' : (dif < -50 ? 'MEDIO' : (dif > 0.05 ? 'ALTO' : 'NORMAL'))),
+            nivel_criticidad: absDif <= 0.05 ? 'NORMAL' : (absDif >= 1000 ? 'CRITICO' : (absDif >= 300 ? 'ALTO' : (absDif >= 50 ? 'MEDIO' : 'BAJO'))),
             dictamen_ejecutivo: analisisHeuristico.diagnostico_principal,
             foco_responsabilidad: analisisHeuristico.foco_turno
                 ? analisisHeuristico.foco_turno.texto

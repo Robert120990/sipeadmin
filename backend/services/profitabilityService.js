@@ -136,7 +136,7 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
             const [mantRows] = await db.query(`
                 SELECT empresa_id, COALESCE(SUM(costo_estimado), 0) as total_mant
                 FROM finanzas_planes_mantenimiento
-                WHERE COALESCE(fecha_completado, fecha_programada) BETWEEN ? AND ?
+                WHERE COALESCE(fecha_ejecutada, fecha_programada) BETWEEN ? AND ?
                   AND estado IN ('completado', 'programado', 'pendiente')
                 GROUP BY empresa_id
             `, [dInicio, dFin]);
@@ -156,7 +156,8 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         const [payrollRows] = await withRetry(() => accountingDb.query(`
             SELECT branch_id, COALESCE(SUM(monto_recibir), 0.0) as total_planilla
             FROM rh_planillas
-            WHERE CONCAT(periodo_anio, '-', LPAD(periodo_mes, 2, '0'), '-', CASE WHEN quincena = 1 OR quincena = 'primera' THEN '15' ELSE '28' END)
+            WHERE COALESCE(estado, 'pendiente') != 'anulada'
+              AND CONCAT(periodo_anio, '-', LPAD(periodo_mes, 2, '0'), '-', CASE WHEN quincena = 1 OR quincena = 'primera' THEN '15' ELSE '28' END)
                   BETWEEN ? AND ?
             GROUP BY branch_id
         `, [dInicio, dFin]));
@@ -167,7 +168,7 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
                 if (amt <= 0) return;
                 hasRealPayroll = true;
                 if (pr.branch_id) {
-                    const normBranch = Number(pr.branch_id) === 7 ? 12 : Number(pr.branch_id);
+                    const normBranch = Number(pr.branch_id) === 12 ? 7 : Number(pr.branch_id);
                     payrollByBranch[normBranch] = (payrollByBranch[normBranch] || 0) + amt;
                 } else {
                     unassignedSum += amt;
@@ -397,15 +398,13 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
  * la variación de volumen diario en turnos cerrados (últimos 7 días vs base previa).
  */
 const getElasticidadPreciosCompetencia = async (dias = 30) => {
+    const { getElSalvadorTodayYMD, addDaysYMD } = require('../utils/dateSv');
     const windowDays = Math.min(90, Math.max(14, parseInt(dias, 10) || 30));
-    const now = new Date();
-    const dFin = now.toISOString().split('T')[0];
-    const dSplitObj = new Date(now);
-    dSplitObj.setDate(dSplitObj.getDate() - 7);
-    const dSplit = dSplitObj.toISOString().split('T')[0];
-    const dInicioObj = new Date(now);
-    dInicioObj.setDate(dInicioObj.getDate() - windowDays);
-    const dInicio = dInicioObj.toISOString().split('T')[0];
+    // Excluir el día en curso (hoySV) para que Turno 1 parcial nunca dispare falsas alertas de fuga de volumen
+    const hoySV = getElSalvadorTodayYMD();
+    const dFin = addDaysYMD(hoySV, -1);
+    const dSplit = addDaysYMD(dFin, -7);
+    const dInicio = addDaysYMD(dFin, -(windowDays - 1));
 
     let compRows = [];
     try {
@@ -435,7 +434,7 @@ const getElasticidadPreciosCompetencia = async (dias = 30) => {
         const accountingDb = await getAccountingDb();
         const [volRows] = await withRetry(() => accountingDb.query(`
             SELECT
-                CASE WHEN c.branch_id = 7 THEN 12 ELSE c.branch_id END as branch_id,
+                c.branch_id as branch_id,
                 CASE 
                     WHEN (r.codigo_producto LIKE '%DIESEL%' AND r.codigo_producto NOT LIKE '%ION%') OR p.tipo_combustible = 3 THEN 'diesel'
                     WHEN r.codigo_producto LIKE '%SUPER%' OR p.tipo_combustible = 2 THEN 'super'
@@ -443,14 +442,14 @@ const getElasticidadPreciosCompetencia = async (dias = 30) => {
                     ELSE 'other'
                 END as fuel_key,
                 COUNT(DISTINCT CASE WHEN c.fecha_turno > ? THEN c.fecha_turno END) as dias_recientes,
-                COALESCE(SUM(CASE WHEN c.fecha_turno > ? THEN r.diferencia ELSE 0 END), 0) as gal_recientes,
+                COALESCE(SUM(CASE WHEN c.fecha_turno > ? THEN GREATEST(0, COALESCE(r.diferencia, 0)) ELSE 0 END), 0) as gal_recientes,
                 COUNT(DISTINCT CASE WHEN c.fecha_turno <= ? THEN c.fecha_turno END) as dias_base,
-                COALESCE(SUM(CASE WHEN c.fecha_turno <= ? THEN r.diferencia ELSE 0 END), 0) as gal_base
+                COALESCE(SUM(CASE WHEN c.fecha_turno <= ? THEN GREATEST(0, COALESCE(r.diferencia, 0)) ELSE 0 END), 0) as gal_base
             FROM gas_station_closeouts c
             JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
             LEFT JOIN products p ON r.product_id = p.id
-            WHERE c.estado = 'cerrado' AND c.fecha_turno BETWEEN ? AND ?
-            GROUP BY branch_id, fuel_key
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
+            GROUP BY c.branch_id, fuel_key
         `, [dSplit, dSplit, dSplit, dSplit, dInicio, dFin]));
 
         (volRows || []).forEach(vr => {

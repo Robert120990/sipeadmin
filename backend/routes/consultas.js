@@ -947,10 +947,12 @@ const getConsolidadoVentasData = async (date) => {
                 };
             });
 
-            // 3. Inventario de tanques (último turno cerrado) y promedios 7 días cerrados
-            const cDesde7d = new Date(date + 'T12:00:00');
-            cDesde7d.setDate(cDesde7d.getDate() - 6);
-            const dateDesde7d = cDesde7d.toISOString().split('T')[0];
+            // 3. Inventario de tanques (último turno cerrado) y promedios 7 días COMPLETOS (excluyendo hoySV)
+            const { getElSalvadorTodayYMD, addDaysYMD } = require('../utils/dateSv');
+            const hoySV = getElSalvadorTodayYMD();
+            const ayerSV = addDaysYMD(hoySV, -1);
+            const dateHasta7d = (date && date < hoySV) ? date : ayerSV;
+            const dateDesde7d = addDaysYMD(dateHasta7d, -6);
 
             const [saasTankRows, saas7dRows] = await Promise.all([
                 withRetry(() => accountingDb.query(`
@@ -973,17 +975,19 @@ const getConsolidadoVentasData = async (date) => {
                     SELECT 
                         c.branch_id,
                         CASE 
-                            WHEN r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
-                            WHEN r.descripcion_producto LIKE '%SUPER%' THEN 'S'
-                            WHEN r.descripcion_producto LIKE '%ION%' THEN 'I'
+                            WHEN p.tipo_combustible = 1 OR r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
+                            WHEN p.tipo_combustible = 2 OR r.descripcion_producto LIKE '%SUPER%' OR r.descripcion_producto LIKE '%V-POWER%' THEN 'S'
+                            WHEN p.tipo_combustible = 4 OR r.descripcion_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ULSD%' THEN 'I'
                             ELSE 'D'
                         END as tipo_combustible,
-                        SUM(r.diferencia) as total_7d
+                        SUM(GREATEST(0, COALESCE(r.diferencia, 0))) as total_7d,
+                        COUNT(DISTINCT c.fecha_turno) as dias_activos
                     FROM gas_station_closeouts c
                     JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
+                    LEFT JOIN products p ON r.product_id = p.id
                     WHERE c.fecha_turno BETWEEN ? AND ? AND c.estado = 'cerrado'
                     GROUP BY c.branch_id, tipo_combustible
-                `, [dateDesde7d, date]))
+                `, [dateDesde7d, dateHasta7d]))
             ]);
 
             const tankList = (saasTankRows[0] || []).map(t => ({ ...t, branch_id: normalizeSaasBranchId(t.branch_id) }));
@@ -1006,10 +1010,15 @@ const getConsolidadoVentasData = async (date) => {
                 const nS = Math.round(getInv('S') * 100) / 100;
                 const nI = Math.round(getInv('I') * 100) / 100;
 
+                const branchDays = Math.max(
+                    1,
+                    ...promedios7d.filter(p => p.branch_id === bId).map(p => Number(p.dias_activos || 0)),
+                    0
+                ) || 7;
                 const getProm = (tipo) => {
                     const rows = promedios7d.filter(p => p.branch_id === bId && p.tipo_combustible === tipo);
                     const total7d = rows.reduce((sum, r) => sum + Number(r?.total_7d || 0), 0);
-                    return (total7d / 7);
+                    return total7d / branchDays;
                 };
                 const pD = getProm('D'), pR = getProm('R'), pS = getProm('S'), pI = getProm('I');
 
@@ -1720,7 +1729,7 @@ router.post('/ventas/combustibles/quincenas', authenticateToken, requirePermissi
             precio_super = VALUES(precio_super),
             precio_ion = VALUES(precio_ion),
             activo = VALUES(activo)
-        `, [periodo_inicio, periodo_fin, Number(precio_diesel || 0), Number(precio_regular || 0), Number(precio_super || 0), Number(precio_ion || 0), activo ? 1 : 1]);
+        `, [periodo_inicio, periodo_fin, Number(precio_diesel || 0), Number(precio_regular || 0), Number(precio_super || 0), Number(precio_ion || 0), (activo === false || activo === 0 || activo === '0') ? 0 : 1]);
 
         // 2. Si se proporcionaron precios por estación, guardarlos
         if (Array.isArray(estaciones) && estaciones.length > 0) {

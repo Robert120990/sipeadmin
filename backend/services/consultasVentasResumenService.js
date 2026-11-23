@@ -82,12 +82,12 @@ const getResumenMensualData = async (externalDb, yearNum, monthNum, accountingDb
                             SELECT 
                                 b.id as id_empresa,
                                 b.nombre as empresa,
-                                COALESCE(SUM(sh.total), 0.0) as venta,
+                                COALESCE(SUM(sh.total_pagar), 0.0) as venta,
                                 COUNT(DISTINCT DATE(sh.fecha_emision)) as dias_con_venta,
-                                ROUND(COALESCE(SUM(sh.total), 0.0) / GREATEST(COUNT(DISTINCT DATE(sh.fecha_emision)), 1), 2) as promedio_diario
+                                ROUND(COALESCE(SUM(sh.total_pagar), 0.0) / GREATEST(COUNT(DISTINCT DATE(sh.fecha_emision)), 1), 2) as promedio_diario
                             FROM branches b
                             JOIN sales_headers sh ON b.id = sh.branch_id
-                            WHERE DATE(sh.fecha_emision) BETWEEN ? AND ?
+                            WHERE b.id != 12 AND sh.estado = 'emitido' AND DATE(sh.fecha_emision) BETWEEN ? AND ?
                             GROUP BY b.id, b.nombre
                             ORDER BY b.id
                         `;
@@ -518,12 +518,12 @@ const getResumenRangoVentasData = async (externalDb, startDate, endDate, account
                             SELECT 
                                 b.id as id_empresa,
                                 b.nombre as empresa,
-                                COALESCE(SUM(sh.total), 0.0) as venta,
+                                COALESCE(SUM(sh.total_pagar), 0.0) as venta,
                                 COUNT(DISTINCT DATE(sh.fecha_emision)) as dias_con_venta,
-                                ROUND(COALESCE(SUM(sh.total), 0.0) / GREATEST(COUNT(DISTINCT DATE(sh.fecha_emision)), 1), 2) as promedio_diario
+                                ROUND(COALESCE(SUM(sh.total_pagar), 0.0) / GREATEST(COUNT(DISTINCT DATE(sh.fecha_emision)), 1), 2) as promedio_diario
                             FROM branches b
                             JOIN sales_headers sh ON b.id = sh.branch_id
-                            WHERE DATE(sh.fecha_emision) BETWEEN ? AND ?
+                            WHERE b.id != 12 AND sh.estado = 'emitido' AND DATE(sh.fecha_emision) BETWEEN ? AND ?
                             GROUP BY b.id, b.nombre
                             ORDER BY b.id
                         `;

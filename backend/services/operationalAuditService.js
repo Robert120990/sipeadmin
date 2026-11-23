@@ -353,18 +353,19 @@ const getHomeResumenInteligente = async (user) => {
             if (!canViewVentas) return null;
             try {
                 const accountingDb = await getAccountingDb();
-                if (!accountingDb) return { fecha: yesterdayStr, total_dolares: 0, total_galones: 0, hoy_dolares: 0, hoy_galones: 0 };
+                if (!accountingDb) return { fecha_corte: yesterdayStr, ayer_dolares: 0, ayer_galones: 0, hoy_dolares: 0, hoy_galones: 0 };
                 const sql = `
-                    SELECT COALESCE(SUM(r.diferencia), 0) as galones, COALESCE(SUM(r.monto), 0) as dolares
+                    SELECT COALESCE(SUM(GREATEST(0, COALESCE(r.diferencia, 0))), 0) as galones, COALESCE(SUM(r.monto), 0) as dolares
                     FROM gas_station_closeouts c
                     JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
-                    WHERE c.estado = 'cerrado' AND c.fecha_turno = ?
+                    WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno = ?
                 `;
                 let [[ayerRow]] = await withRetry(() => accountingDb.query(sql, [yesterdayStr]));
                 let fechaRef = yesterdayStr;
                 if (Number(ayerRow?.dolares || 0) === 0) {
                     const [[maxRow]] = await withRetry(() => accountingDb.query(
-                        "SELECT MAX(fecha_turno) as last_date FROM gas_station_closeouts WHERE estado = 'cerrado'"
+                        "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as last_date FROM gas_station_closeouts WHERE estado = 'cerrado' AND branch_id != 12 AND fecha_turno < ?",
+                        [todayStr]
                     ));
                     const lastD = formatYMD(maxRow?.last_date);
                     if (lastD) {
@@ -515,7 +516,8 @@ const getHomeResumenInteligente = async (user) => {
  * Listo para renderizar con generateExecutiveReportPdf en Web (ReportPreviewModal) y Telegram (/dossier).
  */
 const buildWeeklyExecutiveDossierPayload = async () => {
-    const dFin = getDateStr(0);
+    // 7 días completos cerrados (excluyendo hoy en curso para no subestimar EBITDA semanal)
+    const dFin = getDateStr(-1);
     const dInicio = getDateStr(-7);
 
     const [pnlRes, tanquesRes, bancosRes, elasticidadRes, transitoRes] = await Promise.allSettled([

@@ -460,20 +460,24 @@ router.get('/consultas/estaciones/precios-competencia/bi-analytics', authenticat
             };
         }).sort((a, b) => b.count - a.count);
 
-        // 4. Historical Trends
+        // 4. Historical Trends (últimos 30 días reales en orden cronológico ASC)
         const queryTrend = `
-            SELECT DATE_FORMAT(fecha_registro, '%Y-%m-%d') as fecha,
-                   AVG(NULLIF(super_a, 0)) as super_a,
-                   AVG(NULLIF(regular_a, 0)) as regular_a,
-                   AVG(NULLIF(diesel_a, 0)) as diesel_a,
-                   AVG(NULLIF(super_c, 0)) as super_c,
-                   AVG(NULLIF(regular_c, 0)) as regular_c,
-                   AVG(NULLIF(diesel_c, 0)) as diesel_c,
-                   COUNT(DISTINCT estacion) as total_estaciones
-            FROM web_precios_competencia_historial
-            GROUP BY fecha_registro
-            ORDER BY fecha_registro ASC
-            LIMIT 30
+            SELECT fecha, super_a, regular_a, diesel_a, super_c, regular_c, diesel_c, total_estaciones
+            FROM (
+                SELECT DATE_FORMAT(fecha_registro, '%Y-%m-%d') as fecha,
+                       AVG(NULLIF(super_a, 0)) as super_a,
+                       AVG(NULLIF(regular_a, 0)) as regular_a,
+                       AVG(NULLIF(diesel_a, 0)) as diesel_a,
+                       AVG(NULLIF(super_c, 0)) as super_c,
+                       AVG(NULLIF(regular_c, 0)) as regular_c,
+                       AVG(NULLIF(diesel_c, 0)) as diesel_c,
+                       COUNT(DISTINCT estacion) as total_estaciones
+                FROM web_precios_competencia_historial
+                GROUP BY fecha_registro
+                ORDER BY fecha_registro DESC
+                LIMIT 30
+            ) recent
+            ORDER BY fecha ASC
         `;
         const [trendRows] = await withRetry(() => localDb.query(queryTrend));
 

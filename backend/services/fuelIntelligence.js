@@ -236,7 +236,12 @@ const getTanquesAutonomia = async () => {
         const stockUtil = Math.max(0, stockActual - reserva);
         const espacioLibreUllage = Math.max(0, capacidad - stockActual);
 
-        const consumoPromDiario = consumptionMap[`${idEmpresa}_${tipo}`] || 0;
+        const totalCapFuel = capByStationFuel[`${empCode}_${tipo}`] || Math.max(1, capacidad);
+        const shareRatio = capacidad > 0 ? (capacidad / totalCapFuel) : 1;
+
+        // Prorratear consumo de estación por proporción de capacidad del tanque en combustibles multi-tanque
+        const consumoEstacionDiario = consumptionMap[`${idEmpresa}_${tipo}`] || 0;
+        const consumoPromDiario = Math.round((consumoEstacionDiario * shareRatio) * 100) / 100;
         const consumoPorHora = consumoPromDiario > 0 ? (consumoPromDiario / 24) : 0;
 
         let horasRestantes = 999;
@@ -253,8 +258,6 @@ const getTanquesAutonomia = async () => {
             pedidos_retenidos_count: 0,
             ordenes_en_ruta: []
         };
-        const totalCapFuel = capByStationFuel[`${empCode}_${tipo}`] || Math.max(1, capacidad);
-        const shareRatio = capacidad > 0 ? (capacidad / totalCapFuel) : 1;
         const galonesEnTransito = Math.round(transitInfo.galones_transito * shareRatio);
         const galonesRetenidos = Math.round(transitInfo.galones_retenidos * shareRatio);
         totalGalonesTransito += galonesEnTransito;
@@ -311,7 +314,7 @@ const getTanquesAutonomia = async () => {
             riesgo_real: riesgoReal,
             porcentaje_ocupacion: porcentajeOcupacion,
             estado,
-            fecha_lectura: lastDate
+            fecha_lectura: formatYMD(t.fecha_lectura) || lastDate
         });
     });
 
@@ -464,26 +467,37 @@ const getAuditoriaMermas = async (desde, hasta) => {
     `;
     const [ventasRows] = await withRetry(() => accountingDb.query(sqlVentas, [dInicio, dFin]));
 
-    // Movimientos físicos de tanques (inicial, recargas, final)
+    // Movimientos físicos de tanques (agrupados primero por tank_id para no mezclar lecturas multi-tanque)
     const sqlMovs = `
-        SELECT 
-            c.branch_id as id_empresa,
-            b.nombre as estacion,
-            CASE 
-                WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
-                WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
-                WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
-                WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
-                ELSE 'D'
-            END as tipo_combustible,
-            SUM(tr.recarga) as recarga,
-            CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_anterior ORDER BY c.fecha_turno ASC, c.numero_turno ASC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as anterior,
-            CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_actual ORDER BY c.fecha_turno DESC, c.numero_turno DESC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as lectura
-        FROM gas_station_closeouts c
-        JOIN branches b ON c.branch_id = b.id
-        JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
-        JOIN gas_station_tanks t ON tr.tank_id = t.id
-        WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
+        SELECT
+            id_empresa,
+            estacion,
+            tipo_combustible,
+            SUM(recarga) as recarga,
+            SUM(anterior) as anterior,
+            SUM(lectura) as lectura
+        FROM (
+            SELECT 
+                c.branch_id as id_empresa,
+                b.nombre as estacion,
+                tr.tank_id,
+                CASE 
+                    WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                    WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                    WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                    WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                    ELSE 'D'
+                END as tipo_combustible,
+                SUM(COALESCE(tr.recarga, 0)) as recarga,
+                CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_anterior ORDER BY c.fecha_turno ASC, CAST(c.numero_turno AS UNSIGNED) ASC, tr.id ASC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as anterior,
+                CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_actual ORDER BY c.fecha_turno DESC, CAST(c.numero_turno AS UNSIGNED) DESC, tr.id DESC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as lectura
+            FROM gas_station_closeouts c
+            JOIN branches b ON c.branch_id = b.id
+            JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
+            JOIN gas_station_tanks t ON tr.tank_id = t.id
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
+            GROUP BY c.branch_id, b.nombre, tr.tank_id, tipo_combustible
+        ) per_tank
         GROUP BY id_empresa, estacion, tipo_combustible
         ORDER BY id_empresa, tipo_combustible
     `;
@@ -586,24 +600,35 @@ const getAuditoriaMermas = async (desde, hasta) => {
 
         const [dailyMovs] = await withRetry(() => accountingDb.query(`
             SELECT
-                c.branch_id as id_empresa,
-                c.fecha_turno as fecha,
-                CASE 
-                    WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
-                    WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
-                    WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
-                    WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
-                    ELSE 'D'
-                END as tipo,
-                SUM(tr.recarga) as recarga,
-                CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_anterior ORDER BY c.numero_turno ASC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as anterior,
-                CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_actual ORDER BY c.numero_turno DESC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as lectura
-            FROM gas_station_closeouts c
-            JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
-            JOIN gas_station_tanks t ON tr.tank_id = t.id
-            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
-            GROUP BY id_empresa, c.fecha_turno, tipo
-            ORDER BY id_empresa, tipo, c.fecha_turno ASC
+                id_empresa,
+                fecha,
+                tipo,
+                SUM(recarga) as recarga,
+                SUM(anterior) as anterior,
+                SUM(lectura) as lectura
+            FROM (
+                SELECT
+                    c.branch_id as id_empresa,
+                    c.fecha_turno as fecha,
+                    tr.tank_id,
+                    CASE 
+                        WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                        WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                        WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                        WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                        ELSE 'D'
+                    END as tipo,
+                    SUM(COALESCE(tr.recarga, 0)) as recarga,
+                    CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_anterior ORDER BY CAST(c.numero_turno AS UNSIGNED) ASC, tr.id ASC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as anterior,
+                    CAST(SUBSTRING_INDEX(GROUP_CONCAT(tr.lectura_actual ORDER BY CAST(c.numero_turno AS UNSIGNED) DESC, tr.id DESC SEPARATOR ','), ',', 1) AS DECIMAL(14,5)) as lectura
+                FROM gas_station_closeouts c
+                JOIN gas_station_closeout_tank_readings tr ON c.id = tr.closeout_id
+                JOIN gas_station_tanks t ON tr.tank_id = t.id
+                WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
+                GROUP BY c.branch_id, c.fecha_turno, tr.tank_id, tipo
+            ) per_tank_day
+            GROUP BY id_empresa, fecha, tipo
+            ORDER BY id_empresa, tipo, fecha ASC
         `, [dInicio, dFin]));
 
         const movByKey = {};

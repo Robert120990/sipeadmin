@@ -12,58 +12,68 @@ const withRetry = (...args) => dbModule.withRetry(...args);
 const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
     const horizon = parseInt(diasHorizonte, 10) === 60 ? 60 : 30;
     const db = getDb();
+    const { getElSalvadorTodayYMD, addDaysYMD, formatDateYMD } = require('../utils/dateSv');
     const accountingDb = await getAccountingDb();
 
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = getElSalvadorTodayYMD();
+    const yesterdayStr = addDaysYMD(todayStr, -1);
+    const start30dStr = addDaysYMD(yesterdayStr, -29);
 
-    // 1. Obtener saldo inicial en bancos desde movimientos y cuentas bancarias de SIPE
+    // 1. Obtener saldo inicial en bancos (sp_saldo_en_bancos externo o movimientos_bancarios local)
     let saldoInicialBancos = 0;
     try {
-        const [localBalanceRows] = await db.query(`
-            SELECT COALESCE(SUM(abono - cargo), 0) as saldo_neto
-            FROM movimientos_bancarios
-        `);
-        saldoInicialBancos = Number(localBalanceRows[0]?.saldo_neto || 0);
-    } catch (err) {
-        console.warn('Error al calcular saldo en movimientos bancarios:', err.message);
+        const extDb = await Promise.resolve(getExternalDb()).catch(() => null);
+        if (extDb && typeof extDb.query === 'function') {
+            const [spRes] = await extDb.query('CALL sp_saldo_en_bancos(?)', [todayStr]);
+            const rowsSp = Array.isArray(spRes?.[0]) ? spRes[0] : (Array.isArray(spRes) ? spRes : []);
+            const sumSp = rowsSp.reduce((s, r) => s + Number(r.saldo || r.saldo_banco || r.SALDO || 0), 0);
+            if (sumSp > 0) saldoInicialBancos = sumSp;
+        }
+    } catch (_errSp) {
+        // Fallback a movimientos_bancarios local
     }
 
     if (saldoInicialBancos <= 0) {
         try {
-            const [accRows] = await db.query(`
-                SELECT COALESCE(SUM(saldo_inicial), 0) as saldo_base
-                FROM cuentas_bancarias
-                WHERE activa = 1
+            const [localBalanceRows] = await db.query(`
+                SELECT COALESCE(SUM(abono - cargo), 0) as saldo_neto
+                FROM movimientos_bancarios
             `);
-            saldoInicialBancos = Number(accRows[0]?.saldo_base || 85000);
-        } catch (e) {
-            saldoInicialBancos = 85000;
+            saldoInicialBancos = Number(localBalanceRows[0]?.saldo_neto || 0);
+        } catch (err) {
+            console.warn('Error al calcular saldo en movimientos bancarios:', err.message);
         }
     }
 
-    // 2. Calcular promedio diario de ventas de combustible (turnos cerrados) y tienda de los últimos 30 días
+    // 2. Calcular promedio diario de ventas de combustible (turnos cerrados) y tienda (30 días COMPLETOS)
     let promedioVentaDiariaCombustible = 0;
     let promedioVentaDiariaTiendas = 0;
     try {
-        // Ventas de combustible en turnos cerrados de los últimos 30 días
+        // Ventas de combustible en turnos cerrados de los últimos 30 días completos (sin branch 12 ni hoy parcial)
         const [ventasRows] = await withRetry(() => accountingDb.query(`
-            SELECT COALESCE(SUM(r.monto), 0.0) as total_venta_30d
+            SELECT COALESCE(SUM(r.monto), 0.0) as total_venta_30d,
+                   COUNT(DISTINCT c.fecha_turno) as dias_activos
             FROM gas_station_closeouts c
             JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
-            WHERE c.estado = 'cerrado' AND c.fecha_turno >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-        `));
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
+        `, [start30dStr, yesterdayStr]));
         const totalVenta30d = Number(ventasRows[0]?.total_venta_30d || 0);
-        promedioVentaDiariaCombustible = totalVenta30d > 0 ? (totalVenta30d / 30) : 28000;
+        const diasComb = Math.max(1, Number(ventasRows[0]?.dias_activos || 30));
+        promedioVentaDiariaCombustible = totalVenta30d > 0 ? (totalVenta30d / diasComb) : 28000;
 
-        // Ventas de tiendas / mostrador en los últimos 30 días
+        // Ventas de tiendas desde pos_shifts cerrados (sin duplicar CCFs de combustible de sales_headers)
         const [tiendasRows] = await withRetry(() => accountingDb.query(`
-            SELECT COALESCE(SUM(total_pagar), 0.0) as total_tienda_30d
-            FROM sales_headers
-            WHERE estado = 'emitido' AND fecha_emision >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-        `));
+            SELECT COALESCE(SUM(ps.total_sales), 0.0) as total_tienda_30d,
+                   COUNT(DISTINCT ps.shift_date) as dias_activos
+            FROM pos_shifts ps
+            JOIN points_of_sale p ON ps.pos_id = p.id
+            WHERE ps.status = 'closed' AND ps.branch_id != 12
+              AND (p.nombre LIKE '%Tienda%' OR p.nombre LIKE '%Super%')
+              AND ps.shift_date BETWEEN ? AND ?
+        `, [start30dStr, yesterdayStr]));
         const totalTienda30d = Number(tiendasRows[0]?.total_tienda_30d || 0);
-        promedioVentaDiariaTiendas = totalTienda30d > 0 ? (totalTienda30d / 30) : 3500;
+        const diasTienda = Math.max(1, Number(tiendasRows[0]?.dias_activos || 30));
+        promedioVentaDiariaTiendas = totalTienda30d > 0 ? (totalTienda30d / diasTienda) : 3500;
     } catch (err) {
         console.warn('Error calculando promedio de ventas 30d:', err.message);
         promedioVentaDiariaCombustible = 28000;
@@ -86,9 +96,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
     }
 
     // 4. Obtener compromisos y quedans de proveedores pendientes en la ventana de proyección
-    const fechaFinHorizonte = new Date(today);
-    fechaFinHorizonte.setDate(fechaFinHorizonte.getDate() + horizon);
-    const fechaFinHorizonteStr = fechaFinHorizonte.toISOString().split('T')[0];
+    const fechaFinHorizonteStr = addDaysYMD(todayStr, horizon);
 
     let recordatoriosPendientes = [];
     try {
@@ -108,7 +116,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
     let compromisosPumaPendientesUsd = 0;
     try {
         const [mRows] = await db.query(`
-            SELECT fecha_programada, nombre AS nombre_activo, costo_estimado
+            SELECT fecha_programada, nombre_activo, costo_estimado
             FROM finanzas_planes_mantenimiento
             WHERE fecha_programada BETWEEN ? AND ?
               AND estado IN ('programado', 'pendiente')
@@ -222,7 +230,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         // Fallback limpio si externalDb no está disponible
     }
 
-    // 6. Nómina quincenal real calculada desde rh_planillas
+    // 6. Nómina quincenal real calculada desde rh_planillas (excluyendo anuladas)
     let nominaQuincenalEstimada = 18000;
     try {
         const [payrollRows] = await withRetry(() => accountingDb.query(`
@@ -230,6 +238,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
             FROM (
                 SELECT periodo_anio, periodo_mes, quincena, SUM(monto_recibir) as total_quincena
                 FROM rh_planillas
+                WHERE COALESCE(estado, 'pendiente') != 'anulada'
                 GROUP BY periodo_anio, periodo_mes, quincena
                 ORDER BY periodo_anio DESC, periodo_mes DESC, quincena DESC
                 LIMIT 4
@@ -245,7 +254,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
     // 7. Costo diario de compra de combustible (85% a 88% del valor de venta)
     const costoDiarioCombustible = promedioVentaDiariaCombustible * 0.88;
 
-    // 8. Construcción de la línea de tiempo día a día
+    // 8. Construcción de la línea de tiempo día a día (en calendario UTC-safe de America/El_Salvador)
     const timeline = [];
     let saldoAcumulado = saldoInicialBancos;
     let saldoMinimoProyectado = saldoInicialBancos;
@@ -255,14 +264,11 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
     const fondoReservaSeguridad = 15000;
 
     for (let i = 1; i <= horizon; i++) {
-        const d = new Date(today);
-        d.setDate(d.getDate() + i);
-        const yyyy = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const dayStr = `${yyyy}-${mm}-${dd}`;
-        const diaDelMes = d.getDate();
-        const diaSemana = d.getDay();
+        const dayStr = addDaysYMD(todayStr, i);
+        const [yyyy, mmNum, diaDelMes] = dayStr.split('-').map(Number);
+        const dayUtc = new Date(Date.UTC(yyyy, mmNum - 1, diaDelMes, 12, 0, 0));
+        const diaSemana = dayUtc.getUTCDay();
+        const ultimoDiaMes = new Date(Date.UTC(yyyy, mmNum, 0, 12, 0, 0)).getUTCDate();
 
         // Moduladores por día de semana
         let factorVenta = 1.0;
@@ -275,8 +281,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         const ingresoTienda = promedioVentaDiariaTiendas * factorVenta;
         let ingresoCxcRecordatorios = 0;
         recordatoriosCxcPendientes.forEach(r => {
-            let rFecha = r.fecha_vence;
-            if (rFecha instanceof Date) rFecha = rFecha.toISOString().split('T')[0];
+            const rFecha = formatDateYMD(r.fecha_vence);
             if (rFecha === dayStr) {
                 ingresoCxcRecordatorios += Number(r.monto || 0);
             }
@@ -289,13 +294,27 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
             egresoCombustible = (costoDiarioCombustible * 7) / 6;
         }
 
-        // Cuotas de préstamos bancarios vencidas este día
+        // Cuotas de préstamos bancarios vencidas este día (respetando mensual/quincenal/semanal y meses cortos)
         let egresoPrestamos = 0;
         const prestamosDetalle = [];
         prestamosActivos.forEach(p => {
-            const fechaPrimerPago = p.fecha_primer_pago ? new Date(p.fecha_primer_pago) : null;
-            const diaVencePrestamo = p.dia_pago || (fechaPrimerPago ? fechaPrimerPago.getDate() : 15);
-            if (diaDelMes === diaVencePrestamo) {
+            const freq = String(p.frecuencia_pago || 'mensual').toLowerCase();
+            const primerPagoYmd = formatDateYMD(p.fecha_primer_pago);
+            const diaBase = Number(p.dia_pago || (primerPagoYmd ? Number(primerPagoYmd.slice(8, 10)) : 15));
+            let vencimientoHoy = false;
+            if (freq === 'semanal' && primerPagoYmd) {
+                const startUtc = new Date(`${primerPagoYmd}T12:00:00Z`);
+                const diffDays = Math.round((dayUtc - startUtc) / (1000 * 60 * 60 * 24));
+                vencimientoHoy = diffDays >= 0 && (diffDays % 7 === 0);
+            } else if (freq === 'quincenal') {
+                const diaA = Math.min(diaBase <= 15 ? diaBase : Math.max(1, diaBase - 15), ultimoDiaMes);
+                const diaB = Math.min(diaBase <= 15 ? diaBase + 15 : diaBase, ultimoDiaMes);
+                vencimientoHoy = (diaDelMes === diaA || diaDelMes === diaB);
+            } else {
+                const diaAjustado = Math.min(diaBase, ultimoDiaMes);
+                vencimientoHoy = (diaDelMes === diaAjustado);
+            }
+            if (vencimientoHoy) {
                 const cuota = Number(p.cuota_total || p.cuota_calculada || 0);
                 egresoPrestamos += cuota;
                 prestamosDetalle.push({
@@ -310,8 +329,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         let egresoRecordatorios = 0;
         const recordatoriosDetalle = [];
         recordatoriosPendientes.forEach(r => {
-            let rFecha = r.fecha_vence;
-            if (rFecha instanceof Date) rFecha = rFecha.toISOString().split('T')[0];
+            const rFecha = formatDateYMD(r.fecha_vence);
             if (rFecha === dayStr) {
                 const m = Number(r.monto || 0);
                 egresoRecordatorios += m;
@@ -325,8 +343,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         // Mantenimientos
         let egresoMantenimientos = 0;
         mantenimientosProgramados.forEach(m => {
-            let mFecha = m.fecha_programada;
-            if (mFecha instanceof Date) mFecha = mFecha.toISOString().split('T')[0];
+            const mFecha = formatDateYMD(m.fecha_programada);
             if (mFecha === dayStr) {
                 const c = Number(m.costo_estimado || 0);
                 egresoMantenimientos += c;
@@ -335,7 +352,6 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
 
         // Nómina: Se paga el 15 y el último día del mes
         let egresoNomina = 0;
-        const ultimoDiaMes = new Date(yyyy, d.getMonth() + 1, 0).getDate();
         if (diaDelMes === 15 || diaDelMes === ultimoDiaMes) {
             egresoNomina = nominaQuincenalEstimada;
         }
@@ -429,7 +445,7 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
             compromisos_control_pagos_cxp_usd: Math.round(compromisosControlPagosCxpUsd),
             compromisos_control_pagos_cxc_usd: Math.round(compromisosControlPagosCxcUsd),
             dias_con_deficit: brechasDeLiquidez.length,
-            salud_flujo: brechasDeLiquidez.length === 0 ? 'SALUDABLE' : (saldoMinimoProyectado < 0 ? 'CRÍTICO' : 'PRECAUCIÓN')
+            salud_flujo: saldoMinimoProyectado < 0 ? 'CRÍTICO' : (saldoMinimoProyectado < fondoReservaSeguridad ? 'PRECAUCIÓN' : 'SALUDABLE')
         },
         brechas_liquidez: brechasDeLiquidez.slice(0, 5),
         recomendaciones,

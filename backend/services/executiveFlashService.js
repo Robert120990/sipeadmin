@@ -22,24 +22,21 @@ const formatFechaTexto = (dateStr) => {
  * Genera el Flash Ejecutivo Diario para Dueños y Directores
  */
 const getFlashEjecutivo = async () => {
+    const { getElSalvadorTodayYMD, addDaysYMD, formatDateYMD } = require('../utils/dateSv');
     const db = getDb();
     const accountingDb = await getAccountingDb();
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = getElSalvadorTodayYMD();
+    const yesterdayStr = addDaysYMD(todayStr, -1);
 
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
-
-    // 1. Ventas por estación (solo turnos cerrados) para Ayer y Hoy
+    // 1. Ventas por estación (solo turnos cerrados, excluyendo duplicado branch_id = 12) para Ayer y Hoy
     const sqlVentasTurno = `
         SELECT b.id as id_empresa, b.nombre as estacion,
-               COALESCE(SUM(r.diferencia), 0.0) as galones,
+               COALESCE(SUM(GREATEST(0, COALESCE(r.diferencia, 0))), 0.0) as galones,
                COALESCE(SUM(r.monto), 0.0) as venta_monto
         FROM branches b
         JOIN gas_station_closeouts c ON b.id = c.branch_id
         JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
-        WHERE c.estado = 'cerrado' AND c.fecha_turno = ?
+        WHERE c.estado = 'cerrado' AND b.id != 12 AND c.fecha_turno = ?
         GROUP BY b.id, b.nombre
         ORDER BY b.id
     `;
@@ -57,13 +54,13 @@ const getFlashEjecutivo = async () => {
         let [rowsAyer] = await withRetry(() => accountingDb.query(sqlVentasTurno, [yesterdayStr]));
         let fechaAplicada = yesterdayStr;
 
-        // Si ayer aún no tiene turnos cerrados, tomar el último día con turnos cerrados
+        // Si ayer aún no tiene turnos cerrados, tomar el último día COMPLETO (< todayStr) con turnos cerrados
         if (rowsAyer.length === 0) {
             const [latestClosedRows] = await withRetry(() => accountingDb.query(
-                "SELECT MAX(fecha_turno) as latest_date FROM gas_station_closeouts WHERE estado = 'cerrado'"
+                "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as latest_date FROM gas_station_closeouts WHERE estado = 'cerrado' AND branch_id != 12 AND fecha_turno < ?",
+                [todayStr]
             ));
-            let lastClosedDate = latestClosedRows[0]?.latest_date;
-            if (lastClosedDate instanceof Date) lastClosedDate = lastClosedDate.toISOString().split('T')[0];
+            const lastClosedDate = formatDateYMD(latestClosedRows[0]?.latest_date);
             if (lastClosedDate) {
                 fechaAplicada = lastClosedDate;
                 const [rowsLatest] = await withRetry(() => accountingDb.query(sqlVentasTurno, [lastClosedDate]));
@@ -214,27 +211,28 @@ const getFlashEjecutivo = async () => {
     let compromisosProximos = [];
     let totalCompromisos48h = 0;
     try {
-        const en48h = new Date(today);
-        en48h.setDate(en48h.getDate() + 2);
-        const en48hStr = en48h.toISOString().split('T')[0];
+        const mananaStr = addDaysYMD(todayStr, 1);
+        const en48hStr = addDaysYMD(todayStr, 2);
 
-        // Préstamos con cuota en próximas 48h
-        const diaHoy = today.getDate();
-        const diaManana = new Date(today.getTime() + 24 * 60 * 60 * 1000).getDate();
+        // Préstamos con cuota en próximas 48h (hoy, mañana y pasado mañana en America/El_Salvador)
+        const diaHoy = Number(todayStr.slice(8, 10));
+        const diaManana = Number(mananaStr.slice(8, 10));
+        const diaPasado = Number(en48hStr.slice(8, 10));
+        const diaToDate = { [diaHoy]: todayStr, [diaManana]: mananaStr, [diaPasado]: en48hStr };
         const [pRows] = await db.query(`
-            SELECT numero_prestamo, descripcion, cuota_total,
+            SELECT numero_prestamo, descripcion, COALESCE(NULLIF(cuota_total, 0), cuota_calculada, 0) as cuota_efectiva,
                    COALESCE(DAY(fecha_primer_pago), 15) as dia_pago
             FROM prestamos
-            WHERE estado = 'activo' AND COALESCE(DAY(fecha_primer_pago), 15) IN (?, ?)
-        `, [diaHoy, diaManana]);
+            WHERE estado = 'activo' AND COALESCE(DAY(fecha_primer_pago), 15) IN (?, ?, ?)
+        `, [diaHoy, diaManana, diaPasado]);
         pRows.forEach(p => {
-            const m = Number(p.cuota_total || 0);
+            const m = Number(p.cuota_efectiva || 0);
             totalCompromisos48h += m;
             compromisosProximos.push({
                 tipo: 'Préstamo Bancario',
                 descripcion: `${p.numero_prestamo} - ${p.descripcion}`,
                 monto: Math.round(m),
-                fecha: todayStr
+                fecha: diaToDate[Number(p.dia_pago)] || todayStr
             });
         });
 
@@ -290,7 +288,7 @@ Responde únicamente con el texto ejecutivo directo sin títulos ni introduccion
         if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
         return dStr;
     };
-    const fechaDMY = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+    const fechaDMY = formatDMY(todayStr);
     let whatsappText = `📊 *FLASH EJECUTIVO SIPE - ${fechaDMY}*\n`;
     whatsappText += `────────────────────────────\n`;
     whatsappText += `⛽ *Ventas de Ayer (${formatDMY(ventasAyer.fecha)}):* $${ventasAyer.total_dolares.toLocaleString()} (${ventasAyer.total_galones.toLocaleString()} gal)\n`;

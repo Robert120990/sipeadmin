@@ -198,12 +198,8 @@ function generarFallbackAnaliticoHoras(targetDate, branchId = null) {
  * Si la BD no está accesible o no devuelve datos, provee el fallback analítico.
  */
 const getHorasPicoVentas = async (targetDate, branchId = null) => {
-    let dateStr = targetDate;
-    if (!dateStr) {
-        dateStr = new Date().toISOString().split('T')[0];
-    } else if (dateStr instanceof Date) {
-        dateStr = dateStr.toISOString().split('T')[0];
-    }
+    const { getElSalvadorTodayYMD, formatDateYMD } = require('../utils/dateSv');
+    const dateStr = formatDateYMD(targetDate) || getElSalvadorTodayYMD();
 
     try {
         const accountingDb = await getAccountingDb();
@@ -220,8 +216,13 @@ const getHorasPicoVentas = async (targetDate, branchId = null) => {
             const params = [dateStr];
 
             if (branchId !== null && branchId !== undefined && branchId !== '') {
-                sql += ' AND branch_id = ?';
-                params.push(parseInt(branchId, 10));
+                const parsedBranch = parseInt(branchId, 10);
+                if (Number.isInteger(parsedBranch) && parsedBranch > 0) {
+                    sql += ' AND branch_id = ?';
+                    params.push(parsedBranch);
+                }
+            } else {
+                sql += ' AND branch_id != 12';
             }
 
             sql += ' GROUP BY HOUR(hora_emision) ORDER BY hora ASC';
@@ -272,19 +273,18 @@ const getHorasPicoVentas = async (targetDate, branchId = null) => {
  * Análisis consolidado de horas pico para un rango de fechas o mes completo.
  */
 const getHorasPicoRango = async (startDate, endDate, branchId = null) => {
-    let dStart = startDate;
-    let dEnd = endDate;
+    const { getElSalvadorTodayYMD, addDaysYMD, formatDateYMD } = require('../utils/dateSv');
+    let dStart = formatDateYMD(startDate);
+    let dEnd = formatDateYMD(endDate);
 
     if (!dStart || !dEnd) {
-        const today = new Date();
-        dEnd = today.toISOString().split('T')[0];
-        const prev30 = new Date(today);
-        prev30.setDate(prev30.getDate() - 30);
-        dStart = prev30.toISOString().split('T')[0];
+        const ayerSv = addDaysYMD(getElSalvadorTodayYMD(), -1);
+        dEnd = ayerSv;
+        dStart = addDaysYMD(ayerSv, -29);
     }
 
-    const tStart = new Date(dStart + 'T00:00:00');
-    const tEnd = new Date(dEnd + 'T00:00:00');
+    const tStart = new Date(dStart + 'T12:00:00Z');
+    const tEnd = new Date(dEnd + 'T12:00:00Z');
     const diffDays = Math.max(1, Math.round((tEnd - tStart) / (1000 * 60 * 60 * 24)) + 1);
 
     try {
@@ -303,8 +303,13 @@ const getHorasPicoRango = async (startDate, endDate, branchId = null) => {
             const params = [dStart, dEnd];
 
             if (branchId !== null && branchId !== undefined && branchId !== '') {
-                sql += ' AND branch_id = ?';
-                params.push(parseInt(branchId, 10));
+                const parsedBranch = parseInt(branchId, 10);
+                if (Number.isInteger(parsedBranch) && parsedBranch > 0) {
+                    sql += ' AND branch_id = ?';
+                    params.push(parsedBranch);
+                }
+            } else {
+                sql += ' AND branch_id != 12';
             }
 
             sql += ' GROUP BY HOUR(hora_emision) ORDER BY hora ASC';

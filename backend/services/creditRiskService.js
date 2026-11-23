@@ -20,12 +20,18 @@ const getRiesgoCreditoFlotas = async () => {
             c.nrc,
             COALESCE(c.dias_credito, 15) as dias_plazo,
             COALESCE(SUM(s.total_pagar), 0.0) as facturado_credito,
-            COALESCE(p.total_pagado, 0.0) as total_pagado,
-            (COALESCE(SUM(s.total_pagar), 0.0) - COALESCE(p.total_pagado, 0.0)) as saldo_pendiente,
-            MIN(s.fecha_emision) as factura_mas_antigua_pendiente
+            COALESCE(MAX(p.total_pagado), 0.0) as total_pagado,
+            GREATEST(0.0, COALESCE(SUM(s.total_pagar), 0.0) - COALESCE(MAX(p.total_pagado), 0.0)) as saldo_pendiente,
+            MIN(CASE WHEN s.total_pagar > COALESCE(sp.abonado_dte, 0.0) + 0.01 THEN s.fecha_emision ELSE NULL END) as factura_mas_antigua_pendiente
         FROM customers c
         INNER JOIN companies comp ON c.company_id = comp.id
         LEFT JOIN sales_headers s ON c.id = s.customer_id AND s.condicion_operacion = 2 AND s.estado = 'emitido'
+        LEFT JOIN (
+            SELECT sale_id, SUM(monto) as abonado_dte
+            FROM customer_payments
+            WHERE sale_id IS NOT NULL
+            GROUP BY sale_id
+        ) sp ON s.id = sp.sale_id
         LEFT JOIN (
             SELECT customer_id, SUM(monto) as total_pagado
             FROM customer_payments
@@ -33,14 +39,17 @@ const getRiesgoCreditoFlotas = async () => {
         ) p ON c.id = p.customer_id
         WHERE c.es_credito = 1
         GROUP BY c.id, c.company_id, comp.nombre_comercial, c.nombre_comercial, c.nombre, c.nit, c.nrc, c.dias_credito
-        HAVING saldo_pendiente > 0 OR facturado_credito > 0
+        HAVING saldo_pendiente > 0.01
         ORDER BY saldo_pendiente DESC
         LIMIT 50
     `;
     const [rows] = await withRetry(() => accountingDb.query(query));
     clientes = rows;
 
-    // 2. Vales de pista no facturados en turnos cerrados (gas_station_closeout_creditos)
+    // 2. Vales de pista no facturados en turnos cerrados (últimos 30 días sin CCF emitido posterior)
+    const { getElSalvadorTodayYMD, addDaysYMD, formatDateYMD } = require('../utils/dateSv');
+    const todayStr = getElSalvadorTodayYMD();
+    const valesSince = addDaysYMD(todayStr, -30);
     const valesPistaMap = {};
     try {
         const [valesRows] = await withRetry(() => accountingDb.query(`
@@ -48,8 +57,16 @@ const getRiesgoCreditoFlotas = async () => {
             FROM gas_station_closeout_creditos gsc
             JOIN gas_station_closeouts c ON gsc.closeout_id = c.id
             WHERE c.estado = 'cerrado'
+              AND c.branch_id != 12
+              AND c.fecha_turno >= ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM sales_headers sh
+                  WHERE sh.customer_id = gsc.cliente_id
+                    AND sh.estado = 'emitido'
+                    AND sh.fecha_emision >= c.fecha_turno
+              )
             GROUP BY gsc.cliente_id
-        `));
+        `, [valesSince]));
         valesRows.forEach(v => {
             if (v.cliente_id) valesPistaMap[v.cliente_id] = Number(v.total_vales || 0);
         });
@@ -57,8 +74,7 @@ const getRiesgoCreditoFlotas = async () => {
         // Opcional si la tabla no está poblada
     }
 
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayNoonUtc = new Date(`${todayStr}T12:00:00Z`);
     let totalCarteraCredito = 0;
     let totalSaldoVencido = 0;
     let clientesEnRiesgoAlto = 0;
@@ -75,12 +91,13 @@ const getRiesgoCreditoFlotas = async () => {
 
         const porcentajeUtilizado = Math.min(100, Math.round((saldo / limite) * 100));
 
-        // Calcular días de mora si hay fecha de factura más antigua
+        // Calcular días de mora únicamente si existe saldo pendiente en facturas y fecha antigua sin pagar
         let diasMora = 0;
-        if (c.factura_mas_antigua_pendiente) {
-            const fAntigua = new Date(c.factura_mas_antigua_pendiente);
-            const diffTime = Math.abs(today - fAntigua);
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const fechaAntiguaYmd = formatDateYMD(c.factura_mas_antigua_pendiente);
+        if (saldoFacturas > 0.01 && fechaAntiguaYmd) {
+            const fAntigua = new Date(`${fechaAntiguaYmd}T12:00:00Z`);
+            const diffTime = Math.max(0, todayNoonUtc - fAntigua);
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
             if (diffDays > plazoDias) {
                 diasMora = diffDays - plazoDias;
             }
@@ -137,8 +154,8 @@ const getRiesgoCreditoFlotas = async () => {
 const calcularEstadoPagoDte = ({ total_pagar = 0, total_abonado = 0, condicion_operacion = 2, fecha_emision = null, dias_plazo = 15, fecha_referencia = new Date() }) => {
     const total = Number(total_pagar || 0);
     const abonado = Number(total_abonado || 0);
-    const saldo = Math.max(0, Math.round((total - abonado) * 100) / 100);
     const esCredito = Number(condicion_operacion) === 2;
+    const saldo = esCredito ? Math.max(0, Math.round((total - abonado) * 100) / 100) : 0;
 
     let estado_pago = 'PENDIENTE';
     if (!esCredito) {
@@ -156,7 +173,7 @@ const calcularEstadoPagoDte = ({ total_pagar = 0, total_abonado = 0, condicion_o
     if (fecha_emision) {
         const fEmi = new Date(fecha_emision);
         if (!isNaN(fEmi.getTime())) {
-            const diff = Math.abs(fecha_referencia - fEmi);
+            const diff = Math.max(0, fecha_referencia - fEmi);
             dias_transcurridos = Math.floor(diff / (1000 * 60 * 60 * 24));
             if (esCredito && estado_pago !== 'PAGADO' && dias_transcurridos > dias_plazo) {
                 dias_mora = dias_transcurridos - dias_plazo;

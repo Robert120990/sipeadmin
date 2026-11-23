@@ -13,7 +13,7 @@ const calculatePMT = (principal, annualRate, termMonths, frequency = 'mensual') 
     const P = parseFloat(principal);
     const rate = parseFloat(annualRate);
     const nMonths = parseInt(termMonths, 10);
-    if (!P || P <= 0 || !rate || rate <= 0 || !nMonths || nMonths <= 0) return 0;
+    if (!Number.isFinite(P) || P <= 0 || !Number.isFinite(rate) || rate < 0 || !Number.isFinite(nMonths) || nMonths <= 0) return 0;
 
     let periodsPerYear = 12;
     let totalPeriods = nMonths;
@@ -23,6 +23,10 @@ const calculatePMT = (principal, annualRate, termMonths, frequency = 'mensual') 
     } else if (frequency === 'semanal') {
         periodsPerYear = 52;
         totalPeriods = Math.round(nMonths * 4.3333);
+    }
+
+    if (rate === 0) {
+        return Math.round((P / totalPeriods) * 100) / 100;
     }
 
     const r = (rate / 100) / periodsPerYear;
@@ -618,7 +622,10 @@ router.get('/resumen', authenticateToken, requirePermission(resumenViewPerms), a
                 SUM(CASE WHEN estado = 'activo' THEN 1 ELSE 0 END) AS prestamos_activos,
                 SUM(CASE WHEN estado = 'pagado' THEN 1 ELSE 0 END) AS prestamos_pagados,
                 COALESCE(SUM(monto_original), 0) AS total_monto_contratado,
-                COALESCE(SUM(CASE WHEN estado = 'activo' THEN cuota_calculada ELSE 0 END), 0) AS cuota_mensual_total
+                COALESCE(SUM(CASE WHEN estado = 'activo' THEN
+                    COALESCE(NULLIF(cuota_total, 0), cuota_calculada, 0) *
+                    CASE frecuencia_pago WHEN 'quincenal' THEN 2 WHEN 'semanal' THEN 4.3333 ELSE 1 END
+                ELSE 0 END), 0) AS cuota_mensual_total
             FROM prestamos
             WHERE estado != 'cancelado'
         `);
@@ -638,7 +645,7 @@ router.get('/resumen', authenticateToken, requirePermission(resumenViewPerms), a
         const totalInteres = parseFloat(paymentsRows[0].total_interes_pagado || 0);
         const saldoTotal = Math.max(0, totalContratado - totalAmortizado);
 
-        // 3. Debt by Company
+        // 3. Debt by Company (pre-agregar pagos por préstamo para evitar multiplicación cartesiana)
         const [byCompany] = await db.query(`
             SELECT 
                 e.id,
@@ -646,27 +653,35 @@ router.get('/resumen', authenticateToken, requirePermission(resumenViewPerms), a
                 e.codigo AS empresa_codigo,
                 COUNT(p.id) AS cantidad_prestamos,
                 COALESCE(SUM(p.monto_original), 0) AS monto_original,
-                COALESCE(SUM(pp.monto_capital), 0) AS capital_pagado,
-                (COALESCE(SUM(p.monto_original), 0) - COALESCE(SUM(pp.monto_capital), 0)) AS saldo_deudor
+                COALESCE(SUM(COALESCE(pp.capital_pagado, 0)), 0) AS capital_pagado,
+                GREATEST(0, COALESCE(SUM(p.monto_original), 0) - COALESCE(SUM(COALESCE(pp.capital_pagado, 0)), 0)) AS saldo_deudor
             FROM prestamos p
             INNER JOIN empresas e ON p.empresa_id = e.id
-            LEFT JOIN prestamos_pagos pp ON p.id = pp.prestamo_id
+            LEFT JOIN (
+                SELECT prestamo_id, COALESCE(SUM(monto_capital), 0) AS capital_pagado
+                FROM prestamos_pagos
+                GROUP BY prestamo_id
+            ) pp ON p.id = pp.prestamo_id
             WHERE p.estado = 'activo'
             GROUP BY e.id, e.nombre, e.codigo
             ORDER BY saldo_deudor DESC
         `);
 
-        // 4. Debt by Bank
+        // 4. Debt by Bank (pre-agregar pagos por préstamo para evitar multiplicación cartesiana)
         const [byBank] = await db.query(`
             SELECT 
                 COALESCE(b.id, 0) as banco_id,
                 COALESCE(b.descripcion, 'SIN BANCO / OTROS') AS banco_nombre,
                 COUNT(p.id) AS cantidad_prestamos,
                 COALESCE(SUM(p.monto_original), 0) AS monto_original,
-                (COALESCE(SUM(p.monto_original), 0) - COALESCE(SUM(pp.monto_capital), 0)) AS saldo_deudor
+                GREATEST(0, COALESCE(SUM(p.monto_original), 0) - COALESCE(SUM(COALESCE(pp.capital_pagado, 0)), 0)) AS saldo_deudor
             FROM prestamos p
             LEFT JOIN bancos b ON p.banco_id = b.id
-            LEFT JOIN prestamos_pagos pp ON p.id = pp.prestamo_id
+            LEFT JOIN (
+                SELECT prestamo_id, COALESCE(SUM(monto_capital), 0) AS capital_pagado
+                FROM prestamos_pagos
+                GROUP BY prestamo_id
+            ) pp ON p.id = pp.prestamo_id
             WHERE p.estado = 'activo'
             GROUP BY b.id, b.descripcion
             ORDER BY saldo_deudor DESC
