@@ -4,7 +4,7 @@ const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
 const withRetry = (...args) => dbModule.withRetry(...args);
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
-const { GoogleGenAI } = require('@google/genai');
+const { generateWithGeminiFallback } = require('../services/telegramGeminiService');
 const {
     cierreViewPerms,
     getCleanStationName,
@@ -1140,11 +1140,9 @@ router.post('/ventas/cierre-turno/analisis-ia', authenticateToken, requirePermis
         const pagos = Number(exp.desglose_descargos?.pagos || 0);
         const turnosList = Array.isArray(turnos) ? turnos : [];
 
-        // 1. Si hay clave GEMINI_API_KEY disponible en el entorno
-        if (process.env.GEMINI_API_KEY) {
-            try {
-                const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-                const prompt = `Eres un Auditor Forense Senior y Controller Financiero Corporativo de Estaciones de Servicio de Combustibles (Gasolineras) de Grupo SIPE.
+        // 1. Intentar dictamen IA con rotación automática de claves y modelos estables Gemini
+        try {
+            const prompt = `Eres un Auditor Forense Senior y Controller Financiero Corporativo de Estaciones de Servicio de Combustibles (Gasolineras) de Grupo SIPE.
 Tu trabajo es auditar un cierre de turno de pista que presenta una diferencia o descuadre de efectivo.
 
 DATOS DEL CIERRE AUDITADO:
@@ -1184,26 +1182,25 @@ Emite un dictamen pericial forense riguroso, objetivo y en español profesional.
     ]
 }`;
 
-                const result = await ai.models.generateContent({
-                    model: 'gemini-2.0-flash',
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    config: {
-                        temperature: 0.2,
-                        responseMimeType: 'application/json'
-                    }
-                });
+            const aiRes = await generateWithGeminiFallback({
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                config: {
+                    temperature: 0.2,
+                    responseMimeType: 'application/json'
+                },
+                logPrefix: '[Cierre Turno IA]'
+            });
 
-                const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-                const parsed = JSON.parse(rawText);
-
+            if (aiRes && aiRes.text) {
+                const parsed = JSON.parse(aiRes.text);
                 return res.json({
                     success: true,
-                    fuente: 'gemini-2.0-flash',
+                    fuente: aiRes.modelUsed || 'gemini-2.5-flash',
                     data: parsed
                 });
-            } catch (aiErr) {
-                console.warn('[Cierre Turno IA] Error invocando Gemini, utilizando fallback heurístico:', aiErr.message);
             }
+        } catch (aiErr) {
+            console.warn('[Cierre Turno IA] Error invocando Gemini, utilizando fallback heurístico:', aiErr.message);
         }
 
         // 2. Fallback Heurístico Experto si no hay API Key o falla Gemini

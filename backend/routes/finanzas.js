@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { GoogleGenAI } = require('@google/genai');
+const { generateWithGeminiFallback } = require('../services/telegramGeminiService');
 const { getDb, withTransaction } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
@@ -1266,11 +1266,9 @@ router.post('/asesor-ia', authenticateToken, requirePermission(['/dashboard/fina
             }
         };
 
-        // Si hay API KEY de Gemini disponible
-        if (process.env.GEMINI_API_KEY) {
-            try {
-                const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-                const systemInstruction = `Eres el Director Financiero Corporativo (CFO) y Asesor Estratégico Senior del Grupo Empresarial SIPE (estaciones de servicio de combustible, transporte de hidrocarburos e inversiones).
+        // Invocar Gemini con rotación automática de claves candidatas y modelos estables
+        try {
+            const systemInstruction = `Eres el Director Financiero Corporativo (CFO) y Asesor Estratégico Senior del Grupo Empresarial SIPE (estaciones de servicio de combustible, transporte de hidrocarburos e inversiones).
 Tu misión es emitir diagnósticos de alto rigor financiero, evaluar rentabilidad (VPN, TIR, ROI, Payback), arbitraje de capital (prepagar deuda bancaria vs financiar nuevos proyectos), y planes de mantenimiento.
 Responde de manera estructurada, ejecutiva, con números exactos y recomendaciones prioritarias.
 
@@ -1291,20 +1289,21 @@ FORMATO DE RESPUESTA JSON ESTRICTO:
     "reply_markdown": "Respuesta detallada y profesional en Markdown con tablas o viñetas para que el usuario la lea con total claridad."
 }`;
 
-                const userPromptText = prompt
-                    ? `CONSULTA ESPECÍFICA DEL USUARIO: ${prompt}\n\nDATOS FINANCIEROS Y OPERATIVOS EN SISTEMA:\n${JSON.stringify(financialContext)}`
-                    : `Realiza un diagnóstico integral de salud financiera, arbitraje de deuda vs proyectos y recomendaciones para la gerencia general.\n\nDATOS FINANCIEROS Y OPERATIVOS EN SISTEMA:\n${JSON.stringify(financialContext)}`;
+            const userPromptText = prompt
+                ? `CONSULTA ESPECÍFICA DEL USUARIO: ${prompt}\n\nDATOS FINANCIEROS Y OPERATIVOS EN SISTEMA:\n${JSON.stringify(financialContext)}`
+                : `Realiza un diagnóstico integral de salud financiera, arbitraje de deuda vs proyectos y recomendaciones para la gerencia general.\n\nDATOS FINANCIEROS Y OPERATIVOS EN SISTEMA:\n${JSON.stringify(financialContext)}`;
 
-                const result = await ai.models.generateContent({
-                    model: 'gemini-2.0-flash',
-                    contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
-                    config: {
-                        systemInstruction,
-                        responseMimeType: "application/json"
-                    }
-                });
+            const aiRes = await generateWithGeminiFallback({
+                contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
+                config: {
+                    systemInstruction,
+                    responseMimeType: "application/json"
+                },
+                logPrefix: '[Finanzas IA]'
+            });
 
-                let rawText = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+            if (aiRes && aiRes.text) {
+                let rawText = aiRes.text;
                 if (rawText.startsWith('```json')) {
                     rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
                 }
@@ -1312,13 +1311,13 @@ FORMATO DE RESPUESTA JSON ESTRICTO:
                 const parsed = JSON.parse(rawText);
                 return res.json({
                     success: true,
-                    fuente: 'gemini-2.0-flash',
+                    fuente: aiRes.modelUsed || 'gemini-2.5-flash-lite',
                     contexto_base: financialContext,
                     data: parsed
                 });
-            } catch (aiErr) {
-                console.warn('Gemini Finanzas call failed, falling back to heuristic engine:', aiErr.message);
             }
+        } catch (aiErr) {
+            console.warn('Gemini Finanzas call failed, falling back to heuristic engine:', aiErr.message);
         }
 
         // --- MOTOR HEURÍSTICO / MATEMÁTICO DE CONTINGENCIA (Fallback Offline) ---

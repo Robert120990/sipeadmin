@@ -78,6 +78,24 @@ const isRunningNodeTests = () => {
 };
 
 let cachedSiblingEnvKeys = null;
+const invalidApiKeysCache = new Map(); // apiKey -> expiresAtMs
+const INVALID_KEY_TTL_MS = 10 * 60 * 1000;
+
+const markGeminiKeyInvalid = (apiKey) => {
+    if (!apiKey || isRunningNodeTests()) return;
+    invalidApiKeysCache.set(apiKey, Date.now() + INVALID_KEY_TTL_MS);
+};
+
+const isGeminiKeyTemporarilyInvalid = (apiKey) => {
+    if (!apiKey || isRunningNodeTests()) return false;
+    const exp = invalidApiKeysCache.get(apiKey);
+    if (!exp) return false;
+    if (Date.now() > exp) {
+        invalidApiKeysCache.delete(apiKey);
+        return false;
+    }
+    return true;
+};
 
 /**
  * Buscar claves de Gemini configuradas en servicios hermanos del mismo VPS (ej. SIPEWEBgas / nova-saas)
@@ -135,6 +153,7 @@ const setRuntimeGeminiApiKey = (rawKey) => {
     const clean = sanitizeGeminiApiKey(rawKey);
     if (clean && !isRunningNodeTests()) {
         process.env.GEMINI_API_KEY = clean;
+        invalidApiKeysCache.delete(clean);
     }
     return clean;
 };
@@ -177,7 +196,10 @@ const getGeminiApiKeyCandidates = async () => {
         addCandidate(siblingKey);
     }
 
-    return candidates;
+    // Priorizar claves que no hayan fallado recientemente con API_KEY_INVALID
+    const healthy = candidates.filter(k => !isGeminiKeyTemporarilyInvalid(k));
+    const penalized = candidates.filter(k => isGeminiKeyTemporarilyInvalid(k));
+    return [...healthy, ...penalized];
 };
 
 /**
@@ -211,15 +233,57 @@ const sanitizeAudioMimeType = (rawMime = '') => {
 };
 
 const GEMINI_FALLBACK_MODELS = [
-    'gemini-3.8-flash',
     'gemini-2.5-flash-lite',
-    'gemini-flash-latest',
-    'gemini-2.5-flash'
+    'gemini-3.5-flash-lite',
+    'gemini-flash-lite-latest',
+    'gemini-3.8-flash',
+    'gemini-flash-latest'
 ];
 
 const isGeminiApiKeyInvalidError = (err) => {
     const msg = String(err?.message || err || '');
     return /(API_KEY_INVALID|API key not valid|API key expired|INVALID_ARGUMENT.*API key|key not valid)/i.test(msg);
+};
+
+/**
+ * Helper centralizado para invocar Gemini con rotación automática de claves candidatas,
+ * caché negativa de claves inválidas y fallback de modelos estables (2.5-flash -> lite -> latest -> 3.8-flash).
+ */
+const generateWithGeminiFallback = async ({
+    contents,
+    config = undefined,
+    models = GEMINI_FALLBACK_MODELS,
+    logPrefix = '[Gemini]'
+}) => {
+    const candidates = await getGeminiApiKeyCandidates();
+    if (!candidates || candidates.length === 0) {
+        return null;
+    }
+
+    const { GoogleGenAI } = require('@google/genai');
+    let lastErr = null;
+
+    for (const apiKey of candidates) {
+        const ai = new GoogleGenAI({ apiKey });
+        for (const modelName of models) {
+            try {
+                const payload = config ? { model: modelName, contents, config } : { model: modelName, contents };
+                const response = await ai.models.generateContent(payload);
+                const text = (response?.text || response?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+                return { response, text, modelUsed: modelName };
+            } catch (err) {
+                lastErr = err;
+                console.warn(`${logPrefix} Fallo con modelo ${modelName}:`, err.message);
+                if (isGeminiApiKeyInvalidError(err)) {
+                    markGeminiKeyInvalid(apiKey);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (lastErr) throw lastErr;
+    return null;
 };
 
 /**
@@ -252,7 +316,10 @@ Si te preguntan comparaciones o análisis, apóyate en el contexto de datos real
                 if (reply) return reply.trim();
             } catch (e) {
                 console.warn(`[TelegramBot] Gemini fallback error (${modelName}):`, e.message);
-                if (isGeminiApiKeyInvalidError(e)) break;
+                if (isGeminiApiKeyInvalidError(e)) {
+                    markGeminiKeyInvalid(apiKey);
+                    break;
+                }
             }
         }
     }
@@ -307,6 +374,7 @@ const transcribeTelegramVoice = async (audioBuffer, mimeType = 'audio/ogg') => {
                 lastErr = err;
                 console.warn(`[TelegramBot] Fallo transcripción con ${modelName}:`, err.message);
                 if (isGeminiApiKeyInvalidError(err)) {
+                    markGeminiKeyInvalid(apiKey);
                     break;
                 }
             }
@@ -385,6 +453,7 @@ Extrae los datos y responde ÚNICAMENTE con un objeto JSON válido con la siguie
                 lastErr = err;
                 console.warn(`[TelegramBot] Fallo análisis de imagen con ${modelName}:`, err.message);
                 if (isGeminiApiKeyInvalidError(err)) {
+                    markGeminiKeyInvalid(apiKey);
                     break;
                 }
             }
@@ -574,6 +643,8 @@ module.exports = {
     sanitizeAudioMimeType,
     GEMINI_FALLBACK_MODELS,
     isGeminiApiKeyInvalidError,
+    markGeminiKeyInvalid,
+    generateWithGeminiFallback,
     askGeminiAssistant,
     transcribeTelegramVoice,
     analyzeTelegramImageReceipt,

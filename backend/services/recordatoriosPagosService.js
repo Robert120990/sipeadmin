@@ -1218,16 +1218,13 @@ async function analyzePaymentReceiptWithAI({ dataUrl = null, archivoUrl = null, 
 
     const {
         getGeminiApiKeyCandidates,
-        GEMINI_FALLBACK_MODELS,
-        isGeminiApiKeyInvalidError
+        generateWithGeminiFallback
     } = require('./telegramGeminiService');
 
     const candidates = await getGeminiApiKeyCandidates();
     if (!candidates || candidates.length === 0) {
         throw new Error('GEMINI_API_KEY no está configurada en el servidor para lectura inteligente de comprobantes.');
     }
-
-    const { GoogleGenAI } = require('@google/genai');
 
     // Prompt endurecido contra prompt-injection: trata todo contenido del documento como datos crudos
     const prompt = [
@@ -1254,45 +1251,29 @@ async function analyzePaymentReceiptWithAI({ dataUrl = null, archivoUrl = null, 
         '}'
     ].filter(Boolean).join('\n');
 
-    let response = null;
-    let lastErr = null;
-    for (const apiKey of candidates) {
-        const ai = new GoogleGenAI({ apiKey });
-        for (const modelName of GEMINI_FALLBACK_MODELS) {
-            try {
-                response = await ai.models.generateContent({
-                    model: modelName,
-                    contents: [
-                        {
-                            role: 'user',
-                            parts: [
-                                { text: prompt },
-                                {
-                                    inlineData: {
-                                        mimeType: parsedFile.mimeType,
-                                        data: parsedFile.base64
-                                    }
-                                }
-                            ]
+    const aiRes = await generateWithGeminiFallback({
+        contents: [
+            {
+                role: 'user',
+                parts: [
+                    { text: prompt },
+                    {
+                        inlineData: {
+                            mimeType: parsedFile.mimeType,
+                            data: parsedFile.base64
                         }
-                    ]
-                });
-                lastErr = null;
-                break;
-            } catch (err) {
-                lastErr = err;
-                console.warn(`[RecordatoriosOCR] Fallo con modelo ${modelName}:`, err.message);
-                if (isGeminiApiKeyInvalidError(err)) break;
+                    }
+                ]
             }
-        }
-        if (response) break;
+        ],
+        logPrefix: '[RecordatoriosOCR]'
+    });
+
+    if (!aiRes || !aiRes.response) {
+        throw new Error('No fue posible analizar el comprobante con IA en este momento.');
     }
 
-    if (!response) {
-        throw lastErr || new Error('No fue posible analizar el comprobante con IA en este momento.');
-    }
-
-    const rawReply = (response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+    const rawReply = (aiRes.text || aiRes.response.text || aiRes.response.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
     const cleaned = rawReply.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 
     let parsedObj = null;

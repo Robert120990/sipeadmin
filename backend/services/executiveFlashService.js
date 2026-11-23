@@ -1,5 +1,5 @@
 const nodemailer = require('nodemailer');
-const { GoogleGenAI } = require('@google/genai');
+const { generateWithGeminiFallback } = require('./telegramGeminiService');
 const dbModule = require('../db');
 const getDb = (...args) => dbModule.getDb(...args);
 const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
@@ -259,10 +259,8 @@ const getFlashEjecutivo = async () => {
 
     // 5. Diagnóstico de Inteligencia Artificial (Gemini) si está disponible
     let aiDiagnostico = 'Operaciones de pista y balances financieros dentro de parámetros normales. Mantener monitoreo de tanques y flujo de caja.';
-    if (process.env.GEMINI_API_KEY) {
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-            const prompt = `Actúa como el CFO Corporativo del Grupo Empresarial SIPE de estaciones de servicio en El Salvador.
+    try {
+        const prompt = `Actúa como el CFO Corporativo del Grupo Empresarial SIPE de estaciones de servicio en El Salvador.
 Proporciona un diagnóstico ejecutivo de 2 oraciones concisas y directas para los dueños sobre la situación de hoy:
 - Ventas de ayer: $${ventasAyer.total_dolares.toLocaleString()} (${ventasAyer.total_galones.toLocaleString()} galones).
 - Saldo en bancos disponible: $${Math.round(totalBancos).toLocaleString()}.
@@ -270,15 +268,13 @@ Proporciona un diagnóstico ejecutivo de 2 oraciones concisas y directas para lo
 - Compromisos por pagar próximas 48h: $${Math.round(totalCompromisos48h).toLocaleString()}.
 Responde únicamente con el texto ejecutivo directo sin títulos ni introducciones.`;
 
-            const resAi = await ai.models.generateContent({
-                model: 'gemini-2.0-flash',
-                contents: [{ role: 'user', parts: [{ text: prompt }] }]
-            });
-            const raw = resAi.text || resAi.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (raw) aiDiagnostico = raw.trim();
-        } catch (e) {
-            console.warn('AI executive flash error:', e.message);
-        }
+        const resAi = await generateWithGeminiFallback({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            logPrefix: '[ExecutiveFlash IA]'
+        });
+        if (resAi && resAi.text) aiDiagnostico = resAi.text;
+    } catch (e) {
+        console.warn('AI executive flash error:', e.message);
     }
 
     // 6. Generar texto preformateado para WhatsApp / Telegram

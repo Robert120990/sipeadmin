@@ -1037,19 +1037,20 @@ function applyFlexibleTextEdit(currentText, searchBlock, replaceBlock) {
 
 async function resolveAiClient() {
     if (injectedAiClient !== undefined) return injectedAiClient;
-    let apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    let apiKey = '';
+    try {
+        const { getGeminiApiKey } = require('./telegramGeminiService');
+        apiKey = (await getGeminiApiKey()) || '';
+    } catch { /* ignore */ }
     if (!apiKey) {
-        try {
-            const { getGeminiApiKey } = require('./conversationalAiService');
-            apiKey = (await getGeminiApiKey()) || '';
-        } catch { /* ignore */ }
+        apiKey = (process.env.GEMINI_API_KEY || '').trim();
     }
     if (!apiKey) return null;
     return new GoogleGenAI({ apiKey });
 }
 
 async function generateGeminiContentWithFallback(aiClient, { systemInstruction, contents, responseMimeType = null }) {
-    const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+    const candidateModels = ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.8-flash'];
     let lastErr = null;
     for (const modelName of candidateModels) {
         try {
