@@ -246,15 +246,39 @@ router.get('/operaciones/fecha-servidor', authenticateToken, requirePermission(p
     }
 });
 
+const SV_TIMEZONE = 'America/El_Salvador';
+
+function formatDateYMD(val) {
+    if (!val) return null;
+    if (val instanceof Date && !isNaN(val.getTime())) {
+        return val.toISOString().split('T')[0];
+    }
+    const str = String(val).trim();
+    const match = str.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : null;
+}
+
+function addDaysYMD(ymd, deltaDays) {
+    const clean = formatDateYMD(ymd);
+    if (!clean) return null;
+    const [y, m, d] = clean.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d + deltaDays, 12, 0, 0));
+    return dt.toISOString().split('T')[0];
+}
+
+function getElSalvadorTodayYMD(now = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: SV_TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(now);
+}
+
 router.get('/operaciones/fecha-servidor-global', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
-        const accountingDb = await getAccountingDb().catch(() => null);
-        const dbConn = accountingDb || await getExternalDb();
-        const [rows] = await dbConn.query("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') as fecha_actual, DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%Y-%m-%d') as fecha_ayer");
-        let fechaActual = rows[0]?.fecha_actual;
-        let fechaAyer = rows[0]?.fecha_ayer;
-        if (fechaActual instanceof Date) { fechaActual = fechaActual.toISOString().split('T')[0]; }
-        if (fechaAyer instanceof Date) { fechaAyer = fechaAyer.toISOString().split('T')[0]; }
+        const fechaActual = getElSalvadorTodayYMD();
+        const fechaAyer = addDaysYMD(fechaActual, -1);
         res.json({ fecha_actual: fechaActual, fecha_ayer: fechaAyer });
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar fecha global del servidor'); 
@@ -411,8 +435,16 @@ async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
     return { fecha: fecha, inventario: [] };
 }
 
-async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
+async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb, options = {}) {
     const agg = { D: 0, R: 0, S: 0, I: 0 };
+    const now = options.now instanceof Date ? options.now : new Date();
+    const hoySV = getElSalvadorTodayYMD(now);
+    const ayerSV = addDaysYMD(hoySV, -1);
+    const requestedYMD = formatDateYMD(fecha);
+    // ADM-0014: Nunca incluir el día calendario en curso (hoySV) en el promedio móvil de 7 días.
+    // Los turnos parciales de madrugada (Turno 1) reducían artificialmente el promedio diario ~15%
+    // al desplazar la ventana de 7 días completos a 6 días completos + 1 turno parcial.
+    const maxAllowedCompleteDate = (requestedYMD && requestedYMD < hoySV) ? requestedYMD : ayerSV;
 
     // 1. Prioridad: nuevo sistema SaaS (accountingDb)
     if (accountingDb) {
@@ -420,23 +452,37 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
             const branchId = await resolveStationBranchId(accountingDb, id_empresa);
             if (branchId) {
                 const [maxRows] = await accountingDb.query(
-                    "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as max_fecha FROM gas_station_closeouts WHERE branch_id = ? AND estado = 'cerrado'",
-                    [branchId]
+                    "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as max_fecha FROM gas_station_closeouts WHERE branch_id = ? AND estado = 'cerrado' AND fecha_turno <= ?",
+                    [branchId, maxAllowedCompleteDate]
                 );
-                const rawRef = maxRows[0]?.max_fecha || (fecha.includes('T') ? fecha.split('T')[0] : fecha);
-                const cHasta = new Date(rawRef + 'T12:00:00');
-                const cDesde = new Date(rawRef + 'T12:00:00');
-                cDesde.setDate(cDesde.getDate() - 6);
-                const dateDesde = cDesde.toISOString().split('T')[0];
-                const dateHasta = cHasta.toISOString().split('T')[0];
+                let rawRef = formatDateYMD(maxRows[0]?.max_fecha);
+                if (!rawRef) {
+                    const [fallbackMax] = await accountingDb.query(
+                        "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as max_fecha FROM gas_station_closeouts WHERE branch_id = ? AND estado = 'cerrado'",
+                        [branchId]
+                    );
+                    rawRef = formatDateYMD(fallbackMax[0]?.max_fecha) || maxAllowedCompleteDate;
+                }
+                const dateHasta = rawRef;
+                const dateDesde = addDaysYMD(dateHasta, -6);
+
+                // Contar días operativos cerrados a nivel de estación (evita sobreestimar productos
+                // de baja rotación como Ion Diesel si no tuvieron ventas en algún día de la ventana).
+                const [daysRows] = await accountingDb.query(`
+                    SELECT COUNT(DISTINCT fecha_turno) as dias_activos
+                    FROM gas_station_closeouts
+                    WHERE branch_id = ?
+                      AND fecha_turno BETWEEN ? AND ?
+                      AND estado = 'cerrado'
+                `, [branchId, dateDesde, dateHasta]);
+                const activeDays = Math.max(1, Number(daysRows[0]?.dias_activos || 0));
 
                 const [rows] = await accountingDb.query(`
                     SELECT 
                         tipo_combustible,
-                        SUM(diferencia) / GREATEST(1, COUNT(DISTINCT fecha_turno)) as promedio
+                        SUM(GREATEST(0, COALESCE(diferencia, 0))) as total_galones
                     FROM (
                         SELECT 
-                            c.fecha_turno,
                             r.diferencia,
                             CASE 
                                 WHEN p.tipo_combustible = 1 OR r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
@@ -457,13 +503,22 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
                 let totalProm = 0;
                 (rows || []).forEach(r => {
                     if (['D', 'R', 'S', 'I'].includes(r.tipo_combustible)) {
-                        agg[r.tipo_combustible] += Number(r.promedio || 0);
-                        totalProm += Number(r.promedio || 0);
+                        const val = Math.round((Number(r.total_galones || 0) / activeDays) * 100) / 100;
+                        agg[r.tipo_combustible] = Math.round((agg[r.tipo_combustible] + val) * 100) / 100;
+                        totalProm += val;
                     }
                 });
 
                 if (totalProm > 0) {
-                    return agg;
+                    return {
+                        ...agg,
+                        meta: {
+                            fecha_desde: dateDesde,
+                            fecha_hasta: dateHasta,
+                            dias_activos: activeDays,
+                            fuente: 'saas'
+                        }
+                    };
                 }
             }
         } catch (saasErr) {
@@ -475,13 +530,9 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
     if (externalDb) {
         try {
             const dates = [];
-            const baseDate = new Date(fecha + 'T12:00:00');
             for (let i = 0; i < 7; i++) {
-                const d = new Date(baseDate);
-                d.setDate(d.getDate() - i);
-                const day = String(d.getDate()).padStart(2, '0');
-                const month = String(d.getMonth() + 1).padStart(2, '0');
-                const year = d.getFullYear();
+                const ymd = addDaysYMD(maxAllowedCompleteDate, -i);
+                const [year, month, day] = ymd.split('-');
                 dates.push(`${day}/${month}/${year}`);
             }
             const query = `
@@ -495,9 +546,18 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb) {
             const [rows] = await externalDb.query(query, [id_empresa, dates]);
             (rows || []).forEach(r => {
                 if (['D', 'R', 'S', 'I'].includes(r.tipo_combustible)) {
-                    agg[r.tipo_combustible] += Number(r.promedio || 0);
+                    agg[r.tipo_combustible] = Math.round((agg[r.tipo_combustible] + Number(r.promedio || 0)) * 100) / 100;
                 }
             });
+            return {
+                ...agg,
+                meta: {
+                    fecha_desde: addDaysYMD(maxAllowedCompleteDate, -6),
+                    fecha_hasta: maxAllowedCompleteDate,
+                    dias_activos: 7,
+                    fuente: 'external'
+                }
+            };
         } catch (extErr) {
             console.warn('ExternalDb promedios warning:', extErr.message);
         }
@@ -543,33 +603,244 @@ async function ensureSharedColumns(db) {
     sharedColsChecked = true;
 }
 
+function createEmptyFuelBuckets() {
+    return { D: 0, R: 0, S: 0, I: 0 };
+}
+
+/**
+ * Reconcilia pedidos programados contra recargas físicas ya registradas en turnos cerrados.
+ * - Incluye pedidos de hoy (hoySV) y futuros (> hoySV).
+ * - Si un pedido confirmado de ayer (ayerSV) no tuvo recarga ayer y hoy en Turno 1 hubo descarga
+ *   de madrugada (rollover nocturno), esa recarga de T1 cubre primero el pedido de ayer sin
+ *   anular falsamente pedidos nuevos programados para hoy.
+ * - Para pedidos de hoy (hoySV), descuenta las recargas ya ingresadas en lectura_actual para
+ *   evitar doble conteo en inventario/autonomía y marca ya_descargado / descarga_parcial.
+ */
+function reconcileScheduledOrdersWithRefills(orders = [], hoySV, refillProfile = {}, options = {}) {
+    const ayerSV = addDaysYMD(hoySV, -1);
+    const minVisibleDate = options.minVisibleDate || hoySV;
+    const isHistorical = Boolean(options.isHistorical);
+
+    const recargaAyer = { ...createEmptyFuelBuckets(), ...(refillProfile.ayer || {}) };
+    const recargaHoyT1 = { ...createEmptyFuelBuckets(), ...(refillProfile.hoyT1 || {}) };
+    const recargaHoyPostT1 = { ...createEmptyFuelBuckets(), ...(refillProfile.hoyPostT1 || {}) };
+
+    const sorted = [...(orders || [])].sort((a, b) => {
+        const fa = formatDateYMD(a.fecha) || '';
+        const fb = formatDateYMD(b.fecha) || '';
+        if (fa !== fb) return fa.localeCompare(fb);
+        return Number(a.id_pedido || a.id || 0) - Number(b.id_pedido || b.id || 0);
+    });
+
+    if (!isHistorical) {
+        // Paso 1: Si hubo un pedido confirmado de ayer sin recarga suficiente ayer,
+        // asignar recarga nocturna de hoy Turno 1 (T1) para no descontarla de pedidos de hoy.
+        const ayerUnfilled = createEmptyFuelBuckets();
+        sorted.forEach(o => {
+            const f = formatDateYMD(o.fecha);
+            if (f !== ayerSV) return;
+            const hasConfirmedNum = String(o.numero || '').trim().length > 0;
+            if (!hasConfirmedNum) return;
+            const fuels = {
+                D: Number(o.diesel || 0),
+                R: Number(o.regular || 0),
+                S: Number(o.super || 0),
+                I: Number(o.iondiesel || 0)
+            };
+            ['D', 'R', 'S', 'I'].forEach(k => {
+                const coveredYesterday = Math.min(fuels[k], recargaAyer[k]);
+                recargaAyer[k] = Math.max(0, recargaAyer[k] - coveredYesterday);
+                ayerUnfilled[k] += Math.max(0, fuels[k] - coveredYesterday);
+            });
+        });
+
+        ['D', 'R', 'S', 'I'].forEach(k => {
+            if (ayerUnfilled[k] > 0 && recargaHoyT1[k] > 0) {
+                const rolloverUsed = Math.min(ayerUnfilled[k], recargaHoyT1[k]);
+                recargaHoyT1[k] = Math.max(0, recargaHoyT1[k] - rolloverUsed);
+            }
+        });
+    }
+
+    const remainingHoy = {
+        D: Math.max(0, Number(recargaHoyT1.D || 0) + Number(recargaHoyPostT1.D || 0)),
+        R: Math.max(0, Number(recargaHoyT1.R || 0) + Number(recargaHoyPostT1.R || 0)),
+        S: Math.max(0, Number(recargaHoyT1.S || 0) + Number(recargaHoyPostT1.S || 0)),
+        I: Math.max(0, Number(recargaHoyT1.I || 0) + Number(recargaHoyPostT1.I || 0))
+    };
+
+    const result = [];
+    for (const o of sorted) {
+        const orderDate = formatDateYMD(o.fecha);
+        if (!orderDate) continue;
+        if (isHistorical) {
+            if (orderDate <= minVisibleDate) continue;
+        } else if (orderDate < minVisibleDate) {
+            continue;
+        }
+
+        const d = Number(o.diesel || 0);
+        const r = Number(o.regular || 0);
+        const s = Number(o.super || 0);
+        const i = Number(o.iondiesel || 0);
+        const totalGal = d + r + s + i;
+
+        let pD = d;
+        let pR = r;
+        let pS = s;
+        let pI = i;
+        let yaDescargado = false;
+        let descargaParcial = false;
+
+        if (!isHistorical && orderDate === hoySV && totalGal > 0) {
+            const covD = Math.min(d, remainingHoy.D);
+            const covR = Math.min(r, remainingHoy.R);
+            const covS = Math.min(s, remainingHoy.S);
+            const covI = Math.min(i, remainingHoy.I);
+
+            remainingHoy.D = Math.max(0, remainingHoy.D - covD);
+            remainingHoy.R = Math.max(0, remainingHoy.R - covR);
+            remainingHoy.S = Math.max(0, remainingHoy.S - covS);
+            remainingHoy.I = Math.max(0, remainingHoy.I - covI);
+
+            pD = Math.round(Math.max(0, d - covD) * 100) / 100;
+            pR = Math.round(Math.max(0, r - covR) * 100) / 100;
+            pS = Math.round(Math.max(0, s - covS) * 100) / 100;
+            pI = Math.round(Math.max(0, i - covI) * 100) / 100;
+
+            const totalPendiente = pD + pR + pS + pI;
+            // Tolerancia del 5% por merma o redondeo de varilla en descarga completa
+            if (totalPendiente <= totalGal * 0.05) {
+                yaDescargado = true;
+                pD = 0;
+                pR = 0;
+                pS = 0;
+                pI = 0;
+            } else if (totalPendiente < totalGal) {
+                descargaParcial = true;
+            }
+        }
+
+        result.push({
+            ...o,
+            fecha: orderDate,
+            diesel: d,
+            regular: r,
+            super: s,
+            iondiesel: i,
+            pendiente_diesel: pD,
+            pendiente_regular: pR,
+            pendiente_super: pS,
+            pendiente_iondiesel: pI,
+            ya_descargado: yaDescargado,
+            descarga_parcial: descargaParcial,
+            nombre_estacion_compartida: getCleanStationName(o.id_estacion_compartida, o.nombre_estacion_compartida) || null
+        });
+    }
+
+    return result;
+}
+
+async function fetchRefillProfile(accountingDb, id_estacion, hoySV, ayerSV) {
+    const profile = {
+        ayer: createEmptyFuelBuckets(),
+        hoyT1: createEmptyFuelBuckets(),
+        hoyPostT1: createEmptyFuelBuckets()
+    };
+    if (!accountingDb) return profile;
+    try {
+        const branchId = await resolveStationBranchId(accountingDb, id_estacion);
+        if (!branchId) return profile;
+        const [rows] = await accountingDb.query(`
+            SELECT
+                DATE_FORMAT(c.fecha_turno, '%Y-%m-%d') as fecha,
+                c.numero_turno,
+                CASE
+                    WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
+                    WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
+                    WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
+                    WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
+                    ELSE 'D'
+                END as tipo_combustible,
+                SUM(COALESCE(tr.recarga, 0)) as total_recarga
+            FROM gas_station_closeouts c
+            JOIN gas_station_closeout_tank_readings tr ON tr.closeout_id = c.id
+            JOIN gas_station_tanks t ON t.id = tr.tank_id
+            WHERE c.branch_id = ?
+              AND c.fecha_turno IN (?, ?)
+              AND c.estado = 'cerrado'
+            GROUP BY c.fecha_turno, c.numero_turno, tipo_combustible
+            HAVING SUM(COALESCE(tr.recarga, 0)) > 0
+        `, [branchId, ayerSV, hoySV]);
+
+        (rows || []).forEach(r => {
+            const tipo = r.tipo_combustible;
+            const rec = Number(r.total_recarga || 0);
+            if (!['D', 'R', 'S', 'I'].includes(tipo) || rec <= 0) return;
+            const fechaStr = formatDateYMD(r.fecha);
+            if (fechaStr === ayerSV) {
+                profile.ayer[tipo] += rec;
+            } else if (fechaStr === hoySV) {
+                if (Number(r.numero_turno) === 1) {
+                    profile.hoyT1[tipo] += rec;
+                } else {
+                    profile.hoyPostT1[tipo] += rec;
+                }
+            }
+        });
+    } catch (err) {
+        console.warn('Error consultando recargas de tanque para reconciliación:', err.message);
+    }
+    return profile;
+}
+
+async function fetchProgramadosEstacion(id_estacion, fechaParam, externalDb, accountingDb, options = {}) {
+    const now = options.now instanceof Date ? options.now : new Date();
+    const hoySV = getElSalvadorTodayYMD(now);
+    const ayerSV = addDaysYMD(hoySV, -1);
+    const reqYMD = formatDateYMD(fechaParam);
+    // ADM-0016: Cuando se consulta operación actual (fecha >= ayerSV, incluyendo cuando
+    // Turno 1 de hoy ya cerró y effectiveDate === hoySV), siempre incluir pedidos con fecha >= hoySV.
+    const isHistorical = Boolean(reqYMD && reqYMD < ayerSV);
+    const sqlMinDate = isHistorical ? reqYMD : ayerSV;
+    const sqlOp = isHistorical ? '>' : '>=';
+
+    const query = `
+        SELECT t.fecha, t.numero, t.diesel, t.regular, t.super, t.iondiesel,
+               IFNULL(t.id_carrier_local, t.id_transportista) as id_transportista,
+               IFNULL(t.id_tanker_local, t.id_calibracion_diesel) as id_calibracion_diesel,
+               t.id as id_pedido,
+               t.id_estacion_compartida,
+               t.id_pedido_compartido,
+               e2.titulo as nombre_estacion_compartida,
+               t2.diesel as diesel_compartido,
+               t2.regular as regular_compartido,
+               t2.super as super_compartido,
+               t2.iondiesel as iondiesel_compartido
+        FROM web_pedidos_temp t
+        LEFT JOIN web_consolidado e2 ON t.id_estacion_compartida = e2.id_empresa AND e2.grupo = 'ESTACION'
+        LEFT JOIN web_pedidos_temp t2 ON t.id_pedido_compartido = t2.id
+        WHERE t.id_estacion = ? AND t.fecha ${sqlOp} ?
+        ORDER BY t.fecha ASC, t.id ASC
+    `;
+    const [rows] = await externalDb.query(query, [id_estacion, sqlMinDate]);
+    const refillProfile = isHistorical
+        ? { ayer: createEmptyFuelBuckets(), hoyT1: createEmptyFuelBuckets(), hoyPostT1: createEmptyFuelBuckets() }
+        : await fetchRefillProfile(accountingDb, id_estacion, hoySV, ayerSV);
+
+    return reconcileScheduledOrdersWithRefills(rows || [], hoySV, refillProfile, {
+        minVisibleDate: isHistorical ? reqYMD : hoySV,
+        isHistorical
+    });
+}
+
 router.get('/operaciones/pedidos/programados/:id_estacion/:fecha', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const { id_estacion, fecha } = req.params;
         const externalDb = await getExternalDb();
+        const accountingDb = await getAccountingDb().catch(() => null);
         await ensureSharedColumns(externalDb);
-        const query = `
-            SELECT t.fecha, t.numero, t.diesel, t.regular, t.super, t.iondiesel,
-                   IFNULL(t.id_carrier_local, t.id_transportista) as id_transportista,
-                   IFNULL(t.id_tanker_local, t.id_calibracion_diesel) as id_calibracion_diesel,
-                   t.id as id_pedido,
-                   t.id_estacion_compartida,
-                   t.id_pedido_compartido,
-                   e2.titulo as nombre_estacion_compartida,
-                   t2.diesel as diesel_compartido,
-                   t2.regular as regular_compartido,
-                   t2.super as super_compartido,
-                   t2.iondiesel as iondiesel_compartido
-            FROM web_pedidos_temp t
-            LEFT JOIN web_consolidado e2 ON t.id_estacion_compartida = e2.id_empresa AND e2.grupo = 'ESTACION'
-            LEFT JOIN web_pedidos_temp t2 ON t.id_pedido_compartido = t2.id
-            WHERE t.id_estacion = ? AND t.fecha > ? ORDER BY t.fecha
-        `;
-        const [rows] = await externalDb.query(query, [id_estacion, fecha]);
-        const enriched = (rows || []).map(r => ({
-            ...r,
-            nombre_estacion_compartida: getCleanStationName(r.id_estacion_compartida, r.nombre_estacion_compartida)
-        }));
+        const enriched = await fetchProgramadosEstacion(id_estacion, fecha, externalDb, accountingDb);
         res.json(enriched);
     } catch (error) { 
         sendSafeError(res, error, 'Error al consultar pedidos programados'); 
@@ -594,12 +865,9 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
             console.warn('Error preloading carriers/tankers:', e.message);
         }
 
-        // Determine fecha_actual and fecha_corte
-        const [fechaRows] = await externalDb.query("SELECT CURDATE() as fecha_actual, DATE_SUB(CURDATE(), INTERVAL 1 DAY) as fecha_ayer");
-        let fechaActual = fechaRows[0]?.fecha_actual;
-        let fechaAyer = fechaRows[0]?.fecha_ayer;
-        if (fechaActual instanceof Date) fechaActual = fechaActual.toISOString().split('T')[0];
-        if (fechaAyer instanceof Date) fechaAyer = fechaAyer.toISOString().split('T')[0];
+        // Fechas oficiales en zona horaria America/El_Salvador
+        const fechaActual = getElSalvadorTodayYMD();
+        const fechaAyer = addDaysYMD(fechaActual, -1);
 
         // Stations: excluir Puma El Desvío (004, inactiva) y garantizar Shell Poliedro (016)
         const [dbEstaciones] = await externalDb.query("SELECT id_empresa, titulo FROM web_consolidado WHERE grupo = 'ESTACION' AND id_empresa != '004' ORDER BY orden");
@@ -622,48 +890,47 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
 
         // Compute rows for each station in parallel
         const rows = await Promise.all(estaciones.map(async (est) => {
-            const orderQ = `
-                SELECT t.id as id_pedido, t.fecha, t.numero, t.diesel, t.regular, t.super, t.iondiesel,
-                       IFNULL(t.id_carrier_local, t.id_transportista) as id_transportista,
-                       IFNULL(t.id_tanker_local, t.id_calibracion_diesel) as id_calibracion_diesel,
-                       t.id_estacion_compartida,
-                       t.id_pedido_compartido,
-                       e2.titulo as nombre_estacion_compartida
-                FROM web_pedidos_temp t
-                LEFT JOIN web_consolidado e2 ON t.id_estacion_compartida = e2.id_empresa AND e2.grupo = 'ESTACION'
-                WHERE t.id_estacion = ? AND t.fecha > ?
-                ORDER BY t.fecha ASC, t.id ASC
-            `;
-            const [orders] = await externalDb.query(orderQ, [est.id_empresa, fechaAyer]);
+            const [reconciledOrders, tanquesData, promedios] = await Promise.all([
+                fetchProgramadosEstacion(est.id_empresa, fechaActual, externalDb, accountingDb),
+                fetchTankReadings(est.id_empresa, fechaAyer, externalDb, accountingDb),
+                fetchPromedios(est.id_empresa, fechaAyer, externalDb, accountingDb)
+            ]);
 
             const sumProg = { D: 0, R: 0, S: 0, I: 0 };
-            const enrichedOrders = orders.map(o => {
+            const enrichedOrders = reconciledOrders.map(o => {
                 const d = Number(o.diesel || 0);
                 const r = Number(o.regular || 0);
                 const s = Number(o.super || 0);
                 const i = Number(o.iondiesel || 0);
-                sumProg.D += d;
-                sumProg.R += r;
-                sumProg.S += s;
-                sumProg.I += i;
+                if (!o.ya_descargado) {
+                    sumProg.D += Number(o.pendiente_diesel ?? d);
+                    sumProg.R += Number(o.pendiente_regular ?? r);
+                    sumProg.S += Number(o.pendiente_super ?? s);
+                    sumProg.I += Number(o.pendiente_iondiesel ?? i);
+                }
                 return {
                     id_pedido: o.id_pedido,
-                    fecha: o.fecha instanceof Date ? o.fecha.toISOString().split('T')[0] : (o.fecha || '').split('T')[0],
+                    fecha: o.fecha,
                     numero: o.numero || '',
                     diesel: d,
                     regular: r,
                     super: s,
                     iondiesel: i,
+                    pendiente_diesel: Number(o.pendiente_diesel ?? d),
+                    pendiente_regular: Number(o.pendiente_regular ?? r),
+                    pendiente_super: Number(o.pendiente_super ?? s),
+                    pendiente_iondiesel: Number(o.pendiente_iondiesel ?? i),
+                    ya_descargado: Boolean(o.ya_descargado),
+                    descarga_parcial: Boolean(o.descarga_parcial),
                     total_galones: d + r + s + i,
                     transportista_nombre: carrierMap[o.id_transportista] || 'Sin asignar',
                     pipa_placa: tankerMap[o.id_calibracion_diesel] || 'Sin asignar',
-                    nombre_estacion_compartida: getCleanStationName(o.id_estacion_compartida, o.nombre_estacion_compartida) || null
+                    nombre_estacion_compartida: o.nombre_estacion_compartida || null
                 };
             });
 
-            const tanquesData = await fetchTankReadings(est.id_empresa, fechaAyer, externalDb, accountingDb);
             const tanques = tanquesData.inventario || [];
-            const promedios = await fetchPromedios(est.id_empresa, fechaAyer, externalDb, accountingDb);
+            const refTankDate = formatDateYMD(tanquesData.fecha) || fechaAyer;
 
             const getInv = (tipo) => {
                 const items = tanques.filter(t => t.tipo_combustible === tipo);
@@ -690,17 +957,16 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
                 }
 
                 let fechaStr = "";
-                if (durDias > 0 && fechaAyer) {
-                    const cleanDate = fechaAyer.includes('T') ? fechaAyer.split('T')[0] : fechaAyer;
-                    const parts = cleanDate.split('-').map(Number);
+                if (durDias > 0 && refTankDate) {
+                    const parts = refTankDate.split('-').map(Number);
                     if (parts.length === 3) {
                         const [y, m, d] = parts;
-                        const target = new Date(y, m - 1, d + Math.floor(durDias));
-                        const dd = String(target.getDate()).padStart(2, '0');
-                        const mm = String(target.getMonth() + 1).padStart(2, '0');
-                        const yyyy = target.getFullYear();
+                        const target = new Date(Date.UTC(y, m - 1, d + Math.floor(durDias), 12, 0, 0));
+                        const dd = String(target.getUTCDate()).padStart(2, '0');
+                        const mm = String(target.getUTCMonth() + 1).padStart(2, '0');
+                        const yyyy = target.getUTCFullYear();
                         const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-                        fechaStr = `${dd}/${mm}/${yyyy} (${days[target.getDay()]})`;
+                        fechaStr = `${dd}/${mm}/${yyyy} (${days[target.getUTCDay()]})`;
                     }
                 }
 
@@ -722,10 +988,14 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
             const S = calcType('S');
 
             const totalPedido = sumProg.D + sumProg.I + sumProg.R + sumProg.S;
+            const pendingCount = enrichedOrders.filter(o => !o.ya_descargado).length;
 
             return {
                 id_empresa: est.id_empresa,
                 estacion: est.titulo,
+                fecha_lectura: refTankDate,
+                turno_lectura: tanquesData.turno || null,
+                promedio_ventana: promedios.meta || null,
                 pedido_diesel: sumProg.D,
                 pedido_diesel_ion: sumProg.I,
                 pedido_regular: sumProg.R,
@@ -741,7 +1011,7 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
                 fecha_super: S.fechaStr,
                 tanques_detalle: { D, I, R, S },
                 pedidos: enrichedOrders,
-                pedidos_count: enrichedOrders.length
+                pedidos_count: pendingCount
             };
         }));
 
@@ -2733,6 +3003,12 @@ router.buildEstacionFilterClause = buildEstacionFilterClause;
 router.buildCompactPresetValue = buildCompactPresetValue;
 router.inferBankNameFromText = inferBankNameFromText;
 router.inferUbicacionTags = inferUbicacionTags;
+router.formatDateYMD = formatDateYMD;
+router.addDaysYMD = addDaysYMD;
+router.getElSalvadorTodayYMD = getElSalvadorTodayYMD;
+router.fetchPromedios = fetchPromedios;
+router.reconcileScheduledOrdersWithRefills = reconcileScheduledOrdersWithRefills;
+router.fetchProgramadosEstacion = fetchProgramadosEstacion;
 
 module.exports = router;
 module.exports.parsePedidosPagination = parsePedidosPagination;
@@ -2741,3 +3017,9 @@ module.exports.buildEstacionFilterClause = buildEstacionFilterClause;
 module.exports.buildCompactPresetValue = buildCompactPresetValue;
 module.exports.inferBankNameFromText = inferBankNameFromText;
 module.exports.inferUbicacionTags = inferUbicacionTags;
+module.exports.formatDateYMD = formatDateYMD;
+module.exports.addDaysYMD = addDaysYMD;
+module.exports.getElSalvadorTodayYMD = getElSalvadorTodayYMD;
+module.exports.fetchPromedios = fetchPromedios;
+module.exports.reconcileScheduledOrdersWithRefills = reconcileScheduledOrdersWithRefills;
+module.exports.fetchProgramadosEstacion = fetchProgramadosEstacion;

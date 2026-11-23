@@ -6,7 +6,10 @@ const {
     buildEstacionFilterClause,
     buildCompactPresetValue,
     inferBankNameFromText,
-    inferUbicacionTags
+    inferUbicacionTags,
+    fetchPromedios,
+    reconcileScheduledOrdersWithRefills,
+    fetchProgramadosEstacion
 } = require('../routes/operaciones');
 const { normalizeEstacion, getPortalCredentials, savePortalCredentials } = require('../services/energyLatamService');
 
@@ -173,6 +176,198 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
             assert.ok(preset.length <= 50, `Longitud excedida: ${preset.length}`);
             assert.ok(preset.includes('201002367'));
             assert.ok(preset.includes('ANDELSA'));
+        });
+    });
+
+    describe('Promedios de Venta 7 Días Completos (ADM-0014)', () => {
+        it('debe excluir el día en curso (hoySV) aunque ya exista un Turno 1 cerrado y mantener el promedio estable de 7 días completos', async () => {
+            const capturedParams = [];
+            const mockAccountingDb = {
+                query: async (sql, params) => {
+                    capturedParams.push({ sql, params });
+                    if (sql.includes('MAX(fecha_turno)')) {
+                        // Simula que el query exige fecha_turno <= ayerSV ('2026-11-18')
+                        assert.strictEqual(params[1], '2026-11-18');
+                        return [[{ max_fecha: '2026-11-18' }]];
+                    }
+                    if (sql.includes('COUNT(DISTINCT fecha_turno) as dias_activos')) {
+                        assert.strictEqual(params[1], '2026-11-12');
+                        assert.strictEqual(params[2], '2026-11-18');
+                        return [[{ dias_activos: 7 }]];
+                    }
+                    if (sql.includes('SUM(GREATEST(0, COALESCE(diferencia, 0)))')) {
+                        // Totales exactos de Puma Miraflores (12/11 al 18/11) del caso ADM-0014
+                        return [[
+                            { tipo_combustible: 'D', total_galones: 14997.36 }, // 2142.48 / día
+                            { tipo_combustible: 'R', total_galones: 7502.67 },  // 1071.81 / día
+                            { tipo_combustible: 'S', total_galones: 4644.50 }   // 663.50 / día
+                        ]];
+                    }
+                    return [[]];
+                }
+            };
+
+            // Simula consulta a las 12:00 m.d. del 19/11/2026 (cuando Turno 1 de hoy ya cerró y fecha enviada es '2026-11-19')
+            const fixedNow = new Date('2026-11-19T18:00:00Z'); // 12:00 PM America/El_Salvador
+            const res = await fetchPromedios('002', '2026-11-19', null, mockAccountingDb, { now: fixedNow });
+
+            assert.strictEqual(res.D, 2142.48);
+            assert.strictEqual(res.R, 1071.81);
+            assert.strictEqual(res.S, 663.5);
+            assert.strictEqual(res.I, 0);
+            assert.deepStrictEqual(res.meta, {
+                fecha_desde: '2026-11-12',
+                fecha_hasta: '2026-11-18',
+                dias_activos: 7,
+                fuente: 'saas'
+            });
+        });
+
+        it('debe dividir combustibles de baja rotación (ej. Ion Diesel) por los días operativos de la estación y no sobreestimarlos', async () => {
+            const mockAccountingDb = {
+                query: async (sql) => {
+                    if (sql.includes('MAX(fecha_turno)')) return [[{ max_fecha: '2026-11-22' }]];
+                    if (sql.includes('COUNT(DISTINCT fecha_turno) as dias_activos')) return [[{ dias_activos: 7 }]];
+                    if (sql.includes('SUM(GREATEST(0, COALESCE(diferencia, 0)))')) {
+                        return [[
+                            { tipo_combustible: 'D', total_galones: 7000 },
+                            { tipo_combustible: 'I', total_galones: 212.10 } // 30.30/día en 7 días (NO 53.03 si solo vendió 4 días)
+                        ]];
+                    }
+                    return [[]];
+                }
+            };
+
+            const fixedNow = new Date('2026-11-23T14:00:00Z'); // 8:00 AM SV
+            const res = await fetchPromedios('016', '2026-11-23', null, mockAccountingDb, { now: fixedNow });
+            assert.strictEqual(res.D, 1000);
+            assert.strictEqual(res.I, 30.3);
+        });
+
+        it('debe respetar una fecha histórica explícita anterior a hoySV', async () => {
+            let capturedMaxCap = null;
+            const mockAccountingDb = {
+                query: async (sql, params) => {
+                    if (sql.includes('MAX(fecha_turno)')) {
+                        capturedMaxCap = params[1];
+                        return [[{ max_fecha: '2026-11-10' }]];
+                    }
+                    if (sql.includes('COUNT(DISTINCT fecha_turno) as dias_activos')) return [[{ dias_activos: 7 }]];
+                    if (sql.includes('SUM(GREATEST(0, COALESCE(diferencia, 0)))')) {
+                        return [[{ tipo_combustible: 'D', total_galones: 7000 }]];
+                    }
+                    return [[]];
+                }
+            };
+
+            const fixedNow = new Date('2026-11-23T14:00:00Z');
+            const res = await fetchPromedios('002', '2026-11-10', null, mockAccountingDb, { now: fixedNow });
+            assert.strictEqual(capturedMaxCap, '2026-11-10');
+            assert.strictEqual(res.meta.fecha_desde, '2026-11-04');
+            assert.strictEqual(res.meta.fecha_hasta, '2026-11-10');
+        });
+    });
+
+    describe('Pedidos Programados del Día y Reconciliación Anti-Doble-Conteo (ADM-0016)', () => {
+        it('debe incluir pedidos programados para HOY incluso cuando Turno 1 de hoy ya cerró y effectiveDate === hoySV', async () => {
+            const mockExternalDb = {
+                query: async (sql, params) => {
+                    // Debe usar >= ayerSV internamente para nunca ocultar pedidos con fecha === hoySV
+                    assert.ok(sql.includes('t.fecha >= ?'));
+                    assert.strictEqual(params[1], '2026-11-19');
+                    return [[
+                        {
+                            id_pedido: 4578,
+                            fecha: '2026-11-20',
+                            numero: '30250994',
+                            diesel: 4000,
+                            regular: 3000,
+                            super: 1500,
+                            iondiesel: 0
+                        }
+                    ]];
+                }
+            };
+            const mockAccountingDb = {
+                query: async () => [[]] // Sin recargas registradas en T1 todavía
+            };
+
+            const fixedNow = new Date('2026-11-20T15:30:00Z'); // 9:30 AM SV del 20/11/2026
+            const rows = await fetchProgramadosEstacion('002', '2026-11-20', mockExternalDb, mockAccountingDb, { now: fixedNow });
+
+            assert.strictEqual(rows.length, 1);
+            assert.strictEqual(rows[0].numero, '30250994');
+            assert.strictEqual(rows[0].ya_descargado, false);
+            assert.strictEqual(rows[0].pendiente_diesel, 4000);
+            assert.strictEqual(rows[0].pendiente_regular, 3000);
+            assert.strictEqual(rows[0].pendiente_super, 1500);
+        });
+
+        it('debe marcar ya_descargado = true y pendiente = 0 cuando la recarga del día ya entró al turno cerrado', () => {
+            const orders = [
+                { id_pedido: 4578, fecha: '2026-11-20', numero: '30250994', diesel: 4000, regular: 3000, super: 1500, iondiesel: 0 },
+                { id_pedido: 4590, fecha: '2026-11-22', numero: '', diesel: 5000, regular: 2000, super: 1000, iondiesel: 0 }
+            ];
+            const refills = {
+                ayer: { D: 0, R: 0, S: 0, I: 0 },
+                hoyT1: { D: 0, R: 0, S: 0, I: 0 },
+                hoyPostT1: { D: 4000, R: 3000, S: 1500, I: 0 }
+            };
+
+            const res = reconcileScheduledOrdersWithRefills(orders, '2026-11-20', refills);
+            assert.strictEqual(res.length, 2);
+
+            // El pedido de hoy ya fue descargado en Turno 2 -> visible pero pendiente = 0 (sin doble conteo)
+            assert.strictEqual(res[0].id_pedido, 4578);
+            assert.strictEqual(res[0].ya_descargado, true);
+            assert.strictEqual(res[0].pendiente_diesel, 0);
+            assert.strictEqual(res[0].pendiente_regular, 0);
+            assert.strictEqual(res[0].pendiente_super, 0);
+
+            // El pedido futuro sigue 100% pendiente
+            assert.strictEqual(res[1].id_pedido, 4590);
+            assert.strictEqual(res[1].ya_descargado, false);
+            assert.strictEqual(res[1].pendiente_diesel, 5000);
+        });
+
+        it('debe manejar múltiples entregas el mismo día (ej. pipa principal descargada, pipa Ion aún en tránsito)', () => {
+            const orders = [
+                { id_pedido: 4584, fecha: '2026-11-23', numero: '', diesel: 4000, regular: 2000, super: 1000, iondiesel: 0 },
+                { id_pedido: 4585, fecha: '2026-11-23', numero: '', diesel: 0, regular: 0, super: 0, iondiesel: 1500 }
+            ];
+            const refills = {
+                ayer: { D: 0, R: 0, S: 0, I: 0 },
+                hoyT1: { D: 0, R: 0, S: 0, I: 0 },
+                hoyPostT1: { D: 4000, R: 2000, S: 1000, I: 0 }
+            };
+
+            const res = reconcileScheduledOrdersWithRefills(orders, '2026-11-23', refills);
+            assert.strictEqual(res[0].id_pedido, 4584);
+            assert.strictEqual(res[0].ya_descargado, true);
+            assert.strictEqual(res[1].id_pedido, 4585);
+            assert.strictEqual(res[1].ya_descargado, false);
+            assert.strictEqual(res[1].pendiente_iondiesel, 1500);
+        });
+
+        it('no debe descontar falsamente un pedido nuevo de HOY cuando la recarga de Turno 1 pertenecía a una entrega nocturna confirmada de AYER', () => {
+            const orders = [
+                { id_pedido: 4574, fecha: '2026-11-19', numero: '30250795', diesel: 2000, regular: 4500, super: 2000, iondiesel: 0 },
+                { id_pedido: 4599, fecha: '2026-11-20', numero: '', diesel: 2500, regular: 4000, super: 2000, iondiesel: 0 }
+            ];
+            const refills = {
+                ayer: { D: 0, R: 0, S: 0, I: 0 },
+                hoyT1: { D: 2000, R: 4500, S: 2000, I: 0 }, // Descarga de madrugada del pedido 4574 de ayer
+                hoyPostT1: { D: 0, R: 0, S: 0, I: 0 }
+            };
+
+            const res = reconcileScheduledOrdersWithRefills(orders, '2026-11-20', refills);
+            // Solo devuelve pedidos >= hoySV (oculta el de ayer) y mantiene el de hoy 100% pendiente
+            assert.strictEqual(res.length, 1);
+            assert.strictEqual(res[0].id_pedido, 4599);
+            assert.strictEqual(res[0].ya_descargado, false);
+            assert.strictEqual(res[0].pendiente_diesel, 2500);
+            assert.strictEqual(res[0].pendiente_regular, 4000);
+            assert.strictEqual(res[0].pendiente_super, 2000);
         });
     });
 });

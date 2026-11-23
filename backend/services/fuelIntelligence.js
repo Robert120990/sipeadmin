@@ -15,6 +15,22 @@ const resolveStationEmpCode = (rawId) => {
     return str;
 };
 
+const SV_TIMEZONE = 'America/El_Salvador';
+
+const getElSalvadorTodayYMD = (now = new Date()) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: SV_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+}).format(now);
+
+const addDaysYMD = (ymd, deltaDays) => {
+    const clean = formatYMD(ymd);
+    if (!clean) return null;
+    const [y, m, d] = clean.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + deltaDays, 12, 0, 0)).toISOString().split('T')[0];
+};
+
 /**
  * 1. Obtiene la autonomía en horas y días de todos los tanques por estación,
  * cruzando stock físico con órdenes de cisterna en tránsito o retenidas en portal_pedidos.
@@ -27,18 +43,21 @@ const getTanquesAutonomia = async () => {
         "SELECT id as id_empresa, nombre as titulo FROM branches WHERE id != 12 AND id IN (SELECT DISTINCT branch_id FROM gas_station_tanks) ORDER BY id"
     ));
 
-    // 2. Obtener la última fecha registrada de cierres de estación cerrados
+    // 2. Obtener la última fecha COMPLETA registrada (excluyendo el día en curso en America/El_Salvador
+    // para que un Turno 1 parcial de hoy nunca distorsione el promedio diario de 7 días).
+    const todaySV = getElSalvadorTodayYMD();
     const [maxFechaRows] = await withRetry(() => accountingDb.query(
-        "SELECT MAX(fecha_turno) as last_date FROM gas_station_closeouts WHERE estado = 'cerrado' AND branch_id != 12"
+        "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as last_date FROM gas_station_closeouts WHERE estado = 'cerrado' AND branch_id != 12 AND fecha_turno < ?",
+        [todaySV]
     ));
-    let lastDate = maxFechaRows[0]?.last_date;
-    if (lastDate instanceof Date) {
-        lastDate = lastDate.toISOString().split('T')[0];
-    }
+    let lastDate = formatYMD(maxFechaRows[0]?.last_date);
     if (!lastDate) {
-        const today = new Date();
-        lastDate = today.toISOString().split('T')[0];
+        const [fallbackRows] = await withRetry(() => accountingDb.query(
+            "SELECT DATE_FORMAT(MAX(fecha_turno), '%Y-%m-%d') as last_date FROM gas_station_closeouts WHERE estado = 'cerrado' AND branch_id != 12"
+        ));
+        lastDate = formatYMD(fallbackRows[0]?.last_date) || addDaysYMD(todaySV, -1);
     }
+    const dateDesde7d = addDaysYMD(lastDate, -6);
 
     // 3. Obtener lecturas más recientes de tanques correspondientes a turnos cerrados
     const tankQuery = `
@@ -78,7 +97,7 @@ const getTanquesAutonomia = async () => {
     `;
     const [tankRows] = await withRetry(() => accountingDb.query(tankQuery));
 
-    // 4. Calcular el consumo promedio diario de los últimos 7 días considerando solo turnos cerrados
+    // 4. Calcular el consumo promedio diario de los últimos 7 días COMPLETOS (excluyendo el día en curso)
     const consumptionQuery = `
         SELECT id_empresa, tipo_combustible, SUM(diferencia) as total_7d, COUNT(DISTINCT fecha_turno) as dias_activos
         FROM (
@@ -92,21 +111,31 @@ const getTanquesAutonomia = async () => {
                     WHEN r.codigo_producto LIKE '%REGULAR%' OR r.descripcion_producto LIKE '%REGULAR%' OR p.tipo_combustible = 1 THEN 'R'
                     ELSE 'D'
                 END as tipo_combustible,
-                r.diferencia
+                GREATEST(0, COALESCE(r.diferencia, 0)) as diferencia
             FROM gas_station_closeouts c
             JOIN gas_station_closeout_readings r ON c.id = r.closeout_id
             LEFT JOIN products p ON r.product_id = p.id
-            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno >= DATE_SUB(?, INTERVAL 7 DAY)
+            WHERE c.estado = 'cerrado' AND c.branch_id != 12 AND c.fecha_turno BETWEEN ? AND ?
         ) sub
         GROUP BY id_empresa, tipo_combustible
     `;
-    const [consumptionRows] = await withRetry(() => accountingDb.query(consumptionQuery, [lastDate]));
+    const [consumptionRows] = await withRetry(() => accountingDb.query(consumptionQuery, [dateDesde7d, lastDate]));
+
+    const branchDaysMap = {};
+    (consumptionRows || []).forEach(r => {
+        const d = Number(r.dias_activos || 0);
+        if (d > (branchDaysMap[r.id_empresa] || 0)) {
+            branchDaysMap[r.id_empresa] = d;
+        }
+    });
 
     const consumptionMap = {};
-    consumptionRows.forEach(r => {
+    (consumptionRows || []).forEach(r => {
         const key = `${r.id_empresa}_${r.tipo_combustible}`;
-        const divDays = Number(r.dias_activos) > 0 ? Number(r.dias_activos) : 7;
-        consumptionMap[key] = (Number(r.total_7d || 0) / divDays);
+        const divDays = branchDaysMap[r.id_empresa] > 0
+            ? branchDaysMap[r.id_empresa]
+            : (Number(r.dias_activos) > 0 ? Number(r.dias_activos) : 7);
+        consumptionMap[key] = Math.round((Number(r.total_7d || 0) / divDays) * 100) / 100;
     });
 
     // 5. Cruzar con pedidos activos/en tránsito o retenidos en portal_pedidos (db_sipe_admin)

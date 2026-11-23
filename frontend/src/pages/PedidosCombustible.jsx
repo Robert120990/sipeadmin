@@ -83,6 +83,7 @@ export default function PedidosCombustible() {
     // Operational Programados Data
     const [selectedEstacion, setSelectedEstacion] = useState('');
     const [fechaConsulta, setFechaConsulta] = useState('');
+    const [turnoConsulta, setTurnoConsulta] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [fechaPedido, setFechaPedido] = useState('');
     const [previsualizar, setPrevisualizar] = useState(true);
@@ -100,6 +101,7 @@ export default function PedidosCombustible() {
 
     // Secondary Station (Multiparada) operational data
     const [inventario2, setInventario2] = useState([]);
+    const [fechaConsulta2, setFechaConsulta2] = useState('');
     const [promedios2, setPromedios2] = useState({ D: 0, R: 0, S: 0, I: 0 });
     const [programados2, setProgramados2] = useState([]);
     const [isLoading2, setIsLoading2] = useState(false);
@@ -900,21 +902,23 @@ export default function PedidosCombustible() {
         setPrevisualizar(false);
     };
 
-    const fetchOperationalData = async (est) => {
-        if (!est || !fechaConsulta) return;
+    const fetchOperationalData = async (est, baseDate = fechaServidor || fechaConsulta) => {
+        if (!est || !baseDate) return;
         setIsLoading(true);
         try {
-            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${fechaConsulta}`);
+            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${baseDate}`);
             setInventario(resT.data.inventario || []);
-            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : fechaConsulta;
-            if (effectiveDate && effectiveDate !== fechaConsulta) {
+            setTurnoConsulta(resT.data?.turno || null);
+            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : baseDate;
+            if (effectiveDate) {
                 setFechaConsulta(effectiveDate);
             }
 
-            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${effectiveDate}`);
+            const [resP, resProg] = await Promise.all([
+                api.get(`/operaciones/pedidos/promedios/${est}/${effectiveDate}`),
+                api.get(`/operaciones/pedidos/programados/${est}/${effectiveDate}`)
+            ]);
             setPromedios(resP.data || { D: 0, R: 0, S: 0, I: 0 });
-
-            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${effectiveDate}`);
             setProgramados(resProg.data || []);
         } catch (error) {
             addToast("Error al obtener datos operativos", "error");
@@ -924,22 +928,25 @@ export default function PedidosCombustible() {
     };
 
     useEffect(() => {
-        if (selectedEstacion) {
-            fetchOperationalData(selectedEstacion);
-        } else {
+        if (selectedEstacion && fechaServidor) {
+            fetchOperationalData(selectedEstacion, fechaServidor);
+        } else if (!selectedEstacion) {
             setInventario([]);
+            setTurnoConsulta(null);
+            if (fechaServidor) setFechaConsulta(fechaServidor);
             setPromedios({ D: 0, R: 0, S: 0, I: 0 });
             setProgramados([]);
         }
-    }, [selectedEstacion, fechaConsulta]);
+    }, [selectedEstacion, fechaServidor]);
 
     const matrix = useMemo(() => {
         const sumProg = { D: 0, R: 0, S: 0, I: 0 };
         programados.forEach(p => {
-            sumProg.D += Number(p.diesel || 0);
-            sumProg.R += Number(p.regular || 0);
-            sumProg.S += Number(p.super || 0);
-            sumProg.I += Number(p.iondiesel || 0);
+            if (p.ya_descargado) return;
+            sumProg.D += Number(p.pendiente_diesel ?? p.diesel ?? 0);
+            sumProg.R += Number(p.pendiente_regular ?? p.regular ?? 0);
+            sumProg.S += Number(p.pendiente_super ?? p.super ?? 0);
+            sumProg.I += Number(p.pendiente_iondiesel ?? p.iondiesel ?? 0);
         });
 
         const getInvObj = (tipo) => {
@@ -988,26 +995,29 @@ export default function PedidosCombustible() {
             };
         };
 
-        return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I') };
+        return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I'), meta: promedios?.meta || null };
     }, [inventario, promedios, programados, previsualizar, comp, fechaConsulta]);
 
-    const fetchOperationalData2 = async (est) => {
-        if (!est || !fechaConsulta) {
+    const fetchOperationalData2 = async (est, baseDate = fechaServidor || fechaConsulta) => {
+        if (!est || !baseDate) {
             setInventario2([]);
+            setFechaConsulta2('');
             setPromedios2({ D: 0, R: 0, S: 0, I: 0 });
             setProgramados2([]);
             return;
         }
         setIsLoading2(true);
         try {
-            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${fechaConsulta}`);
+            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${baseDate}`);
             setInventario2(resT.data.inventario || []);
-            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : fechaConsulta;
+            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : baseDate;
+            setFechaConsulta2(effectiveDate);
 
-            const resP = await api.get(`/operaciones/pedidos/promedios/${est}/${effectiveDate}`);
+            const [resP, resProg] = await Promise.all([
+                api.get(`/operaciones/pedidos/promedios/${est}/${effectiveDate}`),
+                api.get(`/operaciones/pedidos/programados/${est}/${effectiveDate}`)
+            ]);
             setPromedios2(resP.data || { D: 0, R: 0, S: 0, I: 0 });
-
-            const resProg = await api.get(`/operaciones/pedidos/programados/${est}/${effectiveDate}`);
             setProgramados2(resProg.data || []);
         } catch (error) {
             console.error("Error al obtener datos operativos de estación secundaria:", error);
@@ -1017,24 +1027,26 @@ export default function PedidosCombustible() {
     };
 
     useEffect(() => {
-        if (esCompartido && selectedEstacion2) {
-            fetchOperationalData2(selectedEstacion2);
+        if (esCompartido && selectedEstacion2 && fechaServidor) {
+            fetchOperationalData2(selectedEstacion2, fechaServidor);
         } else {
             setInventario2([]);
+            setFechaConsulta2('');
             setPromedios2({ D: 0, R: 0, S: 0, I: 0 });
             setProgramados2([]);
         }
-    }, [esCompartido, selectedEstacion2, fechaConsulta]);
+    }, [esCompartido, selectedEstacion2, fechaServidor]);
 
     const matrix2 = useMemo(() => {
         if (!esCompartido || !selectedEstacion2) return null;
 
         const sumProg = { D: 0, R: 0, S: 0, I: 0 };
         programados2.forEach(p => {
-            sumProg.D += Number(p.diesel || 0);
-            sumProg.R += Number(p.regular || 0);
-            sumProg.S += Number(p.super || 0);
-            sumProg.I += Number(p.iondiesel || 0);
+            if (p.ya_descargado) return;
+            sumProg.D += Number(p.pendiente_diesel ?? p.diesel ?? 0);
+            sumProg.R += Number(p.pendiente_regular ?? p.regular ?? 0);
+            sumProg.S += Number(p.pendiente_super ?? p.super ?? 0);
+            sumProg.I += Number(p.pendiente_iondiesel ?? p.iondiesel ?? 0);
         });
 
         const getInvObj = (tipo) => {
@@ -1046,6 +1058,8 @@ export default function PedidosCombustible() {
                 lectura: acc.lectura + Number(curr.lectura || 0)
             }), { capacidad: 0, reserva: 0, lectura: 0 });
         };
+
+        const refDate2 = fechaConsulta2 || fechaConsulta;
 
         const buildCol = (tipo) => {
             const tk = getInvObj(tipo);
@@ -1062,8 +1076,8 @@ export default function PedidosCombustible() {
 
             let fechaDur = "";
             let nomDia = "";
-            if (durDias > 0 && fechaConsulta) {
-                const cleanDate = fechaConsulta.includes('T') ? fechaConsulta.split('T')[0] : fechaConsulta;
+            if (durDias > 0 && refDate2) {
+                const cleanDate = refDate2.includes('T') ? refDate2.split('T')[0] : refDate2;
                 const parts = cleanDate.split('-').map(Number);
                 if (parts.length === 3) {
                     const [y, m, d] = parts;
@@ -1083,8 +1097,8 @@ export default function PedidosCombustible() {
             };
         };
 
-        return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I') };
-    }, [esCompartido, selectedEstacion2, inventario2, comp2, previsualizar, promedios2, programados2, fechaConsulta]);
+        return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I'), meta: promedios2?.meta || null };
+    }, [esCompartido, selectedEstacion2, inventario2, comp2, previsualizar, promedios2, programados2, fechaConsulta2, fechaConsulta]);
 
     // Helpers de semáforo y estilización visual para la tabla operacional
     const getDuracionBadge = (dias, cap) => {
@@ -1214,8 +1228,14 @@ export default function PedidosCombustible() {
                             </tr>
                             {/* VENTA PROMEDIO */}
                             <tr style={{ background: 'rgba(168,85,247,0.06)' }}>
-                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#7c3aed' }}>
-                                    VENTA PROMEDIO
+                                <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#7c3aed' }}
+                                    title={matrixData.meta ? `Promedio diario sobre ${matrixData.meta.dias_activos} días completos (${fmtDateArray(matrixData.meta.fecha_desde)} al ${fmtDateArray(matrixData.meta.fecha_hasta)})` : 'Promedio diario de los últimos 7 días completos'}>
+                                    <div>VENTA PROMEDIO</div>
+                                    {matrixData.meta?.fecha_desde && matrixData.meta?.fecha_hasta && (
+                                        <div style={{ fontSize: '0.64rem', fontWeight: 'normal', color: 'var(--text-muted)' }}>
+                                            {matrixData.meta.dias_activos}d: {fmtDateArray(matrixData.meta.fecha_desde).slice(0, 5)}–{fmtDateArray(matrixData.meta.fecha_hasta).slice(0, 5)}
+                                        </div>
+                                    )}
                                 </td>
                                 <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(245,158,11,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.D.promedio)}</td>
                                 <td style={{ textAlign: 'right', padding: '0.45rem 0.65rem', borderBottom: '1px solid var(--border)', borderLeft: '2px solid rgba(16,185,129,0.3)', color: 'var(--text-color, var(--text))', fontWeight: '600' }}>{numFmt(matrixData.R.promedio)}</td>
@@ -2180,7 +2200,7 @@ export default function PedidosCombustible() {
                         </div>
 
                         <div style={{ background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                            DATOS AL DIA: {fmtDateArray(fechaConsulta)}
+                            DATOS AL DIA: {fmtDateArray(fechaConsulta)}{turnoConsulta ? ` (T${turnoConsulta})` : ''}
                         </div>
 
                         {isLoading && <span style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -2538,13 +2558,23 @@ export default function PedidosCombustible() {
                                         {((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).map(p => (
                                             <tr 
                                                 key={p.id_pedido} 
-                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', opacity: p.ya_descargado ? 0.68 : 1 }}
                                                 onDoubleClick={() => loadPedidoToForm(p)}
-                                                title="Doble clic para editar / cargar en el formulario"
+                                                title={p.ya_descargado ? 'Ya descargado en turno cerrado de hoy (no se suma nuevamente al tanque). Doble clic para ver.' : 'Doble clic para editar / cargar en el formulario'}
                                             >
                                                 <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
                                                 <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>
                                                     <div>{p.numero || p.id_pedido}</div>
+                                                    {p.ya_descargado && (
+                                                        <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', background: 'rgba(16, 185, 129, 0.16)', color: '#047857', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.4)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }}>
+                                                            ✓ Descargado hoy
+                                                        </span>
+                                                    )}
+                                                    {!p.ya_descargado && p.descarga_parcial && (
+                                                        <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', background: 'rgba(245, 158, 11, 0.16)', color: '#b45309', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.4)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }}>
+                                                            Descarga parcial
+                                                        </span>
+                                                    )}
                                                     {p.nombre_estacion_compartida && (
                                                         <span style={{ fontSize: '0.66rem', padding: '0.1rem 0.35rem', background: 'rgba(59, 130, 246, 0.15)', color: '#0284c7', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }} title={`Viaje compartido con ${p.nombre_estacion_compartida}`}>
                                                             🤝 {p.nombre_estacion_compartida}
