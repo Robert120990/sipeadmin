@@ -17,6 +17,13 @@ export default function EstrategiaRentabilidad() {
     });
 
     const [{ desde, hasta }, setDates] = useState(getDefaultDates);
+    const [excluirImpuestos, setExcluirImpuestos] = useState(() => {
+        try {
+            return localStorage.getItem('sipe_pnl_excluir_impuestos') === 'true';
+        } catch {
+            return false;
+        }
+    });
     const [pnlData, setPnlData] = useState(null);
     const [elasticidadData, setElasticidadData] = useState(null);
     const [filtroPosicion, setFiltroPosicion] = useState('todas');
@@ -24,7 +31,7 @@ export default function EstrategiaRentabilidad() {
     const [pdfLoading, setPdfLoading] = useState(false);
     const [dossierPreview, setDossierPreview] = useState({ open: false, blob: null });
 
-    const fetchRentabilidad = async () => {
+    const fetchRentabilidad = async (overrideExcluir = excluirImpuestos) => {
         setLoading(true);
         try {
             const d1 = new Date(desde);
@@ -32,7 +39,7 @@ export default function EstrategiaRentabilidad() {
             const diasVentana = Math.max(14, Math.min(90, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1 || 30));
 
             const [pnlRes, elastRes] = await Promise.allSettled([
-                api.get(`/inteligencia/rentabilidad-estaciones?desde=${desde}&hasta=${hasta}`),
+                api.get(`/inteligencia/rentabilidad-estaciones?desde=${desde}&hasta=${hasta}&excluirImpuestos=${overrideExcluir ? 'true' : 'false'}`),
                 api.get(`/inteligencia/elasticidad-precios?dias=${diasVentana}`)
             ]);
 
@@ -51,6 +58,16 @@ export default function EstrategiaRentabilidad() {
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleToggleImpuestos = (checked) => {
+        setExcluirImpuestos(checked);
+        try {
+            localStorage.setItem('sipe_pnl_excluir_impuestos', String(checked));
+        } catch {
+            // noop
+        }
+        fetchRentabilidad(checked);
     };
 
     const handleOpenDossierPdf = async () => {
@@ -75,6 +92,8 @@ export default function EstrategiaRentabilidad() {
     const resumen = pnlData?.resumen_consolidado || {};
     const estaciones = pnlData?.estaciones || [];
     const esFuenteReal = resumen.fuente_costos === 'real_integrado';
+    const desgloseImp = resumen.desglose_impuestos || {};
+    const sinImpuestosActivo = Boolean(pnlData?.excluir_impuestos ?? excluirImpuestos);
 
     const elasticidadItems = elasticidadData?.elasticidad || [];
     const elasticidadResumen = elasticidadData?.resumen || {};
@@ -106,6 +125,16 @@ export default function EstrategiaRentabilidad() {
                             }}>
                                 {esFuenteReal ? 'COSTOS REALES INTEGRADOS' : 'MODELO ESTÁNDAR'}
                             </span>
+                            <span style={{
+                                fontSize: '0.72rem',
+                                padding: '0.15rem 0.45rem',
+                                borderRadius: '4px',
+                                fontWeight: 700,
+                                backgroundColor: sinImpuestosActivo ? 'rgba(245, 158, 11, 0.16)' : 'rgba(59, 130, 246, 0.14)',
+                                color: sinImpuestosActivo ? '#f59e0b' : '#3b82f6'
+                            }}>
+                                {sinImpuestosActivo ? 'NETO SIN IMPUESTOS' : 'BRUTO PVP (CON IMPUESTOS)'}
+                            </span>
                         </div>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
                             Factura mayorista Puma, flete por cisterna, planilla RRHH, ahorro solar y elasticidad zonal • {formatDateDMY(desde)} al {formatDateDMY(hasta)}
@@ -114,6 +143,32 @@ export default function EstrategiaRentabilidad() {
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <label
+                        title="Descuenta IVA (13%), FOVIAL ($0.20/gal), COTRANS ($0.10/gal) e impuestos de productos/tienda del P&L"
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.45rem',
+                            height: '36px',
+                            padding: '0 0.75rem',
+                            borderRadius: '8px',
+                            border: `1px solid ${excluirImpuestos ? 'rgba(245, 158, 11, 0.55)' : 'var(--border-color)'}`,
+                            background: excluirImpuestos ? 'rgba(245, 158, 11, 0.12)' : 'var(--card-bg)',
+                            color: excluirImpuestos ? '#f59e0b' : 'var(--text)',
+                            fontSize: '0.8rem',
+                            fontWeight: 600,
+                            userSelect: 'none',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={excluirImpuestos}
+                            onChange={(e) => handleToggleImpuestos(e.target.checked)}
+                            style={{ width: '16px', height: '16px', margin: 0, cursor: 'pointer', accentColor: '#f59e0b' }}
+                        />
+                        <span>Quitar impuestos (IVA, FOVIAL, COTRANS)</span>
+                    </label>
                     <input
                         type="date"
                         className="form-control"
@@ -129,7 +184,7 @@ export default function EstrategiaRentabilidad() {
                         style={{ height: '36px', fontSize: '0.825rem', width: '132px' }}
                     />
                     <button
-                        onClick={fetchRentabilidad}
+                        onClick={() => fetchRentabilidad()}
                         className="btn btn-primary"
                         style={{ height: '36px', padding: '0 1rem', fontSize: '0.825rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
                     >
@@ -145,6 +200,34 @@ export default function EstrategiaRentabilidad() {
                     </button>
                 </div>
             </div>
+
+            {/* Desglose compacto de impuestos excluidos cuando el toggle está activo */}
+            {sinImpuestosActivo && (resumen.impuestos_descontados_total_usd || 0) > 0 && (
+                <div
+                    className="card glass"
+                    style={{
+                        padding: '0.65rem 1rem',
+                        borderLeft: '4px solid #f59e0b',
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.6rem',
+                        fontSize: '0.78rem'
+                    }}
+                >
+                    <div style={{ fontWeight: 700, color: '#f59e0b' }}>
+                        Impuestos excluidos del P&amp;L: -${(resumen.impuestos_descontados_total_usd || 0).toLocaleString()}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.85rem', color: 'var(--text-muted)' }}>
+                        <span>IVA Comb. (13%): <strong style={{ color: 'var(--text)' }}>${(desgloseImp.iva_combustible_usd || 0).toLocaleString()}</strong></span>
+                        <span>FOVIAL ($0.20/gal): <strong style={{ color: 'var(--text)' }}>${(desgloseImp.fovial_usd || 0).toLocaleString()}</strong></span>
+                        <span>COTRANS ($0.10/gal): <strong style={{ color: 'var(--text)' }}>${(desgloseImp.cotrans_usd || 0).toLocaleString()}</strong></span>
+                        <span>Imp. Tienda/DTE: <strong style={{ color: 'var(--text)' }}>${(desgloseImp.impuestos_tienda_usd || 0).toLocaleString()}</strong></span>
+                        <span>IVA Lub.: <strong style={{ color: 'var(--text)' }}>${(desgloseImp.iva_lubricantes_usd || 0).toLocaleString()}</strong></span>
+                    </div>
+                </div>
+            )}
 
             {/* KPI Cards */}
             <div style={{

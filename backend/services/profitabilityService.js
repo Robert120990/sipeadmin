@@ -4,6 +4,13 @@ const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
 const withRetry = (...args) => dbModule.withRetry(...args);
 const { branchToEmpId, OFFICIAL_ESTACIONES } = require('./consultasCatalog');
 const solarEnergyService = require('./solarEnergyService');
+const { getElSalvadorTodayYMD, addDaysYMD } = require('../utils/dateSv');
+
+const TAX_DEFAULTS = {
+    ivaRate: 0.13,
+    fovialPerGallon: 0.20,
+    cotransPerGallon: 0.10
+};
 
 const resolveStationEmpCode = (rawId) => {
     if (rawId === null || rawId === undefined) return '';
@@ -19,19 +26,23 @@ const resolveStationEmpCode = (rawId) => {
  * nómina RRHH, ahorro energético solar fotovoltaico y planes de mantenimiento.
  * @param {string} fechaDesde - YYYY-MM-DD
  * @param {string} fechaHasta - YYYY-MM-DD
+ * @param {Object} [options]
+ * @param {boolean} [options.excluirImpuestos=false] - Si es true, descuenta IVA (13%), FOVIAL ($0.20/gal), COTRANS ($0.10/gal) e impuestos de productos/tienda.
  */
-const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
+const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta, options = {}) => {
     const accountingDb = await getAccountingDb();
+    const excluirImpuestos = Boolean(options?.excluirImpuestos || options?.excluir_impuestos);
+    const ivaRate = Number.isFinite(Number(options?.ivaRate)) ? Number(options.ivaRate) : TAX_DEFAULTS.ivaRate;
+    const fovialPerGallon = Number.isFinite(Number(options?.fovialPerGallon)) ? Number(options.fovialPerGallon) : TAX_DEFAULTS.fovialPerGallon;
+    const cotransPerGallon = Number.isFinite(Number(options?.cotransPerGallon)) ? Number(options.cotransPerGallon) : TAX_DEFAULTS.cotransPerGallon;
 
-    // Fechas por defecto: últimos 30 días
+    // Fechas por defecto: últimos 30 días en zona horaria El Salvador
     let dFin = fechaHasta;
     let dInicio = fechaDesde;
     if (!dFin || !dInicio) {
-        const now = new Date();
-        dFin = now.toISOString().split('T')[0];
-        const prev = new Date(now);
-        prev.setDate(prev.getDate() - 30);
-        dInicio = prev.toISOString().split('T')[0];
+        const hoySV = getElSalvadorTodayYMD();
+        dFin = dFin || hoySV;
+        dInicio = dInicio || addDaysYMD(dFin, -30);
     }
 
     const tInicio = new Date(dInicio + 'T00:00:00');
@@ -198,18 +209,25 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         // Fallback limpio
     }
 
-    // 6. Ventas de Tienda de conveniencia (sales_headers POS en la sucursal)
+    // 6. Ventas de Tienda de conveniencia (sales_headers POS en la sucursal, incluyendo impuestos exactos DTE)
     const tiendasMap = {};
     try {
         const sqlTiendas = `
-            SELECT branch_id as id_empresa, COALESCE(SUM(total_pagar), 0.0) as total_tienda
+            SELECT branch_id as id_empresa,
+                   COALESCE(SUM(total_pagar), 0.0) as total_tienda,
+                   COALESCE(SUM(COALESCE(total_iva, 0) + COALESCE(fovial, 0) + COALESCE(cotrans, 0) + COALESCE(iva_percibido, 0) + COALESCE(iva_retenido, 0)), 0.0) as impuestos_tienda,
+                   COALESCE(SUM(COALESCE(total_gravado, 0) + COALESCE(total_exento, 0) + COALESCE(total_nosujetas, 0)), 0.0) as total_tienda_neto
             FROM sales_headers
             WHERE estado = 'emitido' AND fecha_emision BETWEEN ? AND ?
             GROUP BY branch_id
         `;
         const [tiendasRows] = await withRetry(() => accountingDb.query(sqlTiendas, [dInicio, dFin]));
         tiendasRows.forEach(t => {
-            tiendasMap[t.id_empresa] = Number(t.total_tienda || 0);
+            tiendasMap[t.id_empresa] = {
+                bruto: Number(t.total_tienda || 0),
+                impuestos: Number(t.impuestos_tienda || 0),
+                neto: Number(t.total_tienda_neto || 0)
+            };
         });
     } catch (_e) {
         // Si no hay ventas de tienda registradas
@@ -253,6 +271,11 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
     let granTotalUtilidadNeta = 0;
     let granTotalFleteUsd = 0;
     let granTotalAhorroSolarUsd = 0;
+    let granTotalFovialUsd = 0;
+    let granTotalCotransUsd = 0;
+    let granTotalIvaCombustibleUsd = 0;
+    let granTotalImpuestosTiendaUsd = 0;
+    let granTotalIvaLubricantesUsd = 0;
 
     const reporteEstaciones = stations.map(s => {
         const id = s.id_empresa;
@@ -260,12 +283,23 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         const rowC = combustiblesRows.find(c => String(c.id_empresa) === String(id)) || {};
 
         const galonesTotal = Number(rowC.total_galones || 0);
-        const ventaCombustible = Number(rowC.venta_dolares || 0);
+        const ventaCombustibleBruta = Number(rowC.venta_dolares || 0);
 
         const gD = Number(rowC.galones_diesel || 0);
         const gR = Number(rowC.galones_regular || 0);
         const gS = Number(rowC.galones_super || 0);
         const gI = Number(rowC.galones_ion || 0);
+
+        // Desglose fiscal de combustible en El Salvador:
+        // PVP = BaseGravada * (1 + IVA) + FOVIAL ($0.20/gal) + COTRANS ($0.10/gal)
+        const fovialUsd = galonesTotal * fovialPerGallon;
+        const cotransUsd = galonesTotal * cotransPerGallon;
+        const baseConIvaComb = Math.max(0, ventaCombustibleBruta - fovialUsd - cotransUsd);
+        const ventaCombustibleNeta = baseConIvaComb / (1 + ivaRate);
+        const ivaCombustibleUsd = Math.max(0, baseConIvaComb - ventaCombustibleNeta);
+        const impuestosCombustibleUsd = fovialUsd + cotransUsd + ivaCombustibleUsd;
+
+        const ventaCombustible = excluirImpuestos ? ventaCombustibleNeta : ventaCombustibleBruta;
 
         const stWholesale = stationWholesaleMap[empCode] || {};
         const cD = stWholesale.DIESEL || costMap['DIESEL'] || 3.10;
@@ -277,21 +311,42 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         const costoFleteCisternas = galonesTotal * fleteUnitario;
 
         const costoBaseCombustible = (gD * cD) + (gR * cR) + (gS * cS) + (gI * cI);
-        // Si el precio de venta registrado supera el costo mayorista real, calculamos margen real; si no (ej. precios seed de otro período), aplicamos margen mayorista real o respaldo
-        let margenCombustible = ventaCombustible > (costoBaseCombustible + costoFleteCisternas) && ventaCombustible > 0
-            ? (ventaCombustible - costoBaseCombustible - costoFleteCisternas)
-            : (ventaCombustible > costoBaseCombustible && ventaCombustible > 0
-                ? (ventaCombustible - costoBaseCombustible)
-                : Math.max(0, (galonesTotal * 0.28) - costoFleteCisternas));
+        let margenCombustible;
+        if (excluirImpuestos) {
+            if (ventaCombustible > 0 && costoBaseCombustible > 0 && hasRealFuelCosts) {
+                margenCombustible = ventaCombustible - costoBaseCombustible - costoFleteCisternas;
+            } else if (ventaCombustible > (costoBaseCombustible + costoFleteCisternas) && ventaCombustible > 0) {
+                margenCombustible = ventaCombustible - costoBaseCombustible - costoFleteCisternas;
+            } else {
+                margenCombustible = Math.max(0, (galonesTotal * 0.28) - costoFleteCisternas);
+            }
+        } else {
+            // Si el precio de venta registrado supera el costo mayorista real, calculamos margen real; si no (ej. precios seed de otro período), aplicamos margen mayorista real o respaldo
+            margenCombustible = ventaCombustible > (costoBaseCombustible + costoFleteCisternas) && ventaCombustible > 0
+                ? (ventaCombustible - costoBaseCombustible - costoFleteCisternas)
+                : (ventaCombustible > costoBaseCombustible && ventaCombustible > 0
+                    ? (ventaCombustible - costoBaseCombustible)
+                    : Math.max(0, (galonesTotal * 0.28) - costoFleteCisternas));
+        }
 
-        // Tiendas (Margen comercial promedio 24%)
-        const ventaTienda = tiendasMap[id] || 0;
+        // Tiendas (Margen comercial promedio 24% — descontando IVA/FOVIAL/COTRANS/percepciones DTE si toggle activo)
+        const tiendaObj = tiendasMap[id] || { bruto: 0, impuestos: 0, neto: 0 };
+        const ventaTiendaBruta = tiendaObj.bruto || 0;
+        const ventaTiendaNeta = (tiendaObj.impuestos > 0 || tiendaObj.neto > 0)
+            ? (tiendaObj.neto > 0 ? tiendaObj.neto : Math.max(0, ventaTiendaBruta - tiendaObj.impuestos))
+            : (ventaTiendaBruta / (1 + ivaRate));
+        const impuestosTiendaUsd = Math.max(0, ventaTiendaBruta - ventaTiendaNeta);
+        const ventaTienda = excluirImpuestos ? ventaTiendaNeta : ventaTiendaBruta;
         const margenTienda = ventaTienda * 0.24;
 
-        // Lubricantes (Margen comercial promedio 30%)
-        const ventaLubricantes = lubricantesMap[id] || 0;
+        // Lubricantes (Margen comercial promedio 30% — descontando IVA 13% si toggle activo)
+        const ventaLubricantesBruta = lubricantesMap[id] || 0;
+        const ventaLubricantesNeta = ventaLubricantesBruta / (1 + ivaRate);
+        const ivaLubricantesUsd = Math.max(0, ventaLubricantesBruta - ventaLubricantesNeta);
+        const ventaLubricantes = excluirImpuestos ? ventaLubricantesNeta : ventaLubricantesBruta;
         const margenLubricantes = ventaLubricantes * 0.30;
 
+        const impuestosTotalEstacion = impuestosCombustibleUsd + impuestosTiendaUsd + ivaLubricantesUsd;
         const totalIngresosEstacion = ventaCombustible + ventaTienda + ventaLubricantes;
         const totalMargenBruto = margenCombustible + margenTienda + margenLubricantes;
 
@@ -323,6 +378,11 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
         granTotalUtilidadNeta += utilidadOperativaNeta;
         granTotalFleteUsd += costoFleteCisternas;
         granTotalAhorroSolarUsd += ahorroSolarEstacion;
+        granTotalFovialUsd += fovialUsd;
+        granTotalCotransUsd += cotransUsd;
+        granTotalIvaCombustibleUsd += ivaCombustibleUsd;
+        granTotalImpuestosTiendaUsd += impuestosTiendaUsd;
+        granTotalIvaLubricantesUsd += ivaLubricantesUsd;
 
         let clasificacion = 'rentable';
         if (utilidadOperativaNeta < 0) {
@@ -341,6 +401,14 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
                 combustible: Math.round(ventaCombustible),
                 tienda: Math.round(ventaTienda),
                 lubricantes: Math.round(ventaLubricantes)
+            },
+            impuestos_descontados: {
+                total: Math.round(impuestosTotalEstacion),
+                fovial: Math.round(fovialUsd),
+                cotrans: Math.round(cotransUsd),
+                iva_combustible: Math.round(ivaCombustibleUsd),
+                tienda: Math.round(impuestosTiendaUsd),
+                lubricantes: Math.round(ivaLubricantesUsd)
             },
             margenes_brutos: {
                 total: Math.round(totalMargenBruto),
@@ -374,15 +442,32 @@ const getRentabilidadPorEstacion = async (fechaDesde, fechaHasta) => {
     // Ordenar de mayor utilidad neta a menor
     reporteEstaciones.sort((a, b) => b.utilidad_operativa_neta - a.utilidad_operativa_neta);
 
+    const granTotalImpuestosDescontados = granTotalFovialUsd + granTotalCotransUsd + granTotalIvaCombustibleUsd + granTotalImpuestosTiendaUsd + granTotalIvaLubricantesUsd;
+
     return {
         periodo: { desde: dInicio, hasta: dFin, dias: numDias },
+        excluir_impuestos: excluirImpuestos,
         resumen_consolidado: {
+            excluir_impuestos: excluirImpuestos,
             galones_totales: Math.round(granTotalGalones),
             ingresos_totales: Math.round(granTotalIngresos),
             margen_bruto_total: Math.round(granTotalMargenBruto),
             utilidad_operativa_total: Math.round(granTotalUtilidadNeta),
             flete_total_usd: Math.round(granTotalFleteUsd),
             ahorro_solar_total_usd: Math.round(granTotalAhorroSolarUsd),
+            impuestos_descontados_total_usd: Math.round(granTotalImpuestosDescontados),
+            desglose_impuestos: {
+                fovial_usd: Math.round(granTotalFovialUsd),
+                cotrans_usd: Math.round(granTotalCotransUsd),
+                iva_combustible_usd: Math.round(granTotalIvaCombustibleUsd),
+                impuestos_tienda_usd: Math.round(granTotalImpuestosTiendaUsd),
+                iva_lubricantes_usd: Math.round(granTotalIvaLubricantesUsd)
+            },
+            tasas_impuestos: {
+                iva_pct: Math.round(ivaRate * 1000) / 10,
+                fovial_galon: fovialPerGallon,
+                cotrans_galon: cotransPerGallon
+            },
             fuente_costos: (hasRealFuelCosts || hasRealPayroll || granTotalAhorroSolarUsd > 0) ? 'real_integrado' : 'estimado_estandar',
             margen_neto_promedio_galon: granTotalGalones > 0 ? Math.round((granTotalUtilidadNeta / granTotalGalones) * 1000) / 1000 : 0,
             estaciones_estrella: reporteEstaciones.filter(e => e.clasificacion === 'estrella').length,
@@ -558,6 +643,7 @@ const getElasticidadPreciosCompetencia = async (dias = 30) => {
 };
 
 module.exports = {
+    TAX_DEFAULTS,
     getRentabilidadPorEstacion,
     getElasticidadPreciosCompetencia
 };

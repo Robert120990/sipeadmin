@@ -116,8 +116,10 @@ router.get(
 // 6. Rentabilidad Operativa (EBITDA Real) y P&L por Estación
 router.get('/rentabilidad-estaciones', authenticateToken, requirePermission(['view_direccion_estrategica', '/dashboard/estrategia/rentabilidad']), async (req, res) => {
     const { desde, hasta } = req.query;
+    const rawExcluir = req.query.excluirImpuestos ?? req.query.excluir_impuestos ?? '';
+    const excluirImpuestos = ['1', 'true', 'si', 'yes'].includes(String(rawExcluir).trim().toLowerCase());
     try {
-        const data = await getRentabilidadPorEstacion(desde, hasta);
+        const data = await getRentabilidadPorEstacion(desde, hasta, { excluirImpuestos });
         res.json(data);
     } catch (error) {
         sendSafeError(res, error, 'Error al calcular rentabilidad por estación');
