@@ -9,62 +9,12 @@ import { useTickets } from '../context/TicketContext';
 import ColorIcon from '../components/ColorIcon';
 import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, rrhhMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
 
-// Import All Page Components for Tab Rendering (Code-split with lazy)
 import LoadingFallback from '../components/LoadingFallback';
 import {
-    Dashboard,
-    Users,
-    Carriers,
-    Tankers,
-    Consultas,
-    VentasEstaciones,
-    Lubricantes,
-    ResumenPista,
-    DiferenciasCombustible,
-    PreciosEstacion,
-    ConsultasPreciosCompetencia,
-    PedidosCombustible,
-    ControlRecordatorios,
-    Permissions,
-    CuentasBancarias,
-    ConfiguracionDb,
-    ConfiguracionEmail,
-    ConfiguracionContabilidad,
-    ConfiguracionTema,
-    ConsultasCumpleanos,
-    MovimientosBancarios,
-    ConciliacionBancaria,
-    Cheques,
-    ChequesContado,
-    CheckDesigner,
-    ImpresionCheques,
-    ReporteChequesFecha,
-    ReporteMovimientosFecha,
-    BackupDBCheck,
-    Bitacora,
-    FinanzasPrestamos,
-    FinanzasCalculadora,
-    FinanzasInversiones,
-    FinanzasPlanesMantenimiento,
-    FinanzasAsesor,
-    FinanzasCrecimiento,
-    FinanzasResumen,
-    EstrategiaTorreControl,
-    EstrategiaCombustible,
-    EstrategiaFlujoCaja,
-    EstrategiaMermas,
-    EstrategiaRentabilidad,
-    EstrategiaCreditos,
-    Tareas,
-    ConsultaCambiosGithub,
-    PlanillasRRHH,
-    PedidosProgramadosConsulta,
-    TelegramUsers,
-    AsistenteIA,
-    EnergiaSolarAndelsa,
-    SupportTickets,
-    ConfiguracionAgentesIA
-} from './lazyPages';
+    LEGACY_ROUTE_REDIRECTS,
+    hasRoutePermission,
+    getRouteElement
+} from '../config/routeRegistry';
 import pkg from '../../package.json';
 import { getStoredUser } from '../utils/auth';
 import { clearErrorLogs } from '../utils/errorDiagnostics';
@@ -138,77 +88,7 @@ export default function DashboardLayout() {
     const mobileTabsRef = useRef(null);
 
     const user = getStoredUser();
-    const hasPermission = (path) => {
-        if (path === '/dashboard/settings/theme' || path === '/dashboard/seguridad/tickets') return true;
-        if (user.role_id === 1 || user.role === 'Administrator' || user.role_name === 'Administrator') return true;
-        if (user.permissions?.includes(path)) return true;
-        if (path?.startsWith('/dashboard/estrategia') && (user.permissions?.includes('view_direccion_estrategica') || user.permissions?.includes('/dashboard/estrategia'))) return true;
-        if (path === '/dashboard/configuracion/agentes-ia' && (user.permissions?.includes('manage_telegram') || user.permissions?.includes('view_direccion_estrategica'))) return true;
-        if (path === '/dashboard/bancos/reportes/saldos-bancos' && user.permissions?.includes('/dashboard/consultas/saldos-bancos')) return true;
-        if (path === '/dashboard/bancos/reportes/saldos-chequera' && user.permissions?.includes('/dashboard/consultas/saldos-chequera')) return true;
-        return false;
-    };
-
-    // Component Registry Mapping
-    const componentRegistry = {
-        '/dashboard': <Dashboard />,
-        '/dashboard/users': <Users />,
-        '/dashboard/carriers': <Carriers />,
-        '/dashboard/tankers': <Tankers />,
-        '/dashboard/consultas/estaciones': <div className="card glass"><h1>Estaciones</h1><p>Módulo de estaciones (Próximamente).</p></div>,
-        '/dashboard/consultas/estaciones/ventas': <VentasEstaciones />,
-        '/dashboard/consultas/estaciones/lubricantes': <Lubricantes />,
-        '/dashboard/consultas/estaciones/resumen-cierre': <ResumenPista />,
-        '/dashboard/consultas/estaciones/diferencias-combustible': <DiferenciasCombustible />,
-        '/dashboard/consultas/estaciones/precios': <PreciosEstacion />,
-        '/dashboard/consultas/estaciones/precios-competencia': <ConsultasPreciosCompetencia />,
-        '/dashboard/operaciones/pedidos': <PedidosCombustible />,
-        '/dashboard/operaciones/pedidos-programados': <PedidosProgramadosConsulta />,
-        '/dashboard/operaciones/recordatorios': <ControlRecordatorios />,
-        '/dashboard/operaciones/tareas': <Tareas />,
-        '/dashboard/bancos/reportes/saldos-bancos': <Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." />,
-        '/dashboard/bancos/reportes/saldos-chequera': <Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />,
-        '/dashboard/bancos/reportes/impresion-cheques': <ImpresionCheques />,
-        '/dashboard/bancos/reportes/cheques-fecha': <ReporteChequesFecha />,
-        '/dashboard/bancos/reportes/movimientos-fecha': <ReporteMovimientosFecha />,
-        '/dashboard/consultas/saldos-bancos': <Consultas type="saldos-bancos" title="Saldos en Bancos" description="Reporte de saldos consolidados en bancos." />,
-        '/dashboard/consultas/saldos-chequera': <Consultas type="saldos-chequera" title="Saldos en Chequera" description="Reporte de saldos en chequeras a la fecha actual." />,
-        '/dashboard/consultas/otras/cumpleanos': <ConsultasCumpleanos />,
-        '/dashboard/bancos/cuentas': <CuentasBancarias />,
-        '/dashboard/bancos/movimientos': <MovimientosBancarios />,
-        '/dashboard/bancos/conciliacion': <ConciliacionBancaria />,
-        '/dashboard/bancos/cheques': <Cheques />,
-        '/dashboard/bancos/cheques-contado': <ChequesContado />,
-        '/dashboard/bancos/check-designer': <CheckDesigner />,
-        '/dashboard/consultas/otras/backup-db-check': <BackupDBCheck />,
-        '/dashboard/settings/database': <ConfiguracionDb />,
-        '/dashboard/settings/accounting': <ConfiguracionContabilidad />,
-        '/dashboard/settings/email': <ConfiguracionEmail />,
-        '/dashboard/settings/theme': <ConfiguracionTema />,
-        '/dashboard/permissions': <Permissions />,
-        '/dashboard/bitacora': <Bitacora />,
-        '/dashboard/finanzas/prestamos': <FinanzasPrestamos />,
-        '/dashboard/finanzas/calculadora': <FinanzasCalculadora />,
-        '/dashboard/finanzas/inversiones': <FinanzasInversiones />,
-        '/dashboard/finanzas/planes-mantenimiento': <FinanzasPlanesMantenimiento />,
-        '/dashboard/finanzas/asesor': <FinanzasAsesor />,
-        '/dashboard/finanzas/crecimiento': <FinanzasCrecimiento />,
-        '/dashboard/finanzas/resumen': <FinanzasResumen />,
-        '/dashboard/rrhh/planillas': <PlanillasRRHH />,
-        '/dashboard/estrategia': <EstrategiaTorreControl />,
-        '/dashboard/estrategia/torre-control': <EstrategiaTorreControl />,
-        '/dashboard/estrategia/combustible': <EstrategiaCombustible />,
-        '/dashboard/estrategia/flujo-caja': <EstrategiaFlujoCaja />,
-        '/dashboard/estrategia/mermas': <EstrategiaMermas />,
-        '/dashboard/estrategia/rentabilidad': <EstrategiaRentabilidad />,
-        '/dashboard/estrategia/creditos': <EstrategiaCreditos />,
-        '/dashboard/seguridad/cambios': <ConsultaCambiosGithub />,
-        '/dashboard/seguridad/telegram': <TelegramUsers />,
-        '/dashboard/seguridad/tickets': <SupportTickets />,
-        '/dashboard/consultas/ia-asistente': <AsistenteIA />,
-        '/dashboard/operaciones/energia-solar': <EnergiaSolarAndelsa />,
-        '/dashboard/configuracion/agentes-ia': <ConfiguracionAgentesIA />,
-    };
+    const hasPermission = (path) => hasRoutePermission(user, path);
 
     // Sync with URL location
     useEffect(() => {
@@ -228,19 +108,13 @@ export default function DashboardLayout() {
             ...configuracionMenu
         ];
         
-        const LEGACY_PATH_MAP = {
-            '/dashboard/consultas/saldos-bancos': '/dashboard/bancos/reportes/saldos-bancos',
-            '/dashboard/consultas/saldos-chequera': '/dashboard/bancos/reportes/saldos-chequera'
-        };
-        const resolvedPathname = LEGACY_PATH_MAP[location.pathname] || location.pathname;
+        const resolvedPathname = LEGACY_ROUTE_REDIRECTS[location.pathname] || location.pathname;
         if (resolvedPathname !== location.pathname) {
             navigate(resolvedPathname, { replace: true });
             return;
         }
 
-        let item = (resolvedPathname === '/dashboard/estrategia' || resolvedPathname === '/dashboard/estrategia/')
-            ? allNavItems.find(i => i.path === '/dashboard/estrategia/torre-control')
-            : allNavItems.find(i => i.path === resolvedPathname);
+        let item = allNavItems.find(i => i.path === resolvedPathname);
         // Rutas hijas (ej. check-designer/edit/1): abrir el tab del módulo padre
         if (!item) {
             item = allNavItems
@@ -685,7 +559,7 @@ export default function DashboardLayout() {
                             <React.Suspense fallback={<LoadingFallback message={`Cargando ${tab.name}...`} />}>
                                 <ErrorBoundary tabName={tab.name} tabPath={tab.path} isTabLevel>
                                     {hasPermission(tab.path) || tab.path === '/dashboard' ? (
-                                        componentRegistry[tab.path] || <div className="card glass">Módulo no registrado: {tab.path}</div>
+                                        getRouteElement(tab.path) || <div className="card glass">Módulo no registrado: {tab.path}</div>
                                     ) : (
                                         <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
                                             <Shield size={48} color="var(--danger)" style={{ marginBottom: '1rem' }} />
