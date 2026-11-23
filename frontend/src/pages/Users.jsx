@@ -67,8 +67,14 @@ export default function Users() {
     };
 
     const toggleStatus = async (user) => {
+        const newStatus = user.status === 'active' ? 'inactive' : 'active';
+        const isDeactivating = newStatus === 'inactive';
+        const ok = await confirm(
+            `¿Estás seguro de ${isDeactivating ? 'desactivar' : 'activar'} al usuario "${user.nombre || user.username}"?`,
+            isDeactivating ? { variant: 'danger' } : {}
+        );
+        if (!ok) return;
         try {
-            const newStatus = user.status === 'active' ? 'inactive' : 'active';
             await api.put(`/users/${user.id}/status`, { status: newStatus });
             addToast(`Usuario ${newStatus === 'active' ? 'activado' : 'desactivado'} con éxito`, 'success');
             fetchData();

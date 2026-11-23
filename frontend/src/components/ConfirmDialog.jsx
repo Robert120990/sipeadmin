@@ -39,7 +39,7 @@ export const ConfirmProvider = ({ children }) => {
             {children}
             {state.show && (
                 <div className="modal-overlay" onClick={handleCancel}>
-                    <div className="modal-content" onClick={e => e.stopPropagation()} style={{ width: '420px', padding: '2rem', borderRadius: '12px' }}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '420px', padding: '2rem', borderRadius: '12px' }}>
                         <h3 style={{ margin: '0 0 0.75rem 0', fontSize: '1.15rem' }}>{options.title}</h3>
                         <p style={{ color: 'var(--text-muted)', margin: '0 0 1.5rem 0', lineHeight: 1.5, whiteSpace: 'pre-wrap', fontSize: '0.9rem' }}>
                             {state.message}

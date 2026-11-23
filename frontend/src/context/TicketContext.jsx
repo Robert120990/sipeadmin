@@ -30,6 +30,7 @@ export const useTickets = () => {
 export const TicketProvider = ({ children }) => {
     const { addToast } = useToast();
     const [quickModalOpen, setQuickModalOpen] = useState(false);
+    const [quickModalHiddenForCapture, setQuickModalHiddenForCapture] = useState(false);
     const [quickModalInit, setQuickModalInit] = useState({});
     const [resolvedQueue, setResolvedQueue] = useState([]);
     const [detailTicketId, setDetailTicketId] = useState(null);
@@ -126,7 +127,10 @@ export const TicketProvider = ({ children }) => {
     // Consultar tickets resueltos pendientes de enterado para el usuario actual
     const fetchPendingResolved = useCallback(async () => {
         const token = localStorage.getItem('token');
-        if (!token) return;
+        if (!token || !user?.id) {
+            setResolvedQueue([]);
+            return;
+        }
         try {
             const res = await api.get('/tickets/pending-resolved');
             const list = Array.isArray(res.data?.data) ? res.data.data : [];
@@ -140,17 +144,21 @@ export const TicketProvider = ({ children }) => {
         } catch (_) {
             // Silencioso en polling
         }
-    }, []);
+    }, [user]);
 
     useEffect(() => {
+        if (!user?.id) {
+            setResolvedQueue([]);
+            return undefined;
+        }
         fetchPendingResolved();
         const interval = setInterval(fetchPendingResolved, 25000);
         return () => clearInterval(interval);
-    }, [fetchPendingResolved]);
+    }, [user, fetchPendingResolved]);
 
     // Escuchar eventos en tiempo real por Socket.io
     useEffect(() => {
-        const currentUser = getStoredUser();
+        const currentUser = user || getStoredUser();
         const myId = Number(currentUser?.id || 0);
         const myName = String(currentUser?.nombre || currentUser?.name || '').toLowerCase();
         const myUsername = String(currentUser?.username || '').toLowerCase();
@@ -216,7 +224,7 @@ export const TicketProvider = ({ children }) => {
             socket.off('ticket:message', onTicketMessage);
             window.removeEventListener('sipe:open-ticket-detail', onOpenTicketFromNotification);
         };
-    }, [addToast, triggerTicketRefresh]);
+    }, [user, addToast, triggerTicketRefresh]);
 
     const handleAcknowledgeResolved = async (ticketId) => {
         try {
@@ -247,14 +255,20 @@ export const TicketProvider = ({ children }) => {
                 <Suspense fallback={null}>
                     <QuickTicketModal
                         open={quickModalOpen}
-                        onClose={() => setQuickModalOpen(false)}
+                        hiddenForCapture={quickModalHiddenForCapture}
+                        onClose={() => {
+                            setQuickModalHiddenForCapture(false);
+                            setQuickModalOpen(false);
+                        }}
                         initialData={quickModalInit}
                         onCaptureRequest={async () => {
-                            setQuickModalOpen(false);
+                            setQuickModalHiddenForCapture(true);
                             await new Promise((r) => setTimeout(r, 180));
-                            const img = await captureScreenAsWebp();
-                            setQuickModalOpen(true);
-                            return img;
+                            try {
+                                return await captureScreenAsWebp();
+                            } finally {
+                                setQuickModalHiddenForCapture(false);
+                            }
                         }}
                         onSuccess={() => {
                             triggerTicketRefresh();

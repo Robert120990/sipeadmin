@@ -14,6 +14,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { formatCurrency } from '../utils/loanCalculations';
 import { calculateTCO } from '../utils/investmentCalculations';
+import { todayStr } from '../utils/date';
 
 export default function FinanzasPlanesMantenimiento() {
     const { addToast } = useToast();
@@ -48,7 +49,7 @@ export default function FinanzasPlanesMantenimiento() {
         costo_estimado: 0,
         tipo_gasto: 'preventivo',
         frecuencia: 'semestral',
-        fecha_programada: new Date().toISOString().split('T')[0],
+        fecha_programada: todayStr(),
         responsable: '',
         proveedor: '',
         criticidad: 'media',
@@ -123,7 +124,7 @@ export default function FinanzasPlanesMantenimiento() {
                 costo_estimado: 0,
                 tipo_gasto: 'preventivo',
                 frecuencia: 'semestral',
-                fecha_programada: new Date().toISOString().split('T')[0],
+                fecha_programada: todayStr(),
                 responsable: '',
                 proveedor: '',
                 criticidad: 'media',
@@ -177,13 +178,14 @@ export default function FinanzasPlanesMantenimiento() {
     // Marcar como ejecutado
     const handleMarcarEjecutado = async (item) => {
         try {
+            const hoyLocal = todayStr();
             await api.put(`/finanzas/mantenimiento/${item.id}`, {
                 ...item,
                 estado: 'ejecutado',
-                fecha_ejecutada: new Date().toISOString().split('T')[0]
+                fecha_ejecutada: hoyLocal
             });
             addToast(`Mantenimiento para "${item.nombre_activo}" marcado como ejecutado`, 'success');
-            setMantenimientos(prev => prev.map(m => m.id === item.id ? { ...m, estado: 'ejecutado', fecha_ejecutada: new Date().toISOString().split('T')[0] } : m));
+            setMantenimientos(prev => prev.map(m => m.id === item.id ? { ...m, estado: 'ejecutado', fecha_ejecutada: hoyLocal } : m));
         } catch (error) {
             addToast('Error al actualizar estado', 'error');
         }
@@ -301,18 +303,7 @@ export default function FinanzasPlanesMantenimiento() {
                 8: { halign: 'center' }
             },
             headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], halign: 'center' },
-            margin: { left: 14, right: 14, bottom: 15 },
-            didDrawPage: (dataHook) => {
-                const pNum = dataHook.pageNumber;
-                doc.setFontSize(7.5);
-                doc.setTextColor(148, 163, 184);
-                doc.text(
-                    `Página ${pNum}`,
-                    pageWidth - 20,
-                    pageHeight - 8,
-                    { align: 'right' }
-                );
-            }
+            margin: { left: 14, right: 14, bottom: 15 }
         });
 
         const pagesCount = doc.internal.getNumberOfPages();
@@ -328,7 +319,7 @@ export default function FinanzasPlanesMantenimiento() {
         setPdfSource(blob);
         setPreviewPdfDoc(doc);
         setTotalPages(pagesCount);
-        setPreviewFileName(`Planes_Mantenimiento_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewFileName(`Planes_Mantenimiento_${todayStr()}.pdf`);
         setPreviewModalOpen(true);
     };
 

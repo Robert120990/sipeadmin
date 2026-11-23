@@ -41,7 +41,13 @@ export default function EstrategiaCombustible() {
     const ejecutarSimulador = async (vars = variaciones) => {
         setCalculandoSimulador(true);
         try {
-            const res = await api.post('/inteligencia/simulador-dgehm', { variaciones: vars });
+            const numericVars = {
+                S: Number(parseFloat(vars.S)) || 0,
+                R: Number(parseFloat(vars.R)) || 0,
+                D: Number(parseFloat(vars.D)) || 0,
+                I: Number(parseFloat(vars.I)) || 0
+            };
+            const res = await api.post('/inteligencia/simulador-dgehm', { variaciones: numericVars });
             setSimuladorData(res.data);
         } catch (error) {
             console.error('Error calculando simulador DGEHM:', error);
@@ -57,9 +63,7 @@ export default function EstrategiaCombustible() {
     }, []);
 
     const handleVariacionChange = (combustible, val) => {
-        const parsed = parseFloat(val) || 0;
-        const updated = { ...variaciones, [combustible]: parsed };
-        setVariaciones(updated);
+        setVariaciones(prev => ({ ...prev, [combustible]: val }));
     };
 
     const handleCalcularClick = (e) => {

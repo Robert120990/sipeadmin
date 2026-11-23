@@ -1,9 +1,27 @@
-export function parseDateOnly(str) {
-    if (!str) return null;
-    const [datePart] = str.split('T');
+export function parseDateOnly(val) {
+    if (!val) return null;
+    if (val instanceof Date) {
+        if (isNaN(val.getTime())) return null;
+        return { year: val.getFullYear(), month: val.getMonth() + 1, day: val.getDate() };
+    }
+    const [datePart] = String(val).trim().split(/[T ]/);
     const [y, m, d] = datePart.split('-').map(Number);
     if (!y || !m || !d) return null;
     return { year: y, month: m, day: d };
+}
+
+export function formatLocalYMD(date = new Date()) {
+    const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+export function offsetDaysStr(deltaDays = 0, baseDate = new Date()) {
+    const base = baseDate instanceof Date && !isNaN(baseDate.getTime()) ? new Date(baseDate) : new Date();
+    base.setDate(base.getDate() + Number(deltaDays || 0));
+    return formatLocalYMD(base);
 }
 
 export function dateFromParts({ year, month, day }) {

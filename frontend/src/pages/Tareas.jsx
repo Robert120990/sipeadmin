@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import api from '../services/api';
 import socket from '../services/socket';
+import { todayStr } from '../utils/date';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
@@ -241,8 +242,12 @@ export default function Tareas() {
         };
 
         const handleCommentAdded = (data) => {
-            if (selectedTask && selectedTask.id === data.taskId) {
-                setTaskComments(prev => [...prev, data.comment]);
+            if (selectedTask && Number(selectedTask.id) === Number(data.taskId) && data.comment) {
+                setTaskComments(prev => (
+                    prev.some(c => c.id != null && c.id === data.comment.id)
+                        ? prev
+                        : [...prev, data.comment]
+                ));
             }
             fetchTasks(true);
         };
@@ -645,7 +650,7 @@ export default function Tareas() {
         if (mibotRecipients.length === 0) {
             fetchMibotRecipients();
         }
-        const today = new Date().toISOString().split('T')[0];
+        const today = todayStr();
         if (task) {
             const linkedTgId = getLinkedTelegramIdForUser(task.assigned_to);
             const existingDests = (task.mibot_summary?.destinatarios || []).map(d => Number(d.telegram_usuario_id)).filter(Boolean);
@@ -815,7 +820,13 @@ export default function Tareas() {
         setSubmittingComment(true);
         try {
             const res = await api.post(`/tasks/${selectedTask.id}/comments`, { comentario: newCommentText.trim() });
-            setTaskComments(prev => [...prev, res.data.comment]);
+            if (res.data?.comment) {
+                setTaskComments(prev => (
+                    prev.some(c => c.id != null && c.id === res.data.comment.id)
+                        ? prev
+                        : [...prev, res.data.comment]
+                ));
+            }
             setNewCommentText('');
             addToast('Comentario registrado', 'success');
         } catch (err) {

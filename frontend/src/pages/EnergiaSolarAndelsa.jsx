@@ -315,6 +315,12 @@ export default function EnergiaSolarAndelsa() {
     const [fechaCorte, setFechaCorte] = useState(() => todayStr());
     const [estacionFiltro, setEstacionFiltro] = useState('ALL'); // 'ALL' | 'ANDELSA' | '014'
     const [searchTerm, setSearchTerm] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(searchTerm.trim()), 350);
+        return () => clearTimeout(timer);
+    }, [searchTerm]);
 
     // Pestañas principales y sub-selector Andelsa
     const [activeTab, setActiveTab] = useState('solar'); // 'solar' | 'andelsa'
@@ -323,6 +329,7 @@ export default function EnergiaSolarAndelsa() {
     // Estado de carga y datos del endpoint GET /api/ai/solar-andelsa/dashboard
     const [loading, setLoading] = useState(false);
     const [rawDashboard, setRawDashboard] = useState(null);
+    const [apiError, setApiError] = useState(null);
 
     // Estado del modal de Vista Previa PDF Carta (ReportPreviewModal)
     const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -335,6 +342,7 @@ export default function EnergiaSolarAndelsa() {
 
     const fetchDashboard = useCallback(async () => {
         setLoading(true);
+        setApiError(null);
         try {
             const params = {
                 fecha: fechaCorte
@@ -342,19 +350,21 @@ export default function EnergiaSolarAndelsa() {
             if (estacionFiltro !== 'ALL') {
                 params.estacionId = estacionFiltro;
             }
-            if (searchTerm.trim()) {
-                params.search = searchTerm.trim();
+            if (debouncedSearch) {
+                params.search = debouncedSearch;
             }
 
             const res = await api.get('/ai/solar-andelsa/dashboard', { params });
             setRawDashboard(res.data || null);
-        } catch (_err) {
-            // Mantiene el motor analítico determinista sin bloquear la vista
+        } catch (err) {
             setRawDashboard(null);
+            const msg = err?.response?.data?.message || 'No se pudo consultar el backend en tiempo real; se muestran datos referenciales de respaldo.';
+            setApiError(msg);
+            addToast(msg, 'warning');
         } finally {
             setLoading(false);
         }
-    }, [fechaCorte, estacionFiltro, searchTerm]);
+    }, [fechaCorte, estacionFiltro, debouncedSearch, addToast]);
 
     useEffect(() => {
         fetchDashboard();
@@ -562,6 +572,19 @@ export default function EnergiaSolarAndelsa() {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {apiError && (
+                <div style={{
+                    padding: '0.65rem 1rem',
+                    borderRadius: '8px',
+                    background: 'rgba(245, 158, 11, 0.14)',
+                    border: '1px solid rgba(245, 158, 11, 0.45)',
+                    color: '#fbbf24',
+                    fontSize: '0.82rem',
+                    fontWeight: 600
+                }}>
+                    Aviso de conectividad: {apiError}
+                </div>
+            )}
             {/* Cabecera Compacta (Regla AGENTS.md) */}
             <div
                 className="page-header"

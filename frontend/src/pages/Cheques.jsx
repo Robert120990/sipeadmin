@@ -21,6 +21,7 @@ export default function Cheques() {
     const itemsPerPage = 20;
 
     const [cuentas, setCuentas] = useState([]);
+    const [modalCuentas, setModalCuentas] = useState([]);
     const [empresas, setEmpresas] = useState([]);
 
     const [filters, setFilters] = useState({
@@ -74,7 +75,8 @@ export default function Cheques() {
         setLoading(true);
         try {
             const res = await api.get('/cheques', { params: filters });
-            setCheques(res.data);
+            setCheques(res.data || []);
+            setCurrentPage(1);
         } catch (err) {
             addToast('Error al cargar historial de cheques', 'error');
         } finally {
@@ -83,10 +85,13 @@ export default function Cheques() {
     };
 
     const fetchCatalogsForCompany = async (id_empresa) => {
-        if (!id_empresa) return;
+        if (!id_empresa) {
+            setModalCuentas([]);
+            return;
+        }
         try {
             const res = await api.get(`/cheques/catalogos?id_empresa=${id_empresa}`);
-            setCuentas(res.data.cuentas || []);
+            setModalCuentas(res.data.cuentas || []);
         } catch (err) {
             addToast('Error al cargar cuentas para la empresa', 'error');
         }
@@ -285,7 +290,7 @@ export default function Cheques() {
     );
 
     return (
-        <div>
+        <div className="cheques-page">
             <div className="page-header">
                 <div>
                     <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -341,7 +346,7 @@ export default function Cheques() {
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                         <div style={{ position: 'relative', flex: 1 }}>
                             <Search size={16} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                            <input type="text" placeholder="Buscar en resultados..." style={{ paddingLeft: '2.5rem', width: '100%' }} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                            <input type="text" placeholder="Buscar en resultados..." style={{ paddingLeft: '2.5rem', width: '100%' }} value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }} />
                         </div>
                         <button className="btn-secondary" onClick={() => fetchCheques()} title="Actualizar">
                             <Filter size={18} />
@@ -480,7 +485,7 @@ export default function Cheques() {
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>Cuenta Bancaria</label>
                         <select style={{ width: '100%' }} value={formData.numero_cuenta} onChange={e => setFormData({...formData, numero_cuenta: e.target.value})} disabled={!formData.id_empresa} required>
                             <option value="">Seleccione Cuenta...</option>
-                            {sortCuentas(cuentas.filter(c => c.id_empresa === formData.id_empresa)).map(c => (
+                            {sortCuentas((modalCuentas.length > 0 ? modalCuentas : cuentas).filter(c => c.id_empresa === formData.id_empresa)).map(c => (
                                 <option key={c.corr} value={c.numero}>{formatCuentaLabel(c)}</option>
                             ))}
                         </select>
@@ -566,8 +571,7 @@ export default function Cheques() {
             </Modal>
 
             <style dangerouslySetInnerHTML={{ __html: `
-                .hover-row:hover { background: rgba(255,255,255,0.03); }
-                input[type="date"] { color-scheme: dark; }
+                .cheques-page .hover-row:hover { background: rgba(255,255,255,0.03); }
             `}} />
         </div>
     );

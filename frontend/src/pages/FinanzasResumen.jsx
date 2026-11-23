@@ -6,6 +6,7 @@ import autoTable from 'jspdf-autotable';
 import { useToast } from '../components/Toast';
 import api from '../services/api';
 import { formatCurrency } from '../utils/loanCalculations';
+import { todayStr } from '../utils/date';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 
 export default function FinanzasResumen() {
@@ -106,18 +107,7 @@ export default function FinanzasResumen() {
                 4: { halign: 'right', fontStyle: 'bold' }
             },
             headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] },
-            margin: { left: 14, right: 14, bottom: 15 },
-            didDrawPage: (dataHook) => {
-                const pNum = dataHook.pageNumber;
-                doc.setFontSize(7.5);
-                doc.setTextColor(148, 163, 184);
-                doc.text(
-                    `Página ${pNum}`,
-                    pageWidth - 20,
-                    pageHeight - 8,
-                    { align: 'right' }
-                );
-            }
+            margin: { left: 14, right: 14, bottom: 15 }
         });
 
         const pagesCount = doc.internal.getNumberOfPages();
@@ -133,7 +123,7 @@ export default function FinanzasResumen() {
         setPdfSource(blob);
         setPreviewPdfDoc(doc);
         setTotalPages(pagesCount);
-        setPreviewFileName(`Resumen_Finanzas_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewFileName(`Resumen_Finanzas_${todayStr()}.pdf`);
         setPreviewModalOpen(true);
     };
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     AlertTriangle, CheckCircle2, Fuel, CreditCard, Banknote, 
     Receipt, DollarSign, Eye, Info, Clock, Sparkles, Copy, 
@@ -322,6 +322,12 @@ export default function DiferenciaDescuadreModal({ modalData, onClose, fecha, on
     const [loadingIA, setLoadingIA] = useState(false);
     const [errorIA, setErrorIA] = useState(null);
     const [checkedChecklist, setCheckedChecklist] = useState({});
+
+    useEffect(() => {
+        setDictamenIA(null);
+        setErrorIA(null);
+        setCheckedChecklist({});
+    }, [modalData?.id_empresa, modalData?.branch_id, fecha]);
 
     if (!modalData) return null;
 

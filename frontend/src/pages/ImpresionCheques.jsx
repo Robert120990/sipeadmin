@@ -4,11 +4,11 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { Printer, Search, FileText, CheckSquare, Square, AlertCircle } from 'lucide-react';
 import DesignerService from '../modules/check-designer/services/DesignerService';
-import PrintEngine from '../modules/check-designer/services/PrintEngine';
 import CheckPdfService from '../modules/check-designer/services/CheckPdfService';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 import { numeroALetras, formatMonto, formatearFechaEnLetras, formatearFechaEnLetrasCorta } from '../utils/numeroALetras';
+import { getStoredUser } from '../utils/auth';
 
 export default function ImpresionCheques() {
     const [cuentas, setCuentas] = useState([]);
@@ -35,7 +35,6 @@ export default function ImpresionCheques() {
     const [previewSubtitle, setPreviewSubtitle] = useState('');
     const [previewBadge, setPreviewBadge] = useState('');
     const [previewFileName, setPreviewFileName] = useState('cheques.pdf');
-    const [previewListaDatos, setPreviewListaDatos] = useState([]);
 
     const { addToast } = useToast();
     const navigate = useNavigate();
@@ -200,7 +199,7 @@ export default function ImpresionCheques() {
 
     // Formatear datos de cheque para el motor de impresión
     const formatChequeData = (cheque) => {
-        const user = JSON.parse(localStorage.getItem('user')) || {};
+        const user = getStoredUser() || {};
         const partesFecha = (cheque.fecha || '').split('/');
         return {
             fecha: cheque.fecha || '',
@@ -254,7 +253,6 @@ export default function ImpresionCheques() {
             setPreviewBadge(currentFormato.name || 'FORMATO');
             setPreviewSubtitle(`Cuenta: ${currentCuenta?.nombre || ''} (${currentCuenta?.numero || ''}) | ${listaDatos.length} cheque(s)`);
             setPreviewFileName(`Cheques_${currentCuenta?.nombre || 'Banco'}_${desdeCheque}-${hastaCheque}.pdf`);
-            setPreviewListaDatos(listaDatos);
             setShowPreviewModal(true);
         } catch (error) {
             addToast('Error al preparar la vista previa de cheques', 'error');
@@ -290,7 +288,6 @@ export default function ImpresionCheques() {
             setPreviewBadge(currentFormato.name || 'FORMATO');
             setPreviewSubtitle(`${cheque.a_nombre} | $${formatMonto(cheque.valor)} | Cuenta: ${currentCuenta?.nombre || ''}`);
             setPreviewFileName(`Cheque_${cheque.cheque || cheque.llave}.pdf`);
-            setPreviewListaDatos(listaDatos);
             setShowPreviewModal(true);
         } catch (error) {
             addToast('Error al preparar vista previa del cheque', 'error');
@@ -631,10 +628,6 @@ export default function ImpresionCheques() {
                 fileName={previewFileName}
                 totalPages={previewTotalPages}
                 footerInfo={`Formato de cheque: ${currentFormato?.name || 'Estándar'} (${Math.round(currentFormato?.width || 152)} x ${Math.round(currentFormato?.height || 70)} mm) - Presentación Carta a página completa`}
-                onPrint={() => {
-                    const campos = currentFormato?.design_json?.campos || [];
-                    PrintEngine.printBatch(currentFormato, campos, previewListaDatos, currentFormato?.printer_name || null);
-                }}
             />
         </div>
     );

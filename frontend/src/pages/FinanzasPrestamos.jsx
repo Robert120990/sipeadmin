@@ -10,6 +10,7 @@ import ReportPreviewModal from '../components/ReportPreviewModal';
 import api from '../services/api';
 import { calculatePMT, formatCurrency, generateAmortizationSchedule, calculateRemainingPayoffFromBalance, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, COMMISSION_TYPES, calculatePeriodInsurance, calculatePeriodSavings, calculateDisbursementCommission } from '../utils/loanCalculations';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
+import { todayStr } from '../utils/date';
 
 export default function FinanzasPrestamos() {
     const { addToast } = useToast();
@@ -46,8 +47,8 @@ export default function FinanzasPrestamos() {
         tasa_interes_anual: '',
         plazo_meses: 60,
         frecuencia_pago: 'mensual',
-        fecha_inicio: new Date().toISOString().split('T')[0],
-        fecha_primer_pago: new Date().toISOString().split('T')[0],
+        fecha_inicio: todayStr(),
+        fecha_primer_pago: todayStr(),
         cuota_calculada: '',
         seguro_tipo: 'none',
         seguro_valor: 0,
@@ -68,7 +69,7 @@ export default function FinanzasPrestamos() {
     // Payment Registration Modal State
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentForm, setPaymentForm] = useState({
-        fecha_pago: new Date().toISOString().split('T')[0],
+        fecha_pago: todayStr(),
         tipo_pago: 'cuota_regular',
         monto_total: '',
         monto_capital: '',
@@ -172,8 +173,8 @@ export default function FinanzasPrestamos() {
             tasa_interes_anual: 9.5,
             plazo_meses: 60,
             frecuencia_pago: 'mensual',
-            fecha_inicio: new Date().toISOString().split('T')[0],
-            fecha_primer_pago: new Date().toISOString().split('T')[0],
+            fecha_inicio: todayStr(),
+            fecha_primer_pago: todayStr(),
             cuota_calculada: '',
             seguro_tipo: 'none',
             seguro_valor: 0,
@@ -299,7 +300,7 @@ export default function FinanzasPrestamos() {
         const totalConCargos = Math.round((regularCuota + estSeguroPago + estAhorroPago) * 100) / 100;
 
         setPaymentForm({
-            fecha_pago: new Date().toISOString().split('T')[0],
+            fecha_pago: todayStr(),
             tipo_pago: 'cuota_regular',
             monto_total: totalConCargos,
             monto_capital: estCapital,
@@ -464,18 +465,7 @@ export default function FinanzasPrestamos() {
                 8: { halign: 'center' }
             },
             headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255], halign: 'center' },
-            margin: { left: 14, right: 14, bottom: 15 },
-            didDrawPage: (dataHook) => {
-                const pNum = dataHook.pageNumber;
-                doc.setFontSize(7.5);
-                doc.setTextColor(148, 163, 184);
-                doc.text(
-                    `Página ${pNum}`,
-                    pageWidth - 20,
-                    pageHeight - 8,
-                    { align: 'right' }
-                );
-            }
+            margin: { left: 14, right: 14, bottom: 15 }
         });
 
         const pagesCount = doc.internal.getNumberOfPages();
@@ -491,7 +481,7 @@ export default function FinanzasPrestamos() {
         setPdfSource(blob);
         setPreviewPdfDoc(doc);
         setTotalPages(pagesCount);
-        setPreviewFileName(`Prestamos_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewFileName(`Prestamos_${todayStr()}.pdf`);
         setPreviewModalOpen(true);
     };
 

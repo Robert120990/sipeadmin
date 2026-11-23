@@ -46,6 +46,7 @@ const TicketDetailModal = ({ open, ticketId, onClose, onUpdated, canManage = fal
     const [previewImageUrl, setPreviewImageUrl] = useState(null);
     const [agyOpen, setAgyOpen] = useState(false);
     const replyFileRef = useRef(null);
+    const aiNotesDirtyRef = useRef(false);
 
     const loadTicketDetail = useCallback(async (silent = false) => {
         if (!open || !ticketId) return;
@@ -54,7 +55,10 @@ const TicketDetailModal = ({ open, ticketId, onClose, onUpdated, canManage = fal
             const res = await api.get(`/tickets/${ticketId}`);
             const data = res.data?.data || res.data;
             setTicket(data);
-            setAiNotes(data?.ai_notes || '');
+            if (!silent || !aiNotesDirtyRef.current) {
+                setAiNotes(data?.ai_notes || '');
+                aiNotesDirtyRef.current = false;
+            }
         } catch (_) {
             if (!silent) addToast('No se pudo cargar el detalle del ticket', 'error');
         } finally {
@@ -63,6 +67,7 @@ const TicketDetailModal = ({ open, ticketId, onClose, onUpdated, canManage = fal
     }, [open, ticketId, addToast]);
 
     useEffect(() => {
+        aiNotesDirtyRef.current = false;
         if (open && ticketId) {
             loadTicketDetail(false);
             const interval = setInterval(() => loadTicketDetail(true), 10000);
@@ -116,6 +121,7 @@ const TicketDetailModal = ({ open, ticketId, onClose, onUpdated, canManage = fal
                 ...extra
             });
             const updated = res.data?.data || res.data?.ticket;
+            aiNotesDirtyRef.current = false;
             setTicket(updated);
             setShowResolveBox(false);
             addToast(
@@ -148,6 +154,7 @@ const TicketDetailModal = ({ open, ticketId, onClose, onUpdated, canManage = fal
                 ai_notes: aiNotes
             });
             const updated = res.data?.data || res.data?.ticket;
+            aiNotesDirtyRef.current = false;
             setTicket(updated);
             addToast(nextInclude ? 'Ticket incluido en el paquete para IA' : 'Revisión para IA actualizada', 'success');
             if (onUpdated) onUpdated(updated);
@@ -176,6 +183,7 @@ const TicketDetailModal = ({ open, ticketId, onClose, onUpdated, canManage = fal
                 attachment_base64: replyImageBase64 || null
             });
             const updated = res.data?.data || res.data?.ticket;
+            aiNotesDirtyRef.current = false;
             setTicket(updated);
             setReplyText('');
             setReplyImageBase64(null);
@@ -441,7 +449,10 @@ const TicketDetailModal = ({ open, ticketId, onClose, onUpdated, canManage = fal
                                     <input
                                         type="text"
                                         value={aiNotes}
-                                        onChange={(e) => setAiNotes(e.target.value)}
+                                        onChange={(e) => {
+                                            aiNotesDirtyRef.current = true;
+                                            setAiNotes(e.target.value);
+                                        }}
                                         placeholder="Comentario / instrucción técnica para que la IA resuelva este ticket..."
                                         className="form-input"
                                         style={{ flex: '1 1 240px', height: '36px', fontSize: '0.78rem' }}

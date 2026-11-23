@@ -8,6 +8,7 @@ import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import api from '../services/api';
 import { calculatePMT, calculatePV, generateAmortizationSchedule, formatCurrency, FREQUENCIES, INSURANCE_TYPES, SAVINGS_TYPES, COMMISSION_TYPES } from '../utils/loanCalculations';
+import { todayStr } from '../utils/date';
 
 export default function FinanzasCalculadora() {
     const { addToast } = useToast();
@@ -21,7 +22,7 @@ export default function FinanzasCalculadora() {
     const [annualRate, setAnnualRate] = useState(9.5);
     const [termMonths, setTermMonths] = useState(60);
     const [frequency, setFrequency] = useState('mensual');
-    const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+    const [startDate, setStartDate] = useState(todayStr());
 
     // Additional Charges: Seguro, Ahorro Obligatorio & Comisión por Desembolso
     const [commissionType, setCommissionType] = useState('none');

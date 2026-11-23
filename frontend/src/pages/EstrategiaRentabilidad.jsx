@@ -4,21 +4,17 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
-import { formatDateDMY } from '../utils/date';
+import { formatDateDMY, todayStr, offsetDaysStr } from '../utils/date';
 import EstrategiaNav from '../components/EstrategiaNav';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 
 export default function EstrategiaRentabilidad() {
     const { addToast } = useToast();
 
-    const getDefaultDates = () => {
-        const now = new Date();
-        const hasta = now.toISOString().split('T')[0];
-        const prev = new Date(now);
-        prev.setDate(prev.getDate() - 30);
-        const desde = prev.toISOString().split('T')[0];
-        return { desde, hasta };
-    };
+    const getDefaultDates = () => ({
+        desde: offsetDaysStr(-30),
+        hasta: todayStr()
+    });
 
     const [{ desde, hasta }, setDates] = useState(getDefaultDates);
     const [pnlData, setPnlData] = useState(null);

@@ -1,25 +1,30 @@
 const UNIDADES = ['', 'UNO ', 'DOS ', 'TRES ', 'CUATRO ', 'CINCO ', 'SEIS ', 'SIETE ', 'OCHO ', 'NUEVE ', 'DIEZ ', 'ONCE ', 'DOCE ', 'TRECE ', 'CATORCE ', 'QUINCE ', 'DIECISÉIS ', 'DIECISIETE ', 'DIECIOCHO ', 'DIECINUEVE ', 'VEINTE '];
-const DECENAS = ['', 'DIEZ ', 'VEINTI', 'TREINTA ', 'CUARENTA ', 'CINCUENTA ', 'SESENTA ', 'SETENTA ', 'OCHENTA ', 'NOVENTA '];
+const VEINTIS = ['VEINTE ', 'VEINTIUNO ', 'VEINTIDÓS ', 'VEINTITRÉS ', 'VEINTICUATRO ', 'VEINTICINCO ', 'VEINTISÉIS ', 'VEINTISIETE ', 'VEINTIOCHO ', 'VEINTINUEVE '];
+const DECENAS = ['', 'DIEZ ', 'VEINTE ', 'TREINTA ', 'CUARENTA ', 'CINCUENTA ', 'SESENTA ', 'SETENTA ', 'OCHENTA ', 'NOVENTA '];
 const CENTENAS = ['', 'CIENTO ', 'DOSCIENTOS ', 'TRESCIENTOS ', 'CUATROCIENTOS ', 'QUINIENTOS ', 'SEISCIENTOS ', 'SETECIENTOS ', 'OCHOCIENTOS ', 'NOVECIENTOS '];
 
-const toWords = (n) => {
+const toWords = (n, apocopate = false) => {
     if (n === 0) return 'CERO ';
     let num = n;
     let words = '';
 
     if (num >= 1000000) {
         const millones = Math.floor(num / 1000000);
-        words += (millones === 1 ? 'UN MILLÓN ' : toWords(millones) + 'MILLONES ');
+        words += (millones === 1 ? 'UN MILLÓN ' : toWords(millones, true) + 'MILLONES ');
         num %= 1000000;
     }
     if (num >= 1000) {
         const miles = Math.floor(num / 1000);
-        words += (miles === 1 ? 'MIL ' : toWords(miles) + 'MIL ');
+        words += (miles === 1 ? 'MIL ' : toWords(miles, true) + 'MIL ');
         num %= 1000;
     }
     if (num >= 100) {
         const centena = Math.floor(num / 100);
-        words += (centena === 1 && num % 100 !== 0) ? 'CIENTO ' : CENTENAS[centena];
+        if (centena === 1 && num % 100 === 0) {
+            words += 'CIEN ';
+        } else {
+            words += CENTENAS[centena];
+        }
         num %= 100;
     }
     if (num >= 30) {
@@ -28,13 +33,16 @@ const toWords = (n) => {
         num %= 10;
         if (num > 0) words += 'Y ';
     } else if (num >= 20) {
-        words += 'VEINTI';
-        num %= 10;
+        const u = num % 10;
+        words += (u === 1 && apocopate) ? 'VEINTIÚN ' : VEINTIS[u];
+        num = 0;
     } else if (num >= 10) {
         words += UNIDADES[num];
         num = 0;
     }
-    if (num > 0) words += UNIDADES[num];
+    if (num > 0) {
+        words += (num === 1 && apocopate) ? 'UN ' : UNIDADES[num];
+    }
 
     return words;
 };
@@ -47,11 +55,12 @@ export const numeroALetras = (monto) => {
     const valor = parseFloat(monto);
     if (isNaN(valor)) return '';
 
-    const entero = Math.floor(Math.abs(valor));
-    const decimales = Math.round((Math.abs(valor) - entero) * 100);
+    const totalCents = Math.round(Math.abs(valor) * 100);
+    const entero = Math.floor(totalCents / 100);
+    const decimales = totalCents % 100;
 
     const parteEntera = toWords(entero);
-    const parteDecimal = decimales > 0 ? `${String(decimales).padStart(2, '0')}/100` : '00/100';
+    const parteDecimal = `${String(decimales).padStart(2, '0')}/100`;
 
     return `${parteEntera}CON ${parteDecimal}`.trim();
 };

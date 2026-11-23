@@ -16,6 +16,7 @@ import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import dgehmEstacionesList from '../data/dgehm_estaciones.json';
 import socket from '../services/socket';
+import { todayStr, offsetDaysStr } from '../utils/date';
 
 const ConsultasPreciosCompetencia = () => {
     const [activeTab, setActiveTab] = useState('actuales'); // 'actuales' | 'historial' | 'bi'
@@ -36,12 +37,8 @@ const ConsultasPreciosCompetencia = () => {
     const [historialData, setHistorialData] = useState([]);
     const [historialLoading, setHistorialLoading] = useState(false);
     const [historialSearch, setHistorialSearch] = useState('');
-    const [historialDesde, setHistorialDesde] = useState(() => {
-        const d = new Date();
-        d.setDate(d.getDate() - 30);
-        return d.toISOString().split('T')[0];
-    });
-    const [historialHasta, setHistorialHasta] = useState(() => new Date().toISOString().split('T')[0]);
+    const [historialDesde, setHistorialDesde] = useState(() => offsetDaysStr(-30));
+    const [historialHasta, setHistorialHasta] = useState(() => todayStr());
 
     // Report preview state
     const [previewModalOpen, setPreviewModalOpen] = useState(false);
@@ -462,11 +459,8 @@ const ConsultasPreciosCompetencia = () => {
     }, [estacionesMonitoreadas, selectedBranchFilter, searchMonitored]);
 
     const setQuickRange = (days) => {
-        const today = new Date();
-        const past = new Date();
-        past.setDate(today.getDate() - days);
-        setHistorialDesde(past.toISOString().split('T')[0]);
-        setHistorialHasta(today.toISOString().split('T')[0]);
+        setHistorialDesde(offsetDaysStr(-days));
+        setHistorialHasta(todayStr());
     };
 
     const exportToExcel = () => {
@@ -488,7 +482,7 @@ const ConsultasPreciosCompetencia = () => {
             }));
             const ws = XLSX.utils.json_to_sheet(exportData);
             XLSX.utils.book_append_sheet(wb, ws, 'Precios Actuales');
-            XLSX.writeFile(wb, `precios_competencia_${new Date().toISOString().split('T')[0]}.xlsx`);
+            XLSX.writeFile(wb, `precios_competencia_${todayStr()}.xlsx`);
         } else if (activeTab === 'historial') {
             const exportData = filteredHistorialData.map(item => ({
                 'Fecha Registro': item.fecha_registro,
@@ -570,18 +564,7 @@ const ConsultasPreciosCompetencia = () => {
                     8: { halign: 'right' }
                 },
                 headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], halign: 'center' },
-                margin: { left: 14, right: 14, bottom: 15 },
-                didDrawPage: (dataHook) => {
-                    const pNum = dataHook.pageNumber;
-                    doc.setFontSize(7.5);
-                    doc.setTextColor(148, 163, 184);
-                    doc.text(
-                        `Página ${pNum}`,
-                        pageWidth - 20,
-                        pageHeight - 8,
-                        { align: 'right' }
-                    );
-                }
+                margin: { left: 14, right: 14, bottom: 15 }
             });
         } else if (activeTab === 'historial') {
             if (filteredHistorialData.length === 0) {
@@ -630,18 +613,7 @@ const ConsultasPreciosCompetencia = () => {
                     8: { halign: 'right' }
                 },
                 headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], halign: 'center' },
-                margin: { left: 14, right: 14, bottom: 15 },
-                didDrawPage: (dataHook) => {
-                    const pNum = dataHook.pageNumber;
-                    doc.setFontSize(7.5);
-                    doc.setTextColor(148, 163, 184);
-                    doc.text(
-                        `Página ${pNum}`,
-                        pageWidth - 20,
-                        pageHeight - 8,
-                        { align: 'right' }
-                    );
-                }
+                margin: { left: 14, right: 14, bottom: 15 }
             });
         } else {
             return;

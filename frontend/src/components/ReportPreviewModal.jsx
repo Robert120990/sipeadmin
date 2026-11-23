@@ -38,32 +38,30 @@ export default function ReportPreviewModal({
     const [blobUrl, setBlobUrl] = useState('');
     const iframeRef = useRef(null);
 
-    // Generate or update Blob URL when pdfSource changes
+    // Generate or update Blob URL when pdfSource changes (only revoke URLs created internally)
     useEffect(() => {
         if (!isOpen || !pdfSource) {
-            if (blobUrl && blobUrl.startsWith('blob:')) {
-                URL.revokeObjectURL(blobUrl);
-            }
             setBlobUrl('');
-            return;
+            return undefined;
         }
 
         let url = '';
+        let createdLocally = false;
         if (typeof pdfSource === 'string') {
             url = pdfSource;
         } else if (pdfSource instanceof Blob) {
             url = URL.createObjectURL(pdfSource);
+            createdLocally = true;
         }
 
         setBlobUrl(url);
         setCurrentPage(1);
 
         return () => {
-            if (url && url.startsWith('blob:')) {
+            if (createdLocally && url && url.startsWith('blob:')) {
                 URL.revokeObjectURL(url);
             }
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, pdfSource]);
 
     // Keyboard navigation (ESC to close, Left/Right to change page)

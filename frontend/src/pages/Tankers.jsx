@@ -33,17 +33,31 @@ export default function Tankers() {
         };
     }, []);
 
+    const parseCompartmentsSafe = (raw) => {
+        if (Array.isArray(raw)) return raw;
+        if (typeof raw === 'string') {
+            try {
+                const parsed = JSON.parse(raw);
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (_) {
+                return [];
+            }
+        }
+        return [];
+    };
+
     const fetchData = async () => {
         try {
             const [tankersRes, carriersRes] = await Promise.all([
                 api.get('/tankers'),
                 api.get('/carriers')
             ]);
-            setTankers(tankersRes.data);
-            setCarriers(carriersRes.data);
-            setLoading(false);
+            setTankers(tankersRes.data || []);
+            setCarriers(carriersRes.data || []);
         } catch (err) {
             addToast('Error al cargar datos', 'error');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -52,13 +66,13 @@ export default function Tankers() {
             setEditingTanker(tanker);
             setFormData({ code: tanker.code, carrier_id: tanker.carrier_id || '' });
             
-            let comps = typeof tanker.compartments === 'string' ? JSON.parse(tanker.compartments) : (tanker.compartments || []);
+            const comps = parseCompartmentsSafe(tanker.compartments);
             // Migración de datos viejos o estructura básica
             const migratedComps = comps.map(c => {
-                if (!c.separations) {
+                if (!Array.isArray(c.separations)) {
                     return { ...c, separations: [{ capacity: c.capacity || '' }] };
                 }
-                return c;
+                return { ...c, separations: c.separations.map(s => ({ ...s })) };
             });
             setCompartments(migratedComps.length > 0 ? migratedComps : [{ number: 1, separations: [{ capacity: '' }], capacity: 0 }]);
         } else {
@@ -70,35 +84,40 @@ export default function Tankers() {
     };
 
     const handleAddCompartment = () => {
-        setCompartments([...compartments, { number: compartments.length + 1, separations: [{ capacity: '' }], capacity: 0 }]);
+        setCompartments(prev => [...prev, { number: prev.length + 1, separations: [{ capacity: '' }], capacity: 0 }]);
     };
 
     const handleRemoveCompartment = (index) => {
-        const newComps = compartments.filter((_, i) => i !== index).map((c, i) => ({ ...c, number: i + 1 }));
-        setCompartments(newComps);
+        setCompartments(prev => prev.filter((_, i) => i !== index).map((c, i) => ({ ...c, number: i + 1 })));
     };
 
     const handleAddSeparation = (compIndex) => {
-        const newComps = [...compartments];
-        newComps[compIndex].separations.push({ capacity: '' });
-        setCompartments(newComps);
+        setCompartments(prev => prev.map((comp, idx) => (
+            idx === compIndex
+                ? { ...comp, separations: [...comp.separations, { capacity: '' }] }
+                : comp
+        )));
     };
 
     const handleRemoveSeparation = (compIndex, sepIndex) => {
-        const newComps = [...compartments];
-        newComps[compIndex].separations = newComps[compIndex].separations.filter((_, i) => i !== sepIndex);
-        if (newComps[compIndex].separations.length === 0) {
-            newComps[compIndex].separations = [{ capacity: '' }];
-        }
-        setCompartments(newComps);
+        setCompartments(prev => prev.map((comp, idx) => {
+            if (idx !== compIndex) return comp;
+            const remaining = comp.separations.filter((_, i) => i !== sepIndex);
+            const nextSeps = remaining.length > 0 ? remaining : [{ capacity: '' }];
+            const nextCap = nextSeps.reduce((sum, s) => sum + (parseFloat(s.capacity) || 0), 0);
+            return { ...comp, separations: nextSeps, capacity: nextCap };
+        }));
     };
 
     const handleSeparationChange = (compIndex, sepIndex, value) => {
-        const newComps = [...compartments];
-        newComps[compIndex].separations[sepIndex].capacity = value;
-        // Recalcular capacidad del compartimiento
-        newComps[compIndex].capacity = newComps[compIndex].separations.reduce((sum, s) => sum + (parseFloat(s.capacity) || 0), 0);
-        setCompartments(newComps);
+        setCompartments(prev => prev.map((comp, idx) => {
+            if (idx !== compIndex) return comp;
+            const nextSeps = comp.separations.map((s, sIdx) => (
+                sIdx === sepIndex ? { ...s, capacity: value } : s
+            ));
+            const nextCap = nextSeps.reduce((sum, s) => sum + (parseFloat(s.capacity) || 0), 0);
+            return { ...comp, separations: nextSeps, capacity: nextCap };
+        }));
     };
 
     const handleSubmit = async (e) => {
@@ -145,12 +164,12 @@ export default function Tankers() {
 
     // Calculate total capacity
     const getTotalCapacity = (comps) => {
-        let parsed = typeof comps === 'string' ? JSON.parse(comps) : (comps || []);
+        const parsed = parseCompartmentsSafe(comps);
         return parsed.reduce((acc, curr) => {
-            if (curr.separations) {
+            if (Array.isArray(curr.separations)) {
                 return acc + curr.separations.reduce((sSum, s) => sSum + (parseFloat(s.capacity) || 0), 0);
             }
-            return acc + (parseFloat(curr.capacity) || 0)
+            return acc + (parseFloat(curr.capacity) || 0);
         }, 0);
     };
 
@@ -182,7 +201,7 @@ export default function Tankers() {
                     </thead>
                     <tbody>
                         {tankers.map(t => {
-                            const compsArray = typeof t.compartments === 'string' ? JSON.parse(t.compartments) : (t.compartments || []);
+                            const compsArray = parseCompartmentsSafe(t.compartments);
                             return (
                             <tr key={t.id}>
                                 <td data-label="Código/Placa" style={{ fontWeight: '500' }}>{t.code}</td>

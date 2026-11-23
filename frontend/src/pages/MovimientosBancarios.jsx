@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin, CheckCircle } from 'lucide-react';
-import { todayStr } from '../utils/date';
+import { todayStr, offsetDaysStr } from '../utils/date';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 
 export default function MovimientosBancarios() {
@@ -24,7 +25,7 @@ export default function MovimientosBancarios() {
     const [filters, setFilters] = useState({
         id_empresa: '',
         numero_cuenta: '',
-        desde: (() => { const d = new Date(); d.setDate(d.getDate() - 30); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })(),
+        desde: offsetDaysStr(-30),
         hasta: todayStr()
     });
 
@@ -75,6 +76,7 @@ export default function MovimientosBancarios() {
         try {
             const res = await api.get('/bancos/movimientos', { params: filters });
             setMovements(res.data || []);
+            setCurrentPage(1);
         } catch (err) {
             addToast('Error al cargar historial', 'error');
         } finally {
@@ -306,11 +308,35 @@ export default function MovimientosBancarios() {
     }, [filteredMovements, currentPage]);
 
     const handleExportExcel = () => {
-        addToast('Exportando a Excel...', 'info');
+        if (!filteredMovements.length) {
+            addToast('No hay movimientos para exportar', 'warning');
+            return;
+        }
+        try {
+            const rows = filteredMovements.map(m => ({
+                Fecha: m.fecha || '',
+                'Fecha Aplicado': m.fecha_aplicado || '',
+                Llave: m.llave || '',
+                Documento: m.documento || '',
+                Empresa: m.empresa_nombre || m.id_empresa || '',
+                Cuenta: m.numero_cuenta || '',
+                Tipo: m.tipo || (m.valor >= 0 ? 'ABONO' : 'CARGO'),
+                Concepto: m.concepto || '',
+                Monto: Number(m.valor ?? m.monto ?? 0),
+                Partida: m.num_partida || ''
+            }));
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.json_to_sheet(rows);
+            XLSX.utils.book_append_sheet(wb, ws, 'Movimientos');
+            XLSX.writeFile(wb, `movimientos_bancarios_${filters.desde || todayStr()}_${filters.hasta || todayStr()}.xlsx`);
+            addToast(`Exportados ${rows.length} movimientos a Excel`, 'success');
+        } catch (err) {
+            addToast('Error al exportar movimientos a Excel', 'error');
+        }
     };
 
     return (
-        <div>
+        <div className="movimientos-bancarios-page">
             {/* Header */}
             <div className="page-header">
                 <div>
@@ -340,7 +366,7 @@ export default function MovimientosBancarios() {
                         <select 
                             style={{ width: '100%' }}
                             value={filters.id_empresa}
-                            onChange={e => setFilters({...filters, id_empresa: e.target.value})}
+                            onChange={e => setFilters({...filters, id_empresa: e.target.value, numero_cuenta: ''})}
                         >
                             <option value="">Todas las empresas</option>
                             {empresas.map(emp => (
@@ -385,7 +411,7 @@ export default function MovimientosBancarios() {
                                 placeholder="Buscar en resultados..." 
                                 style={{ paddingLeft: '2.5rem', width: '100%' }}
                                 value={searchTerm}
-                                onChange={e => setSearchTerm(e.target.value)}
+                                onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
                             />
                         </div>
                         <button className="btn-secondary" onClick={() => fetchMovements()} title="Actualizar">
@@ -688,10 +714,9 @@ export default function MovimientosBancarios() {
             </Modal>
 
             <style dangerouslySetInnerHTML={{ __html: `
-                .hover-row:hover { background: rgba(255,255,255,0.03); }
-                input[type="date"] { color-scheme: dark; }
-                textarea { width: 100%; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--border-radius); color: var(--text); resize: none; }
-                textarea:focus { outline: none; border-color: var(--primary); }
+                .movimientos-bancarios-page .hover-row:hover { background: rgba(255,255,255,0.03); }
+                .movimientos-bancarios-page textarea { width: 100%; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--border-radius); color: var(--text); resize: none; }
+                .movimientos-bancarios-page textarea:focus { outline: none; border-color: var(--primary); }
             `}} />
         </div>
     );

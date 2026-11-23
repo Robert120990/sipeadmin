@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useNotifications } from '../context/NotificationContext';
+import { useConfirm } from './ConfirmDialog';
 import api from '../services/api';
 import {
     Bell,
@@ -105,6 +106,7 @@ export default function NotificationBell({ isMobile = false }) {
         deleteNotification,
         clearAll
     } = useNotifications();
+    const { confirm } = useConfirm();
 
     const [isOpen, setIsOpen] = useState(false);
     const [filter, setFilter] = useState('all'); // 'all' | 'unread'
@@ -529,7 +531,10 @@ export default function NotificationBell({ isMobile = false }) {
                             {notifications.length > 0 ? (
                                 <button
                                     type="button"
-                                    onClick={clearAll}
+                                    onClick={async () => {
+                                        if (!await confirm('¿Estás seguro de limpiar todo el historial de notificaciones?', { variant: 'danger' })) return;
+                                        clearAll();
+                                    }}
                                     style={{
                                         background: 'none',
                                         border: 'none',

@@ -122,18 +122,7 @@ export default function PreciosEstacion() {
             styles: { fontSize: 8, cellPadding: 2, halign: 'right' },
             columnStyles: { 0: { halign: 'left', fontStyle: 'bold' } },
             headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255], halign: 'center' },
-            margin: { left: 14, right: 14, bottom: 15 },
-            didDrawPage: (dataHook) => {
-                const pNum = dataHook.pageNumber;
-                doc.setFontSize(7.5);
-                doc.setTextColor(148, 163, 184);
-                doc.text(
-                    `Página ${pNum}`,
-                    pageWidth - 20,
-                    pageHeight - 8,
-                    { align: 'right' }
-                );
-            }
+            margin: { left: 14, right: 14, bottom: 15 }
         });
 
         const pagesCount = doc.internal.getNumberOfPages();

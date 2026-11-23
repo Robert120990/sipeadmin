@@ -88,18 +88,7 @@ export default function ConsultasCumpleanos() {
             theme: 'striped',
             styles: { fontSize: 8.5, cellPadding: 2.5 },
             headStyles: { fillColor: [16, 185, 129], textColor: [255, 255, 255] },
-            margin: { left: 14, right: 14, bottom: 15 },
-            didDrawPage: (dataHook) => {
-                const pNum = dataHook.pageNumber;
-                doc.setFontSize(7.5);
-                doc.setTextColor(148, 163, 184);
-                doc.text(
-                    `Página ${pNum}`,
-                    pageWidth - 20,
-                    pageHeight - 8,
-                    { align: 'right' }
-                );
-            }
+            margin: { left: 14, right: 14, bottom: 15 }
         });
 
         const pagesCount = doc.internal.getNumberOfPages();
@@ -209,7 +198,7 @@ export default function ConsultasCumpleanos() {
                                                         borderRadius: '4px',
                                                         fontSize: '0.8rem'
                                                     }}>
-                                                        Día {birthParts.day}
+                                                        Día {birthParts?.day ?? '—'}
                                                     </span>
                                                 </td>
                                                 <td style={{ padding: '0.45rem 0.5rem', color: 'var(--text-muted)' }}>

@@ -228,13 +228,23 @@ export default function DashboardLayout() {
             ...configuracionMenu
         ];
         
-        let item = (location.pathname === '/dashboard/estrategia' || location.pathname === '/dashboard/estrategia/')
+        const LEGACY_PATH_MAP = {
+            '/dashboard/consultas/saldos-bancos': '/dashboard/bancos/reportes/saldos-bancos',
+            '/dashboard/consultas/saldos-chequera': '/dashboard/bancos/reportes/saldos-chequera'
+        };
+        const resolvedPathname = LEGACY_PATH_MAP[location.pathname] || location.pathname;
+        if (resolvedPathname !== location.pathname) {
+            navigate(resolvedPathname, { replace: true });
+            return;
+        }
+
+        let item = (resolvedPathname === '/dashboard/estrategia' || resolvedPathname === '/dashboard/estrategia/')
             ? allNavItems.find(i => i.path === '/dashboard/estrategia/torre-control')
-            : allNavItems.find(i => i.path === location.pathname);
+            : allNavItems.find(i => i.path === resolvedPathname);
         // Rutas hijas (ej. check-designer/edit/1): abrir el tab del módulo padre
         if (!item) {
             item = allNavItems
-                .filter(i => location.pathname.startsWith(i.path + '/'))
+                .filter(i => resolvedPathname.startsWith(i.path + '/'))
                 .sort((a, b) => b.path.length - a.path.length)[0];
         }
         if (item) {
@@ -980,7 +990,7 @@ export default function DashboardLayout() {
                         <button
                             onClick={() => {
                                 openTab({ name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: GitCommit });
-                                setDrawerOpen(false);
+                                closeMore();
                             }}
                             title="Ver historial de cambios y actualizaciones (GitHub)"
                             style={{

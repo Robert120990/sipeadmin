@@ -51,10 +51,11 @@ export default function CuentasBancarias() {
     const fetchData = async () => {
         try {
             const res = await api.get('/bancos/cuentas');
-            setAccounts(res.data);
-            setLoading(false);
+            setAccounts(res.data || []);
         } catch (err) {
             addToast('Error al cargar cuentas bancarias', 'error');
+        } finally {
+            setLoading(false);
         }
     };
 

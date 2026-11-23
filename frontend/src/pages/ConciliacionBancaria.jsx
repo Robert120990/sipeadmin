@@ -16,6 +16,7 @@ import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 import { getStoredUser } from '../utils/auth';
+import { formatLocalYMD, todayStr as getTodayStr } from '../utils/date';
 
 export default function ConciliacionBancaria() {
     const { addToast } = useToast();
@@ -34,8 +35,8 @@ export default function ConciliacionBancaria() {
     // Fechas y Selector de Periodo
     const [periodoPreset, setPeriodoPreset] = useState('este_mes');
     const today = new Date();
-    const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-    const todayStr = today.toISOString().split('T')[0];
+    const firstDay = formatLocalYMD(new Date(today.getFullYear(), today.getMonth(), 1));
+    const todayStr = getTodayStr();
     const [desde, setDesde] = useState(firstDay);
     const [hasta, setHasta] = useState(todayStr);
 

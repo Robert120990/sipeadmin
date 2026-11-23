@@ -12,6 +12,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import { formatCurrency } from '../utils/loanCalculations';
+import { todayStr } from '../utils/date';
 import { 
     calculateNPV, calculateIRR, calculatePayback, 
     calculateDiscountedPayback, calculateROI, calculateBCRatio, 
@@ -416,17 +417,22 @@ export default function FinanzasInversiones() {
         doc.text(`Total Proyectos: ${proyectos.length}  |  Generado: ${new Date().toLocaleDateString('es-SV')} ${new Date().toLocaleTimeString('es-SV')}`, 14, 21);
 
         const columns = ['Proyecto', 'Empresa', 'Categoría', 'Inversión', 'VPN', 'TIR', 'ROI', 'Payback', 'Estado'];
-        const rows = proyectos.map(p => [
-            p.nombre_proyecto || '-',
-            p.empresa_nombre || '-',
-            p.categoria || '-',
-            formatCurrency(p.inversion_inicial),
-            formatCurrency(p.vpn_estimado),
-            p.tir_estimada !== null ? `${p.tir_estimada}%` : 'N/A',
-            `${p.roi_estimado}%`,
-            `${Math.round(p.payback_meses / 12)}a ${Math.round(p.payback_meses % 12)}m`,
-            (p.estado || '').toUpperCase()
-        ]);
+        const rows = proyectos.map(p => {
+            const roundedMonths = Math.max(0, Math.round(Number(p.payback_meses || 0)));
+            const pbYears = Math.floor(roundedMonths / 12);
+            const pbMonths = roundedMonths % 12;
+            return [
+                p.nombre_proyecto || '-',
+                p.empresa_nombre || '-',
+                p.categoria || '-',
+                formatCurrency(p.inversion_inicial),
+                formatCurrency(p.vpn_estimado),
+                p.tir_estimada !== null ? `${p.tir_estimada}%` : 'N/A',
+                `${p.roi_estimado}%`,
+                `${pbYears}a ${pbMonths}m`,
+                (p.estado || '').toUpperCase()
+            ];
+        });
 
         autoTable(doc, {
             head: [columns],
@@ -444,18 +450,7 @@ export default function FinanzasInversiones() {
                 8: { halign: 'center' }
             },
             headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], halign: 'center' },
-            margin: { left: 14, right: 14, bottom: 15 },
-            didDrawPage: (dataHook) => {
-                const pNum = dataHook.pageNumber;
-                doc.setFontSize(7.5);
-                doc.setTextColor(148, 163, 184);
-                doc.text(
-                    `Página ${pNum}`,
-                    pageWidth - 20,
-                    pageHeight - 8,
-                    { align: 'right' }
-                );
-            }
+            margin: { left: 14, right: 14, bottom: 15 }
         });
 
         const pagesCount = doc.internal.getNumberOfPages();
@@ -471,7 +466,7 @@ export default function FinanzasInversiones() {
         setPdfSource(blob);
         setPreviewPdfDoc(doc);
         setTotalPages(pagesCount);
-        setPreviewFileName(`Cartera_Inversiones_${new Date().toISOString().split('T')[0]}.pdf`);
+        setPreviewFileName(`Cartera_Inversiones_${todayStr()}.pdf`);
         setPreviewModalOpen(true);
     };
 

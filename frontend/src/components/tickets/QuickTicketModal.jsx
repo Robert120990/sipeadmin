@@ -28,6 +28,7 @@ const MAX_ATTACHMENTS = 6;
 
 const QuickTicketModal = ({
     open,
+    hiddenForCapture = false,
     onClose,
     initialData = {},
     onCaptureRequest,
@@ -201,7 +202,10 @@ const QuickTicketModal = ({
                     background: 'rgba(2, 6, 23, 0.68)',
                     backdropFilter: 'blur(4px)',
                     padding: '0.75rem',
-                    overflowY: 'auto'
+                    overflowY: 'auto',
+                    visibility: hiddenForCapture ? 'hidden' : 'visible',
+                    opacity: hiddenForCapture ? 0 : 1,
+                    pointerEvents: hiddenForCapture ? 'none' : 'auto'
                 }}
                 onClick={onClose}
             >

@@ -39,10 +39,15 @@ export default function PedidosCombustible() {
             if (dStr instanceof Date) {
                 d = dStr;
             } else if (typeof dStr === 'string') {
-                if (dStr.includes(' ') && !dStr.includes('T')) {
-                    d = new Date(dStr.replace(' ', 'T'));
+                const trimmed = dStr.trim();
+                const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                if (dateOnlyMatch) {
+                    return `${dateOnlyMatch[3]}/${dateOnlyMatch[2]}/${dateOnlyMatch[1]}`;
+                }
+                if (trimmed.includes(' ') && !trimmed.includes('T')) {
+                    d = new Date(trimmed.replace(' ', 'T'));
                 } else {
-                    d = new Date(dStr);
+                    d = new Date(trimmed);
                 }
             } else {
                 d = new Date(dStr);

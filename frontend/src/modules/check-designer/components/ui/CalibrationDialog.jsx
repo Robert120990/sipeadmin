@@ -56,6 +56,7 @@ export default function CalibrationDialog({ printerName, isOpen, onClose, onSave
     };
 
     const handleSelectCalibration = (cal) => {
+        setPrinter(cal.printer_name || '');
         setOffsetX(cal.offset_x);
         setOffsetY(cal.offset_y);
         setScale(cal.scale);
@@ -73,7 +74,7 @@ export default function CalibrationDialog({ printerName, isOpen, onClose, onSave
                     <div><label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem' }}>Offset Horizontal (mm)</label><input type="number" step="0.1" value={offsetX} onChange={e => setOffsetX(e.target.value)} style={{ width: '100%' }} /></div>
                     <div><label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem' }}>Offset Vertical (mm)</label><input type="number" step="0.1" value={offsetY} onChange={e => setOffsetY(e.target.value)} style={{ width: '100%' }} /></div>
                 </div>
-                <div><label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem' }}>Escala (%)</label><input type="number" step="0.1" value={scale * 100} onChange={e => setScale(parseFloat(e.target.value) / 100)} style={{ width: '100%' }} /></div>
+                <div><label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem' }}>Escala (%)</label><input type="number" step="0.1" value={Number.isFinite(Number(scale)) ? Math.round(Number(scale) * 1000) / 10 : 100} onChange={e => setScale((parseFloat(e.target.value) || 100) / 100)} style={{ width: '100%' }} /></div>
                 {calibrations.length > 0 && (
                     <div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Calibraciones Guardadas</label>

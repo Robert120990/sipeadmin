@@ -21,10 +21,11 @@ export default function Carriers() {
     const fetchData = async () => {
         try {
             const res = await api.get('/carriers');
-            setCarriers(res.data);
-            setLoading(false);
+            setCarriers(res.data || []);
         } catch (err) {
             addToast('Error al cargar transportistas', 'error');
+        } finally {
+            setLoading(false);
         }
     };
 

@@ -57,8 +57,9 @@ export default function EstrategiaFlujoCaja() {
         const maxVal = Math.max(...saldos, 100000);
         const range = maxVal - minVal || 1;
 
+        const denom = Math.max(1, timeline.length - 1);
         const points = timeline.map((t, idx) => {
-            const x = padding + (idx / (timeline.length - 1)) * (width - 2 * padding);
+            const x = padding + (idx / denom) * (width - 2 * padding);
             const y = height - padding - ((t.saldo_final_proyectado - minVal) / range) * (height - 2 * padding);
             return `${x},${y}`;
         }).join(' ');
@@ -78,7 +79,7 @@ export default function EstrategiaFlujoCaja() {
 
                     {/* Puntos clave */}
                     {timeline.map((t, idx) => {
-                        const x = padding + (idx / (timeline.length - 1)) * (width - 2 * padding);
+                        const x = padding + (idx / denom) * (width - 2 * padding);
                         const y = height - padding - ((t.saldo_final_proyectado - minVal) / range) * (height - 2 * padding);
                         const isDeficit = t.estado === 'deficit';
 
@@ -325,33 +326,33 @@ export default function EstrategiaFlujoCaja() {
                                                 ${d.saldo_inicial?.toLocaleString()}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>
-                                                +${d.ingresos.total?.toLocaleString()}
+                                                +${(d.ingresos?.total ?? 0).toLocaleString()}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: 'var(--text-muted)' }}>
-                                                -${d.egresos.combustible?.toLocaleString()}
+                                                -${(d.egresos?.combustible ?? 0).toLocaleString()}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>
-                                                {d.egresos.prestamos > 0 && (
+                                                {(d.egresos?.prestamos ?? 0) > 0 && (
                                                     <span style={{ color: '#f59e0b', display: 'block', fontSize: '0.75rem', fontWeight: 600 }}>
-                                                        Cuota: -${d.egresos.prestamos?.toLocaleString()}
+                                                        Cuota: -${d.egresos.prestamos.toLocaleString()}
                                                     </span>
                                                 )}
-                                                {d.egresos.nomina > 0 && (
+                                                {(d.egresos?.nomina ?? 0) > 0 && (
                                                     <span style={{ color: '#8b5cf6', display: 'block', fontSize: '0.75rem', fontWeight: 600 }}>
-                                                        Nómina: -${d.egresos.nomina?.toLocaleString()}
+                                                        Nómina: -${d.egresos.nomina.toLocaleString()}
                                                     </span>
                                                 )}
-                                                {d.egresos.recordatorios > 0 && (
+                                                {(d.egresos?.recordatorios ?? 0) > 0 && (
                                                     <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>
-                                                        Fijos: -${d.egresos.recordatorios?.toLocaleString()}
+                                                        Fijos: -${d.egresos.recordatorios.toLocaleString()}
                                                     </span>
                                                 )}
-                                                {d.egresos.prestamos === 0 && d.egresos.nomina === 0 && d.egresos.recordatorios === 0 && (
+                                                {(d.egresos?.prestamos ?? 0) === 0 && (d.egresos?.nomina ?? 0) === 0 && (d.egresos?.recordatorios ?? 0) === 0 && (
                                                     <span style={{ color: 'var(--text-muted)' }}>$0</span>
                                                 )}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#ef4444', fontWeight: 600 }}>
-                                                -${d.egresos.total?.toLocaleString()}
+                                                -${(d.egresos?.total ?? 0).toLocaleString()}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 600, color: d.flujo_neto_dia >= 0 ? '#10b981' : '#ef4444' }}>
                                                 {d.flujo_neto_dia >= 0 ? `+$${d.flujo_neto_dia?.toLocaleString()}` : `-$${Math.abs(d.flujo_neto_dia)?.toLocaleString()}`}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import api from '../services/api';
+import { todayStr } from '../utils/date';
 import {
     Users,
     Building2,
@@ -424,7 +425,7 @@ export default function PlanillasRRHH() {
                     tipo_remesa_codigo: 'TR',
                     documento: '',
                     monto: Number(periodo.total_neto || 0).toFixed(2),
-                    fecha_pago: new Date().toISOString().split('T')[0],
+                    fecha_pago: todayStr(),
                     concepto: ''
                 }
             ]);
@@ -453,7 +454,7 @@ export default function PlanillasRRHH() {
                 tipo_remesa_codigo: 'TR',
                 documento: '',
                 monto: restante > 0 ? restante.toFixed(2) : '',
-                fecha_pago: new Date().toISOString().split('T')[0],
+                fecha_pago: todayStr(),
                 concepto: ''
             }
         ]);
@@ -2177,7 +2178,7 @@ export default function PlanillasRRHH() {
                                                 </label>
                                                 <select
                                                     value={row.cuenta_bancaria_id}
-                                                    onChange={(e) => handlePagoRowChange(idx, 'cuenta_bancaria_id', parseInt(e.target.value, 10))}
+                                                    onChange={(e) => handlePagoRowChange(idx, 'cuenta_bancaria_id', parseInt(e.target.value, 10) || '')}
                                                     style={{
                                                         width: '100%',
                                                         height: '36px',

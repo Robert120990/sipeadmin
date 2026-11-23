@@ -1,3 +1,5 @@
+import { formatLocalYMD, todayStr } from './date';
+
 /**
  * Financial Calculation Utilities for SIPEOFI Loans and Amortization
  * Modeled after Dinkytown Simple Loan Amortization Calculator
@@ -106,9 +108,9 @@ export const formatCurrency = (amount) => {
 export const addPeriodToDate = (baseDate, periodIndex, frequency = 'mensual') => {
     let cleanStr = '';
     if (baseDate instanceof Date) {
-        cleanStr = baseDate.toISOString().split('T')[0];
+        cleanStr = formatLocalYMD(baseDate);
     } else {
-        cleanStr = String(baseDate || '').split('T')[0];
+        cleanStr = String(baseDate || '').trim().split(/[T ]/)[0];
     }
     const [yStr, mStr, dStr] = cleanStr.split('-');
     const startYear = parseInt(yStr, 10);
@@ -180,7 +182,7 @@ export const generateAmortizationSchedule = ({
     annualRate,
     termMonths,
     frequency = 'mensual',
-    startDate = new Date().toISOString().split('T')[0],
+    startDate = todayStr(),
     extraPaymentMonthly = 0,
     extraPaymentsCustom = [], // array of { periodNumber, amount }
     insuranceType = 'none',
