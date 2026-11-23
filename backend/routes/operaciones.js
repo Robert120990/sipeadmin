@@ -284,6 +284,40 @@ function getElSalvadorTodayYMD(now = new Date()) {
     }).format(now);
 }
 
+/**
+ * Formatea una marca de tiempo DATETIME/TIMESTAMP almacenada en hora local SV
+ * (devuelta como 'YYYY-MM-DD HH:mm:ss' por DATE_FORMAT) sin aplicar un segundo desfase UTC.
+ */
+function formatSqlDateTimeSV(val) {
+    if (!val) return null;
+    let raw = '';
+    if (val instanceof Date && !isNaN(val.getTime())) {
+        const y = val.getUTCFullYear();
+        const mo = String(val.getUTCMonth() + 1).padStart(2, '0');
+        const d = String(val.getUTCDate()).padStart(2, '0');
+        const h = String(val.getUTCHours()).padStart(2, '0');
+        const mi = String(val.getUTCMinutes()).padStart(2, '0');
+        const s = String(val.getUTCSeconds()).padStart(2, '0');
+        raw = `${y}-${mo}-${d} ${h}:${mi}:${s}`;
+    } else {
+        raw = String(val).trim().replace('T', ' ').replace(/\.\d+Z?$/, '').replace(/Z$/, '');
+    }
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ ](\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (!m) return null;
+    const [, year, month, day, hourStr, minute, sec = '00'] = m;
+    const hour24 = Number(hourStr);
+    const ampm = hour24 >= 12 ? 'PM' : 'AM';
+    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    const hora = `${String(hour12).padStart(2, '0')}:${minute} ${ampm}`;
+    const fecha = `${day}/${month}/${year}`;
+    return {
+        iso: `${year}-${month}-${day} ${hourStr}:${minute}:${sec}`,
+        fecha,
+        hora,
+        label: `${fecha} • ${hora}`
+    };
+}
+
 router.get('/operaciones/fecha-servidor-global', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
     try {
         const fechaActual = getElSalvadorTodayYMD();
@@ -322,7 +356,11 @@ async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
             const branchId = await resolveStationBranchId(accountingDb, id_empresa);
             if (branchId) {
                 const [closeoutRows] = await accountingDb.query(`
-                    SELECT id, branch_id, DATE_FORMAT(fecha_turno, '%Y-%m-%d') as fecha_turno, numero_turno 
+                    SELECT id, branch_id,
+                           DATE_FORMAT(fecha_turno, '%Y-%m-%d') as fecha_turno,
+                           numero_turno,
+                           DATE_FORMAT(COALESCE(updated_at, closed_at, created_at), '%Y-%m-%d %H:%i:%s') as fecha_hora_datos,
+                           DATE_FORMAT(COALESCE(closed_at, created_at), '%Y-%m-%d %H:%i:%s') as fecha_hora_cierre
                     FROM gas_station_closeouts 
                     WHERE branch_id = ? AND estado = 'cerrado'
                     ORDER BY fecha_turno DESC, numero_turno DESC 
@@ -361,7 +399,18 @@ async function fetchTankReadings(id_empresa, fecha, externalDb, accountingDb) {
                         const effectiveDate = closeout.fecha_turno instanceof Date 
                             ? closeout.fecha_turno.toISOString().split('T')[0] 
                             : String(closeout.fecha_turno || fecha).split('T')[0];
-                        return { fecha: effectiveDate, turno: closeout.numero_turno, inventario: normalizedTanks };
+                        const dtDatos = formatSqlDateTimeSV(closeout.fecha_hora_datos);
+                        const dtCierre = formatSqlDateTimeSV(closeout.fecha_hora_cierre);
+                        return {
+                            fecha: effectiveDate,
+                            turno: closeout.numero_turno,
+                            fecha_hora_datos: dtDatos?.iso || null,
+                            fecha_hora_label: dtDatos?.label || null,
+                            hora_datos: dtDatos?.hora || null,
+                            fecha_hora_cierre: dtCierre?.iso || null,
+                            fecha_hora_cierre_label: dtCierre?.label || null,
+                            inventario: normalizedTanks
+                        };
                     }
                 }
             }
@@ -3049,6 +3098,7 @@ router.buildCompactPresetValue = buildCompactPresetValue;
 router.inferBankNameFromText = inferBankNameFromText;
 router.inferUbicacionTags = inferUbicacionTags;
 router.formatDateYMD = formatDateYMD;
+router.formatSqlDateTimeSV = formatSqlDateTimeSV;
 router.addDaysYMD = addDaysYMD;
 router.getElSalvadorTodayYMD = getElSalvadorTodayYMD;
 router.fetchPromedios = fetchPromedios;
@@ -3063,6 +3113,7 @@ module.exports.buildCompactPresetValue = buildCompactPresetValue;
 module.exports.inferBankNameFromText = inferBankNameFromText;
 module.exports.inferUbicacionTags = inferUbicacionTags;
 module.exports.formatDateYMD = formatDateYMD;
+module.exports.formatSqlDateTimeSV = formatSqlDateTimeSV;
 module.exports.addDaysYMD = addDaysYMD;
 module.exports.getElSalvadorTodayYMD = getElSalvadorTodayYMD;
 module.exports.fetchPromedios = fetchPromedios;

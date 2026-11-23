@@ -89,6 +89,7 @@ export default function PedidosCombustible() {
     const [selectedEstacion, setSelectedEstacion] = useState('');
     const [fechaConsulta, setFechaConsulta] = useState('');
     const [turnoConsulta, setTurnoConsulta] = useState(null);
+    const [datosMeta, setDatosMeta] = useState({ fechaHoraLabel: '', horaDatos: '', fechaCierreLabel: '' });
     const [isLoading, setIsLoading] = useState(false);
     const [fechaPedido, setFechaPedido] = useState('');
     const [previsualizar, setPrevisualizar] = useState(true);
@@ -107,6 +108,8 @@ export default function PedidosCombustible() {
     // Secondary Station (Multiparada) operational data
     const [inventario2, setInventario2] = useState([]);
     const [fechaConsulta2, setFechaConsulta2] = useState('');
+    const [turnoConsulta2, setTurnoConsulta2] = useState(null);
+    const [datosMeta2, setDatosMeta2] = useState({ fechaHoraLabel: '', horaDatos: '', fechaCierreLabel: '' });
     const [promedios2, setPromedios2] = useState({ D: 0, R: 0, S: 0, I: 0 });
     const [programados2, setProgramados2] = useState([]);
     const [isLoading2, setIsLoading2] = useState(false);
@@ -907,14 +910,33 @@ export default function PedidosCombustible() {
         setPrevisualizar(false);
     };
 
-    const fetchOperationalData = async (est, baseDate = fechaServidor || fechaConsulta) => {
-        if (!est || !baseDate) return;
+    const fetchOperationalData = async (est, baseDate = fechaServidor || fechaConsulta, options = {}) => {
+        const { forceFreshServerDate = false, showSuccessToast = false } = options || {};
+        if (!est) return;
+        let queryDate = baseDate || todayStr();
         setIsLoading(true);
         try {
-            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${baseDate}`);
+            if (forceFreshServerDate) {
+                try {
+                    const resSrv = await api.get('/operaciones/fecha-servidor-global');
+                    const freshDate = resSrv.data?.fecha_actual ? String(resSrv.data.fecha_actual).split('T')[0] : null;
+                    if (freshDate) {
+                        queryDate = freshDate;
+                        setFechaServidor(freshDate);
+                    }
+                } catch (_) {
+                    // Continuar con fecha actual conocida
+                }
+            }
+            const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${queryDate}`);
             setInventario(resT.data.inventario || []);
             setTurnoConsulta(resT.data?.turno || null);
-            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : baseDate;
+            setDatosMeta({
+                fechaHoraLabel: resT.data?.fecha_hora_label || '',
+                horaDatos: resT.data?.hora_datos || '',
+                fechaCierreLabel: resT.data?.fecha_hora_cierre_label || ''
+            });
+            const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : queryDate;
             if (effectiveDate) {
                 setFechaConsulta(effectiveDate);
             }
@@ -925,6 +947,9 @@ export default function PedidosCombustible() {
             ]);
             setPromedios(resP.data || { D: 0, R: 0, S: 0, I: 0 });
             setProgramados(resProg.data || []);
+            if (showSuccessToast) {
+                addToast('Datos operacionales actualizados', 'success');
+            }
         } catch (error) {
             addToast("Error al obtener datos operativos", "error");
         } finally {
@@ -938,6 +963,7 @@ export default function PedidosCombustible() {
         } else if (!selectedEstacion) {
             setInventario([]);
             setTurnoConsulta(null);
+            setDatosMeta({ fechaHoraLabel: '', horaDatos: '', fechaCierreLabel: '' });
             if (fechaServidor) setFechaConsulta(fechaServidor);
             setPromedios({ D: 0, R: 0, S: 0, I: 0 });
             setProgramados([]);
@@ -1003,10 +1029,13 @@ export default function PedidosCombustible() {
         return { D: buildCol('D'), R: buildCol('R'), S: buildCol('S'), I: buildCol('I'), meta: promedios?.meta || null };
     }, [inventario, promedios, programados, previsualizar, comp, fechaConsulta]);
 
-    const fetchOperationalData2 = async (est, baseDate = fechaServidor || fechaConsulta) => {
+    const fetchOperationalData2 = async (est, baseDate = fechaServidor || fechaConsulta, options = {}) => {
+        const { showSuccessToast = false } = options || {};
         if (!est || !baseDate) {
             setInventario2([]);
             setFechaConsulta2('');
+            setTurnoConsulta2(null);
+            setDatosMeta2({ fechaHoraLabel: '', horaDatos: '', fechaCierreLabel: '' });
             setPromedios2({ D: 0, R: 0, S: 0, I: 0 });
             setProgramados2([]);
             return;
@@ -1015,6 +1044,12 @@ export default function PedidosCombustible() {
         try {
             const resT = await api.get(`/operaciones/pedidos/datos-tanque/${est}/${baseDate}`);
             setInventario2(resT.data.inventario || []);
+            setTurnoConsulta2(resT.data?.turno || null);
+            setDatosMeta2({
+                fechaHoraLabel: resT.data?.fecha_hora_label || '',
+                horaDatos: resT.data?.hora_datos || '',
+                fechaCierreLabel: resT.data?.fecha_hora_cierre_label || ''
+            });
             const effectiveDate = resT.data?.fecha ? String(resT.data.fecha).split('T')[0] : baseDate;
             setFechaConsulta2(effectiveDate);
 
@@ -1024,8 +1059,14 @@ export default function PedidosCombustible() {
             ]);
             setPromedios2(resP.data || { D: 0, R: 0, S: 0, I: 0 });
             setProgramados2(resProg.data || []);
+            if (showSuccessToast) {
+                addToast('Datos operacionales de estación compañera actualizados', 'success');
+            }
         } catch (error) {
             console.error("Error al obtener datos operativos de estación secundaria:", error);
+            if (showSuccessToast) {
+                addToast('Error al actualizar estación compañera', 'error');
+            }
         } finally {
             setIsLoading2(false);
         }
@@ -1037,6 +1078,8 @@ export default function PedidosCombustible() {
         } else {
             setInventario2([]);
             setFechaConsulta2('');
+            setTurnoConsulta2(null);
+            setDatosMeta2({ fechaHoraLabel: '', horaDatos: '', fechaCierreLabel: '' });
             setPromedios2({ D: 0, R: 0, S: 0, I: 0 });
             setProgramados2([]);
         }
@@ -1138,19 +1181,49 @@ export default function PedidosCombustible() {
         return { bg: 'rgba(239, 68, 68, 0.18)', color: '#b91c1c', border: '1px solid rgba(239, 68, 68, 0.6)', label: 'Crítico' }; // Crítico
     };
 
-    const renderOperationalTable = (stationTitle, matrixData, isSecondary = false, loading = false, showLegend = true) => {
+    const renderOperationalTable = (stationTitle, matrixData, isSecondary = false, loading = false, showLegend = true, metaInfo = null) => {
         if (!matrixData && !loading) return null;
         const themeColor = isSecondary ? '#0284c7' : 'var(--primary)';
         const headerBg = isSecondary ? 'rgba(14, 165, 233, 0.12)' : 'rgba(37,99,235,0.08)';
         const borderTheme = isSecondary ? 'rgba(14, 165, 233, 0.4)' : 'var(--border)';
 
+        const dataTimestampText = metaInfo?.fechaHoraLabel
+            ? `${metaInfo.fechaHoraLabel}${metaInfo.turno ? ` (T${metaInfo.turno})` : ''}`
+            : (metaInfo?.fecha
+                ? `${fmtDateArray(metaInfo.fecha)}${metaInfo.turno ? ` (T${metaInfo.turno})` : ''}`
+                : '');
+        const timestampTooltip = metaInfo?.fechaCierreLabel && metaInfo.fechaCierreLabel !== metaInfo.fechaHoraLabel
+            ? `Últ. actualización de datos: ${metaInfo.fechaHoraLabel} | Cierre de turno${metaInfo.turno ? ` T${metaInfo.turno}` : ''}: ${metaInfo.fechaCierreLabel}`
+            : (dataTimestampText ? `Última fecha y hora registrada de estos datos: ${dataTimestampText}` : 'Sin fecha de cierre registrada');
+
         return (
             <div className="card glass table-responsive" style={{ padding: 0, border: `1px solid ${borderTheme}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: headerBg, padding: '0.45rem 0.75rem', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', gap: '0.4rem' }}>
-                    <h3 style={{ margin: 0, fontSize: '0.85rem', color: themeColor, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: headerBg, padding: '0.45rem 0.75rem', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <h3 style={{ margin: 0, fontSize: '0.85rem', color: themeColor, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                         <span>{isSecondary ? '🤝' : '🏢'}</span>
                         <span>RESUMEN DE DATOS OPERACIONALES:</span>
                         <span style={{ color: 'var(--text-color, var(--text))' }}>{stationTitle}</span>
+                        {dataTimestampText && (
+                            <span
+                                title={timestampTooltip}
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    padding: '0.15rem 0.5rem',
+                                    borderRadius: '999px',
+                                    background: 'rgba(16, 185, 129, 0.14)',
+                                    border: '1px solid rgba(16, 185, 129, 0.35)',
+                                    color: '#10b981',
+                                    whiteSpace: 'nowrap'
+                                }}
+                            >
+                                <Clock size={12} />
+                                {dataTimestampText}
+                            </span>
+                        )}
                         {isSecondary && (
                             <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(14, 165, 233, 0.2)', color: '#0284c7', fontWeight: 'bold' }}>
                                 ESTACIÓN 2 (COMPAÑERA)
@@ -1162,12 +1235,38 @@ export default function PedidosCombustible() {
                             </span>
                         )}
                     </h3>
-                    {loading && (
-                        <span style={{ fontSize: '0.72rem', color: themeColor, display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <div className="spinner" style={{ width: '13px', height: '13px', border: `2px solid ${themeColor}`, borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-                            Consultando...
-                        </span>
-                    )}
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        {metaInfo?.onRefresh && (
+                            <button
+                                type="button"
+                                onClick={metaInfo.onRefresh}
+                                disabled={loading || metaInfo.canRefresh === false}
+                                title="Volver a consultar los últimos datos de tanques, promedios y pedidos de esta estación"
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    height: '28px',
+                                    padding: '0 0.65rem',
+                                    borderRadius: '6px',
+                                    border: `1px solid ${isSecondary ? 'rgba(14, 165, 233, 0.45)' : 'rgba(16, 185, 129, 0.45)'}`,
+                                    background: isSecondary ? 'rgba(14, 165, 233, 0.14)' : 'rgba(16, 185, 129, 0.14)',
+                                    color: isSecondary ? '#38bdf8' : '#10b981',
+                                    fontSize: '0.74rem',
+                                    fontWeight: 700,
+                                    cursor: (loading || metaInfo.canRefresh === false) ? 'not-allowed' : 'pointer',
+                                    opacity: (loading || metaInfo.canRefresh === false) ? 0.6 : 1,
+                                    whiteSpace: 'nowrap'
+                                }}
+                            >
+                                <RefreshCw
+                                    size={13}
+                                    style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }}
+                                />
+                                <span>{loading ? 'Actualizando...' : 'Actualizar'}</span>
+                            </button>
+                        )}
+                    </div>
                 </div>
                 {matrixData ? (
                     <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse', minWidth: '500px' }}>
@@ -2204,8 +2303,56 @@ export default function PedidosCombustible() {
                             </select>
                         </div>
 
-                        <div style={{ background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                            DATOS AL DIA: {fmtDateArray(fechaConsulta)}{turnoConsulta ? ` (T${turnoConsulta})` : ''}
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <div
+                                title={datosMeta.fechaCierreLabel && datosMeta.fechaCierreLabel !== datosMeta.fechaHoraLabel
+                                    ? `Últ. actualización: ${datosMeta.fechaHoraLabel} | Cierre de turno: ${datosMeta.fechaCierreLabel}`
+                                    : 'Fecha y hora de los últimos datos operacionales cargados'}
+                                style={{
+                                    background: 'var(--primary)',
+                                    color: 'white',
+                                    padding: '0.4rem 0.9rem',
+                                    borderRadius: '4px',
+                                    fontSize: '0.8rem',
+                                    fontWeight: 'bold',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    height: '36px'
+                                }}
+                            >
+                                <Clock size={14} />
+                                <span>
+                                    DATOS AL DIA: {datosMeta.fechaHoraLabel || fmtDateArray(fechaConsulta)}{turnoConsulta ? ` (T${turnoConsulta})` : ''}
+                                </span>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (selectedEstacion) {
+                                        fetchOperationalData(selectedEstacion, fechaServidor || todayStr(), { forceFreshServerDate: true, showSuccessToast: true });
+                                    }
+                                    if (esCompartido && selectedEstacion2) {
+                                        fetchOperationalData2(selectedEstacion2, fechaServidor || todayStr(), { showSuccessToast: false });
+                                    }
+                                }}
+                                disabled={isLoading || !selectedEstacion}
+                                className="btn-secondary"
+                                title="Actualizar datos operacionales de la estación"
+                                style={{
+                                    height: '36px',
+                                    padding: '0 0.85rem',
+                                    fontSize: '0.8rem',
+                                    fontWeight: 600,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    cursor: (isLoading || !selectedEstacion) ? 'not-allowed' : 'pointer'
+                                }}
+                            >
+                                <RefreshCw size={14} style={{ animation: isLoading ? 'spin 1s linear infinite' : 'none' }} />
+                                <span>{isLoading ? 'Actualizando...' : 'Actualizar'}</span>
+                            </button>
                         </div>
 
                         {isLoading && <span style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -2481,7 +2628,15 @@ export default function PedidosCombustible() {
                                     matrix,
                                     false,
                                     isLoading,
-                                    !esCompartido || !selectedEstacion2 || resumenViewMode !== 'ambas'
+                                    !esCompartido || !selectedEstacion2 || resumenViewMode !== 'ambas',
+                                    {
+                                        fecha: fechaConsulta,
+                                        turno: turnoConsulta,
+                                        fechaHoraLabel: datosMeta.fechaHoraLabel,
+                                        fechaCierreLabel: datosMeta.fechaCierreLabel,
+                                        canRefresh: Boolean(selectedEstacion),
+                                        onRefresh: () => fetchOperationalData(selectedEstacion, fechaServidor || todayStr(), { forceFreshServerDate: true, showSuccessToast: true })
+                                    }
                                 )
                             )}
 
@@ -2492,7 +2647,15 @@ export default function PedidosCombustible() {
                                     matrix2,
                                     true,
                                     isLoading2,
-                                    true
+                                    true,
+                                    {
+                                        fecha: fechaConsulta2,
+                                        turno: turnoConsulta2,
+                                        fechaHoraLabel: datosMeta2.fechaHoraLabel,
+                                        fechaCierreLabel: datosMeta2.fechaCierreLabel,
+                                        canRefresh: Boolean(selectedEstacion2),
+                                        onRefresh: () => fetchOperationalData2(selectedEstacion2, fechaServidor || fechaConsulta || todayStr(), { showSuccessToast: true })
+                                    }
                                 )
                             )}
 

@@ -20,6 +20,7 @@ const { calcularEstadoPagoDte } = require('../services/creditRiskService');
 const { getRentabilidadPorEstacion, TAX_DEFAULTS } = require('../services/profitabilityService');
 const { GEMINI_FALLBACK_MODELS, isGeminiApiKeyInvalidError } = require('../services/telegramGeminiService');
 const { isTransientPuppeteerError, safePageEvaluate } = require('../services/energyLatamService');
+const operacionesRouter = require('../routes/operaciones');
 const dbModule = require('../db');
 const solarEnergyService = require('../services/solarEnergyService');
 
@@ -103,6 +104,15 @@ describe('Security & Audit Regression Suite', () => {
             // 2026-11-24 00:30:00Z corresponde a 2026-11-23 18:30:00 en El Salvador (UTC-6)
             const lateEveningSv = new Date('2026-11-24T00:30:00.000Z');
             assert.strictEqual(getElSalvadorTodayYMD(lateEveningSv), '2026-11-23');
+        });
+
+        it('formatSqlDateTimeSV formatea timestamps de cierres SV sin doble corrimiento UTC', () => {
+            const pm = operacionesRouter.formatSqlDateTimeSV('2026-11-23 12:35:25');
+            assert.strictEqual(pm.label, '23/11/2026 • 12:35 PM');
+            const am = operacionesRouter.formatSqlDateTimeSV('2026-11-23 06:04:22');
+            assert.strictEqual(am.label, '23/11/2026 • 06:04 AM');
+            const midnight = operacionesRouter.formatSqlDateTimeSV('2026-11-23 00:05:00');
+            assert.strictEqual(midnight.label, '23/11/2026 • 12:05 AM');
         });
     });
 
