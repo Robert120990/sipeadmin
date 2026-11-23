@@ -181,9 +181,11 @@ const isGenericDescription = (desc) => {
 const formatYMD = (val) => {
     if (!val) return '';
     if (val instanceof Date) {
-        const y = val.getFullYear();
-        const m = String(val.getMonth() + 1).padStart(2, '0');
-        const d = String(val.getDate()).padStart(2, '0');
+        if (isNaN(val.getTime())) return '';
+        // Los pools MySQL usan timezone: 'Z'; leer UTC evita corrimiento -1 día en UTC-6
+        const y = val.getUTCFullYear();
+        const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+        const d = String(val.getUTCDate()).padStart(2, '0');
         return `${y}-${m}-${d}`;
     }
     const s = String(val).trim();

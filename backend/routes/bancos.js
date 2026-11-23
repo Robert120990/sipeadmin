@@ -3,20 +3,14 @@ const router = express.Router();
 const { getDb } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { formatDateYMD, formatDisplayDMY } = require('../utils/dateSv');
 
 const toDisplayDate = (dateVal) => {
-    if (!dateVal) return null;
-    const d = dateVal instanceof Date ? dateVal : new Date(dateVal + 'T12:00:00');
-    if (isNaN(d.getTime())) return null;
-    return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+    const formatted = formatDisplayDMY(dateVal);
+    return formatted || null;
 };
 
-const toDBDate = (dateStr) => {
-    if (!dateStr) return null;
-    const d = new Date(dateStr + 'T12:00:00');
-    if (isNaN(d.getTime())) return null;
-    return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
-};
+const toDBDate = (dateStr) => formatDateYMD(dateStr);
 
 const bancosViewPerms = [
     '/dashboard/bancos/cuentas',
@@ -565,8 +559,16 @@ router.put('/movimientos/:id', authenticateToken, requirePermission('/dashboard/
         monto, tipo, cod_remesa, cod_cta, num_partida
     } = req.body;
 
-    const cargo = tipo === 'CARGO' ? monto : 0;
-    const abono = tipo === 'ABONO' ? monto : 0;
+    const numericMonto = Number(monto);
+    if (!Number.isFinite(numericMonto) || numericMonto <= 0) {
+        return res.status(400).json({ message: 'El monto debe ser mayor a $0.00' });
+    }
+    const cleanTipo = String(tipo || '').toUpperCase();
+    if (cleanTipo !== 'CARGO' && cleanTipo !== 'ABONO') {
+        return res.status(400).json({ message: 'Tipo de movimiento inválido (debe ser CARGO o ABONO)' });
+    }
+    const cargo = cleanTipo === 'CARGO' ? numericMonto : 0;
+    const abono = cleanTipo === 'ABONO' ? numericMonto : 0;
 
     try {
         const db = getDb();

@@ -216,8 +216,11 @@ function computePaymentBalance(montoTotal, abonos = [], legacyEstado = 'P') {
 
     let ultimaFecha = null;
     for (const a of list) {
-        const f = a.fecha_pago ? String(a.fecha_pago).split('T')[0] : null;
-        if (f && (!ultimaFecha || f > ultimaFecha)) {
+        const rawF = a.fecha_pago;
+        const f = rawF instanceof Date && !isNaN(rawF.getTime())
+            ? rawF.toISOString().slice(0, 10)
+            : (rawF ? String(rawF).trim().slice(0, 10) : null);
+        if (f && /^\d{4}-\d{2}-\d{2}$/.test(f) && (!ultimaFecha || f > ultimaFecha)) {
             ultimaFecha = f;
         }
     }

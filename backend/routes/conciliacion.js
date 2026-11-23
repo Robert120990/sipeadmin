@@ -1,37 +1,32 @@
 const express = require('express');
 const router = express.Router();
-const { getDb } = require('../db');
+const { getDb, withTransaction } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { formatDateYMD, formatDisplayDMY, getElSalvadorTodayYMD } = require('../utils/dateSv');
 
 const toDisplayDate = (dateVal) => {
-    if (!dateVal) return null;
-    const d = dateVal instanceof Date ? dateVal : new Date(dateVal + 'T12:00:00');
-    if (isNaN(d.getTime())) return null;
-    return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+    const formatted = formatDisplayDMY(dateVal);
+    return formatted || null;
 };
 
 const toDBDate = (dateStr) => {
     if (!dateStr) return null;
     if (dateStr instanceof Date) {
-        return isNaN(dateStr.getTime()) ? null : dateStr.toISOString().split('T')[0];
+        return isNaN(dateStr.getTime()) ? null : formatDateYMD(dateStr);
     }
-    if (typeof dateStr === 'string') {
-        const str = dateStr.trim();
-        if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-        if (str.includes('/')) {
-            const parts = str.split('/');
-            if (parts.length === 3) {
-                const day = parts[0].padStart(2, '0');
-                const month = parts[1].padStart(2, '0');
-                const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-                return `${year}-${month}-${day}`;
-            }
+    const parsed = formatDateYMD(dateStr);
+    if (parsed) return parsed;
+    if (typeof dateStr === 'string' && dateStr.includes('/')) {
+        const parts = dateStr.trim().split('/');
+        if (parts.length === 3) {
+            const day = parts[0].padStart(2, '0');
+            const month = parts[1].padStart(2, '0');
+            const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+            return `${year}-${month}-${day}`;
         }
     }
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return null;
-    return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
+    return null;
 };
 
 const withRetry = async (fn, retries = 2) => {
@@ -298,14 +293,16 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             const allCandidates = [...pendientes, ...movimientosConciliados];
             sugerenciasControlPagos = (abRows || []).map(ab => {
                 const abMonto = Number(ab.monto || 0);
-                const abTime = ab.fecha_pago ? new Date(String(ab.fecha_pago).split('T')[0] + 'T12:00:00').getTime() : 0;
+                const abYmd = formatDateYMD(ab.fecha_pago);
+                const abTime = abYmd ? new Date(abYmd + 'T12:00:00Z').getTime() : 0;
                 const abRef = String(ab.referencia_doc || '').trim().toLowerCase();
 
                 const suggestedMatch = allCandidates.find(m => {
                     const mMonto = Number(m.monto_display || m.monto || 0);
                     if (Math.abs(mMonto - abMonto) > 0.05) return false;
                     if (abRef && String(m.documento || '').toLowerCase().includes(abRef)) return true;
-                    const mDate = m.fecha ? new Date(String(m.fecha).split('T')[0] + 'T12:00:00').getTime() : 0;
+                    const mYmd = formatDateYMD(m.fecha);
+                    const mDate = mYmd ? new Date(mYmd + 'T12:00:00Z').getTime() : 0;
                     return Math.abs(mDate - abTime) <= 7 * 24 * 3600 * 1000;
                 }) || null;
 
@@ -363,26 +360,30 @@ router.post('/aplicar', authenticateToken, requirePermission(['manage_conciliaci
     }
 
     const esConciliar = accion !== 'DESCONCILIAR';
-    const dbFecha = esConciliar ? toDBDate(fecha_aplicado || new Date()) : null;
+    const dbFecha = esConciliar ? toDBDate(fecha_aplicado || getElSalvadorTodayYMD()) : null;
+    if (esConciliar && !dbFecha) {
+        return res.status(400).json({ message: 'La fecha de aplicación enviada no es válida (use YYYY-MM-DD).' });
+    }
 
     try {
-        const db = getDb();
         const movIds = items.filter(i => i.tipo === 'MOV' || i.origen_tipo === 'MOV').map(i => i.id);
         const chkIds = items.filter(i => i.tipo === 'CK' || i.origen_tipo === 'CK').map(i => i.id);
 
-        if (movIds.length > 0) {
-            await db.query(
-                `UPDATE movimientos_bancarios SET fecha_aplicado = ? WHERE id IN (${movIds.map(() => '?').join(',')})`,
-                [dbFecha, ...movIds]
-            );
-        }
+        await withTransaction(async (conn) => {
+            if (movIds.length > 0) {
+                await conn.query(
+                    `UPDATE movimientos_bancarios SET fecha_aplicado = ? WHERE id IN (${movIds.map(() => '?').join(',')})`,
+                    [dbFecha, ...movIds]
+                );
+            }
 
-        if (chkIds.length > 0) {
-            await db.query(
-                `UPDATE cheques SET fecha_aplicado = ? WHERE id IN (${chkIds.map(() => '?').join(',')})`,
-                [dbFecha, ...chkIds]
-            );
-        }
+            if (chkIds.length > 0) {
+                await conn.query(
+                    `UPDATE cheques SET fecha_aplicado = ? WHERE id IN (${chkIds.map(() => '?').join(',')})`,
+                    [dbFecha, ...chkIds]
+                );
+            }
+        });
 
         if (req.io) {
             req.io.emit('conciliacion_updated', { count: items.length, accion });
@@ -390,7 +391,7 @@ router.post('/aplicar', authenticateToken, requirePermission(['manage_conciliaci
 
         res.json({
             message: esConciliar 
-                ? `Se conciliarion ${items.length} documento(s) con fecha ${toDisplayDate(dbFecha)}.`
+                ? `Se conciliaron ${items.length} documento(s) con fecha ${toDisplayDate(dbFecha)}.`
                 : `Se desconciliaron ${items.length} documento(s) exitosamente.`,
             actualizados: items.length
         });

@@ -999,7 +999,8 @@ async function dispatchMibotProgramacion({
     sendTelegramFn = sendTelegramMessage,
     onlyDestinatarioIds = null,
     isSnoozeFollowup = false,
-    isAutomaticCron = false
+    isAutomaticCron = false,
+    nowSqlOverride = null
 }) {
     await ensureMibotSchema(db);
     const prog = await getMibotProgramacionById(db, programacionId);
@@ -1045,7 +1046,7 @@ async function dispatchMibotProgramacion({
         ? allDests.filter(d => targetIdsSet.has(Number(d.id)))
         : allDests;
 
-    const nowSv = getElSalvadorNowSql();
+    const nowSv = nowSqlOverride || getElSalvadorNowSql();
     let sent = 0;
     let failed = 0;
 
@@ -1458,13 +1459,13 @@ async function getActiveMibotSummaryByTaskIds(db, taskIds = []) {
  */
 async function processDueMibotSchedules({
     db = null,
-    externalDb = null,
+    externalDb = undefined,
     sendTelegramFn = sendTelegramMessage,
     nowSqlOverride = null
 } = {}) {
     const conn = db || getDb();
     if (!conn) return { processed: 0, snoozedProcessed: 0 };
-    const extConn = externalDb !== undefined ? externalDb : getExternalDb();
+    const extConn = externalDb !== undefined ? externalDb : await Promise.resolve(getExternalDb()).catch(() => null);
 
     await ensureMibotSchema(conn);
     const nowSv = nowSqlOverride || getElSalvadorNowSql();
@@ -1488,7 +1489,8 @@ async function processDueMibotSchedules({
                 externalDb: extConn,
                 programacionId: row.id,
                 sendTelegramFn,
-                isAutomaticCron: true
+                isAutomaticCron: true,
+                nowSqlOverride: nowSv
             });
             processed += 1;
         } catch (err) {
@@ -1520,7 +1522,8 @@ async function processDueMibotSchedules({
                 sendTelegramFn,
                 onlyDestinatarioIds: [sr.dest_id],
                 isSnoozeFollowup: true,
-                isAutomaticCron: true
+                isAutomaticCron: true,
+                nowSqlOverride: nowSv
             });
             snoozedProcessed += 1;
         } catch (err) {
@@ -1568,13 +1571,13 @@ async function ensureMibotDigestTable(db) {
  */
 async function processMorningAgendaDigest({
     db = null,
-    externalDb = null,
+    externalDb = undefined,
     sendTelegramFn = sendTelegramMessage,
     nowSqlOverride = null
 } = {}) {
     const conn = db || getDb();
     if (!conn) return { sent: 0, skipped: 0 };
-    const extConn = externalDb !== undefined ? externalDb : getExternalDb();
+    const extConn = externalDb !== undefined ? externalDb : await Promise.resolve(getExternalDb()).catch(() => null);
 
     await ensureMibotSchema(conn);
     await ensureMibotDigestTable(conn);

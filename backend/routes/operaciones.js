@@ -34,6 +34,16 @@ const recordatoriosViewPerms = [
     '/dashboard/finanzas/resumen'
 ];
 
+const recordatoriosManagePerms = [
+    'manage_recordatorios',
+    '/dashboard/operaciones/recordatorios'
+];
+
+const pedidosManagePerms = [
+    'manage_pedidos',
+    '/dashboard/operaciones/pedidos'
+];
+
 /**
  * Parsea y sanitiza los parámetros de paginación para consultas de pedidos.
  * Por defecto limita a 10 transacciones para no sobrecargar el sistema.
@@ -157,15 +167,14 @@ function buildEstacionFilterClause(estacionInput) {
 router.get('/dashboard/vencimientos', authenticateToken, requirePermission(vencimientosViewPerms), async (req, res) => {
     try {
         const externalDb = await getExternalDb();
-        const now = new Date();
-        const toDate = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+        const toDate = addDaysYMD(getElSalvadorTodayYMD(), 7);
         
         const query = `
             SELECT c.descripcion as ubicacion, b.descripcion, a.vencimiento as vence, b.monto, a.id, b.id as id_recordatorio
             FROM web_rc_recordatorios_vencimientos a 
             INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id 
             INNER JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id 
-            WHERE a.vencimiento < ? 
+            WHERE a.vencimiento <= ? 
             AND a.estado = 'P' AND b.activo = 1
             ORDER BY a.vencimiento DESC
         `;
@@ -857,8 +866,8 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
         let carrierMap = {};
         let tankerMap = {};
         try {
-            const [carriers] = await localDb.query('SELECT id, name FROM carriers');
-            const [tankers] = await localDb.query('SELECT id, plate FROM tankers');
+            const [carriers] = await localDb.query("SELECT id, COALESCE(NULLIF(TRIM(description), ''), code) AS name FROM carriers");
+            const [tankers] = await localDb.query('SELECT id, code AS plate FROM tankers');
             carrierMap = Object.fromEntries(carriers.map(c => [c.id, c.name]));
             tankerMap = Object.fromEntries(tankers.map(t => [t.id, t.plate]));
         } catch (e) {
@@ -1520,32 +1529,67 @@ router.post('/operaciones/recordatorios', authenticateToken, requirePermission([
         const safeFormaPago = String(forma_pago || '').trim().slice(0, 50);
         const safeFormaPago2 = String(formaPago2 || '').trim().slice(0, 50);
         const externalDb = await getExternalDb();
+        const db = getDb();
         const connection = await externalDb.getConnection();
-        await connection.beginTransaction();
         try {
+            await connection.beginTransaction();
             let recordatorioId = id;
+            let preservePaidSchedule = false;
             if (id) {
                 await connection.query(`UPDATE web_rc_recordatorios SET descripcion=?, id_ubicacion=?, iniciar=?, monto=?, repetir=?, repetir_desc=?, activo=?, forma_pago=? WHERE id=?`, 
                     [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, safeFormaPago, id]);
+
+                const [existingVens] = await connection.query(
+                    "SELECT id, estado FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?",
+                    [id]
+                );
+                const existingIds = (existingVens || []).map(v => v.id);
+                const hasPaidLegacy = (existingVens || []).some(v => String(v.estado || '').toUpperCase() === 'C');
+                let hasLinkedAbonos = false;
+                if (existingIds.length > 0 && db) {
+                    try {
+                        const [abCnt] = await db.query(
+                            `SELECT COUNT(*) AS cnt FROM recordatorios_pagos_abonos WHERE vencimiento_id IN (${existingIds.map(() => '?').join(',')})`,
+                            existingIds
+                        );
+                        hasLinkedAbonos = Number(abCnt[0]?.cnt || 0) > 0;
+                    } catch (_) {
+                        // Tabla opcional en entornos mínimos
+                    }
+                }
+                // Nunca destruir vencimientos ya pagados o con abonos/comprobantes vinculados al editar un recordatorio
+                preservePaidSchedule = hasPaidLegacy || hasLinkedAbonos;
             } else {
                 const [result] = await connection.query(`INSERT INTO web_rc_recordatorios (descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo, forma_pago) VALUES (?,?,?,?,?,?,?,?)`, 
                     [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, safeFormaPago]);
                 recordatorioId = result.insertId;
             }
-            await connection.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?", [recordatorioId]);
-            for (let n = 1; n <= repetir; n++) {
-                const formattedDate = calculateRecurringDate(iniciar, n, repetir_desc);
-                let isPagado = false;
-                if (repetir_desc === 'VEZ') { if (pagado) isPagado = true; }
-                if (isPagado) {
-                    await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, safeFormaPago2]);
-                } else {
-                    await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'P', NULL, '')", [recordatorioId, formattedDate]);
+            if (!preservePaidSchedule) {
+                await connection.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?", [recordatorioId]);
+                for (let n = 1; n <= repetir; n++) {
+                    const formattedDate = calculateRecurringDate(iniciar, n, repetir_desc);
+                    let isPagado = false;
+                    if (repetir_desc === 'VEZ') { if (pagado) isPagado = true; }
+                    if (isPagado) {
+                        await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, safeFormaPago2]);
+                    } else {
+                        await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'P', NULL, '')", [recordatorioId, formattedDate]);
+                    }
                 }
             }
             await connection.commit();
-            res.json({ success: true, message: 'Recordatorio Guardado!' });
-        } catch(errTx) { await connection.rollback(); throw errTx; } finally { connection.release(); }
+            res.json({
+                success: true,
+                message: preservePaidSchedule
+                    ? 'Recordatorio actualizado (se conservaron las cuotas existentes con pagos o abonos registrados).'
+                    : 'Recordatorio Guardado!'
+            });
+        } catch (errTx) {
+            await connection.rollback().catch(() => {});
+            throw errTx;
+        } finally {
+            connection.release();
+        }
     } catch (error) { sendSafeError(res, error, 'Error al guardar recordatorio'); }
 });
 
@@ -1560,7 +1604,7 @@ router.put('/operaciones/recordatorios/pagar/:id', authenticateToken, requirePer
     } catch (error) { sendSafeError(res, error, 'Error al registrar pago'); }
 });
 
-router.patch('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+router.patch('/operaciones/recordatorios/vencimiento/:id', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const { id } = req.params;
         const { forma_pago, fecha_cancelacion, observacion, id_recordatorio } = req.body;
@@ -1645,7 +1689,7 @@ router.get('/operaciones/recordatorios/vencimiento/:id/detalle', authenticateTok
     }
 });
 
-router.patch('/operaciones/recordatorios/vencimiento/:id/meta', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+router.patch('/operaciones/recordatorios/vencimiento/:id/meta', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const venId = parseInt(req.params.id, 10);
         if (!venId) return res.status(400).json({ message: 'ID de vencimiento inválido' });
@@ -1715,7 +1759,7 @@ router.patch('/operaciones/recordatorios/vencimiento/:id/meta', authenticateToke
     }
 });
 
-router.post('/operaciones/recordatorios/vencimiento/:id/abonos', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+router.post('/operaciones/recordatorios/vencimiento/:id/abonos', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const venId = parseInt(req.params.id, 10);
         if (!venId) return res.status(400).json({ message: 'ID de vencimiento inválido' });
@@ -1739,7 +1783,7 @@ router.post('/operaciones/recordatorios/vencimiento/:id/abonos', authenticateTok
             return res.status(400).json({ message: 'El monto del abono debe ser mayor a $0.00' });
         }
 
-        const cleanFecha = fecha_pago ? String(fecha_pago).split('T')[0] : new Date().toISOString().split('T')[0];
+        const cleanFecha = formatDateYMD(fecha_pago) || getElSalvadorTodayYMD();
         if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanFecha)) {
             return res.status(400).json({ message: 'La fecha de pago no es válida (use YYYY-MM-DD)' });
         }
@@ -1861,7 +1905,7 @@ router.post('/operaciones/recordatorios/vencimiento/:id/abonos', authenticateTok
     }
 });
 
-router.put('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+router.put('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const abonoId = parseInt(req.params.abonoId, 10);
         if (!abonoId) return res.status(400).json({ message: 'ID de abono inválido' });
@@ -1893,7 +1937,7 @@ router.put('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requ
         if (!Number.isFinite(numericMonto) || numericMonto <= 0) {
             return res.status(400).json({ message: 'El monto del abono debe ser mayor a $0.00' });
         }
-        const cleanFecha = fecha_pago ? String(fecha_pago).split('T')[0] : String(existing.fecha_pago).split('T')[0];
+        const cleanFecha = formatDateYMD(fecha_pago) || formatDateYMD(existing.fecha_pago) || getElSalvadorTodayYMD();
         const normOp = recordatoriosPagosService.normalizeTipoOperacion(tipo_operacion);
         const normMetodo = recordatoriosPagosService.normalizeMetodoPago(metodo_pago);
         const parsedCuentaId = cuenta_bancaria_id ? parseInt(cuenta_bancaria_id, 10) || null : null;
@@ -1962,7 +2006,7 @@ router.post('/operaciones/recordatorios/analizar-comprobante', authenticateToken
     }
 });
 
-router.delete('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+router.delete('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const abonoId = parseInt(req.params.abonoId, 10);
         if (!abonoId) return res.status(400).json({ message: 'ID de abono inválido' });
@@ -1994,7 +2038,7 @@ router.delete('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, r
     }
 });
 
-router.post('/operaciones/recordatorios/vencimiento/:id/comprobantes', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+router.post('/operaciones/recordatorios/vencimiento/:id/comprobantes', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const venId = parseInt(req.params.id, 10);
         if (!venId) return res.status(400).json({ message: 'ID de vencimiento inválido' });
@@ -2055,7 +2099,7 @@ router.post('/operaciones/recordatorios/vencimiento/:id/comprobantes', authentic
     }
 });
 
-router.delete('/operaciones/recordatorios/comprobantes/:comprobanteId', authenticateToken, requirePermission(recordatoriosViewPerms), async (req, res) => {
+router.delete('/operaciones/recordatorios/comprobantes/:comprobanteId', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const compId = parseInt(req.params.comprobanteId, 10);
         if (!compId) return res.status(400).json({ message: 'ID de comprobante inválido' });
@@ -2346,7 +2390,7 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
             if (autoSync?.lastSync?.lastRunAt) {
                 data.ultima_sincronizacion = autoSync.lastSync.lastRunAt;
             } else {
-                const [lastOrder] = await withRetry(() => db.query("SELECT MAX(created_at) as last_order_sync FROM portal_pedidos_cache")).catch(() => [[]]);
+                const [lastOrder] = await withRetry(() => db.query("SELECT MAX(sincronizado_at) as last_order_sync FROM portal_pedidos")).catch(() => [[]]);
                 data.ultima_sincronizacion = lastOrder[0]?.last_order_sync || data.updated_at || new Date().toISOString();
             }
         }
@@ -2439,7 +2483,7 @@ router.post('/operaciones/portal/sincronizar', authenticateSyncOrAdmin, async (r
         const result = await energyLatamService.syncFromPortal(io, null, limit);
         try {
             const db = getDb();
-            await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() WHERE id = 1"));
+            await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() ORDER BY id DESC LIMIT 1"));
         } catch (dbErr) {
             console.warn('[sincronizar] Error al actualizar timestamp en portal_resumen_cuenta:', dbErr.message);
         }
@@ -2484,7 +2528,7 @@ router.post('/operaciones/portal/sincronizar-todo', authenticateToken, requirePe
         const result = await executeAutoSyncCycle(io, 'MANUAL_DISPATCH');
         try {
             const db = getDb();
-            await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() WHERE id = 1"));
+            await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() ORDER BY id DESC LIMIT 1"));
         } catch (dbErr) {
             console.warn('[sincronizar-todo] Error al actualizar timestamp en portal_resumen_cuenta:', dbErr.message);
         }
@@ -2498,7 +2542,7 @@ router.post('/operaciones/portal/sincronizar-todo', authenticateToken, requirePe
 router.post('/operaciones/portal/actualizar-hora-sincronizacion', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
         const db = getDb();
-        await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() WHERE id = 1"));
+        await withRetry(() => db.query("UPDATE portal_resumen_cuenta SET ultima_sincronizacion = NOW() ORDER BY id DESC LIMIT 1"));
         const [rows] = await withRetry(() => db.query("SELECT * FROM portal_resumen_cuenta ORDER BY id DESC LIMIT 1"));
         const io = req.app.get('io');
         if (io) {
@@ -2689,7 +2733,7 @@ router.post('/operaciones/portal/vincular-pago', authenticateToken, requirePermi
 });
 
 // 5b. Actualizar método de pago y/o cuenta bancaria directamente en la tabla (inline)
-router.patch('/operaciones/portal/metodo-pago/:numero_orden', authenticateToken, requirePermission(pedidosViewPerms), async (req, res) => {
+router.patch('/operaciones/portal/metodo-pago/:numero_orden', authenticateToken, requirePermission(pedidosManagePerms), async (req, res) => {
     try {
         const { numero_orden } = req.params;
         const { tipo_pago, cuenta_bancaria_id } = req.body;
@@ -2837,6 +2881,10 @@ router.post('/operaciones/portal/guardar-precios-combustible', authenticateToken
         ]);
 
         if (aplicar_a_pedidos_pendientes) {
+            const pD = Number(precio_diesel || 0);
+            const pR = Number(precio_regular || 0);
+            const pS = Number(precio_super || 0);
+            const pI = Number(precio_ion || 0);
             await db.query(`
                 UPDATE portal_pedidos SET
                     costo_diesel = IF(galones_diesel > 0, ?, costo_diesel),
@@ -2848,10 +2896,7 @@ router.post('/operaciones/portal/guardar-precios-combustible', authenticateToken
                         monto_total
                     )
                 WHERE estado IN ('PENDIENTE', 'RETENIDO', 'LIBERADO', 'EN_PROCESO')
-            `, [
-                Number(precio_diesel), Number(precio_regular), Number(precio_super), Number(precio_ion),
-                Number(precio_diesel), Number(precio_regular), Number(precio_super), Number(precio_ion)
-            ]);
+            `, [pD, pR, pS, pI, pD, pR, pS, pI]);
         }
 
         const io = req.app.get('io');

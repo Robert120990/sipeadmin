@@ -1037,7 +1037,7 @@ async function fetchStationAuditRecipients(db) {
     let inAppUsers = [];
     try {
         const [sipeUsers] = await db.query(`
-            SELECT u.id, u.name, u.username, u.role_id, r.name AS role_name
+            SELECT u.id, u.nombre AS name, u.username, u.role_id, r.name AS role_name
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE COALESCE(u.status, 'active') = 'active'

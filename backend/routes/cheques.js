@@ -20,19 +20,14 @@ const contadoPerms = [
     '/dashboard/bancos/cheques-contado'
 ];
 
+const { formatDateYMD, formatDisplayDMY, getElSalvadorTodayYMD } = require('../utils/dateSv');
+
 const toDisplayDate = (dateVal) => {
-    if (!dateVal) return null;
-    const d = dateVal instanceof Date ? dateVal : new Date(dateVal + 'T12:00:00');
-    if (isNaN(d.getTime())) return null;
-    return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+    const formatted = formatDisplayDMY(dateVal);
+    return formatted || null;
 };
 
-const toDBDate = (dateStr) => {
-    if (!dateStr) return null;
-    const d = new Date(dateStr + 'T12:00:00');
-    if (isNaN(d.getTime())) return null;
-    return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
-};
+const toDBDate = (dateStr) => formatDateYMD(dateStr);
 
 router.get('/catalogos', authenticateToken, requirePermission(chequeViewPerms), async (req, res) => {
     try {
@@ -471,25 +466,24 @@ router.post('/contado/generar', authenticateToken, requirePermission(['manage_ch
         const empresaId = empRows[0].id;
 
         const [cuentaRows] = await db.query(
-            'SELECT id FROM cuentas_bancarias WHERE numero = ? AND activa = TRUE',
-            [numero_cuenta]
+            'SELECT id FROM cuentas_bancarias WHERE empresa_id = ? AND numero = ? AND activa = TRUE',
+            [empresaId, numero_cuenta]
         );
         if (cuentaRows.length === 0) {
             return res.status(400).json({ message: 'Cuenta bancaria no encontrada o inactiva' });
         }
         const cuentaBancariaId = cuentaRows[0].id;
 
-        const [maxRow] = await db.query('SELECT MAX(id) as max_id FROM cheques');
-        const nextNum = (maxRow[0]?.max_id || 0) + 1;
-        const llaveCheque = 'CHQ' + nextNum.toString().padStart(17, '0');
-
-        const dbFecha = toDBDate(fecha) || new Date().toISOString().split('T')[0];
+        const dbFecha = toDBDate(fecha) || getElSalvadorTodayYMD();
         const cleanCheque = String(cheque_num).trim();
 
-        await db.query(
+        const tempLlave = `TMP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+        const [insRes] = await db.query(
             'INSERT INTO cheques (empresa_id, cuenta_bancaria_id, llave, fecha, cheque, valor, a_nombre, concepto, es_pago_contado, es_contabilizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)',
-            [empresaId, cuentaBancariaId, llaveCheque, dbFecha, cleanCheque, Number(valor) || 0, a_nombre || '', (concepto || 'PAGO A PROVEEDOR (CONTADO)').toUpperCase()]
+            [empresaId, cuentaBancariaId, tempLlave, dbFecha, cleanCheque, Number(valor) || 0, a_nombre || '', (concepto || 'PAGO A PROVEEDOR (CONTADO)').toUpperCase()]
         );
+        const llaveCheque = 'CHQ' + String(insRes.insertId).padStart(17, '0');
+        await db.query('UPDATE cheques SET llave = ? WHERE id = ?', [llaveCheque, insRes.insertId]);
 
         const externalDb = await getExternalDb();
         await externalDb.query(
@@ -528,15 +522,14 @@ router.post('/contado/marcar-emitido', authenticateToken, requirePermission(['ma
                 const [empRows] = await db.query('SELECT id FROM empresas WHERE codigo = ?', [id_empresa]);
                 const empresaId = empRows[0]?.id;
                 if (empresaId) {
-                    const [maxRow] = await db.query('SELECT MAX(id) as max_id FROM cheques');
-                    const nextNum = (maxRow[0]?.max_id || 0) + 1;
-                    llaveCheque = 'CHQ' + nextNum.toString().padStart(17, '0');
-                    const dbFecha = s.fecha ? new Date(s.fecha).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
-
-                    await db.query(
+                    const dbFecha = formatDateYMD(s.fecha) || getElSalvadorTodayYMD();
+                    const tempLlave = `TMP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+                    const [insRes] = await db.query(
                         'INSERT INTO cheques (empresa_id, cuenta_bancaria_id, llave, fecha, cheque, valor, a_nombre, concepto, es_pago_contado, es_contabilizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)',
-                        [empresaId, cuenta_bancaria_id, llaveCheque, dbFecha, cleanCheque, Number(s.monto) || 0, s.cod_proveedor || '', 'PAGO A PROVEEDOR (CONTADO)']
+                        [empresaId, cuenta_bancaria_id, tempLlave, dbFecha, cleanCheque, Number(s.monto) || 0, s.cod_proveedor || '', 'PAGO A PROVEEDOR (CONTADO)']
                     );
+                    llaveCheque = 'CHQ' + String(insRes.insertId).padStart(17, '0');
+                    await db.query('UPDATE cheques SET llave = ? WHERE id = ?', [llaveCheque, insRes.insertId]);
                 }
             }
         }

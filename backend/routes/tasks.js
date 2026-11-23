@@ -250,7 +250,7 @@ async function scheduleMibotForTask({ db, req, task, mibotConfig }) {
         ].filter(Boolean).join('\n');
 
     const io = req.app?.get('io') || req.io || null;
-    const externalDb = getExternalDb();
+    const externalDb = await Promise.resolve(getExternalDb()).catch(() => null);
 
     return createMibotProgramacion({
         db,
@@ -295,6 +295,13 @@ router.get('/kpis/summary', authenticateToken, async (req, res) => {
             params.push(assigned_to);
         }
 
+        const todaySv = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/El_Salvador',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).format(new Date());
+
         const query = `
             SELECT 
                 COUNT(*) AS total,
@@ -302,13 +309,13 @@ router.get('/kpis/summary', authenticateToken, async (req, res) => {
                 SUM(CASE WHEN estado = 'en_proceso' THEN 1 ELSE 0 END) AS en_proceso,
                 SUM(CASE WHEN estado = 'en_revision' THEN 1 ELSE 0 END) AS en_revision,
                 SUM(CASE WHEN estado = 'completada' THEN 1 ELSE 0 END) AS completadas,
-                SUM(CASE WHEN estado NOT IN ('completada', 'cancelada') AND fecha_vencimiento < CURDATE() THEN 1 ELSE 0 END) AS vencidas,
-                SUM(CASE WHEN estado NOT IN ('completada', 'cancelada') AND fecha_vencimiento = CURDATE() THEN 1 ELSE 0 END) AS vence_hoy
+                SUM(CASE WHEN estado NOT IN ('completada', 'cancelada') AND fecha_vencimiento < ? THEN 1 ELSE 0 END) AS vencidas,
+                SUM(CASE WHEN estado NOT IN ('completada', 'cancelada') AND fecha_vencimiento = ? THEN 1 ELSE 0 END) AS vence_hoy
             FROM tasks
             ${whereClause}
         `;
 
-        const [rows] = await db.query(query, params);
+        const [rows] = await db.query(query, [todaySv, todaySv, ...params]);
         const stats = rows[0] || {};
 
         res.json({
@@ -993,7 +1000,7 @@ router.post('/:id/comments', authenticateToken, requirePermission(taskPerms), as
 
         const createdComment = newComments[0];
 
-        emitTaskEvent(req, 'tasks:comment_added', { taskId, comment: createdComment });
+        emitTaskEvent(req, 'tasks:comment_added', { taskId: Number(taskId), comment: createdComment });
 
         // Notify other participant of the new comment
         try {

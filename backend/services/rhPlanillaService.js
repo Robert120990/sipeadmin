@@ -1196,9 +1196,14 @@ const generateRecibosMasivosPDF = async ({ companyId, anio, mes, quincena, branc
  */
 const generateReciboIndividualPDF = async ({ companyId, planillaId }) => {
     const db = await getAccountingDb();
-    const [pRows] = await withRetry(() => db.query('SELECT periodo_anio, periodo_mes, quincena FROM rh_planillas WHERE id = ?', [planillaId]));
+    const [pRows] = await withRetry(() => db.query(
+        'SELECT periodo_anio, periodo_mes, quincena FROM rh_planillas WHERE id = ? AND company_id = ?',
+        [planillaId, companyId]
+    ));
     if (pRows.length === 0) {
-        throw new Error('Planilla no encontrada');
+        const err = new Error('Planilla no encontrada para esta empresa');
+        err.status = 404;
+        throw err;
     }
     const { periodo_anio, periodo_mes, quincena } = pRows[0];
 
@@ -1206,7 +1211,12 @@ const generateReciboIndividualPDF = async ({ companyId, planillaId }) => {
     const company = compRows[0] || { razon_social: 'EMPRESA REGISTRADA', nit: 'N/A', nrc: 'N/A' };
 
     const { empleados } = await getPlanillaDetalle({ companyId, anio: periodo_anio, mes: periodo_mes, quincena });
-    const emp = empleados.find(e => e.id === parseInt(planillaId, 10)) || empleados[0];
+    const emp = empleados.find(e => e.id === parseInt(planillaId, 10));
+    if (!emp) {
+        const err = new Error('Recibo de empleado no encontrado en la planilla especificada');
+        err.status = 404;
+        throw err;
+    }
 
     return new Promise((resolve, reject) => {
         try {
@@ -1460,33 +1470,41 @@ const registrarPagoPlanilla = async ({ companyId, anio, mes, quincena, pagos, us
         }
     });
 
-    // 3. En Sipe Web SaaS: actualizar estado de planilla a 'pagada'
+    // 3. En Sipe Web SaaS: verificar si ya estaba pagada (evita doble descuento de cuotas en pagos parciales/repetidos)
+    const [estadoPrevRows] = await withRetry(() => saasDb.query(
+        'SELECT COUNT(*) AS ya_pagadas FROM rh_planillas WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ? AND estado = "pagada"',
+        [companyId, anio, mes, quincena]
+    ));
+    const estabaPagada = Number(estadoPrevRows[0]?.ya_pagadas || 0) > 0;
+
     await withRetry(() => saasDb.query(
         'UPDATE rh_planillas SET estado = "pagada" WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
         [companyId, anio, mes, quincena]
     ));
 
-    // Si existe la tabla rh_empleado_descuentos en SaaS, descontar cuotas activas
-    try {
-        const [pendientes] = await withRetry(() => saasDb.query(
-            'SELECT DISTINCT empleado_id FROM rh_planillas WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
-            [companyId, anio, mes, quincena]
-        ));
-        if (pendientes.length > 0) {
-            const empIds = pendientes.map(p => p.empleado_id);
-            await withRetry(() => saasDb.query(`
-                UPDATE rh_empleado_descuentos
-                SET cuotas_restantes = GREATEST(0, cuotas_restantes - 1),
-                    activo = IF(cuotas_restantes - 1 <= 0, 0, activo)
-                WHERE company_id = ?
-                  AND empleado_id IN (?)
-                  AND activo = 1
-                  AND cuotas_restantes > 0
-                  AND (quincena = 'ambas' OR quincena = ?)
-            `, [companyId, empIds, quincena]));
+    // Si existe la tabla rh_empleado_descuentos en SaaS, descontar cuotas activas SOLO en la transición pendiente -> pagada
+    if (!estabaPagada) {
+        try {
+            const [pendientes] = await withRetry(() => saasDb.query(
+                'SELECT DISTINCT empleado_id FROM rh_planillas WHERE company_id = ? AND periodo_anio = ? AND periodo_mes = ? AND quincena = ?',
+                [companyId, anio, mes, quincena]
+            ));
+            if (pendientes.length > 0) {
+                const empIds = pendientes.map(p => p.empleado_id);
+                await withRetry(() => saasDb.query(`
+                    UPDATE rh_empleado_descuentos
+                    SET cuotas_restantes = GREATEST(0, cuotas_restantes - 1),
+                        activo = IF(cuotas_restantes - 1 <= 0, 0, activo)
+                    WHERE company_id = ?
+                      AND empleado_id IN (?)
+                      AND activo = 1
+                      AND cuotas_restantes > 0
+                      AND (quincena = 'ambas' OR quincena = ?)
+                `, [companyId, empIds, quincena]));
+            }
+        } catch (e) {
+            // Ignorar si la tabla no existe en esta versión de SaaS
         }
-    } catch (e) {
-        // Ignorar si la tabla no existe en esta versión de SaaS
     }
 
     // 4. Emitir eventos en tiempo real si io está disponible
@@ -1540,9 +1558,19 @@ const anularPagoPlanilla = async ({ pagoId, io }) => {
         );
     }
 
-    // 2. Eliminar movimiento bancario y registro de pago en transacción
+    // 2. Eliminar movimiento bancario y registro de pago en transacción bloqueando la fila (evita TOCTOU)
     await withTransaction(async (conn) => {
         if (pago.movimiento_bancario_id) {
+            const [movLock] = await conn.query(
+                'SELECT fecha_aplicado FROM movimientos_bancarios WHERE id = ? FOR UPDATE',
+                [pago.movimiento_bancario_id]
+            );
+            if (movLock.length > 0 && movLock[0].fecha_aplicado) {
+                throw new Error(
+                    `No se puede anular este pago porque el movimiento bancario (#${pago.movimiento_bancario_id}) ` +
+                    `ya ha sido conciliado en el módulo de Bancos.`
+                );
+            }
             await conn.query('DELETE FROM movimientos_bancarios WHERE id = ?', [pago.movimiento_bancario_id]);
         }
         await conn.query('DELETE FROM rh_planilla_pagos WHERE id = ?', [pagoId]);
@@ -1568,6 +1596,7 @@ const anularPagoPlanilla = async ({ pagoId, io }) => {
             ));
             if (emps.length > 0) {
                 const empIds = emps.map(e => e.empleado_id);
+                // Solo revertir descuentos activos o cerrados por este mismo pago (NUNCA resucitar préstamos históricos ya saldados)
                 await withRetry(() => saasDb.query(`
                     UPDATE rh_empleado_descuentos
                     SET cuotas_restantes = cuotas_restantes + 1,
@@ -1575,7 +1604,11 @@ const anularPagoPlanilla = async ({ pagoId, io }) => {
                     WHERE company_id = ?
                       AND empleado_id IN (?)
                       AND (quincena = 'ambas' OR quincena = ?)
-                `, [pago.company_id, empIds, pago.quincena]));
+                      AND (
+                          activo = 1
+                          OR (activo = 0 AND cuotas_restantes = 0 AND updated_at >= DATE_SUB(COALESCE(?, NOW()), INTERVAL 1 HOUR))
+                      )
+                `, [pago.company_id, empIds, pago.quincena, pago.created_at || null]));
             }
         } catch (e) {
             // ignore

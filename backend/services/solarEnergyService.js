@@ -779,17 +779,17 @@ const getSolarAhorroRango = async (startDate, endDate, estacionId = null) => {
 
     if (dailyRows.length === 0) {
         dataSource = 'fallback_analitico';
-        const tStart = new Date(dStart + 'T00:00:00');
-        const tEnd = new Date(dEnd + 'T00:00:00');
-        const diffDays = Math.max(0, Math.round((tEnd - tStart) / (1000 * 60 * 60 * 24)));
+        const tStart = new Date(dStart + 'T12:00:00Z');
+        const tEnd = new Date(dEnd + 'T12:00:00Z');
+        // Limitar a 730 días para prevenir agotamiento de CPU/memoria ante rangos abusivos
+        const diffDays = Math.min(730, Math.max(0, Math.round((tEnd - tStart) / (1000 * 60 * 60 * 24))));
 
         const filtradas = INSTALACIONES_BASE
             .filter(i => i.tiene_paneles === 1)
             .filter(i => matchesStation(i, estacionId));
 
         for (let dayIdx = 0; dayIdx <= diffDays; dayIdx++) {
-            const curDate = new Date(tStart);
-            curDate.setDate(curDate.getDate() + dayIdx);
+            const curDate = new Date(tStart.getTime() + dayIdx * 24 * 60 * 60 * 1000);
             const dateStr = curDate.toISOString().split('T')[0];
 
             for (const inst of filtradas) {
