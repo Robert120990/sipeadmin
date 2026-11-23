@@ -47,9 +47,13 @@ let pendingDeploy = false;
 
 function runDeploy() {
     isDeploying = true;
+    // Pasar solo entorno mínimo permitido a deploy.sh para no exponer JWT_SECRET / DB_PASSWORD en builds
     const deployEnv = {
-        ...process.env,
         HOME: process.env.HOME || '/home/sistemas',
+        USER: process.env.USER || 'sistemas',
+        LANG: process.env.LANG || 'C.UTF-8',
+        NODE_ENV: process.env.NODE_ENV || 'production',
+        AUTO_UPDATE_BRANCH: BRANCH,
         PATH: `/home/sistemas/.local/share/pnpm:/home/sistemas/.pnpm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}`
     };
 
@@ -119,8 +123,10 @@ const server = http.createServer((req, res) => {
 
     req.on('end', () => {
         if (payloadTooLarge) return;
-        const body = Buffer.concat(chunks).toString('utf8');
+        const rawBody = Buffer.concat(chunks);
+        const body = rawBody.toString('utf8');
         const sig = req.headers['x-hub-signature-256'] || '';
+        const ghEvent = String(req.headers['x-github-event'] || '').toLowerCase();
 
         if (!SECRET) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -134,7 +140,7 @@ const server = http.createServer((req, res) => {
 
         try {
             const hmac = crypto.createHmac('sha256', SECRET);
-            const digest = 'sha256=' + hmac.update(body).digest('hex');
+            const digest = 'sha256=' + hmac.update(rawBody).digest('hex');
             const sigBuffer = Buffer.from(sig, 'utf8');
             const digestBuffer = Buffer.from(digest, 'utf8');
 
@@ -147,10 +153,20 @@ const server = http.createServer((req, res) => {
             return res.end(JSON.stringify({ error: 'Signature verification failed' }));
         }
 
+        if (ghEvent && ghEvent !== 'push') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ message: `Ignored GitHub event '${ghEvent}'. Only 'push' triggers deploy.` }));
+        }
+
         try {
             const payload = JSON.parse(body || '{}');
             const ref = payload.ref || '';
             const targetRef = `refs/heads/${BRANCH}`;
+
+            if (payload.deleted) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ message: `Ignored branch deletion event for ${ref}.` }));
+            }
 
             if (ref !== targetRef) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });

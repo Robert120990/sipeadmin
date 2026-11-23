@@ -702,7 +702,8 @@ async function resolveApprovalAction({
 
         if (io && typeof io.to === 'function') {
             try {
-                io.to(`user_${approval.solicitado_por_user_id}`).emit('new_notification', {
+                io.to(`user_${approval.solicitado_por_user_id}`).emit('notification:new', {
+                    user_id: approval.solicitado_por_user_id,
                     type: normDecision === 'APROBADO' ? 'success' : 'warning',
                     title: notifTitle,
                     message: notifMessage,

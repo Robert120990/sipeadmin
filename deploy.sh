@@ -18,10 +18,16 @@ echo "=== [$(date)] Iniciando despliegue de SIPE Admin ==="
 
 # 0. Configurar PATH completo y entorno para Node, pnpm y PM2
 export HOME="${HOME:-/home/sistemas}"
-export PATH="$HOME/.nvm/versions/node/$(node -v 2>/dev/null)/bin:$HOME/.local/share/pnpm:$HOME/.pnpm-global/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+NVM_NODE_BIN=""
+if [ -d "$HOME/.nvm/versions/node" ]; then
+    NVM_LATEST=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n 1)
+    [ -n "$NVM_LATEST" ] && NVM_NODE_BIN="$HOME/.nvm/versions/node/$NVM_LATEST/bin"
+fi
+export PATH="${NVM_NODE_BIN:+$NVM_NODE_BIN:}$HOME/.local/share/pnpm:$HOME/.pnpm-global/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" 2>/dev/null || true
 [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
 
+BRANCH="${AUTO_UPDATE_BRANCH:-main}"
 PROJECT_DIR="${PROJECT_DIR:-$ORIGINAL_DIR}"
 cd "$PROJECT_DIR"
 
@@ -39,13 +45,13 @@ echo "Usuario: $(whoami)" >> "$DEBUG_FILE"
 echo "Directorio: $PROJECT_DIR" >> "$DEBUG_FILE"
 echo "PATH: $PATH" >> "$DEBUG_FILE"
 
-echo ">> 1. Actualizando código desde git..."
-if ! git fetch origin main >> "$DEBUG_FILE" 2>&1; then
-    echo "ERROR: Falló git fetch origin main. Abortando despliegue antes de tocar PM2." | tee -a "$DEBUG_FILE"
+echo ">> 1. Actualizando código desde git (rama: $BRANCH)..."
+if ! git fetch origin "$BRANCH" >> "$DEBUG_FILE" 2>&1; then
+    echo "ERROR: Falló git fetch origin $BRANCH. Abortando despliegue antes de tocar PM2." | tee -a "$DEBUG_FILE"
     exit 1
 fi
-if ! git reset --hard origin/main >> "$DEBUG_FILE" 2>&1; then
-    echo "ERROR: Falló git reset --hard origin/main. Abortando despliegue antes de tocar PM2." | tee -a "$DEBUG_FILE"
+if ! git reset --hard "origin/$BRANCH" >> "$DEBUG_FILE" 2>&1; then
+    echo "ERROR: Falló git reset --hard origin/$BRANCH. Abortando despliegue antes de tocar PM2." | tee -a "$DEBUG_FILE"
     exit 1
 fi
 echo "Git HEAD: $(git rev-parse --short HEAD)" >> "$DEBUG_FILE"
@@ -81,6 +87,12 @@ done
 
 echo "PM2 detectado: ${PM2_BIN:-ninguno}" >> "$DEBUG_FILE"
 
+if [ -z "$PM2_BIN" ]; then
+    echo "ERROR CRÍTICO: No se encontró binario de PM2. Abortando despliegue." | tee -a "$DEBUG_FILE"
+    chmod 600 "$DEBUG_FILE" 2>/dev/null || true
+    exit 1
+fi
+
 if [ -n "$PM2_BIN" ]; then
     echo "--- Detención elegante y recreación de sipeadmin-backend ---" >> "$DEBUG_FILE"
     if $PM2_BIN describe sipeadmin-backend >/dev/null 2>&1; then
@@ -113,6 +125,9 @@ if [ -n "$PM2_BIN" ]; then
         done
         sleep 2
         REM_PIDS=$(lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+        if [ -z "$REM_PIDS" ] && command -v sudo >/dev/null 2>&1; then
+            REM_PIDS=$(sudo -n lsof -t -i:5001 -sTCP:LISTEN 2>/dev/null || sudo -n ss -lptn 'sport = :5001' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+        fi
         for pid in $REM_PIDS; do
             if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; then
                 echo "Último recurso SIGKILL a proceso en 5001: $pid..." >> "$DEBUG_FILE"
@@ -163,7 +178,7 @@ fi
 echo ">> 5. Verificando estado del proxy Caddy..." >> "$DEBUG_FILE"
 if ! systemctl is-active --quiet caddy 2>/dev/null; then
     echo "Caddy no está activo, intentando reiniciar servicio..." >> "$DEBUG_FILE"
-    sudo systemctl restart caddy >> "$DEBUG_FILE" 2>&1 || sudo service caddy restart >> "$DEBUG_FILE" 2>&1 || true
+    sudo -n systemctl restart caddy >> "$DEBUG_FILE" 2>&1 || sudo -n service caddy restart >> "$DEBUG_FILE" 2>&1 || true
 fi
 
 echo "Fecha fin: $(date)" >> "$DEBUG_FILE"

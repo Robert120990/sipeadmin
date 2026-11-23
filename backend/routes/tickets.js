@@ -76,7 +76,7 @@ router.get('/pending-resolved', authenticateToken, async (req, res) => {
     }
 });
 
-// GET /api/tickets/ai-bundle
+// GET /api/tickets/ai-bundle (solo lectura: no muta estado de tickets al consultar)
 router.get('/ai-bundle', authenticateToken, async (req, res) => {
     try {
         if (!canManageTickets(req.user)) {
@@ -84,15 +84,14 @@ router.get('/ai-bundle', authenticateToken, async (req, res) => {
         }
         const idsParam = req.query.ids ? String(req.query.ids).split(',').map(Number).filter(Boolean) : null;
         const tickets = await ticketService.getAiBundleTickets({ ticketIds: idsParam });
-        const bundle = await ticketService.saveAndGenerateAiBundle({
-            items: [],
+        const promptMarkdown = ticketService.buildAiPromptPackage(tickets, {
             aiMode: req.query.ai_mode || 'agent_prompt',
             agentPlatform: req.query.agent_platform || 'antigravity'
         });
         res.json({
             success: true,
             data: tickets,
-            promptMarkdown: bundle.promptMarkdown
+            promptMarkdown
         });
     } catch (err) {
         console.error('Error getting AI bundle:', err);
@@ -168,11 +167,11 @@ router.post('/ai-bundle/resolve-batch', authenticateToken, async (req, res) => {
     }
 });
 
-// GET /api/tickets/agy-settings
+// GET /api/tickets/agy-settings (restringido estrictamente a administradores)
 router.get('/agy-settings', authenticateToken, async (req, res) => {
     try {
-        if (!canManageTickets(req.user)) {
-            return res.status(403).json({ message: 'Permisos insuficientes' });
+        if (!isAdminUser(req.user)) {
+            return res.status(403).json({ message: 'Solo administradores pueden consultar la configuración AGY' });
         }
         const cfg = await ticketService.getAgySettings();
         res.json({ success: true, data: cfg });
@@ -181,11 +180,11 @@ router.get('/agy-settings', authenticateToken, async (req, res) => {
     }
 });
 
-// PUT /api/tickets/agy-settings
+// PUT /api/tickets/agy-settings (restringido estrictamente a administradores)
 router.put('/agy-settings', authenticateToken, async (req, res) => {
     try {
-        if (!canManageTickets(req.user)) {
-            return res.status(403).json({ message: 'Permisos insuficientes' });
+        if (!isAdminUser(req.user)) {
+            return res.status(403).json({ message: 'Solo administradores pueden modificar la configuración AGY' });
         }
         const cfg = await ticketService.saveAgySettings(req.body || {});
         res.json({ success: true, data: cfg, message: 'Configuración de Consola AGY guardada' });
@@ -426,11 +425,11 @@ router.post('/:id/agy/plan', authenticateToken, async (req, res) => {
     }
 });
 
-// POST /api/tickets/:id/agy/execute
+// POST /api/tickets/:id/agy/execute (restringido estrictamente a administradores)
 router.post('/:id/agy/execute', authenticateToken, async (req, res) => {
     try {
-        if (!canManageTickets(req.user)) {
-            return res.status(403).json({ message: 'Permisos insuficientes' });
+        if (!isAdminUser(req.user)) {
+            return res.status(403).json({ message: 'Solo administradores pueden ejecutar planes AGY' });
         }
         const updated = await ticketService.executeApprovedPlan(req.params.id, {
             actorId: req.user.id,

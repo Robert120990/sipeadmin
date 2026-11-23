@@ -71,14 +71,17 @@ const safeCompareKeys = (a, b) => {
 };
 
 const userHasAnyPerm = (user, allowedPerms = []) => {
-    if (!user || user.isApiKey || isAdminUser(user)) return true;
+    if (!user) return false;
+    if (user.isApiKey || isAdminUser(user)) return true;
     const perms = Array.isArray(user.permissions) ? user.permissions : [];
     return allowedPerms.some(p => perms.includes(p));
 };
 
 const PERMS_BANCOS = [
     '/dashboard/bancos/saldos',
+    '/dashboard/bancos/reportes/saldos-bancos',
     '/dashboard/bancos/cuentas',
+    '/dashboard/bancos/movimientos',
     '/dashboard/bancos/estado-cuenta',
     'view_direccion_estrategica',
     '/dashboard/estrategia/torre-control',
@@ -86,6 +89,8 @@ const PERMS_BANCOS = [
 ];
 const PERMS_CHEQUERA = [
     '/dashboard/bancos/chequeras',
+    '/dashboard/bancos/cheques',
+    '/dashboard/bancos/reportes/saldos-chequera',
     '/dashboard/bancos/saldos',
     '/dashboard/bancos/cuentas',
     'view_direccion_estrategica',
@@ -103,6 +108,7 @@ const PERMS_VENTAS_OPERACIONES = [
     '/dashboard/estrategia/torre-control',
     '/dashboard/consultas/estaciones/ventas',
     '/dashboard/consultas/estaciones/cierres',
+    '/dashboard/consultas/estaciones/resumen-cierre',
     '/dashboard/operaciones/energia-solar'
 ];
 const PERMS_PRECIOS_COMPETENCIA = [

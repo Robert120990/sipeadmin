@@ -514,19 +514,43 @@ const getTicketPool = async () => {
     }
 };
 
+const isValidImageBuffer = (buf, ext) => {
+    if (!Buffer.isBuffer(buf) || buf.length < 12) return false;
+    if (ext === 'webp') {
+        return buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP';
+    }
+    if (ext === 'png') {
+        return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+    }
+    if (ext === 'jpg') {
+        return buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
+    }
+    return false;
+};
+
 const saveBase64Screenshot = (base64Data, prefix = 'ticket') => {
     if (!base64Data || typeof base64Data !== 'string') return null;
-    if (base64Data.startsWith('/api/uploads/') || base64Data.startsWith('http')) {
-        return base64Data;
+    const trimmed = base64Data.trim();
+    if (trimmed.startsWith('/api/uploads/')) {
+        if (trimmed.includes('..') || trimmed.includes('\\')) {
+            throw new Error('Ruta de adjunto inválida.');
+        }
+        return trimmed;
     }
 
-    const match = base64Data.match(/^data:image\/(webp|png|jpeg|jpg);base64,(.+)$/i);
-    const ext = match ? (match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase()) : 'webp';
-    const rawBase64 = match ? match[2] : base64Data;
+    const match = trimmed.match(/^data:image\/(webp|png|jpeg|jpg);base64,([A-Za-z0-9+/=\s]+)$/i);
+    if (!match) {
+        throw new Error('Formato de imagen no permitido. Solo se aceptan imágenes PNG, JPEG o WebP.');
+    }
+    const ext = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
+    const rawBase64 = match[2].replace(/\s+/g, '');
 
     const buffer = Buffer.from(rawBase64, 'base64');
     if (buffer.length > 6 * 1024 * 1024) {
         throw new Error('La captura excede el límite de 6MB.');
+    }
+    if (!isValidImageBuffer(buffer, ext)) {
+        throw new Error('El contenido del archivo no corresponde a una imagen válida.');
     }
 
     ensureUploadsDir();
@@ -1623,7 +1647,11 @@ const acknowledgeResolution = async (id, userId, userName = null, username = nul
         userConds.push('admin_user_id = ?');
         params.push(Number(userId || 0));
     }
-    userConds.push('user_id = ?');
+    if (hasTicketCol(pool, 'source_system')) {
+        userConds.push("(user_id = ? AND COALESCE(source_system, 'admin.sipesv.com') = 'admin.sipesv.com')");
+    } else {
+        userConds.push('user_id = ?');
+    }
     params.push(Number(userId || 0));
     if (userName) {
         userConds.push('LOWER(user_name) = LOWER(?)');
@@ -2215,6 +2243,7 @@ module.exports = {
     getTicketById,
     updateTicketStatus,
     updateTicketAiReview,
+    buildAiPromptPackage,
     getAiBundleTickets,
     saveAndGenerateAiBundle,
     autoTriageTicketsForAi,

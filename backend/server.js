@@ -4,7 +4,7 @@ const http = require('http');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 const { initDB, getDbIfReady, closeAllPools } = require('./db');
-const { requireSignedOrAuthenticatedUpload } = require('./utils/uploadSigner');
+const { guardProtectedUploadsMiddleware } = require('./utils/uploadSigner');
 
 dotenv.config();
 
@@ -27,7 +27,9 @@ const corsOptions = {
         if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
             return callback(null, true);
         }
-        return callback(new Error(`Bloqueado por política CORS: origen no autorizado (${origin})`));
+        const corsErr = new Error(`Bloqueado por política CORS: origen no autorizado (${origin})`);
+        corsErr.status = 403;
+        return callback(corsErr);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -95,7 +97,8 @@ app.use((req, res, next) => {
 
 // Assign unique Request ID for error tracing and audit logging
 app.use((req, res, next) => {
-    req.id = req.headers['x-request-id'] || crypto.randomUUID();
+    const incomingId = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'].trim() : '';
+    req.id = /^[a-zA-Z0-9._-]{1,64}$/.test(incomingId) ? incomingId : crypto.randomUUID();
     res.setHeader('X-Request-Id', req.id);
     next();
 });
@@ -264,7 +267,7 @@ app.use('/api', bitacoraRoutes);
 app.use('/api/check-designer', checkDesignerRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/tickets', ticketsRoutes);
-app.use('/api/uploads/pagos', requireSignedOrAuthenticatedUpload);
+app.use('/api/uploads', guardProtectedUploadsMiddleware);
 app.use('/api/uploads', express.static(UPLOADS_DIR, { dotfiles: 'deny', index: false, maxAge: '7d' }));
 app.get('/api/uploads/:filename', (req, res) => {
     const safeName = path.basename(req.params.filename || '');

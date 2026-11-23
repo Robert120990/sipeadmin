@@ -9,8 +9,7 @@ const { sendSafeError } = require('../utils/errorHandler');
 
 const isRoleRowAdmin = (roleRow) => {
     if (!roleRow) return false;
-    const name = String(roleRow.name || '').toLowerCase();
-    return Number(roleRow.id) === 1 || name === 'admin' || name === 'administrator' || name === 'administrador';
+    return isAdminUser({ role_id: roleRow.id, role_name: roleRow.name });
 };
 
 /**
@@ -310,10 +309,16 @@ router.put('/users/:id', authenticateToken, requirePermission(['/dashboard/users
         }
         if (status === 'inactive') {
             revokeUser(targetId);
+            if (req.io && typeof req.io.in === 'function') {
+                req.io.in(`user_${targetId}`).disconnectSockets(true);
+            }
         } else if (status === 'active') {
             restoreUser(targetId);
         } else {
             invalidateUserAuthCache(targetId);
+            if (shouldBumpTokenVersion && req.io && typeof req.io.in === 'function') {
+                req.io.in(`user_${targetId}`).disconnectSockets(true);
+            }
         }
         res.json({
             message: passwordCheck.shouldUpdate
@@ -349,6 +354,9 @@ router.delete('/users/:id', authenticateToken, requirePermission(['/dashboard/us
             return res.status(404).json({ message: 'Usuario no encontrado' });
         }
         revokeUser(id, true);
+        if (req.io && typeof req.io.in === 'function') {
+            req.io.in(`user_${id}`).disconnectSockets(true);
+        }
         res.json({ message: 'Usuario eliminado exitosamente' });
     } catch (error) {
         sendSafeError(res, error, 'Error al eliminar usuario');
@@ -387,6 +395,9 @@ router.put('/users/:id/status', authenticateToken, requirePermission(['/dashboar
                 }
             }
             revokeUser(id);
+            if (req.io && typeof req.io.in === 'function') {
+                req.io.in(`user_${id}`).disconnectSockets(true);
+            }
         } else {
             [statusUpdateRes] = await db.query('UPDATE users SET status = ? WHERE id = ?', [status, id]);
             restoreUser(id);
@@ -458,7 +469,7 @@ router.post('/roles', authenticateToken, requireRole('Administrator'), async (re
         await conn.commit();
         res.status(201).json({ message: 'Rol creado exitosamente', id: roleId });
     } catch (error) {
-        await conn.rollback();
+        await conn.rollback().catch(() => {});
         if (error.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: 'El rol ya existe' });
         sendSafeError(res, error, 'Error al crear rol');
     } finally {
@@ -487,8 +498,8 @@ router.put('/roles/:id', authenticateToken, requireRole('Administrator'), async 
             return res.status(404).json({ message: 'Rol no encontrado.' });
         }
         const currentRole = existingRoles[0];
-        if ((Number(currentRole.id) === 1 || String(currentRole.name).toLowerCase() === 'administrator') && cleanName !== currentRole.name) {
-            return res.status(400).json({ message: 'No se puede renombrar el rol principal Administrator.' });
+        if (isRoleRowAdmin(currentRole) && cleanName !== currentRole.name) {
+            return res.status(400).json({ message: 'No se puede renombrar un rol administrativo principal.' });
         }
 
         await conn.beginTransaction();
@@ -530,8 +541,8 @@ router.delete('/roles/:id', authenticateToken, requireRole('Administrator'), asy
         if (existingRoles.length === 0) {
             return res.status(404).json({ message: 'Rol no encontrado.' });
         }
-        if (Number(existingRoles[0].id) === 1 || String(existingRoles[0].name).toLowerCase() === 'administrator') {
-            return res.status(400).json({ message: 'No se puede eliminar el rol principal Administrator.' });
+        if (isRoleRowAdmin(existingRoles[0])) {
+            return res.status(400).json({ message: 'No se puede eliminar un rol administrativo principal.' });
         }
 
         await db.query('DELETE FROM roles WHERE id = ?', [roleIdNum]);

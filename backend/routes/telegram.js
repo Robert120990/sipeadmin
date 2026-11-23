@@ -68,8 +68,6 @@ const mibotAccessPerms = [
     '/dashboard/operaciones/recordatorios',
     'manage_tasks',
     '/dashboard/operaciones/tareas',
-    '/dashboard',
-    'view_dashboard',
     '/dashboard/finanzas/resumen'
 ];
 
@@ -1475,7 +1473,7 @@ router.post('/mibot/programaciones', authenticateToken, requirePermission(mibotA
     try {
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
-        const externalDb = getExternalDb();
+        const externalDb = await Promise.resolve(getExternalDb()).catch(() => null);
         const io = req.app?.get('io') || req.io || null;
 
         const result = await createMibotProgramacion({
@@ -1520,7 +1518,7 @@ router.post('/mibot/programaciones/:id/enviar-ahora', authenticateToken, require
     try {
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
-        const externalDb = getExternalDb();
+        const externalDb = await Promise.resolve(getExternalDb()).catch(() => null);
 
         const dispatch = await dispatchMibotProgramacion({
             db,

@@ -56,6 +56,30 @@ function verifySignedUploadUrl(rawPath = '', expRaw = '', sigRaw = '') {
 }
 
 /**
+ * Normaliza y decodifica una ruta de /api/uploads/ para prevenir evasiones por encoding
+ * (%70agos, pagos%2f, //pagos, /./pagos, backslashes o path traversal).
+ */
+function normalizeUploadSubpath(rawSubpath = '') {
+    let decoded = String(rawSubpath || '').split('?')[0];
+    try {
+        // Decodificar hasta 2 veces para atrapar double-encoding (%2570agos)
+        for (let i = 0; i < 2; i++) {
+            const next = decodeURIComponent(decoded);
+            if (next === decoded) break;
+            decoded = next;
+        }
+    } catch (_) {
+        return null;
+    }
+    const slashed = decoded.replace(/\\/g, '/');
+    const parts = slashed.split('/').filter((seg) => seg && seg !== '.');
+    if (parts.some((seg) => seg === '..')) {
+        return null;
+    }
+    return '/' + parts.join('/');
+}
+
+/**
  * Middleware para /api/uploads/pagos:
  * Permite acceso con firma HMAC temporal válida (?exp=...&sig=...) O token JWT Bearer válido.
  */
@@ -63,11 +87,14 @@ function requireSignedOrAuthenticatedUpload(req, res, next) {
     const rawPath = (req.baseUrl || req.path)
         ? `${req.baseUrl || ''}${req.path || ''}`
         : (req.originalUrl || '');
-    const cleanPath = String(rawPath).split('?')[0];
+    const normalized = normalizeUploadSubpath(rawPath);
+    if (!normalized) {
+        return res.status(400).json({ message: 'Ruta de archivo inválida' });
+    }
 
     const exp = req.query?.exp;
     const sig = req.query?.sig;
-    if (exp && sig && verifySignedUploadUrl(cleanPath, exp, sig)) {
+    if (exp && sig && verifySignedUploadUrl(normalized, exp, sig)) {
         return next();
     }
 
@@ -80,9 +107,32 @@ function requireSignedOrAuthenticatedUpload(req, res, next) {
     });
 }
 
+/**
+ * Guard global para montar ANTES de express.static('/api/uploads'):
+ * Garantiza que ninguna variante codificada (/api/uploads/%70agos/..., //pagos/..., /./pagos/...)
+ * pueda evadir la protección de /api/uploads/pagos.
+ */
+function guardProtectedUploadsMiddleware(req, res, next) {
+    const normalizedSub = normalizeUploadSubpath(req.path || '');
+    if (normalizedSub === null) {
+        return res.status(400).json({ message: 'Ruta de archivo inválida' });
+    }
+    const firstSegment = normalizedSub.split('/').filter(Boolean)[0] || '';
+    if (firstSegment.toLowerCase() === 'pagos') {
+        const canonicalReq = Object.assign(Object.create(req), {
+            baseUrl: '/api/uploads',
+            path: normalizedSub
+        });
+        return requireSignedOrAuthenticatedUpload(canonicalReq, res, next);
+    }
+    return next();
+}
+
 module.exports = {
     DEFAULT_SIGN_TTL_SECONDS,
     signUploadUrl,
     verifySignedUploadUrl,
-    requireSignedOrAuthenticatedUpload
+    normalizeUploadSubpath,
+    requireSignedOrAuthenticatedUpload,
+    guardProtectedUploadsMiddleware
 };

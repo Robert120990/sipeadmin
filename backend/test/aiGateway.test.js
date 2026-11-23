@@ -31,7 +31,7 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
             headers: options.headers || {},
             body: options.body || {},
             query: options.query || {},
-            user: options.user || null
+            user: Object.prototype.hasOwnProperty.call(options, 'user') ? options.user : null
         };
         const res = {
             statusCode: 200,
@@ -144,12 +144,14 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
         });
     });
 
+    const apiKeyUser = { id: 0, username: 'ai-gateway-test', isApiKey: true, role_id: 1, role_name: 'Administrator' };
+
     describe('3. POST /query (Ventas, Solar y Andelsa)', () => {
         it('debe retornar 400 si no se envía query ni prompt', async () => {
             const layer = getRouteLayer('/query', 'post');
             assert.ok(layer, 'La ruta POST /query debe estar registrada');
 
-            const { req, res } = createMockReqRes({ body: {} });
+            const { req, res } = createMockReqRes({ body: {}, user: apiKeyUser });
             const handler = layer.route.stack[layer.route.stack.length - 1].handle;
             await handler(req, res);
 
@@ -157,9 +159,22 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
             assert.strictEqual(res.body.ok, false);
         });
 
+        it('debe rechazar con 403 (fail-closed) cuando req.user es nulo', async () => {
+            const { req, res } = createMockReqRes({
+                body: { query: '¿Cuál estación vendió más ayer?' },
+                user: null
+            });
+
+            await aiRouter.handleAiQuery(req, res);
+
+            assert.strictEqual(res.statusCode, 403);
+            assert.strictEqual(res.body.ok, false);
+        });
+
         it('debe resolver consultas de ventas y ranking retornando estructura rica completa', async () => {
             const { req, res } = createMockReqRes({
-                body: { query: '¿Cuál estación vendió más ayer?' }
+                body: { query: '¿Cuál estación vendió más ayer?' },
+                user: apiKeyUser
             });
 
             await aiRouter.handleAiQuery(req, res);
@@ -183,7 +198,8 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
 
         it('debe resolver consultas de energía solar y baterías sin montos en $0.00', async () => {
             const { req, res } = createMockReqRes({
-                body: { prompt: 'Ahorro solar de ayer en Andelsa' }
+                body: { prompt: 'Ahorro solar de ayer en Andelsa' },
+                user: apiKeyUser
             });
 
             await aiRouter.handleAiQuery(req, res);
@@ -202,7 +218,8 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
         it('debe resolver consultas administrativas y financieras de Andelsa (resumen, inventario y CXC)', async () => {
             // 3.1 Resumen financiero Andelsa
             const { req: reqFin, res: resFin } = createMockReqRes({
-                body: { query: 'Resumen financiero de Andelsa' }
+                body: { query: 'Resumen financiero de Andelsa' },
+                user: apiKeyUser
             });
             await aiRouter.handleAiQuery(reqFin, resFin);
             assert.strictEqual(resFin.statusCode, 200);
@@ -214,7 +231,8 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
 
             // 3.2 Inventario Andelsa
             const { req: reqInv, res: resInv } = createMockReqRes({
-                body: { query: 'Inventario y stock de Andelsa' }
+                body: { query: 'Inventario y stock de Andelsa' },
+                user: apiKeyUser
             });
             await aiRouter.handleAiQuery(reqInv, resInv);
             assert.strictEqual(resInv.body.intent, 'andelsa');
@@ -223,7 +241,8 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
 
             // 3.3 Cuentas por cobrar Andelsa
             const { req: reqCxc, res: resCxc } = createMockReqRes({
-                body: { query: 'Cuentas por cobrar CXC de Andelsa' }
+                body: { query: 'Cuentas por cobrar CXC de Andelsa' },
+                user: apiKeyUser
             });
             await aiRouter.handleAiQuery(reqCxc, resCxc);
             assert.strictEqual(resCxc.body.intent, 'andelsa');
@@ -235,6 +254,7 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
     describe('4. POST /webhooks/trigger', () => {
         it('debe disparar custom_alert correctamente', async () => {
             const { req, res } = createMockReqRes({
+                user: apiKeyUser,
                 body: {
                     event: 'custom_alert',
                     title: 'Prueba Gateway AI',
@@ -252,6 +272,7 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
 
         it('debe disparar discrepancy_check correctamente', async () => {
             const { req, res } = createMockReqRes({
+                user: apiKeyUser,
                 body: {
                     event: 'discrepancy_check',
                     fecha: '2026-10-12',
@@ -265,6 +286,18 @@ describe('AI Gateway & Solar-Andelsa Consolidated Endpoint Tests', () => {
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.body.ok, true);
             assert.strictEqual(res.body.event, 'discrepancy_check');
+        });
+
+        it('debe rechazar con 403 cuando un usuario sin privilegios dispara un webhook', async () => {
+            const { req, res } = createMockReqRes({
+                user: { id: 99, username: 'operador', role_id: 5, role_name: 'Operador', permissions: [] },
+                body: { event: 'custom_alert', title: 'Test', message: 'Test' }
+            });
+
+            await aiRouter.handleWebhooksTrigger(req, res);
+
+            assert.strictEqual(res.statusCode, 403);
+            assert.strictEqual(res.body.ok, false);
         });
     });
 

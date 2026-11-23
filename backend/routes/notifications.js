@@ -103,27 +103,6 @@ router.patch('/read-all', authenticateToken, async (req, res) => {
 });
 
 /**
- * DELETE /api/notifications/:id
- * Delete a specific notification
- */
-router.delete('/:id', authenticateToken, async (req, res) => {
-    try {
-        const db = getDb();
-        const notificationId = req.params.id;
-        const userId = req.user.id;
-
-        await db.query(`
-            DELETE FROM notifications
-            WHERE id = ? AND user_id = ?
-        `, [notificationId, userId]);
-
-        res.json({ message: 'Notificación eliminada con éxito' });
-    } catch (error) {
-        sendSafeError(res, error, 'Error al eliminar notificación');
-    }
-});
-
-/**
  * DELETE /api/notifications/clear-all
  * Clear all notifications for current user
  */
@@ -140,6 +119,30 @@ router.delete('/clear-all', authenticateToken, async (req, res) => {
         res.json({ message: 'Historial de notificaciones vaciado' });
     } catch (error) {
         sendSafeError(res, error, 'Error al vaciar notificaciones');
+    }
+});
+
+/**
+ * DELETE /api/notifications/:id
+ * Delete a specific notification
+ */
+router.delete('/:id', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        const notificationId = parseInt(req.params.id, 10);
+        if (!Number.isInteger(notificationId) || notificationId <= 0) {
+            return res.status(400).json({ message: 'ID de notificación inválido' });
+        }
+        const userId = req.user.id;
+
+        await db.query(`
+            DELETE FROM notifications
+            WHERE id = ? AND user_id = ?
+        `, [notificationId, userId]);
+
+        res.json({ message: 'Notificación eliminada con éxito' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al eliminar notificación');
     }
 });
 
