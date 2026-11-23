@@ -17,6 +17,11 @@ const {
 const { saveBase64Screenshot, UPLOADS_DIR } = require('../services/ticketService');
 const { computePaymentBalance } = require('../services/recordatoriosPagosService');
 const { calcularEstadoPagoDte } = require('../services/creditRiskService');
+const { getRentabilidadPorEstacion, TAX_DEFAULTS } = require('../services/profitabilityService');
+const { GEMINI_FALLBACK_MODELS, isGeminiApiKeyInvalidError } = require('../services/telegramGeminiService');
+const { isTransientPuppeteerError, safePageEvaluate } = require('../services/energyLatamService');
+const dbModule = require('../db');
+const solarEnergyService = require('../services/solarEnergyService');
 
 describe('Security & Audit Regression Suite', () => {
     describe('1. Protected Uploads Path Normalization & Bypass Guard', () => {
@@ -145,6 +150,122 @@ describe('Security & Audit Regression Suite', () => {
             });
             assert.strictEqual(dteContado.estado_pago, 'PAGADO_CONTADO');
             assert.strictEqual(dteContado.saldo_pendiente, 0);
+        });
+    });
+
+    describe('5. Toggle de Impuestos P&L (IVA 13%, FOVIAL $0.20, COTRANS $0.10)', () => {
+        it('descuenta impuestos de combustible, tienda (DTE) y lubricantes cuando excluirImpuestos=true', async () => {
+            const origAcc = dbModule.getAccountingDb;
+            const origDb = dbModule.getDb;
+            const origRetry = dbModule.withRetry;
+            const origSolar = solarEnergyService.getSolarAhorroRango;
+
+            try {
+                dbModule.withRetry = async (fn) => fn();
+                solarEnergyService.getSolarAhorroRango = async () => ({ desglose_por_estacion: [] });
+                dbModule.getAccountingDb = async () => ({
+                    query: async (sql) => {
+                        if (sql.includes('venta_dolares')) {
+                            // 10,000 gal a $4.82 PVP -> $48,200 bruto
+                            // FOVIAL=$2,000, COTRANS=$1,000 -> baseConIva=$45,200 -> neto=$40,000, IVA=$5,200
+                            return [[{
+                                id_empresa: 1,
+                                total_galones: 10000,
+                                venta_dolares: 48200,
+                                galones_diesel: 10000,
+                                galones_regular: 0,
+                                galones_super: 0,
+                                galones_ion: 0
+                            }]];
+                        }
+                        if (sql.includes('FROM branches WHERE id !=')) {
+                            return [[{ id_empresa: 1, titulo: 'Puma La Loma' }]];
+                        }
+                        if (sql.includes('FROM sales_headers')) {
+                            return [[{
+                                id_empresa: 1,
+                                total_tienda: 1130,
+                                impuestos_tienda: 130,
+                                total_tienda_neto: 1000
+                            }]];
+                        }
+                        if (sql.includes('gas_station_closeout_lubricant_readings')) {
+                            return [[{ id_empresa: 1, total_lubricantes: 1130 }]];
+                        }
+                        if (sql.includes('gas_station_closeout_expenses')) {
+                            return [[{ id_empresa: 1, total_gastos: 0 }]];
+                        }
+                        return [[]];
+                    }
+                });
+                dbModule.getDb = () => ({
+                    query: async (sql) => {
+                        if (sql.includes('combustible_fletes_estacion')) {
+                            return [[{ id_estacion: '014', flete_galon: 0.05 }]];
+                        }
+                        if (sql.includes('combustible_precios_estacion_quincenal')) {
+                            return [[{ id_estacion: '014', precio_diesel: 3.70, precio_regular: 3.70, precio_super: 3.90, precio_ion: 3.80 }]];
+                        }
+                        return [[]];
+                    }
+                });
+
+                const pnlBruto = await getRentabilidadPorEstacion('2026-10-15', '2026-11-13', { excluirImpuestos: false });
+                const pnlNeto = await getRentabilidadPorEstacion('2026-10-15', '2026-11-13', { excluirImpuestos: true });
+
+                assert.strictEqual(TAX_DEFAULTS.fovialPerGallon, 0.20);
+                assert.strictEqual(TAX_DEFAULTS.cotransPerGallon, 0.10);
+                assert.strictEqual(pnlBruto.excluir_impuestos, false);
+                assert.strictEqual(pnlNeto.excluir_impuestos, true);
+
+                // Combustible neto: $40,000 vs bruto $48,200 (impuestos = $8,200)
+                assert.strictEqual(pnlBruto.estaciones[0].ingresos.combustible, 48200);
+                assert.strictEqual(pnlNeto.estaciones[0].ingresos.combustible, 40000);
+                // Tienda neta: $1,000 vs bruta $1,130; Lubricantes neto: $1,000 vs bruto $1,130
+                assert.strictEqual(pnlNeto.estaciones[0].ingresos.tienda, 1000);
+                assert.strictEqual(pnlNeto.estaciones[0].ingresos.lubricantes, 1000);
+                // Margen combustible neto = $40,000 - $37,000 (costo) - $500 (flete) = $2,500
+                assert.strictEqual(pnlNeto.estaciones[0].margenes_brutos.combustible, 2500);
+                assert.strictEqual(pnlNeto.resumen_consolidado.desglose_impuestos.fovial_usd, 2000);
+                assert.strictEqual(pnlNeto.resumen_consolidado.desglose_impuestos.cotrans_usd, 1000);
+                assert.strictEqual(pnlNeto.resumen_consolidado.desglose_impuestos.iva_combustible_usd, 5200);
+                assert.strictEqual(pnlNeto.resumen_consolidado.desglose_impuestos.impuestos_tienda_usd, 130);
+                assert.strictEqual(pnlNeto.resumen_consolidado.desglose_impuestos.iva_lubricantes_usd, 130);
+                assert.strictEqual(pnlNeto.resumen_consolidado.impuestos_descontados_total_usd, 8460);
+            } finally {
+                dbModule.getAccountingDb = origAcc;
+                dbModule.getDb = origDb;
+                dbModule.withRetry = origRetry;
+                solarEnergyService.getSolarAhorroRango = origSolar;
+            }
+        });
+    });
+
+    describe('6. Resiliencia Gemini OCR y Scraper Puppeteer Energy Latam', () => {
+        it('prioriza modelos Flash activos verificados (sin gemini-2.0-flash retirado)', () => {
+            assert.strictEqual(GEMINI_FALLBACK_MODELS[0], 'gemini-2.5-flash-lite');
+            assert.ok(!GEMINI_FALLBACK_MODELS.includes('gemini-2.0-flash'));
+            assert.strictEqual(isGeminiApiKeyInvalidError(new Error('API_KEY_INVALID')), true);
+            assert.strictEqual(isGeminiApiKeyInvalidError(new Error('503 Service Unavailable')), false);
+        });
+
+        it('detecta errores transitorios de Puppeteer y reintenta safePageEvaluate automáticamente', async () => {
+            assert.strictEqual(isTransientPuppeteerError(new Error('Attempted to use detached Frame')), true);
+            assert.strictEqual(isTransientPuppeteerError(new Error('Protocol error: Target closed')), true);
+            assert.strictEqual(isTransientPuppeteerError(new Error('Execution context was destroyed')), true);
+            assert.strictEqual(isTransientPuppeteerError(new Error('Credenciales inválidas')), false);
+
+            let calls = 0;
+            const fakePage = {
+                isClosed: () => false,
+                evaluate: async () => {
+                    calls += 1;
+                    if (calls === 1) throw new Error('Attempted to use detached Frame');
+                    return { ok: true, attempt: calls };
+                }
+            };
+            const res = await safePageEvaluate(fakePage, () => ({}));
+            assert.deepStrictEqual(res, { ok: true, attempt: 2 });
         });
     });
 });

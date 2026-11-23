@@ -101,6 +101,55 @@ async function savePortalCredentials({ user, password, url }) {
 
 let isSyncRunning = false;
 
+const MAX_PORTAL_SCRAPE_ATTEMPTS = 2;
+
+/**
+ * Detecta errores transitorios de Puppeteer/Salesforce LWC cuando un iframe o contexto
+ * se recarga o destruye en medio de una navegación/evaluación.
+ */
+function isTransientPuppeteerError(err) {
+    const msg = String(err?.message || err || '');
+    return /(detached frame|frame was detached|execution context was destroyed|target closed|session closed|protocol error|cannot find context|browser has disconnected|navigation failed because browser)/i.test(msg);
+}
+
+/**
+ * Ejecuta page.evaluate tolerando recargas transitorias de contexto en Salesforce Lightning.
+ */
+async function safePageEvaluate(page, fn, ...args) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        if (!page || page.isClosed()) {
+            throw new Error('Target closed before page.evaluate');
+        }
+        try {
+            return await page.evaluate(fn, ...args);
+        } catch (err) {
+            if (attempt < 2 && isTransientPuppeteerError(err) && !page.isClosed()) {
+                await new Promise(r => setTimeout(r, 1500));
+                continue;
+            }
+            throw err;
+        }
+    }
+    return null;
+}
+
+/**
+ * Limpia archivos de bloqueo huérfanos de Chromium si un proceso previo murió abruptamente.
+ */
+function cleanupStaleBrowserLocks(sessionDir) {
+    if (!sessionDir) return;
+    for (const lockName of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+        const lockPath = path.join(sessionDir, lockName);
+        try {
+            if (fs.existsSync(lockPath)) {
+                fs.unlinkSync(lockPath);
+            }
+        } catch (_) {
+            // Ignorar si no existe o está en uso activo
+        }
+    }
+}
+
 /**
  * Normaliza el estado que devuelve Salesforce a un estado estándar en español
  */
@@ -410,19 +459,12 @@ async function launchBrowser(sessionDir) {
 }
 
 /**
- * Ejecuta el scraper headless en segundo plano para sincronizar el portal para todas las cuentas
+ * Ejecuta un intento completo de sesión/scraping en vivo sobre el portal Energy Latam
+ * con aislamiento total de navegador y cierre limpio garantizado en finally.
  */
-async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount = 10) {
-    if (isSyncRunning) {
-        return { success: false, message: 'La sincronización ya está en curso' };
-    }
-
-    isSyncRunning = true;
-    console.log(`[energyLatamService] Starting sync from Energy Latam Portal across ALL fuel & lube accounts (limit per account: ${maxPerAccount})... ${targetOrderNumber ? `(target: ${targetOrderNumber})` : ''}`);
-
+async function runSinglePortalScrapeAttempt({ creds, maxPerAccount, sessionDir }) {
     let browser = null;
     try {
-        const sessionDir = path.join(__dirname, '..', 'data', 'puppeteer_session');
         browser = await launchBrowser(sessionDir);
 
         const page = await browser.newPage();
@@ -433,6 +475,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
         let latestDoGet = null;
 
         page.on('response', async res => {
+            if (page.isClosed()) return;
             const url = res.url();
             if (url.includes('apex/execute')) {
                 try {
@@ -454,13 +497,12 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
         });
 
         page.on('request', req => {
+            if (page.isClosed()) return;
             if (req.url().includes('apex/execute') && req.headers()?.['csrf-token']) {
                 reqHeaders = req.headers();
                 reqUrl = req.url();
             }
         });
-
-        const creds = await getPortalCredentials();
 
         // 1. Iniciar sesión
         await page.goto(creds.url || DEFAULT_PORTAL_URL, { waitUntil: 'networkidle2', timeout: 60000 });
@@ -479,6 +521,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
 
             for (let i = 0; i < 30; i++) {
                 await new Promise(r => setTimeout(r, 1000));
+                if (page.isClosed()) throw new Error('Target closed during login wait');
                 if (!page.url().includes('/login') && reqHeaders && latestDoGet) break;
             }
             await new Promise(r => setTimeout(r, 3000));
@@ -486,13 +529,14 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
             // Ya había sesión previa activa en userDataDir
             for (let i = 0; i < 15; i++) {
                 await new Promise(r => setTimeout(r, 1000));
+                if (page.isClosed()) throw new Error('Target closed during session resume');
                 if (reqHeaders && latestDoGet) break;
             }
         }
 
         // Inspeccionar estado de la página para detectar 2FA, bloqueo o error
         const currentUrl = page.url();
-        const pageText = await page.evaluate(() => document.body?.innerText || '');
+        const pageText = (await safePageEvaluate(page, () => document.body?.innerText || '')) || '';
         const is2FA = currentUrl.includes('verification') || pageText.includes('Verifique su identidad') || pageText.includes('código de verificación');
         const isBlocked = pageText.includes('Access Denied') || pageText.includes('Cloudflare') || currentUrl.includes('error');
 
@@ -500,10 +544,12 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
             const diagFile = path.join(__dirname, '..', 'public', 'portal_diagnostic.png');
             try { await page.screenshot({ path: diagFile }); } catch (e) { /* ignore */ }
             return {
-                success: false,
-                requires2FA: true,
-                status: 'REQUIRES_2FA',
-                message: 'Salesforce solicitó código de verificación 2FA para el servidor (5.252.55.29). Ingrese a la herramienta de Diagnóstico para ingresar el código recibido o autorice la IP en Salesforce (Network Access -> Trusted IP Ranges).'
+                earlyReturn: {
+                    success: false,
+                    requires2FA: true,
+                    status: 'REQUIRES_2FA',
+                    message: 'Salesforce solicitó código de verificación 2FA para el servidor (5.252.55.29). Ingrese a la herramienta de Diagnóstico para ingresar el código recibido o autorice la IP en Salesforce (Network Access -> Trusted IP Ranges).'
+                }
             };
         }
 
@@ -511,17 +557,19 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
             const diagFile = path.join(__dirname, '..', 'public', 'portal_diagnostic.png');
             try { await page.screenshot({ path: diagFile }); } catch (e) { /* ignore */ }
             return {
-                success: false,
-                isIpBlocked: true,
-                status: 'IP_BLOCKED',
-                message: 'El acceso al portal fue bloqueado por firewall. Autorice la IP 5.252.55.29 en Salesforce Network Access.'
+                earlyReturn: {
+                    success: false,
+                    isIpBlocked: true,
+                    status: 'IP_BLOCKED',
+                    message: 'El acceso al portal fue bloqueado por firewall. Autorice la IP 5.252.55.29 en Salesforce Network Access.'
+                }
             };
         }
 
         // 2. Extraer resumen de usuario del DOM
         /* global document */
-        const domSummary = await page.evaluate(() => {
-            const body = document.body.innerText;
+        const domSummary = await safePageEvaluate(page, () => {
+            const body = document.body?.innerText || '';
             const fondosMatch = body.match(/Fondos disponibles\s*\$\s*([\d,.]+)/i);
             const limiteMatch = body.match(/L[íi]mite de cr[ée]dito\s*\$\s*([\d,.]+)/i);
             const pctMatch = body.match(/(\d+)%\s*Fondos disponibles/i);
@@ -552,7 +600,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
                 };
             });
 
-            capturedOrders = await page.evaluate(async (url, csrf, accounts, maxOrders) => {
+            capturedOrders = (await safePageEvaluate(page, async (url, csrf, accounts, maxOrders) => {
                 const list = [];
                 async function fetchForAccount(accId, type) {
                     try {
@@ -591,7 +639,7 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
                         const json = await resp.json();
                         const ret = typeof json.returnValue === 'string' ? JSON.parse(json.returnValue) : json.returnValue;
                         return ret?.orderList || [];
-                    } catch(e) {
+                    } catch (e) {
                         return [];
                     }
                 }
@@ -605,10 +653,68 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
                     }
                 }
                 return list;
-            }, reqUrl, csrfToken, accountsToQuery, maxPerAccount);
+            }, reqUrl, csrfToken, accountsToQuery, maxPerAccount)) || [];
 
             console.log(`[energyLatamService] Successfully fetched ${capturedOrders.length} live orders directly from Salesforce API!`);
         }
+
+        return { domSummary, sellToList, capturedOrders };
+    } finally {
+        if (browser) {
+            try {
+                await browser.close();
+            } catch (e) {
+                void e;
+            }
+        }
+    }
+}
+
+/**
+ * Ejecuta el scraper headless en segundo plano para sincronizar el portal para todas las cuentas
+ * Incluye reintento automático con reinicio limpio de navegador ante detached Frame / Target closed.
+ */
+async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount = 10) {
+    if (isSyncRunning) {
+        return { success: false, message: 'La sincronización ya está en curso' };
+    }
+
+    isSyncRunning = true;
+    console.log(`[energyLatamService] Starting sync from Energy Latam Portal across ALL fuel & lube accounts (limit per account: ${maxPerAccount})... ${targetOrderNumber ? `(target: ${targetOrderNumber})` : ''}`);
+
+    try {
+        const sessionDir = path.join(__dirname, '..', 'data', 'puppeteer_session');
+        const creds = await getPortalCredentials();
+
+        let scrapeResult = null;
+        let lastTransientErr = null;
+        for (let attempt = 1; attempt <= MAX_PORTAL_SCRAPE_ATTEMPTS; attempt++) {
+            try {
+                scrapeResult = await runSinglePortalScrapeAttempt({ creds, maxPerAccount, sessionDir });
+                lastTransientErr = null;
+                break;
+            } catch (attemptErr) {
+                if (attempt < MAX_PORTAL_SCRAPE_ATTEMPTS && isTransientPuppeteerError(attemptErr)) {
+                    lastTransientErr = attemptErr;
+                    console.warn(`[energyLatamService] Intento ${attempt}/${MAX_PORTAL_SCRAPE_ATTEMPTS} interrumpido por frame/contexto transitorio (${attemptErr.message}). Reiniciando sesión limpia en 2.5s...`);
+                    cleanupStaleBrowserLocks(sessionDir);
+                    await new Promise(r => setTimeout(r, 2500));
+                    continue;
+                }
+                throw attemptErr;
+            }
+        }
+
+        if (!scrapeResult && lastTransientErr) {
+            throw lastTransientErr;
+        }
+        if (scrapeResult?.earlyReturn) {
+            return scrapeResult.earlyReturn;
+        }
+
+        const domSummary = scrapeResult?.domSummary || null;
+        const sellToList = scrapeResult?.sellToList || [];
+        let capturedOrders = scrapeResult?.capturedOrders || [];
 
         // Si se capturaron órdenes en vivo, respaldarlas en el snapshot local
         if (capturedOrders.length > 0) {
@@ -685,13 +791,6 @@ async function syncFromPortal(io = null, targetOrderNumber = null, maxPerAccount
 
         return { success: false, message: 'Error durante la sincronización: ' + err.message };
     } finally {
-        if (browser) {
-            try {
-                await browser.close();
-            } catch (e) {
-                void e;
-            }
-        }
         isSyncRunning = false;
     }
 }
@@ -940,5 +1039,7 @@ module.exports = {
     submit2FACode,
     getPortalCredentials,
     savePortalCredentials,
-    normalizeEstacion
+    normalizeEstacion,
+    isTransientPuppeteerError,
+    safePageEvaluate
 };
