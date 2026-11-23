@@ -47,7 +47,9 @@ describe('Security & Audit Regression Suite', () => {
             ];
 
             for (const testPath of bypassPaths) {
-                const req = { baseUrl: '/api/uploads', path: testPath, query: {}, headers: {} };
+                // Simular req de Express 5 donde req.path es getter de solo lectura
+                const req = { baseUrl: '/api/uploads', query: {}, headers: {} };
+                Object.defineProperty(req, 'path', { get: () => testPath, enumerable: true });
                 const res = makeRes();
                 let nextCalled = false;
                 guardProtectedUploadsMiddleware(req, res, () => { nextCalled = true; });

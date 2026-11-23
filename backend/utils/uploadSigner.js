@@ -79,22 +79,14 @@ function normalizeUploadSubpath(rawSubpath = '') {
     return '/' + parts.join('/');
 }
 
-/**
- * Middleware para /api/uploads/pagos:
- * Permite acceso con firma HMAC temporal válida (?exp=...&sig=...) O token JWT Bearer válido.
- */
-function requireSignedOrAuthenticatedUpload(req, res, next) {
-    const rawPath = (req.baseUrl || req.path)
-        ? `${req.baseUrl || ''}${req.path || ''}`
-        : (req.originalUrl || '');
-    const normalized = normalizeUploadSubpath(rawPath);
-    if (!normalized) {
+function verifyProtectedUploadAccess(req, res, next, normalizedPath) {
+    if (!normalizedPath) {
         return res.status(400).json({ message: 'Ruta de archivo inválida' });
     }
 
     const exp = req.query?.exp;
     const sig = req.query?.sig;
-    if (exp && sig && verifySignedUploadUrl(normalized, exp, sig)) {
+    if (exp && sig && verifySignedUploadUrl(normalizedPath, exp, sig)) {
         return next();
     }
 
@@ -108,9 +100,22 @@ function requireSignedOrAuthenticatedUpload(req, res, next) {
 }
 
 /**
+ * Middleware para /api/uploads/pagos:
+ * Permite acceso con firma HMAC temporal válida (?exp=...&sig=...) O token JWT Bearer válido.
+ */
+function requireSignedOrAuthenticatedUpload(req, res, next) {
+    const rawPath = (req.baseUrl || req.path)
+        ? `${req.baseUrl || ''}${req.path || ''}`
+        : (req.originalUrl || '');
+    const normalized = normalizeUploadSubpath(rawPath);
+    return verifyProtectedUploadAccess(req, res, next, normalized);
+}
+
+/**
  * Guard global para montar ANTES de express.static('/api/uploads'):
  * Garantiza que ninguna variante codificada (/api/uploads/%70agos/..., //pagos/..., /./pagos/...)
  * pueda evadir la protección de /api/uploads/pagos.
+ * No muta propiedades de req (compatible con Express 5 donde req.path es solo lectura).
  */
 function guardProtectedUploadsMiddleware(req, res, next) {
     const normalizedSub = normalizeUploadSubpath(req.path || '');
@@ -119,11 +124,8 @@ function guardProtectedUploadsMiddleware(req, res, next) {
     }
     const firstSegment = normalizedSub.split('/').filter(Boolean)[0] || '';
     if (firstSegment.toLowerCase() === 'pagos') {
-        const canonicalReq = Object.assign(Object.create(req), {
-            baseUrl: '/api/uploads',
-            path: normalizedSub
-        });
-        return requireSignedOrAuthenticatedUpload(canonicalReq, res, next);
+        const canonicalFullPath = normalizeUploadSubpath(`/api/uploads${normalizedSub}`);
+        return verifyProtectedUploadAccess(req, res, next, canonicalFullPath);
     }
     return next();
 }
