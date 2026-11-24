@@ -973,11 +973,10 @@ export default function PedidosCombustible() {
     const matrix = useMemo(() => {
         const sumProg = { D: 0, R: 0, S: 0, I: 0 };
         programados.forEach(p => {
-            if (p.ya_descargado) return;
-            sumProg.D += Number(p.pendiente_diesel ?? p.diesel ?? 0);
-            sumProg.R += Number(p.pendiente_regular ?? p.regular ?? 0);
-            sumProg.S += Number(p.pendiente_super ?? p.super ?? 0);
-            sumProg.I += Number(p.pendiente_iondiesel ?? p.iondiesel ?? 0);
+            sumProg.D += Number(p.diesel || 0);
+            sumProg.R += Number(p.regular || 0);
+            sumProg.S += Number(p.super || 0);
+            sumProg.I += Number(p.iondiesel || 0);
         });
 
         const getInvObj = (tipo) => {
@@ -1090,11 +1089,10 @@ export default function PedidosCombustible() {
 
         const sumProg = { D: 0, R: 0, S: 0, I: 0 };
         programados2.forEach(p => {
-            if (p.ya_descargado) return;
-            sumProg.D += Number(p.pendiente_diesel ?? p.diesel ?? 0);
-            sumProg.R += Number(p.pendiente_regular ?? p.regular ?? 0);
-            sumProg.S += Number(p.pendiente_super ?? p.super ?? 0);
-            sumProg.I += Number(p.pendiente_iondiesel ?? p.iondiesel ?? 0);
+            sumProg.D += Number(p.diesel || 0);
+            sumProg.R += Number(p.regular || 0);
+            sumProg.S += Number(p.super || 0);
+            sumProg.I += Number(p.iondiesel || 0);
         });
 
         const getInvObj = (tipo) => {
@@ -2726,23 +2724,13 @@ export default function PedidosCombustible() {
                                         {((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).map(p => (
                                             <tr 
                                                 key={p.id_pedido} 
-                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', opacity: p.ya_descargado ? 0.68 : 1 }}
+                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
                                                 onDoubleClick={() => loadPedidoToForm(p)}
-                                                title={p.ya_descargado ? 'Ya descargado en turno cerrado de hoy (no se suma nuevamente al tanque). Doble clic para ver.' : 'Doble clic para editar / cargar en el formulario'}
+                                                title="Doble clic para editar / cargar en el formulario"
                                             >
                                                 <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{fmtDateArray(p.fecha)}</td>
                                                 <td style={{ padding: '0.45rem 0.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>
                                                     <div>{p.numero || p.id_pedido}</div>
-                                                    {p.ya_descargado && (
-                                                        <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', background: 'rgba(16, 185, 129, 0.16)', color: '#047857', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.4)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }}>
-                                                            ✓ Descargado hoy
-                                                        </span>
-                                                    )}
-                                                    {!p.ya_descargado && p.descarga_parcial && (
-                                                        <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', background: 'rgba(245, 158, 11, 0.16)', color: '#b45309', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.4)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }}>
-                                                            Descarga parcial
-                                                        </span>
-                                                    )}
                                                     {p.nombre_estacion_compartida && (
                                                         <span style={{ fontSize: '0.66rem', padding: '0.1rem 0.35rem', background: 'rgba(59, 130, 246, 0.15)', color: '#0284c7', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.15rem' }} title={`Viaje compartido con ${p.nombre_estacion_compartida}`}>
                                                             🤝 {p.nombre_estacion_compartida}
@@ -2765,18 +2753,28 @@ export default function PedidosCombustible() {
                                             <tr><td colSpan="7" style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>No hay pedidos programados para la estación y fecha seleccionada.</td></tr>
                                         )}
                                     </tbody>
-                                    {((esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados).length > 0 && (
-                                        <tfoot>
-                                            <tr style={{ background: 'rgba(37,99,235,0.05)', borderTop: '2px solid var(--border)', fontWeight: 'bold' }}>
-                                                <td colSpan="2" style={{ padding: '0.45rem 0.5rem', color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#0284c7' : 'var(--primary)' }}>TOTAL PROGRAMADO</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).D.programado)}</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).R.programado)}</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).S.programado)}</td>
-                                                <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(((esCompartido && selectedEstacion2 && programadosTab === 'estacion2' && matrix2) ? matrix2 : matrix).I.programado)}</td>
-                                                <td></td>
-                                            </tr>
-                                        </tfoot>
-                                    )}
+                                    {(() => {
+                                        const activeProgramados = (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? programados2 : programados;
+                                        if (activeProgramados.length === 0) return null;
+                                        const tot = activeProgramados.reduce((acc, p) => ({
+                                            D: acc.D + Number(p.diesel || 0),
+                                            R: acc.R + Number(p.regular || 0),
+                                            S: acc.S + Number(p.super || 0),
+                                            I: acc.I + Number(p.iondiesel || 0)
+                                        }), { D: 0, R: 0, S: 0, I: 0 });
+                                        return (
+                                            <tfoot>
+                                                <tr style={{ background: 'rgba(37,99,235,0.05)', borderTop: '2px solid var(--border)', fontWeight: 'bold' }}>
+                                                    <td colSpan="2" style={{ padding: '0.45rem 0.5rem', color: (esCompartido && selectedEstacion2 && programadosTab === 'estacion2') ? '#0284c7' : 'var(--primary)' }}>TOTAL PROGRAMADO</td>
+                                                    <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(tot.D)}</td>
+                                                    <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(tot.R)}</td>
+                                                    <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(tot.S)}</td>
+                                                    <td style={{ textAlign: 'right', padding: '0.45rem 0.5rem' }}>{numFmt(tot.I)}</td>
+                                                    <td></td>
+                                                </tr>
+                                            </tfoot>
+                                        );
+                                    })()}
                                 </table>
                             </div>
                         </div>

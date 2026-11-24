@@ -268,13 +268,13 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
         });
     });
 
-    describe('Pedidos Programados del Día y Reconciliación Anti-Doble-Conteo (ADM-0016)', () => {
-        it('debe incluir pedidos programados para HOY incluso cuando Turno 1 de hoy ya cerró y effectiveDate === hoySV', async () => {
+    describe('Pedidos Programados del Día sin cruce contra descargas (ADM-0016)', () => {
+        it('debe incluir pedidos programados para HOY sin consultar accountingDb y con cantidades íntegras', async () => {
+            let accountingCalled = false;
             const mockExternalDb = {
                 query: async (sql, params) => {
-                    // Debe usar >= ayerSV internamente para nunca ocultar pedidos con fecha === hoySV
                     assert.ok(sql.includes('t.fecha >= ?'));
-                    assert.strictEqual(params[1], '2026-11-19');
+                    assert.strictEqual(params[1], '2026-11-20');
                     return [[
                         {
                             id_pedido: 4578,
@@ -289,85 +289,71 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
                 }
             };
             const mockAccountingDb = {
-                query: async () => [[]] // Sin recargas registradas en T1 todavía
+                query: async () => {
+                    accountingCalled = true;
+                    return [[]];
+                }
             };
 
             const fixedNow = new Date('2026-11-20T15:30:00Z'); // 9:30 AM SV del 20/11/2026
             const rows = await fetchProgramadosEstacion('002', '2026-11-20', mockExternalDb, mockAccountingDb, { now: fixedNow });
 
+            assert.strictEqual(accountingCalled, false);
             assert.strictEqual(rows.length, 1);
             assert.strictEqual(rows[0].numero, '30250994');
             assert.strictEqual(rows[0].ya_descargado, false);
+            assert.strictEqual(rows[0].descarga_parcial, false);
             assert.strictEqual(rows[0].pendiente_diesel, 4000);
             assert.strictEqual(rows[0].pendiente_regular, 3000);
             assert.strictEqual(rows[0].pendiente_super, 1500);
         });
 
-        it('debe marcar ya_descargado = true y pendiente = 0 cuando la recarga del día ya entró al turno cerrado', () => {
+        it('no debe descontar pedidos programados aunque existan recargas registradas en turnos cerrados', () => {
             const orders = [
-                { id_pedido: 4578, fecha: '2026-11-20', numero: '30250994', diesel: 4000, regular: 3000, super: 1500, iondiesel: 0 },
+                { id_pedido: 4578, fecha: '2026-11-20', numero: '30250994', diesel: 5000, regular: 3000, super: 1000, iondiesel: 0 },
                 { id_pedido: 4590, fecha: '2026-11-22', numero: '', diesel: 5000, regular: 2000, super: 1000, iondiesel: 0 }
             ];
             const refills = {
                 ayer: { D: 0, R: 0, S: 0, I: 0 },
-                hoyT1: { D: 0, R: 0, S: 0, I: 0 },
-                hoyPostT1: { D: 4000, R: 3000, S: 1500, I: 0 }
+                hoyT1: { D: 500, R: 0, S: 0, I: 0 },
+                hoyPostT1: { D: 4500, R: 3000, S: 1000, I: 0 }
             };
 
             const res = reconcileScheduledOrdersWithRefills(orders, '2026-11-20', refills);
             assert.strictEqual(res.length, 2);
 
-            // El pedido de hoy ya fue descargado en Turno 2 -> visible pero pendiente = 0 (sin doble conteo)
             assert.strictEqual(res[0].id_pedido, 4578);
-            assert.strictEqual(res[0].ya_descargado, true);
-            assert.strictEqual(res[0].pendiente_diesel, 0);
-            assert.strictEqual(res[0].pendiente_regular, 0);
-            assert.strictEqual(res[0].pendiente_super, 0);
+            assert.strictEqual(res[0].ya_descargado, false);
+            assert.strictEqual(res[0].descarga_parcial, false);
+            assert.strictEqual(res[0].diesel, 5000);
+            assert.strictEqual(res[0].pendiente_diesel, 5000);
+            assert.strictEqual(res[0].pendiente_regular, 3000);
+            assert.strictEqual(res[0].pendiente_super, 1000);
 
-            // El pedido futuro sigue 100% pendiente
             assert.strictEqual(res[1].id_pedido, 4590);
             assert.strictEqual(res[1].ya_descargado, false);
+            assert.strictEqual(res[1].descarga_parcial, false);
             assert.strictEqual(res[1].pendiente_diesel, 5000);
         });
 
-        it('debe manejar múltiples entregas el mismo día (ej. pipa principal descargada, pipa Ion aún en tránsito)', () => {
-            const orders = [
-                { id_pedido: 4584, fecha: '2026-11-23', numero: '', diesel: 4000, regular: 2000, super: 1000, iondiesel: 0 },
-                { id_pedido: 4585, fecha: '2026-11-23', numero: '', diesel: 0, regular: 0, super: 0, iondiesel: 1500 }
-            ];
-            const refills = {
-                ayer: { D: 0, R: 0, S: 0, I: 0 },
-                hoyT1: { D: 0, R: 0, S: 0, I: 0 },
-                hoyPostT1: { D: 4000, R: 2000, S: 1000, I: 0 }
-            };
-
-            const res = reconcileScheduledOrdersWithRefills(orders, '2026-11-23', refills);
-            assert.strictEqual(res[0].id_pedido, 4584);
-            assert.strictEqual(res[0].ya_descargado, true);
-            assert.strictEqual(res[1].id_pedido, 4585);
-            assert.strictEqual(res[1].ya_descargado, false);
-            assert.strictEqual(res[1].pendiente_iondiesel, 1500);
-        });
-
-        it('no debe descontar falsamente un pedido nuevo de HOY cuando la recarga de Turno 1 pertenecía a una entrega nocturna confirmada de AYER', () => {
+        it('debe excluir pedidos pasados (< hoySV) y devolver ordenados los de hoy y futuros con cantidades completas', () => {
             const orders = [
                 { id_pedido: 4574, fecha: '2026-11-19', numero: '30250795', diesel: 2000, regular: 4500, super: 2000, iondiesel: 0 },
-                { id_pedido: 4599, fecha: '2026-11-20', numero: '', diesel: 2500, regular: 4000, super: 2000, iondiesel: 0 }
+                { id_pedido: 4585, fecha: '2026-11-20', numero: '', diesel: 0, regular: 0, super: 0, iondiesel: 1500 },
+                { id_pedido: 4584, fecha: '2026-11-20', numero: '', diesel: 4000, regular: 2000, super: 1000, iondiesel: 0 },
+                { id_pedido: 4599, fecha: '2026-11-21', numero: '', diesel: 2500, regular: 4000, super: 2000, iondiesel: 0 }
             ];
-            const refills = {
-                ayer: { D: 0, R: 0, S: 0, I: 0 },
-                hoyT1: { D: 2000, R: 4500, S: 2000, I: 0 }, // Descarga de madrugada del pedido 4574 de ayer
-                hoyPostT1: { D: 0, R: 0, S: 0, I: 0 }
-            };
 
-            const res = reconcileScheduledOrdersWithRefills(orders, '2026-11-20', refills);
-            // Solo devuelve pedidos >= hoySV (oculta el de ayer) y mantiene el de hoy 100% pendiente
-            assert.strictEqual(res.length, 1);
-            assert.strictEqual(res[0].id_pedido, 4599);
-            assert.strictEqual(res[0].ya_descargado, false);
-            assert.strictEqual(res[0].pendiente_diesel, 2500);
-            assert.strictEqual(res[0].pendiente_regular, 4000);
-            assert.strictEqual(res[0].pendiente_super, 2000);
+            const res = reconcileScheduledOrdersWithRefills(orders, '2026-11-20', { hoyT1: { D: 2000, R: 4500, S: 2000, I: 0 } });
+            assert.strictEqual(res.length, 3);
+            assert.strictEqual(res[0].id_pedido, 4584);
+            assert.strictEqual(res[0].pendiente_diesel, 4000);
+            assert.strictEqual(res[1].id_pedido, 4585);
+            assert.strictEqual(res[1].pendiente_iondiesel, 1500);
+            assert.strictEqual(res[2].id_pedido, 4599);
+            assert.strictEqual(res[2].pendiente_diesel, 2500);
+            assert.strictEqual(res[2].ya_descargado, false);
+            assert.strictEqual(res[2].descarga_parcial, false);
         });
     });
 });

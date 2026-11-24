@@ -842,20 +842,10 @@ export default function PedidosProgramadosConsulta() {
                                         </thead>
                                         <tbody>
                                             {selectedStation.pedidos.map(p => (
-                                                <tr key={p.id_pedido} style={{ borderBottom: '1px solid var(--border)', opacity: p.ya_descargado ? 0.68 : 1 }}>
+                                                <tr key={p.id_pedido} style={{ borderBottom: '1px solid var(--border)' }}>
                                                     <td style={{ padding: '0.45rem 0.5rem' }}>{formatDisplayDate(p.fecha)}</td>
                                                     <td style={{ padding: '0.45rem 0.5rem', fontWeight: 'bold', color: 'var(--primary)' }}>
                                                         <div>{p.numero || `TEMP-${p.id_pedido}`}</div>
-                                                        {p.ya_descargado && (
-                                                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', background: 'rgba(16, 185, 129, 0.16)', color: '#047857', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.4)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.1rem' }}>
-                                                                ✓ Descargado hoy
-                                                            </span>
-                                                        )}
-                                                        {!p.ya_descargado && p.descarga_parcial && (
-                                                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', background: 'rgba(245, 158, 11, 0.16)', color: '#b45309', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.4)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.1rem' }}>
-                                                                Descarga parcial
-                                                            </span>
-                                                        )}
                                                         {p.nombre_estacion_compartida && (
                                                             <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', background: 'rgba(59, 130, 246, 0.15)', color: '#0284c7', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.1rem' }}>
                                                                 🤝 Compartido con {p.nombre_estacion_compartida}

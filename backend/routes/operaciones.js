@@ -661,27 +661,14 @@ async function ensureSharedColumns(db) {
     sharedColsChecked = true;
 }
 
-function createEmptyFuelBuckets() {
-    return { D: 0, R: 0, S: 0, I: 0 };
-}
-
 /**
- * Reconcilia pedidos programados contra recargas físicas ya registradas en turnos cerrados.
- * - Incluye pedidos de hoy (hoySV) y futuros (> hoySV).
- * - Si un pedido confirmado de ayer (ayerSV) no tuvo recarga ayer y hoy en Turno 1 hubo descarga
- *   de madrugada (rollover nocturno), esa recarga de T1 cubre primero el pedido de ayer sin
- *   anular falsamente pedidos nuevos programados para hoy.
- * - Para pedidos de hoy (hoySV), descuenta las recargas ya ingresadas en lectura_actual para
- *   evitar doble conteo en inventario/autonomía y marca ya_descargado / descarga_parcial.
+ * Normalizes and filters scheduled orders without discounting physical tank refills.
+ * Kept exported as reconcileScheduledOrdersWithRefills for backwards compatibility.
  */
 function reconcileScheduledOrdersWithRefills(orders = [], hoySV, refillProfile = {}, options = {}) {
-    const ayerSV = addDaysYMD(hoySV, -1);
+    void refillProfile;
     const minVisibleDate = options.minVisibleDate || hoySV;
     const isHistorical = Boolean(options.isHistorical);
-
-    const recargaAyer = { ...createEmptyFuelBuckets(), ...(refillProfile.ayer || {}) };
-    const recargaHoyT1 = { ...createEmptyFuelBuckets(), ...(refillProfile.hoyT1 || {}) };
-    const recargaHoyPostT1 = { ...createEmptyFuelBuckets(), ...(refillProfile.hoyPostT1 || {}) };
 
     const sorted = [...(orders || [])].sort((a, b) => {
         const fa = formatDateYMD(a.fecha) || '';
@@ -689,43 +676,6 @@ function reconcileScheduledOrdersWithRefills(orders = [], hoySV, refillProfile =
         if (fa !== fb) return fa.localeCompare(fb);
         return Number(a.id_pedido || a.id || 0) - Number(b.id_pedido || b.id || 0);
     });
-
-    if (!isHistorical) {
-        // Paso 1: Si hubo un pedido confirmado de ayer sin recarga suficiente ayer,
-        // asignar recarga nocturna de hoy Turno 1 (T1) para no descontarla de pedidos de hoy.
-        const ayerUnfilled = createEmptyFuelBuckets();
-        sorted.forEach(o => {
-            const f = formatDateYMD(o.fecha);
-            if (f !== ayerSV) return;
-            const hasConfirmedNum = String(o.numero || '').trim().length > 0;
-            if (!hasConfirmedNum) return;
-            const fuels = {
-                D: Number(o.diesel || 0),
-                R: Number(o.regular || 0),
-                S: Number(o.super || 0),
-                I: Number(o.iondiesel || 0)
-            };
-            ['D', 'R', 'S', 'I'].forEach(k => {
-                const coveredYesterday = Math.min(fuels[k], recargaAyer[k]);
-                recargaAyer[k] = Math.max(0, recargaAyer[k] - coveredYesterday);
-                ayerUnfilled[k] += Math.max(0, fuels[k] - coveredYesterday);
-            });
-        });
-
-        ['D', 'R', 'S', 'I'].forEach(k => {
-            if (ayerUnfilled[k] > 0 && recargaHoyT1[k] > 0) {
-                const rolloverUsed = Math.min(ayerUnfilled[k], recargaHoyT1[k]);
-                recargaHoyT1[k] = Math.max(0, recargaHoyT1[k] - rolloverUsed);
-            }
-        });
-    }
-
-    const remainingHoy = {
-        D: Math.max(0, Number(recargaHoyT1.D || 0) + Number(recargaHoyPostT1.D || 0)),
-        R: Math.max(0, Number(recargaHoyT1.R || 0) + Number(recargaHoyPostT1.R || 0)),
-        S: Math.max(0, Number(recargaHoyT1.S || 0) + Number(recargaHoyPostT1.S || 0)),
-        I: Math.max(0, Number(recargaHoyT1.I || 0) + Number(recargaHoyPostT1.I || 0))
-    };
 
     const result = [];
     for (const o of sorted) {
@@ -741,43 +691,6 @@ function reconcileScheduledOrdersWithRefills(orders = [], hoySV, refillProfile =
         const r = Number(o.regular || 0);
         const s = Number(o.super || 0);
         const i = Number(o.iondiesel || 0);
-        const totalGal = d + r + s + i;
-
-        let pD = d;
-        let pR = r;
-        let pS = s;
-        let pI = i;
-        let yaDescargado = false;
-        let descargaParcial = false;
-
-        if (!isHistorical && orderDate === hoySV && totalGal > 0) {
-            const covD = Math.min(d, remainingHoy.D);
-            const covR = Math.min(r, remainingHoy.R);
-            const covS = Math.min(s, remainingHoy.S);
-            const covI = Math.min(i, remainingHoy.I);
-
-            remainingHoy.D = Math.max(0, remainingHoy.D - covD);
-            remainingHoy.R = Math.max(0, remainingHoy.R - covR);
-            remainingHoy.S = Math.max(0, remainingHoy.S - covS);
-            remainingHoy.I = Math.max(0, remainingHoy.I - covI);
-
-            pD = Math.round(Math.max(0, d - covD) * 100) / 100;
-            pR = Math.round(Math.max(0, r - covR) * 100) / 100;
-            pS = Math.round(Math.max(0, s - covS) * 100) / 100;
-            pI = Math.round(Math.max(0, i - covI) * 100) / 100;
-
-            const totalPendiente = pD + pR + pS + pI;
-            // Tolerancia del 5% por merma o redondeo de varilla en descarga completa
-            if (totalPendiente <= totalGal * 0.05) {
-                yaDescargado = true;
-                pD = 0;
-                pR = 0;
-                pS = 0;
-                pI = 0;
-            } else if (totalPendiente < totalGal) {
-                descargaParcial = true;
-            }
-        }
 
         result.push({
             ...o,
@@ -786,12 +699,12 @@ function reconcileScheduledOrdersWithRefills(orders = [], hoySV, refillProfile =
             regular: r,
             super: s,
             iondiesel: i,
-            pendiente_diesel: pD,
-            pendiente_regular: pR,
-            pendiente_super: pS,
-            pendiente_iondiesel: pI,
-            ya_descargado: yaDescargado,
-            descarga_parcial: descargaParcial,
+            pendiente_diesel: d,
+            pendiente_regular: r,
+            pendiente_super: s,
+            pendiente_iondiesel: i,
+            ya_descargado: false,
+            descarga_parcial: false,
             nombre_estacion_compartida: getCleanStationName(o.id_estacion_compartida, o.nombre_estacion_compartida) || null
         });
     }
@@ -799,68 +712,16 @@ function reconcileScheduledOrdersWithRefills(orders = [], hoySV, refillProfile =
     return result;
 }
 
-async function fetchRefillProfile(accountingDb, id_estacion, hoySV, ayerSV) {
-    const profile = {
-        ayer: createEmptyFuelBuckets(),
-        hoyT1: createEmptyFuelBuckets(),
-        hoyPostT1: createEmptyFuelBuckets()
-    };
-    if (!accountingDb) return profile;
-    try {
-        const branchId = await resolveStationBranchId(accountingDb, id_estacion);
-        if (!branchId) return profile;
-        const [rows] = await accountingDb.query(`
-            SELECT
-                DATE_FORMAT(c.fecha_turno, '%Y-%m-%d') as fecha,
-                c.numero_turno,
-                CASE
-                    WHEN t.tipo_combustible = 4 OR t.descripcion LIKE '%Ion%' THEN 'I'
-                    WHEN t.tipo_combustible = 3 OR t.descripcion LIKE '%Diesel%' THEN 'D'
-                    WHEN t.tipo_combustible = 2 OR t.descripcion LIKE '%Super%' THEN 'S'
-                    WHEN t.tipo_combustible = 1 OR t.descripcion LIKE '%Regular%' THEN 'R'
-                    ELSE 'D'
-                END as tipo_combustible,
-                SUM(COALESCE(tr.recarga, 0)) as total_recarga
-            FROM gas_station_closeouts c
-            JOIN gas_station_closeout_tank_readings tr ON tr.closeout_id = c.id
-            JOIN gas_station_tanks t ON t.id = tr.tank_id
-            WHERE c.branch_id = ?
-              AND c.fecha_turno IN (?, ?)
-              AND c.estado = 'cerrado'
-            GROUP BY c.fecha_turno, c.numero_turno, tipo_combustible
-            HAVING SUM(COALESCE(tr.recarga, 0)) > 0
-        `, [branchId, ayerSV, hoySV]);
-
-        (rows || []).forEach(r => {
-            const tipo = r.tipo_combustible;
-            const rec = Number(r.total_recarga || 0);
-            if (!['D', 'R', 'S', 'I'].includes(tipo) || rec <= 0) return;
-            const fechaStr = formatDateYMD(r.fecha);
-            if (fechaStr === ayerSV) {
-                profile.ayer[tipo] += rec;
-            } else if (fechaStr === hoySV) {
-                if (Number(r.numero_turno) === 1) {
-                    profile.hoyT1[tipo] += rec;
-                } else {
-                    profile.hoyPostT1[tipo] += rec;
-                }
-            }
-        });
-    } catch (err) {
-        console.warn('Error consultando recargas de tanque para reconciliación:', err.message);
-    }
-    return profile;
-}
-
 async function fetchProgramadosEstacion(id_estacion, fechaParam, externalDb, accountingDb, options = {}) {
+    void accountingDb;
     const now = options.now instanceof Date ? options.now : new Date();
     const hoySV = getElSalvadorTodayYMD(now);
     const ayerSV = addDaysYMD(hoySV, -1);
     const reqYMD = formatDateYMD(fechaParam);
-    // ADM-0016: Cuando se consulta operación actual (fecha >= ayerSV, incluyendo cuando
-    // Turno 1 de hoy ya cerró y effectiveDate === hoySV), siempre incluir pedidos con fecha >= hoySV.
+    // ADM-0016: When querying current operations (fecha >= ayerSV, including when
+    // Turno 1 today already closed and effectiveDate === hoySV), always include orders with fecha >= hoySV.
     const isHistorical = Boolean(reqYMD && reqYMD < ayerSV);
-    const sqlMinDate = isHistorical ? reqYMD : ayerSV;
+    const sqlMinDate = isHistorical ? reqYMD : hoySV;
     const sqlOp = isHistorical ? '>' : '>=';
 
     const query = `
@@ -882,11 +743,8 @@ async function fetchProgramadosEstacion(id_estacion, fechaParam, externalDb, acc
         ORDER BY t.fecha ASC, t.id ASC
     `;
     const [rows] = await externalDb.query(query, [id_estacion, sqlMinDate]);
-    const refillProfile = isHistorical
-        ? { ayer: createEmptyFuelBuckets(), hoyT1: createEmptyFuelBuckets(), hoyPostT1: createEmptyFuelBuckets() }
-        : await fetchRefillProfile(accountingDb, id_estacion, hoySV, ayerSV);
 
-    return reconcileScheduledOrdersWithRefills(rows || [], hoySV, refillProfile, {
+    return reconcileScheduledOrdersWithRefills(rows || [], hoySV, {}, {
         minVisibleDate: isHistorical ? reqYMD : hoySV,
         isHistorical
     });
@@ -960,12 +818,10 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
                 const r = Number(o.regular || 0);
                 const s = Number(o.super || 0);
                 const i = Number(o.iondiesel || 0);
-                if (!o.ya_descargado) {
-                    sumProg.D += Number(o.pendiente_diesel ?? d);
-                    sumProg.R += Number(o.pendiente_regular ?? r);
-                    sumProg.S += Number(o.pendiente_super ?? s);
-                    sumProg.I += Number(o.pendiente_iondiesel ?? i);
-                }
+                sumProg.D += d;
+                sumProg.R += r;
+                sumProg.S += s;
+                sumProg.I += i;
                 return {
                     id_pedido: o.id_pedido,
                     fecha: o.fecha,
@@ -974,12 +830,12 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
                     regular: r,
                     super: s,
                     iondiesel: i,
-                    pendiente_diesel: Number(o.pendiente_diesel ?? d),
-                    pendiente_regular: Number(o.pendiente_regular ?? r),
-                    pendiente_super: Number(o.pendiente_super ?? s),
-                    pendiente_iondiesel: Number(o.pendiente_iondiesel ?? i),
-                    ya_descargado: Boolean(o.ya_descargado),
-                    descarga_parcial: Boolean(o.descarga_parcial),
+                    pendiente_diesel: d,
+                    pendiente_regular: r,
+                    pendiente_super: s,
+                    pendiente_iondiesel: i,
+                    ya_descargado: false,
+                    descarga_parcial: false,
                     total_galones: d + r + s + i,
                     transportista_nombre: carrierMap[o.id_transportista] || 'Sin asignar',
                     pipa_placa: tankerMap[o.id_calibracion_diesel] || 'Sin asignar',
@@ -1046,7 +902,7 @@ router.get('/operaciones/pedidos-programados/consolidado', authenticateToken, re
             const S = calcType('S');
 
             const totalPedido = sumProg.D + sumProg.I + sumProg.R + sumProg.S;
-            const pendingCount = enrichedOrders.filter(o => !o.ya_descargado).length;
+            const pendingCount = enrichedOrders.length;
 
             return {
                 id_empresa: est.id_empresa,
