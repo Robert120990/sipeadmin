@@ -113,14 +113,29 @@ function convertGeminiContentsToOllamaMessages(contents, systemInstruction = '')
 }
 
 /**
+ * Sanitiza etiquetas HTML no soportadas por Telegram (como <br>, <p>, <li>) en texto libre
+ */
+function sanitizeTelegramHtmlOutput(rawText = '') {
+    return String(rawText || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+        .replace(/<\/?(?:p|div|ul|ol|html|body|span)[^>]*>/gi, '')
+        .replace(/<li[^>]*>/gi, '• ')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+/**
  * Invoca el endpoint autenticado de Ollama (`sipe-nlu`) con timeout estricto
  */
 async function generateWithLocalLlm({
     contents,
     systemInstruction = '',
     jsonMode = false,
-    temperature = 0.15,
-    maxTokens = 520,
+    temperature = 0.1,
+    maxTokens = 450,
     timeoutMs = null,
     model = null,
     logPrefix = '[LocalLLM]',
@@ -150,10 +165,10 @@ async function generateWithLocalLlm({
         model: usedModel,
         messages,
         stream: false,
-        keep_alive: '15m',
+        keep_alive: '6h',
         options: {
-            temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.15,
-            num_predict: Math.min(1024, Math.max(64, Number(maxTokens) || 520))
+            temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.1,
+            num_predict: Math.min(1024, Math.max(64, Number(maxTokens) || 450))
         }
     };
     if (jsonMode) {
@@ -178,9 +193,13 @@ async function generateWithLocalLlm({
         }
 
         const data = await res.json();
-        const rawText = String(data?.message?.content || data?.response || '')
+        let rawText = String(data?.message?.content || data?.response || '')
             .replace(/<think>[\s\S]*?<\/think>/gi, '')
             .trim();
+
+        if (!jsonMode && rawText) {
+            rawText = sanitizeTelegramHtmlOutput(rawText);
+        }
 
         if (!rawText) return null;
 
@@ -201,7 +220,7 @@ async function generateWithLocalLlm({
 
 /**
  * Clasifica una frase libre en español salvadoreño a una intención estructurada de SIPE Admin
- * usando el modelo local optimizado `sipe-nlu`.
+ * usando el modelo local optimizado `sipe-nlu` con ejemplos few-shot de precisión.
  */
 async function classifyNaturalIntentWithLocalLlm(rawText = '', referenceNowSv = null, options = {}) {
     const cleanText = String(rawText || '').trim();
@@ -211,9 +230,26 @@ async function classifyNaturalIntentWithLocalLlm(rawText = '', referenceNowSv = 
     const nowRef = referenceNowSv || new Date().toISOString().slice(0, 19).replace('T', ' ');
     const prompt = [
         `Fecha/hora actual en El Salvador (UTC-6): ${nowRef}`,
-        `Clasifica el siguiente mensaje de un usuario de SIPE Admin en JSON estricto:`,
+        `Clasifica el mensaje del usuario en UN JSON estricto con estas llaves:`,
         `{"intent":"agendar_evento|cambiar_hora_evento|consultar_ventas|consultar_bancos|consultar_chequera|consultar_competencia|consultar_tanques|consultar_solar|consultar_pagos|consultar_tareas|consultar_agenda|consultar_alertas|consultar_andelsa|conversacional","confidence":0.0,"stationId":"002|006|008|014|015|016|ANDELSA|null","date":"YYYY-MM-DD|null","time":"HH:mm|null","title":"string|null","frecuencia":"UNA_VEZ|DIARIO|SEMANAL|null"}`,
-        `Mensaje: "${cleanText.replace(/"/g, '\\"')}"`
+        ``,
+        `Guía de intents (NO confundir):`,
+        `- "agendar_evento": crear un NUEVO recordatorio, aviso, reunión o llamada (ej: "avisame pasado mañana tipo almuerzo hablar con Bancovi", "fijate que el jueves tengo junta con el proveedor").`,
+        `- "cambiar_hora_evento": MOVER, CAMBIAR, REPROGRAMAR o POSPONER la fecha/hora de una reunión/recordatorio YA creado (ej: "moveme la reunion pa las 3 y media", "cambiala a las 4", "mejor mañana a las 10").`,
+        `- "consultar_agenda": preguntar qué reuniones o eventos hay programados (ej: "que tengo esta semana").`,
+        `- "frecuencia": SIEMPRE "UNA_VEZ" salvo que diga "diario/todos los dias" ("DIARIO") o "semanal/cada semana" ("SEMANAL").`,
+        ``,
+        `Ejemplos (si hoy es 2026-11-24):`,
+        `Entrada: "ey avisame pasado mañana tipo almuerzo que hable con Bancovi sobre la playa"`,
+        `Salida: {"intent":"agendar_evento","confidence":0.95,"stationId":"008","date":"2026-11-26","time":"12:00","title":"Hablar con Bancovi sobre la playa","frecuencia":"UNA_VEZ"}`,
+        `Entrada: "moveme la reunion de Bancovi pa las 3 y media de la tarde"`,
+        `Salida: {"intent":"cambiar_hora_evento","confidence":0.96,"stationId":null,"date":null,"time":"15:30","title":"Reunión de Bancovi","frecuencia":"UNA_VEZ"}`,
+        `Entrada: "cuanto pisto hay en bancos ahorita"`,
+        `Salida: {"intent":"consultar_bancos","confidence":0.95,"stationId":null,"date":"2026-11-24","time":null,"title":null,"frecuencia":null}`,
+        ``,
+        `Ahora clasifica:`,
+        `Entrada: "${cleanText.replace(/"/g, '\\"')}"`,
+        `Salida:`
     ].join('\n');
 
     const res = await generateWithLocalLlm({
@@ -331,6 +367,7 @@ module.exports = {
     isLocalLlmConfigured,
     hasNonTextGeminiParts,
     convertGeminiContentsToOllamaMessages,
+    sanitizeTelegramHtmlOutput,
     generateWithLocalLlm,
     classifyNaturalIntentWithLocalLlm,
     checkLocalLlmHealth

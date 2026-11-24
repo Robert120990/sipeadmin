@@ -5,6 +5,7 @@ const {
     isLocalLlmConfigured,
     hasNonTextGeminiParts,
     convertGeminiContentsToOllamaMessages,
+    sanitizeTelegramHtmlOutput,
     generateWithLocalLlm,
     classifyNaturalIntentWithLocalLlm,
     checkLocalLlmHealth
@@ -211,5 +212,11 @@ describe('Local LLM Fallback Service (Ollama + sipe-nlu en rsboosted)', () => {
         assert.equal(health.reachable, true);
         assert.equal(health.modelAvailable, true);
         assert.equal(health.model, 'sipe-nlu');
+
+        // Sanitización HTML Telegram (elimina <br>, <p>, **markdown**)
+        const sanitizedHtml = sanitizeTelegramHtmlOutput('<b>Andelsa</b>: 55 kWp<br>**La Loma**: 40 kWp<p>Total: 95 kWp</p>');
+        assert.equal(sanitizedHtml.includes('<br>'), false);
+        assert.equal(sanitizedHtml.includes('<p>'), false);
+        assert.equal(sanitizedHtml.includes('<b>La Loma</b>'), true);
     });
 });
