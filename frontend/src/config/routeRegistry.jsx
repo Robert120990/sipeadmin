@@ -52,7 +52,8 @@ import {
     AsistenteIA,
     EnergiaSolarAndelsa,
     SupportTickets,
-    ConfiguracionAgentesIA
+    ConfiguracionAgentesIA,
+    ControlNAS
 } from '../pages/lazyPages';
 
 const ADMIN_ROLE_NAMES = new Set([
@@ -180,6 +181,7 @@ export const DASHBOARD_ROUTES = [
     defineRoute('bitacora', () => <Bitacora />),
     defineRoute('seguridad/cambios', () => <ConsultaCambiosGithub />),
     defineRoute('seguridad/telegram', () => <TelegramUsers />),
+    defineRoute('seguridad/nas', () => <ControlNAS />),
     defineRoute('seguridad/tickets', () => <SupportTickets />)
 ];
 

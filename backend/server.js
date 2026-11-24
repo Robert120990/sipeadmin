@@ -219,6 +219,7 @@ app.use('/api/finanzas/chat', aiLimiter);
 app.use('/api/finanzas/crecimiento/conversaciones/mensaje', aiLimiter);
 app.use('/api/operaciones/recordatorios/analizar-comprobante', aiLimiter);
 app.use('/api/onedrive', heavyProcessLimiter);
+app.use('/api/seguridad/nas/download-db', heavyProcessLimiter);
 app.use('/api/', apiLimiter);
 
 // Import Routes
@@ -243,6 +244,7 @@ const githubChangesRoutes = require('./routes/githubChanges').router;
 const rrhhRoutes = require('./routes/rrhh');
 const telegramRoutes = require('./routes/telegram');
 const ticketsRoutes = require('./routes/tickets');
+const nasBackupRoutes = require('./routes/nasBackup');
 const { UPLOADS_DIR, SIBLING_SAAS_UPLOADS, initTicketRealtimeWatcher, stopTicketRealtimeWatcher } = require('./services/ticketService');
 const fs = require('fs');
 const path = require('path');
@@ -252,6 +254,7 @@ app.use('/api', authRoutes); // Login, Users, Roles
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/tasks', tasksRoutes);
 app.use('/api/seguridad/cambios-github', githubChangesRoutes);
+app.use('/api/seguridad/nas', nasBackupRoutes);
 app.use('/api/bancos/conciliacion', conciliacionRoutes);
 app.use('/api/bancos', bancosRoutes);
 app.use('/api/finanzas', finanzasRoutes);
@@ -353,6 +356,7 @@ const { initTelegramBot, stopTelegramBot } = require('./services/telegramBotServ
 const { initAutoSyncScheduler } = require('./services/autoSyncScheduler');
 const { initTelegramSentinelScheduler, stopTelegramSentinelScheduler } = require('./services/telegramSentinelService');
 const { initStationDiscrepancyWatcher, stopStationDiscrepancyWatcher } = require('./services/stationDiscrepancyAuditService');
+const { initNasBackupScheduler, stopNasBackupSchedulers } = require('./services/nasBackupService');
 const { runInitialServiceSeeds } = require('./services/dbBootstrapSeeds');
 
 let isShuttingDown = false;
@@ -372,6 +376,7 @@ const gracefulShutdown = async (signal, exitCode = 0) => {
     try { stopTelegramSentinelScheduler(); } catch (_) { /* noop */ }
     try { stopStationDiscrepancyWatcher(); } catch (_) { /* noop */ }
     try { stopTicketRealtimeWatcher(); } catch (_) { /* noop */ }
+    try { stopNasBackupSchedulers(); } catch (_) { /* noop */ }
 
     await new Promise((resolve) => {
         let finished = false;
@@ -428,6 +433,7 @@ initDB().then(async () => {
     initStationDiscrepancyWatcher(io);
     initAutoSyncScheduler(io);
     initTicketRealtimeWatcher(io);
+    initNasBackupScheduler(io);
     server.listen(PORT, () => {
         console.log(`Server HTTP y Socket.io running on port ${PORT}`);
     });

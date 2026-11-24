@@ -103,6 +103,12 @@ export const securityItems = [
     { name: 'Usuarios', path: '/dashboard/users', icon: createColorIcon('flat-color-icons:businessman') },
     { name: 'Permisos', path: '/dashboard/permissions', icon: createColorIcon('flat-color-icons:privacy') },
     { name: 'Usuarios de Telegram', path: '/dashboard/seguridad/telegram', icon: createColorIcon('flat-color-icons:comments') },
+    {
+        name: 'Control NAS & Backups',
+        path: '/dashboard/seguridad/nas',
+        icon: createColorIcon('flat-color-icons:data-backup'),
+        keywords: ['nas', 'synology', 'backup', 'respaldo', 'base de datos', '192.168.31.222', '5.252.55.29', 'raulsosa']
+    },
     { name: 'Bitácora', path: '/dashboard/bitacora', icon: createColorIcon('flat-color-icons:timeline') },
     { name: 'Consulta de Cambios', path: '/dashboard/seguridad/cambios', icon: createColorIcon('flat-color-icons:workflow') },
     { name: 'Tickets de Soporte', path: '/dashboard/seguridad/tickets', icon: createColorIcon('flat-color-icons:online-support') },
@@ -127,6 +133,7 @@ export const specialActionPermissions = [
     { name: 'Ejecutar Planes en Consola AGY & Conocimiento', path: 'manage_finanzas_crecimiento', icon: createColorIcon('flat-color-icons:bullish') },
     { name: 'Registrar / Anular Pagos de Préstamos', path: 'manage_finanzas_pagos', icon: createColorIcon('flat-color-icons:debt') },
     { name: 'Administrar Bot y Webhooks de Telegram', path: 'manage_telegram', icon: createColorIcon('flat-color-icons:comments') },
+    { name: 'Administrar Servidores NAS y Backups BD', path: 'manage_nas_backups', icon: createColorIcon('flat-color-icons:data-backup') },
     { name: 'Acceso Global a Dirección Estratégica', path: 'view_direccion_estrategica', icon: createColorIcon('fluent-emoji-flat:compass') },
     { name: 'Administrar Usuarios (Crear / Editar / Baja)', path: 'manage_users', icon: createColorIcon('flat-color-icons:businessman') },
     { name: 'Administrar Roles y Permisos', path: 'manage_roles', icon: createColorIcon('flat-color-icons:privacy') },

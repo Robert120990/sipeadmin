@@ -1,5 +1,6 @@
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
+const { generateAgentToken } = require('./utils/cryptoVault');
 
 dotenv.config(); // Standard config works better across environments
 
@@ -1488,6 +1489,144 @@ const initDB = async () => {
             console.error('Migration finanzas_crecimiento & permissions:', e.message);
         }
 
+        // Módulo de Seguridad: Panel de Control NAS & Respaldos de Bases de Datos (Synology / WebDAV / SFTP / Pull)
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS nas_servers (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    nombre VARCHAR(120) NOT NULL,
+                    tipo_nas VARCHAR(40) NOT NULL DEFAULT 'synology',
+                    modo_conexion VARCHAR(30) NOT NULL DEFAULT 'synology_pull',
+                    host_lan VARCHAR(255) NULL,
+                    host_remoto VARCHAR(255) NULL,
+                    puerto INT NOT NULL DEFAULT 5001,
+                    usar_ssl TINYINT(1) NOT NULL DEFAULT 1,
+                    permitir_cert_autofirmado TINYINT(1) NOT NULL DEFAULT 1,
+                    usuario VARCHAR(120) NOT NULL,
+                    password_enc TEXT NULL,
+                    ssh_private_key_enc TEXT NULL,
+                    ruta_destino VARCHAR(255) NOT NULL DEFAULT '/volume1/backups/sipe-db',
+                    servidor_origen_ip VARCHAR(100) NOT NULL DEFAULT '5.252.55.29',
+                    bases_datos_json JSON NULL,
+                    respaldar_todas TINYINT(1) NOT NULL DEFAULT 1,
+                    programacion_activa TINYINT(1) NOT NULL DEFAULT 1,
+                    frecuencia VARCHAR(30) NOT NULL DEFAULT 'daily',
+                    cron_expresion VARCHAR(80) NOT NULL DEFAULT '0 2 * * *',
+                    retencion_dias INT NOT NULL DEFAULT 30,
+                    notificar_telegram TINYINT(1) NOT NULL DEFAULT 1,
+                    es_principal TINYINT(1) NOT NULL DEFAULT 0,
+                    activo TINYINT(1) NOT NULL DEFAULT 1,
+                    agent_token_hash VARCHAR(128) NULL,
+                    agent_token_prefix VARCHAR(32) NULL,
+                    agent_token_enc TEXT NULL,
+                    estado_conexion VARCHAR(30) NOT NULL DEFAULT 'pendiente',
+                    ultimo_check_at DATETIME NULL,
+                    ultimo_heartbeat_at DATETIME NULL,
+                    ultimo_backup_at DATETIME NULL,
+                    ultimo_backup_estado VARCHAR(30) NULL,
+                    ultimo_error TEXT NULL,
+                    telemetria_json JSON NULL,
+                    archivos_remotos_json JSON NULL,
+                    notas TEXT NULL,
+                    created_by INT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_nas_servers_activo (activo, es_principal),
+                    INDEX idx_nas_servers_token (agent_token_hash)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS nas_backup_logs (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    nas_id INT NOT NULL,
+                    tipo_ejecucion VARCHAR(30) NOT NULL DEFAULT 'manual',
+                    modo_conexion VARCHAR(30) NOT NULL DEFAULT 'synology_pull',
+                    servidor_origen VARCHAR(100) NOT NULL DEFAULT '5.252.55.29',
+                    estado VARCHAR(30) NOT NULL DEFAULT 'en_progreso',
+                    bases_objetivo_json JSON NULL,
+                    archivos_generados_json JSON NULL,
+                    total_bases INT NOT NULL DEFAULT 0,
+                    bases_exitosas INT NOT NULL DEFAULT 0,
+                    tamano_total_bytes BIGINT NOT NULL DEFAULT 0,
+                    duracion_ms INT NOT NULL DEFAULT 0,
+                    archivos_purgados INT NOT NULL DEFAULT 0,
+                    mensaje TEXT NULL,
+                    error_detalle TEXT NULL,
+                    iniciado_por VARCHAR(100) NULL,
+                    iniciado_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    finalizado_at DATETIME NULL,
+                    FOREIGN KEY (nas_id) REFERENCES nas_servers(id) ON DELETE CASCADE,
+                    INDEX idx_nas_logs_nas_fecha (nas_id, iniciado_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            // Seed inicial del Synology NAS principal de oficina (solo si aún no existe ningún NAS registrado)
+            const [nasCountRows] = await pool.query('SELECT COUNT(*) AS total FROM nas_servers');
+            if (Number(nasCountRows?.[0]?.total || 0) === 0) {
+                const tokenBundle = generateAgentToken();
+                await pool.query(
+                    `INSERT INTO nas_servers (
+                        nombre, tipo_nas, modo_conexion, host_lan, host_remoto, puerto,
+                        usar_ssl, permitir_cert_autofirmado, usuario, ruta_destino,
+                        servidor_origen_ip, bases_datos_json, respaldar_todas,
+                        programacion_activa, frecuencia, cron_expresion, retencion_dias,
+                        notificar_telegram, es_principal, activo,
+                        agent_token_hash, agent_token_prefix, agent_token_enc,
+                        estado_conexion, notas
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        'Synology NAS Oficina (Principal)',
+                        'synology',
+                        'synology_pull',
+                        '192.168.31.222',
+                        '',
+                        5001,
+                        1,
+                        1,
+                        'raulsosa',
+                        '/volume1/backups/sipe-db',
+                        '5.252.55.29',
+                        JSON.stringify([]),
+                        1,
+                        1,
+                        'daily',
+                        '0 2 * * *',
+                        30,
+                        1,
+                        1,
+                        1,
+                        tokenBundle.hash,
+                        tokenBundle.prefix,
+                        tokenBundle.encrypted,
+                        'pendiente',
+                        'Synology NAS pre-registrado para respaldar bases de datos MySQL de 5.252.55.29. Instale el script generado en DSM Task Scheduler (Modo Pull, sin abrir puertos en el router) o configure Tailscale/DDNS y contraseña para Modo Push directo.'
+                    ]
+                );
+            }
+
+            const nasPerms = [
+                ['/dashboard/seguridad/nas', 'Panel de Control NAS y Respaldos de Bases de Datos'],
+                ['manage_nas_backups', 'Configurar servidores NAS, ejecutar respaldos y descargar volcados SQL']
+            ];
+            for (const [pName, pDesc] of nasPerms) {
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);
+            }
+
+            const [allRolesNas] = await pool.query('SELECT id, name FROM roles');
+            const [nasPermRows] = await pool.query("SELECT id FROM permissions WHERE name IN ('/dashboard/seguridad/nas', 'manage_nas_backups')");
+            for (const r of allRolesNas) {
+                const isAdminRole = ['admin', 'administrator', 'administrador', 'super admin', 'superadmin', 'super administrador'].includes(String(r.name || '').toLowerCase()) || r.id === 1;
+                if (isAdminRole) {
+                    for (const np of nasPermRows) {
+                        await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, np.id]);
+                    }
+                }
+            }
+        } catch (nasErr) {
+            console.error('Migration nas_servers & nas_backup_logs:', nasErr.message);
+        }
+
         // Sincronización canónica idempotente de permisos de rutas y acciones críticas
         try {
             const canonicalPermissions = [
@@ -1518,6 +1657,7 @@ const initDB = async () => {
                 ['/dashboard/users', 'Gestión de Usuarios'],
                 ['/dashboard/permissions', 'Gestión de Roles y Permisos'],
                 ['/dashboard/seguridad/telegram', 'Gestión de Usuarios y Bot de Telegram'],
+                ['/dashboard/seguridad/nas', 'Panel de Control NAS y Respaldos de Bases de Datos'],
                 ['/dashboard/bitacora', 'Bitácora de Auditoría'],
                 ['/dashboard/seguridad/cambios', 'Consulta de Cambios en GitHub'],
                 ['/dashboard/seguridad/tickets', 'Centro de Soporte y Tickets'],
@@ -1531,6 +1671,7 @@ const initDB = async () => {
                 ['manage_finanzas_pagos', 'Registrar y eliminar pagos de préstamos financieros'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos y ejecutar planes AGY'],
                 ['manage_telegram', 'Gestionar configuración y webhooks de Telegram'],
+                ['manage_nas_backups', 'Configurar servidores NAS, ejecutar respaldos y descargar volcados SQL'],
                 ['manage_recordatorios', 'Gestionar recordatorios y control de pagos'],
                 ['view_direccion_estrategica', 'Acceso transversal a Dirección Estratégica'],
                 ['view_rrhh_planillas', 'Consultar y exportar planillas de RRHH'],
