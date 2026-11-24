@@ -226,6 +226,7 @@ const authRoutes = require('./routes/auth');
 const bancosRoutes = require('./routes/bancos');
 const catalogosRoutes = require('./routes/catalogos');
 const operacionesRoutes = require('./routes/operaciones');
+const consultaPedidosRoutes = require('./routes/consultaPedidos');
 const consultasRoutes = require('./routes/consultas');
 const configRoutes = require('./routes/config');
 const chequesRoutes = require('./routes/cheques');
@@ -258,6 +259,7 @@ app.use('/api/rrhh', rrhhRoutes);
 app.use('/api/inteligencia', inteligenciaRoutes);
 app.use('/api', catalogosRoutes); // Carriers, Tankers
 app.use('/api', operacionesRoutes); // Dashboard, Operaciones
+app.use('/api/operaciones/consulta-pedidos', consultaPedidosRoutes);
 app.use('/api', consultasRoutes); // Ventas, Consultas
 app.use('/api', configRoutes);
 app.use('/api/cheques', chequesRoutes);

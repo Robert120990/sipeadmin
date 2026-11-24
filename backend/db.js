@@ -492,7 +492,8 @@ const initDB = async () => {
                 ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
-                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -951,7 +952,8 @@ const initDB = async () => {
                 ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
-                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
             ];
             for (const [name, desc] of telegramPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1368,7 +1370,8 @@ const initDB = async () => {
                 ['manage_support_tickets', 'Gestionar, responder y resolver tickets de soporte'],
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
-                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
             ];
             for (const [name, desc] of ticketPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1464,7 +1467,8 @@ const initDB = async () => {
             const crecimientoPerms = [
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
-                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify']
+                ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
             ];
             for (const [name, desc] of crecimientoPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1498,6 +1502,7 @@ const initDB = async () => {
                 ['/dashboard/consultas/estaciones/precios-competencia', 'Precios de la Competencia (DGEHM)'],
                 ['/dashboard/operaciones/pedidos', 'Pedidos de Combustible'],
                 ['/dashboard/operaciones/pedidos-programados', 'Pedidos Programados'],
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)'],
                 ['/dashboard/operaciones/recordatorios', 'Control de Pagos y Recordatorios'],
                 ['/dashboard/operaciones/tareas', 'Gestión de Tareas'],
                 ['/dashboard/operaciones/energia-solar', 'Energía Solar & Andelsa'],

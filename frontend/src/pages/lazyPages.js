@@ -47,6 +47,7 @@ export const ConsultaCambiosGithub = lazy(() => import('./ConsultaCambiosGithub'
 export const PlanillasRRHH = lazy(() => import('./PlanillasRRHH'));
 export const ConfiguracionTema = lazy(() => import('./ConfiguracionTema'));
 export const PedidosProgramadosConsulta = lazy(() => import('./PedidosProgramadosConsulta'));
+export const ConsultaPedidos = lazy(() => import('./ConsultaPedidos'));
 export const TelegramUsers = lazy(() => import('./TelegramUsers'));
 export const AsistenteIA = lazy(() => import('./AsistenteIA'));
 export const EnergiaSolarAndelsa = lazy(() => import('./EnergiaSolarAndelsa'));

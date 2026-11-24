@@ -41,6 +41,11 @@ export const operacionesMenu = [
         icon: createColorIcon('flat-color-icons:calendar')
     },
     {
+        name: 'Consulta de Pedidos',
+        path: '/dashboard/operaciones/consulta-pedidos',
+        icon: createColorIcon('flat-color-icons:inspection')
+    },
+    {
         name: 'Control de Pagos',
         path: '/dashboard/operaciones/recordatorios',
         icon: createColorIcon('flat-color-icons:money-transfer')
