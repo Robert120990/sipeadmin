@@ -2432,7 +2432,7 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
             ultima_sincronizacion: null
         };
 
-        const { getAutoSyncStatus, executeAutoSyncCycle } = require('../services/autoSyncScheduler');
+        const { getAutoSyncStatus } = require('../services/autoSyncScheduler');
         const autoSync = getAutoSyncStatus();
 
         if (!data.ultima_sincronizacion) {
@@ -2444,17 +2444,8 @@ router.get('/operaciones/portal/resumen-cuenta', authenticateToken, requirePermi
             }
         }
 
-        // Sincronización proactiva en segundo plano si pasaron más de 30 minutos desde la última sincronización
-        if (data.ultima_sincronizacion && !autoSync.isSyncInProgress) {
-            const lastTime = new Date(data.ultima_sincronizacion).getTime();
-            const elapsedMin = (Date.now() - lastTime) / (1000 * 60);
-            if (isNaN(lastTime) || elapsedMin > 30) {
-                const io = req.app.get('io');
-                executeAutoSyncCycle(io, 'AUTO_STALE_BACKGROUND').catch(err => {
-                    console.warn('[resumen-cuenta] Error en sincronización proactiva en segundo plano:', err.message);
-                });
-            }
-        }
+        // NOTA: La sincronización automática con Puppeteer está delegada exclusivamente al servidor de automatizaciones (169.58.207.115).
+        // En este servidor principal NO se ejecuta scraping en segundo plano para no sobrecargar la CPU.
 
         if (data.ultima_sincronizacion) {
             try {

@@ -33,6 +33,20 @@ let lastSyncMetadata = {
  * @returns {Promise<object>} Resumen de resultados de ambas sincronizaciones
  */
 async function executeAutoSyncCycle(io = null, source = 'CRON', syncRunners = {}) {
+    // Delegación a servidor dedicado de automatizaciones (169.58.207.115) para no recargar el servidor de producción
+    const isProduction = process.env.NODE_ENV === 'production';
+    const forceLocal = process.env.ENABLE_LOCAL_AUTOSYNC === 'true';
+    const delegateRemote = process.env.DELEGATE_AUTOSYNC_REMOTE === 'true' || process.env.DISABLE_LOCAL_AUTOSYNC === 'true' || (isProduction && !forceLocal);
+
+    if (process.env.NODE_ENV !== 'test' && delegateRemote && (source.startsWith('AUTO_') || source === 'CRON')) {
+        console.log(`[AutoSync Scheduler] Sincronización automática [${source}] omitida localmente: delegada al servidor de automatizaciones 169.58.207.115.`);
+        return {
+            success: true,
+            message: 'Sincronización delegada a servidor de automatizaciones (169.58.207.115)',
+            delegated: true
+        };
+    }
+
     const activeIo = io || globalIo;
 
     if (isSyncInProgress) {
