@@ -308,7 +308,15 @@ describe('Telegram Auditor Service Unit Tests', () => {
                 },
                 gemini: {
                     configured: true,
-                    model: 'gemini-2.0-flash'
+                    model: 'gemini-2.5-flash-lite'
+                },
+                localLlm: {
+                    configured: true,
+                    enabled: true,
+                    reachable: true,
+                    model: 'sipe-nlu',
+                    modelAvailable: true,
+                    latencyMs: 18
                 },
                 activeConversations: {
                     count: 3,
@@ -349,7 +357,8 @@ describe('Telegram Auditor Service Unit Tests', () => {
             assert.ok(html.includes('@SIPE_IA_BOT'));
             assert.ok(html.includes('db_sipe_admin:</b> 🟢 Conectada (4 ms)'));
             assert.ok(html.includes('db_sistema_saas:</b> 🟢 Conectada (7 ms)'));
-            assert.ok(html.includes('Gemini 2.0 Flash: 🟢 Configurado'));
+            assert.ok(html.includes('Gemini (gemini-2.5-flash-lite): 🟢 Configurado'));
+            assert.ok(html.includes('Respaldo Local (rsboosted): 🟢 Activo (<code>sipe-nlu</code> · 18 ms)'));
             assert.ok(html.includes('Sesiones Activas (últimos 20 min): 👥 <b>3</b>'));
             assert.ok(html.includes('Consultas Recibidas: <b>80</b>'));
             assert.ok(html.includes('Exitosas: 🟢 <b>78</b>'));

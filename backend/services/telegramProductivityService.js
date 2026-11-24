@@ -614,7 +614,7 @@ async function parseNaturalScheduleWithGemini(rawText = '', referenceNowSv = nul
             },
             logPrefix: '[MiBot-NLU]'
         });
-        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 10500));
         const res = await Promise.race([aiPromise, timeoutPromise]);
         if (!res || !res.text) return null;
 
@@ -2771,6 +2771,111 @@ async function handleRescheduleEventNaturalLanguage({
 }
 
 /**
+ * Enrutador NLU semántico con `sipe-nlu` (Ollama en rsboosted) para frases muy coloquiales de
+ * programación o reprogramación que no coincidieron con los patrones regex deterministas
+ * (ej. "fijate que pasado mañana tipo almuerzo tengo que hablar con el del banco", "moveme eso pa las 4").
+ */
+async function tryLocalLlmScheduleOrRescheduleFallback({
+    db,
+    externalDb = null,
+    rawText,
+    chatId,
+    user,
+    effectivePerms,
+    voicePrefix = '',
+    transport = {},
+    referenceNowSv = null
+}) {
+    if (process.env.NODE_TEST_CONTEXT || process.argv.includes('--test') || process.execArgv.includes('--test')) {
+        return false;
+    }
+    const norm = normalizeText(rawText);
+    const hasColloquialScheduleCue =
+        /\b(?:record|avis|reuni|junta|cita|llamad|almuerz|mediod|camb|mov|pospon|reprogram|atras|adelant|tempran|tarde|noche|pasado|manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|pa\s+las?|tipo\s+\d)\w*\b/i.test(norm);
+    if (!hasColloquialScheduleCue) return false;
+
+    const { isLocalLlmConfigured, classifyNaturalIntentWithLocalLlm } = require('./localLlmFallbackService');
+    if (!isLocalLlmConfigured()) return false;
+
+    const nowSv = referenceNowSv || getElSalvadorNowSql();
+    const nlu = await classifyNaturalIntentWithLocalLlm(rawText, nowSv, { timeoutMs: 9000 });
+    if (!nlu || nlu.confidence < 0.72) return false;
+
+    const sendFn = transport.sendTelegramMessage || sendTelegramMessage;
+
+    if (nlu.intent === 'cambiar_hora_evento') {
+        const syntheticText = (nlu.date || nlu.time)
+            ? `Cambiar la hora ${nlu.date || ''} ${nlu.time ? `a las ${nlu.time}` : ''}`.trim()
+            : rawText;
+        return await handleRescheduleEventNaturalLanguage({
+            db,
+            rawText: syntheticText,
+            chatId,
+            user,
+            effectivePerms,
+            voicePrefix,
+            transport,
+            referenceNowSv: nowSv,
+            skipAiFallback: true
+        });
+    }
+
+    if (nlu.intent === 'agendar_evento' && nlu.title && nlu.title.length >= 3 && user?.id) {
+        const candidates = await resolveCollaboratorCandidates(db);
+        const selfCand = candidates.find(c => Number(c.telegram_usuario_id) === Number(user.id));
+        if (!selfCand) return false;
+
+        const targetDate = nlu.date || nowSv.slice(0, 10);
+        const frecuencia = nlu.frecuencia || 'UNA_VEZ';
+
+        if (!nlu.time) {
+            await startEventTimeStepFromParsed({
+                chatId,
+                tgUser: user,
+                parsedEvt: {
+                    tipo: /\b(reunion|junta|cita|llamada|banco|bancovi)\b/i.test(norm) ? 'REUNION' : 'TAREA',
+                    titulo: nlu.title,
+                    frecuencia,
+                    targetDate,
+                    dateExplicit: Boolean(nlu.date),
+                    timeExplicit: false,
+                    participants: [selfCand]
+                },
+                rawText,
+                candidates,
+                voicePrefix,
+                transport
+            });
+            return true;
+        }
+
+        const created = await createMibotProgramacion({
+            db,
+            externalDb,
+            payload: {
+                tipo: /\b(reunion|junta|cita|llamada)\b/i.test(norm) ? 'REUNION' : 'TAREA',
+                titulo: nlu.title.slice(0, 175),
+                mensaje: String(rawText).trim(),
+                destinatario_ids: [Number(selfCand.telegram_usuario_id)],
+                enviar_ahora: false,
+                programado_para: `${targetDate} ${nlu.time}:00`,
+                frecuencia
+            },
+            actorUser: buildActorUserFromTelegram(user, effectivePerms),
+            sendTelegramFn: sendFn,
+            io: getRealtimeIo(),
+            skipSystemNotification: true
+        });
+        const prog = created.programacion;
+        rememberLastScheduledEvent(user.telegram_user_id, prog);
+        await sendFn(chatId, voicePrefix + buildEventConfirmationMessage(prog), buildEventConfirmationMarkup(prog.id));
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * Intercepta texto libre o nota de voz cuando un usuario está dentro de un wizard activo
  */
 async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawText, chatId, user, effectivePerms, voicePrefix = '', transport = {}, referenceNowSv = null, skipAiFallback = false }) {
@@ -3636,6 +3741,7 @@ module.exports = {
     startEventScheduleWizard,
     startEventTimeStepFromParsed,
     handleRescheduleEventNaturalLanguage,
+    tryLocalLlmScheduleOrRescheduleFallback,
     parseControlPagosQuery,
     getControlPagosDetailedData,
     formatControlPagosMessage,

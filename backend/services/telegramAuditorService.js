@@ -467,6 +467,15 @@ const getHealthDiagnostics = async () => {
         model: geminiModel
     };
 
+    // 3.5 Estado del modelo local optimizado sipe-nlu (Ollama en rsboosted)
+    let localLlm = { configured: false, enabled: false, reachable: false, model: 'sipe-nlu', modelAvailable: false, latencyMs: null };
+    try {
+        const { checkLocalLlmHealth } = require('./localLlmFallbackService');
+        localLlm = await checkLocalLlmHealth({ timeoutMs: 2500 });
+    } catch (_) {
+        // Silencioso
+    }
+
     // 4. Memoria activa de conversaciones (usuarios activos en los últimos 20 minutos)
     const activeConversationsCount = getActiveUsersCount(20);
 
@@ -497,6 +506,7 @@ const getHealthDiagnostics = async () => {
         bot: botStatus,
         databases,
         gemini,
+        localLlm,
         activeConversations: {
             count: activeConversationsCount,
             windowMinutes: 20
@@ -551,8 +561,15 @@ const formatDiagnosticsMessage = async (customDiagnostics = null) => {
     msg += `• <b>db_sistema_saas:</b> ${dbSaas?.connected ? `🟢 Conectada (${dbSaas.latencyMs} ms)` : `🔴 Fallo (${esc(dbSaas?.error || 'Sin conexión')})`}\n\n`;
 
     // 3. IA y Sesiones
+    const localLlm = diag.localLlm || {};
+    const localLlmStatus = !localLlm.configured
+        ? '⚪ No configurado'
+        : (localLlm.reachable && localLlm.modelAvailable
+            ? `🟢 Activo (<code>${esc(localLlm.model)}</code> · ${localLlm.latencyMs} ms)`
+            : (localLlm.reachable ? `🟡 Conectado (modelo ${esc(localLlm.model)} no cargado)` : '🔴 Sin conexión'));
     msg += `🧠 <b>INTELIGENCIA ARTIFICIAL & MEMORIA:</b>\n`;
-    msg += `• Gemini 2.0 Flash: ${diag.gemini?.configured ? '🟢 Configurado' : '⚠️ Sin GEMINI_API_KEY'}\n`;
+    msg += `• Gemini (${esc(diag.gemini?.model || 'gemini-2.5-flash-lite')}): ${diag.gemini?.configured ? '🟢 Configurado' : '⚠️ Sin GEMINI_API_KEY'}\n`;
+    msg += `• Respaldo Local (rsboosted): ${localLlmStatus}\n`;
     msg += `• Sesiones Activas (últimos 20 min): 👥 <b>${diag.activeConversations?.count || 0}</b> usuario(s)\n`;
     msg += `• Consultas Multi-Turno: 🔄 <b>${diag.metrics?.multiTurnQueriesCount || 0}</b>\n\n`;
 

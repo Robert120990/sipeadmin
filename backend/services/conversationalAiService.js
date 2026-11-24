@@ -353,11 +353,12 @@ const buildLiveProjectContext = async (targetDate = null) => {
 };
 
 /**
- * Procesar consulta conversacional con Gemini (rotación automática vía generateWithGeminiFallback)
+ * Procesar consulta conversacional con Gemini (rotación automática + respaldo local sipe-nlu)
  */
 const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms, extraSystemNote = null }) => {
+    const { isLocalLlmConfigured } = require('./localLlmFallbackService');
     const apiKey = await getGeminiApiKey();
-    if (!apiKey) {
+    if (!apiKey && !isLocalLlmConfigured()) {
         return null; // Fallback al motor semántico determinista
     }
 

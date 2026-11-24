@@ -245,40 +245,65 @@ const isGeminiApiKeyInvalidError = (err) => {
     return /(API_KEY_INVALID|API key not valid|API key expired|INVALID_ARGUMENT.*API key|key not valid)/i.test(msg);
 };
 
+const {
+    isLocalLlmConfigured,
+    hasNonTextGeminiParts,
+    generateWithLocalLlm
+} = require('./localLlmFallbackService');
+
 /**
  * Helper centralizado para invocar Gemini con rotación automática de claves candidatas,
- * caché negativa de claves inválidas y fallback de modelos estables (2.5-flash -> lite -> latest -> 3.8-flash).
+ * caché negativa de claves inválidas, fallback de modelos estables (2.5-flash-lite -> 3.5 -> 3.8)
+ * y respaldo automático al modelo local `sipe-nlu` (Ollama / Qwen 2.5 3B en rsboosted)
+ * cuando Gemini alcanza cuota (429) o no está disponible para peticiones de texto.
  */
 const generateWithGeminiFallback = async ({
     contents,
     config = undefined,
     models = GEMINI_FALLBACK_MODELS,
-    logPrefix = '[Gemini]'
+    logPrefix = '[Gemini]',
+    allowLocalFallback = true,
+    localFetchImpl = null
 }) => {
     const candidates = await getGeminiApiKeyCandidates();
-    if (!candidates || candidates.length === 0) {
-        return null;
-    }
-
-    const { GoogleGenAI } = require('@google/genai');
     let lastErr = null;
 
-    for (const apiKey of candidates) {
-        const ai = new GoogleGenAI({ apiKey });
-        for (const modelName of models) {
-            try {
-                const payload = config ? { model: modelName, contents, config } : { model: modelName, contents };
-                const response = await ai.models.generateContent(payload);
-                const text = (response?.text || response?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-                return { response, text, modelUsed: modelName };
-            } catch (err) {
-                lastErr = err;
-                console.warn(`${logPrefix} Fallo con modelo ${modelName}:`, err.message);
-                if (isGeminiApiKeyInvalidError(err)) {
-                    markGeminiKeyInvalid(apiKey);
-                    break;
+    if (candidates && candidates.length > 0) {
+        const { GoogleGenAI } = require('@google/genai');
+
+        for (const apiKey of candidates) {
+            const ai = new GoogleGenAI({ apiKey });
+            for (const modelName of models) {
+                try {
+                    const payload = config ? { model: modelName, contents, config } : { model: modelName, contents };
+                    const response = await ai.models.generateContent(payload);
+                    const text = (response?.text || response?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+                    return { response, text, modelUsed: modelName };
+                } catch (err) {
+                    lastErr = err;
+                    console.warn(`${logPrefix} Fallo con modelo ${modelName}:`, err.message);
+                    if (isGeminiApiKeyInvalidError(err)) {
+                        markGeminiKeyInvalid(apiKey);
+                        break;
+                    }
                 }
             }
+        }
+    }
+
+    // Respaldo automático al modelo local optimizado `sipe-nlu` (solo texto, sin audio/imagen)
+    if (allowLocalFallback && !hasNonTextGeminiParts(contents) && isLocalLlmConfigured()) {
+        console.warn(`${logPrefix} Activando respaldo automático con modelo local sipe-nlu (rsboosted)...`);
+        const localRes = await generateWithLocalLlm({
+            contents,
+            systemInstruction: config?.systemInstruction || '',
+            jsonMode: config?.responseMimeType === 'application/json',
+            temperature: config?.temperature ?? 0.15,
+            logPrefix: `${logPrefix}[LocalLLM]`,
+            fetchImpl: localFetchImpl
+        });
+        if (localRes && localRes.text) {
+            return localRes;
         }
     }
 
@@ -287,43 +312,28 @@ const generateWithGeminiFallback = async ({
 };
 
 /**
- * Consulta con Gemini API (GenAI) si está configurado en el servidor
+ * Consulta con Gemini API (GenAI) con respaldo automático al modelo local `sipe-nlu`
  */
 const askGeminiAssistant = async (prompt, dataContext) => {
-    const candidates = await getGeminiApiKeyCandidates();
-    if (candidates.length === 0) return null;
-
-    const { GoogleGenAI } = require('@google/genai');
     const systemInstruction = `Eres el asistente gerencial de SIPE Admin para estaciones de servicio de combustible en El Salvador.
 Responde de forma ejecutiva, concisa, cálida y directa en español salvadoreño formal.
 Usa viñetas limpias y negritas en HTML para Telegram (<b>texto</b>, <code>código</code>).
 Si te preguntan comparaciones o análisis, apóyate en el contexto de datos reales proporcionado.`;
 
-    for (const apiKey of candidates) {
-        const ai = new GoogleGenAI({ apiKey });
-        for (const modelName of GEMINI_FALLBACK_MODELS) {
-            try {
-                const result = await ai.models.generateContent({
-                    model: modelName,
-                    contents: [{
-                        role: 'user',
-                        parts: [{ text: `CONTEXTO OPERATIVO REAL: ${JSON.stringify(dataContext)}\n\nPREGUNTA DEL USUARIO: ${prompt}` }]
-                    }],
-                    config: { systemInstruction }
-                });
-
-                const reply = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (reply) return reply.trim();
-            } catch (e) {
-                console.warn(`[TelegramBot] Gemini fallback error (${modelName}):`, e.message);
-                if (isGeminiApiKeyInvalidError(e)) {
-                    markGeminiKeyInvalid(apiKey);
-                    break;
-                }
-            }
-        }
+    try {
+        const res = await generateWithGeminiFallback({
+            contents: [{
+                role: 'user',
+                parts: [{ text: `CONTEXTO OPERATIVO REAL: ${JSON.stringify(dataContext)}\n\nPREGUNTA DEL USUARIO: ${prompt}` }]
+            }],
+            config: { systemInstruction },
+            logPrefix: '[TelegramBot]'
+        });
+        return res?.text ? res.text.trim() : null;
+    } catch (e) {
+        console.warn('[TelegramBot] Error en askGeminiAssistant (cloud + local):', e.message);
+        return null;
     }
-    return null;
 };
 
 /**

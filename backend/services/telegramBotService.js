@@ -72,6 +72,7 @@ const {
     startEventScheduleWizard,
     startEventTimeStepFromParsed,
     handleRescheduleEventNaturalLanguage,
+    tryLocalLlmScheduleOrRescheduleFallback,
     parseControlPagosQuery,
     getControlPagosDetailedData,
     formatControlPagosMessage,
@@ -4000,6 +4001,30 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
     const isConciseBancosGlobal = /^(?:saldos?\s+(?:en\s+|de\s+)?bancos?|bancos?|banco|saldos)$/i.test(strippedButtonText);
     const isConciseChequeraGlobal = /^(?:saldos?\s+(?:en\s+|de\s+)?chequeras?|chequeras?|cheques|saldo_chequera)$/i.test(strippedButtonText);
     const isDirectGlobalCommand = isConciseVentasGlobal || isConciseAlertasGlobal || isConciseCompetenciaGlobal || isConciseBancosGlobal || isConciseChequeraGlobal;
+
+    // 1.75 Si la frase es muy coloquial y parece intención de agendar/reprogramar, intentar enrutamiento NLU con sipe-nlu (rsboosted)
+    if (!isDirectGlobalCommand) {
+        try {
+            const db = getDb();
+            const externalDb = await getExternalDb().catch(() => null);
+            const handledLocalAction = await tryLocalLlmScheduleOrRescheduleFallback({
+                db,
+                externalDb,
+                rawText,
+                chatId,
+                user,
+                effectivePerms,
+                voicePrefix,
+                transport: { sendTelegramMessage, getMainReplyKeyboard }
+            });
+            if (handledLocalAction) {
+                await logTelegramQuery(user.telegram_user_id, rawText, 'Acción NLU sipe-nlu (rsboosted)', 1);
+                return;
+            }
+        } catch (localNluErr) {
+            console.warn('[TelegramBot] Aviso en enrutamiento NLU local:', localNluErr.message);
+        }
+    }
 
     // 2. Si NO es un botón/comando global conciso, atender preguntas abiertas o analíticas mediante el Agente Conversacional IA 360°
     if (!isDirectGlobalCommand) {
