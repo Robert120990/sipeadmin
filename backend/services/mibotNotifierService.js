@@ -133,6 +133,26 @@ function normalizeScheduleDatetime(input, fallbackDate = new Date()) {
 }
 
 /**
+ * Convierte un valor DATETIME leído desde MySQL (donde el pool mysql2 usa timezone: 'Z')
+ * a string SQL local de El Salvador ('YYYY-MM-DD HH:mm:ss') preservando la hora de reloj
+ * almacenada en BD sin restar 6 horas por doble conversión UTC -> America/El_Salvador.
+ */
+function dbDatetimeToSvSql(val) {
+    if (!val) return null;
+    if (val instanceof Date && !Number.isNaN(val.getTime())) {
+        return `${val.getUTCFullYear()}-${pad2(val.getUTCMonth() + 1)}-${pad2(val.getUTCDate())} ${pad2(val.getUTCHours())}:${pad2(val.getUTCMinutes())}:${pad2(val.getUTCSeconds())}`;
+    }
+    const raw = String(val).trim();
+    if (!raw) return null;
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?$/);
+    if (match) {
+        const [, y, m, d, hh, mm, ss = '00'] = match;
+        return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+    }
+    return normalizeScheduleDatetime(raw);
+}
+
+/**
  * Suma minutos exactos a un timestamp SQL local de El Salvador sin depender de la TZ del host
  */
 function addMinutesToSvSql(sqlDatetime, minutes = 60) {
@@ -640,15 +660,176 @@ function hydrateProgramacionRow(prog, destRows = []) {
         task_id: prog.task_id ? Number(prog.task_id) : null,
         monto_total: prog.monto_total !== null && prog.monto_total !== undefined ? Number(prog.monto_total) : null,
         monto_pendiente: prog.monto_pendiente !== null && prog.monto_pendiente !== undefined ? Number(prog.monto_pendiente) : null,
+        programado_para: dbDatetimeToSvSql(prog.programado_para),
+        proximo_envio_at: dbDatetimeToSvSql(prog.proximo_envio_at),
+        ultimo_envio_at: dbDatetimeToSvSql(prog.ultimo_envio_at),
         total_envios: Number(prog.total_envios || 0),
         destinatarios: destRows.map(d => ({
             ...d,
             id: Number(d.id),
             programacion_id: Number(d.programacion_id),
-            telegram_usuario_id: Number(d.telegram_usuario_id)
+            telegram_usuario_id: Number(d.telegram_usuario_id),
+            enviado_at: dbDatetimeToSvSql(d.enviado_at),
+            respondido_at: dbDatetimeToSvSql(d.respondido_at),
+            pospuesto_hasta: dbDatetimeToSvSql(d.pospuesto_hasta)
         })),
         resumen_entrega: counts
     };
+}
+
+/**
+ * Verifica si el actor tiene permiso (fail-closed) para modificar/cancelar una programación MiBot
+ */
+function canActorModifyProgramacion(prog, { actorTgUserId = null, actorSipeUserId = null, isAdmin = false } = {}) {
+    if (!prog) return false;
+    if (isAdmin) return true;
+    if (actorSipeUserId && prog.created_by_user_id && Number(prog.created_by_user_id) === Number(actorSipeUserId)) {
+        return true;
+    }
+    if (actorTgUserId && Array.isArray(prog.destinatarios)) {
+        if (prog.destinatarios.some(d => String(d.telegram_user_id) === String(actorTgUserId))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Reprograma fecha/hora de una programación MiBot existente (fail-closed)
+ */
+async function rescheduleMibotProgramacion({
+    db,
+    programacionId,
+    programadoPara,
+    actorTgUserId = null,
+    actorSipeUserId = null,
+    isAdmin = false
+}) {
+    await ensureMibotSchema(db);
+    const id = Number(programacionId);
+    if (!Number.isFinite(id) || id <= 0) {
+        const err = new Error('ID de programación MiBot inválido.');
+        err.status = 400;
+        throw err;
+    }
+
+    const normalizedWhen = normalizeScheduleDatetime(programadoPara);
+    if (!normalizedWhen) {
+        const err = new Error('Fecha/hora de reprogramación inválida.');
+        err.status = 400;
+        throw err;
+    }
+
+    const existing = await getMibotProgramacionById(db, id);
+    if (!existing) {
+        const err = new Error('Recordatorio o evento MiBot no encontrado.');
+        err.status = 404;
+        throw err;
+    }
+
+    if (!canActorModifyProgramacion(existing, { actorTgUserId, actorSipeUserId, isAdmin })) {
+        const err = new Error('No tienes permiso para modificar la fecha u hora de este recordatorio.');
+        err.status = 403;
+        throw err;
+    }
+
+    if (String(existing.estado || '').toUpperCase() === 'CANCELADO') {
+        const err = new Error('Este recordatorio ya fue cancelado y no se puede reprogramar.');
+        err.status = 400;
+        throw err;
+    }
+
+    await db.query(
+        `UPDATE mibot_programaciones
+         SET programado_para = ?, proximo_envio_at = ?, estado = 'PROGRAMADO'
+         WHERE id = ?`,
+        [normalizedWhen, normalizedWhen, id]
+    );
+
+    await db.query(
+        `UPDATE mibot_programaciones_destinatarios
+         SET estado_entrega = 'PENDIENTE', pospuesto_hasta = NULL, error_msg = NULL
+         WHERE programacion_id = ? AND estado_entrega IN ('POSPUESTO', 'ERROR')`,
+        [id]
+    ).catch(() => {});
+
+    return await getMibotProgramacionById(db, id);
+}
+
+/**
+ * Cancela una programación MiBot existente (fail-closed)
+ */
+async function cancelMibotProgramacion({
+    db,
+    programacionId,
+    actorTgUserId = null,
+    actorSipeUserId = null,
+    isAdmin = false
+}) {
+    await ensureMibotSchema(db);
+    const id = Number(programacionId);
+    if (!Number.isFinite(id) || id <= 0) {
+        const err = new Error('ID de programación MiBot inválido.');
+        err.status = 400;
+        throw err;
+    }
+
+    const existing = await getMibotProgramacionById(db, id);
+    if (!existing) {
+        const err = new Error('Recordatorio o evento MiBot no encontrado.');
+        err.status = 404;
+        throw err;
+    }
+
+    if (!canActorModifyProgramacion(existing, { actorTgUserId, actorSipeUserId, isAdmin })) {
+        const err = new Error('No tienes permiso para cancelar este recordatorio.');
+        err.status = 403;
+        throw err;
+    }
+
+    await db.query(
+        `UPDATE mibot_programaciones
+         SET estado = 'CANCELADO', proximo_envio_at = NULL
+         WHERE id = ?`,
+        [id]
+    );
+
+    return await getMibotProgramacionById(db, id);
+}
+
+/**
+ * Busca la programación MiBot activa más reciente creada por o dirigida al usuario
+ */
+async function getLatestEditableMibotProgramacionForUser(db, { telegramUserId = null, sipeUserId = null } = {}) {
+    if (!db || (!telegramUserId && !sipeUserId)) return null;
+    await ensureMibotSchema(db);
+
+    const conditions = [];
+    const params = [];
+    if (sipeUserId) {
+        conditions.push('p.created_by_user_id = ?');
+        params.push(Number(sipeUserId));
+    }
+    if (telegramUserId) {
+        conditions.push(`EXISTS (
+            SELECT 1 FROM mibot_programaciones_destinatarios md
+            WHERE md.programacion_id = p.id AND md.telegram_user_id = ?
+        )`);
+        params.push(String(telegramUserId));
+    }
+    if (conditions.length === 0) return null;
+
+    const [rows] = await db.query(
+        `SELECT p.id
+         FROM mibot_programaciones p
+         WHERE p.estado IN ('PROGRAMADO', 'ENVIADO')
+           AND (${conditions.join(' OR ')})
+         ORDER BY p.id DESC
+         LIMIT 1`,
+        params
+    );
+    if (!rows || rows.length === 0) return null;
+    return await getMibotProgramacionById(db, rows[0].id);
 }
 
 /**
@@ -1345,7 +1526,7 @@ async function formatUserPersonalMibotInbox(db, telegramUserId, displayName = ''
 
     rows.forEach((r, idx) => {
         const meta = TIPO_META[r.tipo] || TIPO_META.RECORDATORIO_PAGO;
-        const when = formatDisplayDateTimeSv(r.proximo_envio_at || r.programado_para);
+        const when = formatDisplayDateTimeSv(dbDatetimeToSvSql(r.proximo_envio_at || r.programado_para));
         const montoTxt = r.monto_pendiente !== null && r.monto_pendiente !== undefined && Number(r.monto_pendiente) > 0
             ? ` · Saldo: <b>${formatMoney(r.monto_pendiente)}</b>`
             : '';
@@ -1419,7 +1600,7 @@ async function getActiveMibotSummaryByTaskIds(db, taskIds = []) {
                     programacion_id: Number(r.programacion_id),
                     tipo: r.tipo,
                     ultimo_estado: r.prog_estado,
-                    proximo_envio_at: r.proximo_envio_at || r.programado_para,
+                    proximo_envio_at: dbDatetimeToSvSql(r.proximo_envio_at || r.programado_para),
                     frecuencia: r.frecuencia,
                     total_envios: Number(r.total_envios || 0),
                     programaciones_ids: new Set([Number(r.programacion_id)]),
@@ -1437,8 +1618,8 @@ async function getActiveMibotSummaryByTaskIds(db, taskIds = []) {
                     nombre_destinatario: r.nombre_destinatario,
                     cargo: r.cargo,
                     estado_entrega: r.estado_entrega,
-                    enviado_at: r.enviado_at,
-                    respondido_at: r.respondido_at
+                    enviado_at: dbDatetimeToSvSql(r.enviado_at),
+                    respondido_at: dbDatetimeToSvSql(r.respondido_at)
                 });
             }
         }
@@ -1696,7 +1877,7 @@ async function processMorningAgendaDigest({
                 lines.push(`🗓️ <b>Eventos y recordatorios MiBot de hoy (${evtRows.length}):</b>`);
                 evtRows.forEach((ev) => {
                     const meta = TIPO_META[ev.tipo] || TIPO_META.RECORDATORIO_PAGO;
-                    lines.push(`• ${meta.emoji} <b>${escapeHtml(ev.titulo)}</b> — <i>${formatDisplayDateTimeSv(ev.fecha_prog)}</i>`);
+                    lines.push(`• ${meta.emoji} <b>${escapeHtml(ev.titulo)}</b> — <i>${formatDisplayDateTimeSv(dbDatetimeToSvSql(ev.fecha_prog))}</i>`);
                 });
             }
 
@@ -1816,6 +1997,7 @@ module.exports = {
     getElSalvadorNowParts,
     getElSalvadorNowSql,
     normalizeScheduleDatetime,
+    dbDatetimeToSvSql,
     addMinutesToSvSql,
     computeNextScheduleSql,
     formatDisplayDateTimeSv,
@@ -1829,6 +2011,9 @@ module.exports = {
     getMibotProgramacionById,
     listMibotProgramaciones,
     createMibotProgramacion,
+    rescheduleMibotProgramacion,
+    cancelMibotProgramacion,
+    getLatestEditableMibotProgramacionForUser,
     dispatchMibotProgramacion,
     handleMibotCallbackQuery,
     formatUserPersonalMibotInbox,

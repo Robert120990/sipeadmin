@@ -65,8 +65,13 @@ const {
     getEventosProgramadosData,
     formatEventosProgramadosMessage,
     getEventosInlineMarkup,
+    buildEventConfirmationMarkup,
+    buildEventConfirmationMessage,
+    rememberLastScheduledEvent,
     parseScheduleEventInput,
     startEventScheduleWizard,
+    startEventTimeStepFromParsed,
+    handleRescheduleEventNaturalLanguage,
     parseControlPagosQuery,
     getControlPagosDetailedData,
     formatControlPagosMessage,
@@ -1563,6 +1568,21 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
         return true;
     }
 
+    // -0.35 Reprogramar / Cambiar Fecha u Hora de Evento o Recordatorio MiBot en Lenguaje Natural
+    if (parsed.isCambiarHoraEvento) {
+        const db = getDb();
+        await logTelegramQuery(user.telegram_user_id, rawText, 'Reprogramar Evento MiBot', 1);
+        return await handleRescheduleEventNaturalLanguage({
+            db,
+            rawText,
+            chatId,
+            user,
+            effectivePerms,
+            voicePrefix: contextOptions.voicePrefix || '',
+            transport: { sendTelegramMessage, getMainReplyKeyboard }
+        });
+    }
+
     // -0.3 Programar Evento / Reunión / Recordatorio en MiBot
     if (parsed.isAgendarEvento) {
         const db = getDb();
@@ -1576,6 +1596,20 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             if (includesOther && !effectivePerms?.tareas && !effectivePerms?.isAdmin) {
                 await logTelegramQuery(user.telegram_user_id, rawText, 'Permiso denegado agendar evento grupal', 0);
                 await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '⚠️ No tienes permiso para agendar eventos a otros usuarios; solo recordatorios personales.', keyboard);
+                return true;
+            }
+            // Si el usuario no especificó hora (ej: "Agendar reunión Bancovi con Cory"), pedir fecha/hora en vez de asumir 08:00
+            if (!parsedEvt.timeExplicit) {
+                await logTelegramQuery(user.telegram_user_id, rawText, `Asistente Hora Evento: ${parsedEvt.titulo.slice(0, 60)}`, 1);
+                await startEventTimeStepFromParsed({
+                    chatId,
+                    tgUser: user,
+                    parsedEvt,
+                    rawText,
+                    candidates,
+                    voicePrefix: contextOptions.voicePrefix || '',
+                    transport: { sendTelegramMessage }
+                });
                 return true;
             }
             sendChatAction(chatId, 'typing').catch(() => {});
@@ -1602,20 +1636,13 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
                     skipSystemNotification: true
                 });
                 const prog = res.programacion;
-                const meta = mibotService.TIPO_META[prog.tipo] || mibotService.TIPO_META.REUNION;
-                const destNames = (prog.destinatarios || []).map(d => escapeHtml(d.nombre_destinatario)).join(', ');
+                rememberLastScheduledEvent(user.telegram_user_id, prog);
                 await logTelegramQuery(user.telegram_user_id, rawText, `Evento Programado: ${prog.titulo.slice(0, 80)}`, 1);
-                const msg = [
-                    `✅ <b>${meta.emoji} RECORDATORIO PROGRAMADO EN MIBOT</b>`,
-                    `━━━━━━━━━━━━━━━━━━━━━`,
-                    `📌 <b>${escapeHtml(prog.titulo)}</b>`,
-                    `• 🗓️ <b>Fecha / Hora:</b> ${mibotService.formatDisplayDateTimeSv(prog.programado_para)}`,
-                    `• 🔁 <b>Frecuencia:</b> ${mibotService.FRECUENCIA_LABELS[prog.frecuencia] || prog.frecuencia}`,
-                    `• 👥 <b>Destinatarios:</b> ${destNames}`,
-                    ``,
-                    `<i>MiBot te enviará el aviso personal con botones de confirmación en la fecha programada.</i>`
-                ].join('\n');
-                await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + msg, getEventosInlineMarkup('semana'));
+                await sendTelegramMessage(
+                    chatId,
+                    (contextOptions.voicePrefix || '') + buildEventConfirmationMessage(prog),
+                    buildEventConfirmationMarkup(prog.id)
+                );
                 return true;
             } catch (evtErr) {
                 await sendTelegramMessage(chatId, (contextOptions.voicePrefix || '') + '❌ Error programando evento: ' + escapeHtml(evtErr.message), keyboard);

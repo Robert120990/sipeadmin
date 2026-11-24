@@ -22,7 +22,11 @@ const {
     getElSalvadorNowSql,
     addMinutesToSvSql,
     formatDisplayDateTimeSv,
+    getMibotProgramacionById,
     createMibotProgramacion,
+    rescheduleMibotProgramacion,
+    cancelMibotProgramacion,
+    getLatestEditableMibotProgramacionForUser,
     getRealtimeIo
 } = require('./mibotNotifierService');
 
@@ -37,8 +41,39 @@ const {
 } = require('./telegramTransportService');
 
 const WIZARD_TTL_MS = 30 * 60 * 1000;
+const LAST_EVENT_TTL_MS = 4 * 60 * 60 * 1000;
 const pendingTaskWizards = new Map();
 const pendingEventWizards = new Map();
+const lastScheduledEventByUser = new Map();
+
+function rememberLastScheduledEvent(telegramUserId, prog) {
+    if (!telegramUserId || !prog || !prog.id) return;
+    const key = String(telegramUserId);
+    lastScheduledEventByUser.set(key, {
+        programacionId: Number(prog.id),
+        titulo: String(prog.titulo || ''),
+        programado_para: prog.programado_para || prog.proximo_envio_at || null,
+        tipo: prog.tipo || 'REUNION',
+        frecuencia: prog.frecuencia || 'UNA_VEZ',
+        updatedAt: Date.now()
+    });
+    if (lastScheduledEventByUser.size > 500) {
+        const oldestKey = lastScheduledEventByUser.keys().next().value;
+        if (oldestKey !== undefined) lastScheduledEventByUser.delete(oldestKey);
+    }
+}
+
+function getLastScheduledEvent(telegramUserId) {
+    if (!telegramUserId) return null;
+    const key = String(telegramUserId);
+    const entry = lastScheduledEventByUser.get(key);
+    if (!entry) return null;
+    if (Date.now() - (entry.updatedAt || 0) > LAST_EVENT_TTL_MS) {
+        lastScheduledEventByUser.delete(key);
+        return null;
+    }
+    return entry;
+}
 
 const PRIORIDAD_META = {
     urgente: { label: 'URGENTE', emoji: '🔥' },
@@ -104,7 +139,8 @@ function pruneProductivityWizards(maxEntries = 500) {
     const now = Date.now();
     return (
         pruneWizardMap(pendingTaskWizards, maxEntries, now) +
-        pruneWizardMap(pendingEventWizards, maxEntries, now)
+        pruneWizardMap(pendingEventWizards, maxEntries, now) +
+        pruneWizardMap(lastScheduledEventByUser, maxEntries, now)
     );
 }
 
@@ -221,9 +257,52 @@ async function resolveCollaboratorCandidates(db) {
 }
 
 /**
- * Extrae hora (HH:mm) y fecha (YYYY-MM-DD) de texto en español sin depender de timezone del host
+ * Aplica heurística de período horario (AM/PM/mañana/tarde/noche) a una hora en español
  */
-function extractDateAndTimeFromSpanish(rawText = '', referenceNowSv = null) {
+function resolveSpanishHour24(rawHour, periodRaw = '', hasExplicit24hMinutes = false) {
+    let h = Number(rawHour);
+    if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+    const period = String(periodRaw || '').toLowerCase().replace(/[\s.]/g, '').trim();
+    if (period.startsWith('pm') || period === 'tarde' || period === 'noche') {
+        if (h < 12) h += 12;
+    } else if (period.startsWith('am') || period === 'manana') {
+        if (h === 12) h = 0;
+    } else if (!hasExplicit24hMinutes && h >= 1 && h <= 6) {
+        // En horario laboral salvadoreño, "a las 2" / "a las 3 y media" suele significar PM
+        h += 12;
+    }
+    return h >= 0 && h <= 23 ? h : null;
+}
+
+/**
+ * Resuelve un día del mes sin mes explícito ("el 25", "para el 5") al próximo día válido
+ */
+function resolveBareDayOfMonth(dayNum, todaySv) {
+    const d = Number(dayNum);
+    if (!Number.isFinite(d) || d < 1 || d > 31) return null;
+    const [yy, mm, dd] = String(todaySv || '').split('-').map(Number);
+    if (!yy || !mm || !dd) return null;
+
+    let targetYear = yy;
+    let targetMonth = mm;
+    if (d < dd) {
+        targetMonth += 1;
+        if (targetMonth > 12) {
+            targetMonth = 1;
+            targetYear += 1;
+        }
+    }
+    const maxDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+    if (d > maxDay) return null;
+    return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/**
+ * Extrae hora (HH:mm) y fecha (YYYY-MM-DD) de texto en español sin depender de timezone del host.
+ * Soporta expresiones naturales, horas coloquiales ("2 y media", "mediodía"), desplazamientos relativos
+ * ("en 30 minutos", "en 2 horas", "en media hora") y hora digitada libremente.
+ */
+function extractDateAndTimeFromSpanish(rawText = '', referenceNowSv = null, options = {}) {
     const refNow = referenceNowSv || getElSalvadorNowSql();
     const todaySv = String(refNow).slice(0, 10);
     const curHour = Number(String(refNow).slice(11, 13)) || 8;
@@ -236,40 +315,178 @@ function extractDateAndTimeFromSpanish(rawText = '', referenceNowSv = null) {
 
     let timeHHMM = null;
     let timeExplicit = false;
+    let targetDate = null;
+    let dateExplicit = false;
+    let isRelativeTime = false;
 
-    // 1. Detección de hora explícita (ej. "10:30 am", "a las 3 pm", "15:00", "a las 8 de la manana")
-    const timeRegexes = [
-        /\b(?:a\s+las?|para\s+las?|alas)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.\s*m\.?|p\.\s*m\.?)\b/i,
-        /\b(?:a\s+las?|a\s+la|para\s+las?|alas)\s*(\d{1,2})(?::(\d{2}))?\s*(?:de\s+la\s+(manana|tarde|noche)|hrs?|horas?)?\b/i,
-        /\b(\d{1,2}):(\d{2})\s*(?:hrs?|horas?)?\b/i
-    ];
+    // 0. Desplazamientos relativos en minutos / horas ("en 30 minutos", "en media hora", "en 2 horas", "dentro de 1h30")
+    let relativeMinutes = null;
+    const relHourMinMatch = rawForTime.match(/\b(?:en|dentro\s+de)\s+(\d{1,2})\s*(?:horas?|hrs?|h)\s*(?:y\s*)?(\d{1,2})\s*(?:minutos?|mins?|m)?\b/i);
+    const relHourHalfMatch = rawForTime.match(/\b(?:en|dentro\s+de)\s+(?:(\d{1,2}|una?)\s+horas?\s+y\s+media|hora\s+y\s+media)\b/i);
+    const relHalfHourMatch = rawForTime.match(/\b(?:en|dentro\s+de)\s+media\s+hora\b/i);
+    const relHoursOnlyMatch = rawForTime.match(/\b(?:en|dentro\s+de)\s+(\d{1,2}|una?)\s*(?:horas?|hrs?)\b/i);
+    const relShortHoursMatch = rawForTime.match(/\b(?:en|dentro\s+de)\s+(\d{1,2})h\b/i);
+    const relMinsOnlyMatch = rawForTime.match(/\b(?:en|dentro\s+de)\s+(\d{1,3})\s*(?:minutos?|mins?|m)\b/i);
 
-    for (const re of timeRegexes) {
-        const m = rawForTime.match(re);
-        if (m) {
-            let h = parseInt(m[1], 10);
-            const min = m[2] ? parseInt(m[2], 10) : 0;
-            const period = (m[3] || '').toLowerCase().replace(/\./g, '').trim();
-            if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
-                if (period.startsWith('pm') || period === 'tarde' || period === 'noche') {
-                    if (h < 12) h += 12;
-                } else if (period.startsWith('am') || period === 'manana') {
-                    if (h === 12) h = 0;
-                } else if (!m[2] && h >= 1 && h <= 6) {
-                    // "a las 3" normalmente es 3:00 PM en horario laboral
-                    h += 12;
-                }
-                timeHHMM = `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+    if (relHourMinMatch) {
+        const hrs = parseInt(relHourMinMatch[1], 10);
+        const mins = parseInt(relHourMinMatch[2], 10);
+        if (hrs >= 0 && hrs <= 72 && mins >= 0 && mins <= 59) {
+            relativeMinutes = hrs * 60 + mins;
+        }
+    } else if (relHourHalfMatch) {
+        const hrsRaw = relHourHalfMatch[1];
+        const hrs = !hrsRaw || /^una?$/i.test(hrsRaw) ? 1 : parseInt(hrsRaw, 10);
+        if (hrs >= 1 && hrs <= 72) relativeMinutes = hrs * 60 + 30;
+    } else if (relHalfHourMatch) {
+        relativeMinutes = 30;
+    } else if (relHoursOnlyMatch) {
+        const hrs = /^una?$/i.test(relHoursOnlyMatch[1]) ? 1 : parseInt(relHoursOnlyMatch[1], 10);
+        if (hrs >= 1 && hrs <= 72) relativeMinutes = hrs * 60;
+    } else if (relShortHoursMatch) {
+        const hrs = parseInt(relShortHoursMatch[1], 10);
+        if (hrs >= 1 && hrs <= 72) relativeMinutes = hrs * 60;
+    } else if (relMinsOnlyMatch) {
+        const mins = parseInt(relMinsOnlyMatch[1], 10);
+        if (mins >= 1 && mins <= 720) relativeMinutes = mins;
+    }
+
+    if (relativeMinutes && relativeMinutes > 0) {
+        const shiftedSql = addMinutesToSvSql(refNow, relativeMinutes);
+        if (shiftedSql) {
+            targetDate = shiftedSql.slice(0, 10);
+            timeHHMM = shiftedSql.slice(11, 16);
+            dateExplicit = true;
+            timeExplicit = true;
+            isRelativeTime = true;
+            return {
+                todaySv,
+                targetDate,
+                dateExplicit,
+                timeHHMM,
+                timeExplicit,
+                isRelativeTime
+            };
+        }
+    }
+
+    // 1. Detección de expresiones coloquiales de hora ("al mediodía", "medianoche", "2 y media", "10 y cuarto", "4 menos cuarto")
+    if (/\b(?:al\s+|a\s+)?(?:mediodia|medio\s+dia)\b/i.test(rawForTime)) {
+        timeHHMM = '12:00';
+        timeExplicit = true;
+    } else if (/\b(?:a\s+)?(?:medianoche|media\s+noche)\b/i.test(rawForTime)) {
+        timeHHMM = '00:00';
+        timeExplicit = true;
+    }
+
+    if (!timeExplicit) {
+        const fracMatch = rawForTime.match(
+            /\b(?:a\s+las?|para\s+las?|alas|las)?\s*(\d{1,2})\s+(y\s+media|y\s+cuarto|menos\s+cuarto|en\s+punto)(?:\s*(?:(am|pm|a\.\s*m\.?|p\.\s*m\.?)|de\s+la\s+(manana|tarde|noche)))?\b/i
+        );
+        if (fracMatch) {
+            const rawH = parseInt(fracMatch[1], 10);
+            const frac = fracMatch[2].toLowerCase().replace(/\s+/g, ' ');
+            const period = fracMatch[3] || fracMatch[4] || '';
+            const baseH = resolveSpanishHour24(rawH, period, false);
+            if (baseH !== null) {
+                let totalMins = baseH * 60;
+                if (frac === 'y media') totalMins += 30;
+                else if (frac === 'y cuarto') totalMins += 15;
+                else if (frac === 'menos cuarto') totalMins = (totalMins - 15 + 1440) % 1440;
+                const hh = Math.floor(totalMins / 60) % 24;
+                const mm = totalMins % 60;
+                timeHHMM = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
                 timeExplicit = true;
-                break;
             }
         }
     }
 
-    // 2. Detección de fecha explícita (evitando confundir "de la manana" con "mañana")
+    // 2. Detección de hora numérica explícita ("10:30 am", "2.30 pm", "3pm", "14h30", "a las 3 de la tarde", "15:00", "9 de la mañana")
+    if (!timeExplicit) {
+        const timeSpecs = [
+            {
+                re: /\b(?:a\s+las?|para\s+las?|alas|las)?\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a\.\s*m\.?|p\.\s*m\.?)\b/i,
+                has24hMin: false
+            },
+            {
+                re: /\b(\d{1,2})\s*h\s*(\d{2})\b/i,
+                has24hMin: true
+            },
+            {
+                re: /\b(?:a\s+las?|a\s+la|para\s+las?|alas|las)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(?:de\s+la\s+(manana|tarde|noche)|hrs?|horas?)?\b/i,
+                has24hMin: false
+            },
+            {
+                re: /\b(\d{1,2})(?:[:.](\d{2}))?\s+de\s+la\s+(manana|tarde|noche)\b/i,
+                has24hMin: false
+            },
+            {
+                re: /\b(\d{1,2}):(\d{2})\s*(?:hrs?|horas?)?\b/i,
+                has24hMin: true
+            }
+        ];
+
+        for (const spec of timeSpecs) {
+            const m = rawForTime.match(spec.re);
+            if (m) {
+                const rawH = parseInt(m[1], 10);
+                const min = m[2] ? parseInt(m[2], 10) : 0;
+                const period = m[3] || '';
+                if (rawH >= 0 && rawH <= 23 && min >= 0 && min <= 59) {
+                    const h = resolveSpanishHour24(rawH, period, Boolean(spec.has24hMin || (m[2] && !period)));
+                    if (h !== null) {
+                        timeHHMM = `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+                        timeExplicit = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Detección de hora digitada directa cuando el bot pidió explícitamente la hora (ej: "14 30", "3", "9", "16")
+    if (!timeExplicit && options && options.allowBareHour) {
+        const strippedDateWords = rawForTime
+            .replace(/\b(?:para\s+)?(?:pasado\s+manana|manana|hoy|ahora|ahorita)\b/gi, ' ')
+            .replace(/\b(?:para\s+)?(?:el|este|proximo)\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/gi, ' ')
+            .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/gi, ' ')
+            .replace(/\b(?:el\s+)?\d{1,2}\s+de\s+[a-z]+(?:\s+(?:de|del)\s+\d{4})?\b/gi, ' ')
+            .replace(/\b(?:para\s+)?(?:el|dia)\s+\d{1,2}\b/gi, ' ')
+            .replace(/\b(?:a\s+las?|para\s+las?|las|mejor|cambiala|cambialo|mover|reprogramar|hora|fecha)\b/gi, ' ')
+            .replace(/[,.;]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const bareMatch = strippedDateWords.match(/^(\d{1,2})(?:[\s:.](\d{2}))?$/);
+        if (bareMatch) {
+            const rawH = parseInt(bareMatch[1], 10);
+            const min = bareMatch[2] ? parseInt(bareMatch[2], 10) : 0;
+            if (rawH >= 0 && rawH <= 23 && min >= 0 && min <= 59) {
+                const h = resolveSpanishHour24(rawH, '', Boolean(bareMatch[2] && rawH >= 13));
+                if (h !== null) {
+                    timeHHMM = `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+                    timeExplicit = true;
+                }
+            }
+        }
+    }
+
+    // 4. Franjas horarias naturales si no se indicó hora exacta ("en la tarde", "por la mañana", "en la noche")
+    if (!timeExplicit) {
+        if (/\b(?:por|en)\s+la\s+tarde\b/i.test(rawForTime)) {
+            timeHHMM = '14:00';
+            timeExplicit = true;
+        } else if (/\b(?:(?:por|en)\s+la\s+manana|temprano)\b/i.test(rawForTime)) {
+            timeHHMM = '08:00';
+            timeExplicit = true;
+        } else if (/\b(?:por|en)\s+la\s+noche\b/i.test(rawForTime)) {
+            timeHHMM = '19:00';
+            timeExplicit = true;
+        }
+    }
+
+    // 5. Detección de fecha explícita (evitando confundir "de/por/en la manana" con "mañana")
     const normWithoutPeriodOfDay = norm.replace(/\b(?:de|por|en)\s+la\s+manana\b/gi, ' ');
-    let targetDate = null;
-    let dateExplicit = false;
 
     if (/\bpasado\s+manana\b/i.test(normWithoutPeriodOfDay)) {
         targetDate = shiftDate(todaySv, 2);
@@ -277,8 +494,11 @@ function extractDateAndTimeFromSpanish(rawText = '', referenceNowSv = null) {
     } else if (/\bmanana\b/i.test(normWithoutPeriodOfDay)) {
         targetDate = shiftDate(todaySv, 1);
         dateExplicit = true;
-    } else if (/\b(?:para\s+)?hoy\b/i.test(normWithoutPeriodOfDay)) {
+    } else if (/\b(?:para\s+)?(?:hoy|ahora|ahorita)\b/i.test(normWithoutPeriodOfDay)) {
         targetDate = todaySv;
+        dateExplicit = true;
+    } else if (/\ben\s+una\s+semana\b/i.test(normWithoutPeriodOfDay)) {
+        targetDate = shiftDate(todaySv, 7);
         dateExplicit = true;
     } else {
         const inDaysMatch = normWithoutPeriodOfDay.match(/\ben\s+(\d{1,2})\s+dias?\b/i);
@@ -291,17 +511,48 @@ function extractDateAndTimeFromSpanish(rawText = '', referenceNowSv = null) {
                 targetDate = explicitSpanDate;
                 dateExplicit = true;
             } else {
-                const weekdayMatch = normWithoutPeriodOfDay.match(/\b(?:el\s+|este\s+|proximo\s+)?(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/i);
-                if (weekdayMatch) {
-                    const targetDow = WEEKDAY_INDEX[weekdayMatch[1].toLowerCase()];
-                    const [yy, mm, dd] = todaySv.split('-').map(Number);
-                    const curDow = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
-                    let delta = (targetDow - curDow + 7) % 7;
-                    if (delta === 0 || /\bproximo\b/i.test(weekdayMatch[0])) {
-                        delta = delta === 0 ? 7 : delta;
+                const shortDmMatch = rawForTime.match(/(?:^|[^\d/-])(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2}))?(?=$|[^\d/-])/);
+                if (shortDmMatch) {
+                    const sd = parseInt(shortDmMatch[1], 10);
+                    const sm = parseInt(shortDmMatch[2], 10);
+                    const [curY, curM, curD] = todaySv.split('-').map(Number);
+                    let sy = shortDmMatch[3] ? (2000 + parseInt(shortDmMatch[3], 10)) : curY;
+                    if (!shortDmMatch[3] && (sm < curM || (sm === curM && sd < curD))) {
+                        sy = curY + 1;
                     }
-                    targetDate = shiftDate(todaySv, delta);
-                    dateExplicit = true;
+                    if (sm >= 1 && sm <= 12 && sd >= 1 && sd <= 31) {
+                        const maxD = new Date(Date.UTC(sy, sm, 0)).getUTCDate();
+                        if (sd <= maxD) {
+                            targetDate = `${sy}-${String(sm).padStart(2, '0')}-${String(sd).padStart(2, '0')}`;
+                            dateExplicit = true;
+                        }
+                    }
+                }
+                if (!dateExplicit) {
+                    const bareDayMatch = rawForTime.match(
+                        /\b(?:para\s+)?(?:el|dia)\s+(\d{1,2})(?!\s*(?:am|pm|a\.\s*m|p\.\s*m|:|\.|h\b|hrs?|horas?|de\s+la\s+|de\s+[a-z]))\b/i
+                    );
+                    if (bareDayMatch) {
+                        const resolvedDay = resolveBareDayOfMonth(parseInt(bareDayMatch[1], 10), todaySv);
+                        if (resolvedDay) {
+                            targetDate = resolvedDay;
+                            dateExplicit = true;
+                        }
+                    }
+                }
+                if (!dateExplicit) {
+                    const weekdayMatch = normWithoutPeriodOfDay.match(/\b(?:el\s+|este\s+|proximo\s+)?(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/i);
+                    if (weekdayMatch) {
+                        const targetDow = WEEKDAY_INDEX[weekdayMatch[1].toLowerCase()];
+                        const [yy, mm, dd] = todaySv.split('-').map(Number);
+                        const curDow = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
+                        let delta = (targetDow - curDow + 7) % 7;
+                        if (delta === 0 || /\bproximo\b/i.test(weekdayMatch[0])) {
+                            delta = delta === 0 ? 7 : delta;
+                        }
+                        targetDate = shiftDate(todaySv, delta);
+                        dateExplicit = true;
+                    }
                 }
             }
         }
@@ -322,8 +573,79 @@ function extractDateAndTimeFromSpanish(rawText = '', referenceNowSv = null) {
         targetDate,
         dateExplicit,
         timeHHMM: timeHHMM || null,
-        timeExplicit
+        timeExplicit,
+        isRelativeTime
     };
+}
+
+/**
+ * Fallback ligero con Gemini Flash-Lite para frases muy coloquiales o ambiguas de fecha/hora
+ * cuando el parser determinista (<5ms) no logró extraer una fecha ni hora explícita.
+ */
+async function parseNaturalScheduleWithGemini(rawText = '', referenceNowSv = null, options = {}) {
+    if (options.skipAiFallback) return null;
+    if (process.env.NODE_TEST_CONTEXT || process.argv.includes('--test') || process.execArgv.includes('--test')) {
+        return null;
+    }
+    const cleanText = String(rawText || '').trim();
+    if (cleanText.length < 3) return null;
+
+    try {
+        const { generateWithGeminiFallback } = require('./telegramGeminiService');
+        const refNow = referenceNowSv || getElSalvadorNowSql();
+        const [yy, mm, dd] = refNow.slice(0, 10).split('-').map(Number);
+        const dayNames = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+        const dowName = dayNames[new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay()] || '';
+
+        const prompt = [
+            `Fecha y hora actual en El Salvador (UTC-6): ${refNow} (${dowName}).`,
+            `Extrae la fecha, hora, título opcional y frecuencia del siguiente mensaje de usuario en español para programar o reprogramar un recordatorio.`,
+            `Responde EXCLUSIVAMENTE en JSON válido con las llaves:`,
+            `{"understood": boolean, "date": "YYYY-MM-DD" | null, "time": "HH:mm" | null, "title": string | null, "frecuencia": "UNA_VEZ" | "DIARIO" | "SEMANAL" | null}`,
+            `Reglas: formato 24h en "time"; si el usuario solo dijo hora sin fecha, deja "date": null; si solo dijo fecha sin hora, deja "time": null; si no expresa ninguna fecha ni hora, devuelve understood=false.`,
+            `Mensaje del usuario: "${cleanText.replace(/"/g, '\\"')}"`
+        ].join('\n');
+
+        const aiPromise = generateWithGeminiFallback({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            config: {
+                responseMimeType: 'application/json',
+                temperature: 0.1
+            },
+            logPrefix: '[MiBot-NLU]'
+        });
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
+        const res = await Promise.race([aiPromise, timeoutPromise]);
+        if (!res || !res.text) return null;
+
+        const jsonStr = res.text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+        const parsed = JSON.parse(jsonStr);
+        if (!parsed || !parsed.understood) return null;
+
+        const validDate = typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date.trim())
+            ? parsed.date.trim()
+            : null;
+        const validTime = typeof parsed.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(parsed.time.trim())
+            ? parsed.time.trim()
+            : null;
+        if (!validDate && !validTime) return null;
+
+        const validFreq = ['UNA_VEZ', 'DIARIO', 'SEMANAL'].includes(String(parsed.frecuencia || '').toUpperCase())
+            ? String(parsed.frecuencia).toUpperCase()
+            : null;
+
+        return {
+            targetDate: validDate,
+            dateExplicit: Boolean(validDate),
+            timeHHMM: validTime,
+            timeExplicit: Boolean(validTime),
+            title: typeof parsed.title === 'string' && parsed.title.trim().length >= 3 ? parsed.title.trim() : null,
+            frecuencia: validFreq,
+            source: 'gemini'
+        };
+    } catch (_) {
+        return null;
+    }
 }
 
 /**
@@ -427,13 +749,21 @@ function cleanExtractedTitle(rawBody = '') {
         .replace(/^(?:de|que|sobre)\s+(?=[a-zA-ZáéíóúñÁÉÍÓÚÑ])/i, '')
         .replace(/^para\s+(?=[a-zA-ZáéíóúñÁÉÍÓÚÑ]+(?:ar|er|ir)\b)/i, '')
         .replace(/\b(?:con\s+prioridad\s+|prioridad\s+)?(?:urgente|alta|alta\s+prioridad|prioridad\s+alta|media|baja)\b/gi, ' ')
-        .replace(/\b(?:para\s+)?(?:pasado\s+manana|pasado\s+mañana|mañana|manana|hoy)\b/gi, ' ')
+        .replace(/\b(?:en|dentro\s+de)\s+(?:\d{1,2}\s*(?:horas?|hrs?|h)\s*(?:y\s*)?(?:\d{1,2}\s*(?:minutos?|mins?|m)?|media)?|(?:una?\s+)?horas?\s+y\s+media|media\s+hora|\d{1,2}\s*(?:horas?|hrs?|h)|\d{1,3}\s*(?:minutos?|mins?|m)|una\s+semana)\b/gi, ' ')
+        .replace(/\b(?:al\s+|a\s+)?(?:mediod[ií]a|medio\s+d[ií]a|medianoche|media\s+noche)\b/gi, ' ')
+        .replace(/\b(?:a\s+las?|para\s+las?|alas|las)?\s*\d{1,2}\s+(?:y\s+media|y\s+cuarto|menos\s+cuarto|en\s+punto)(?:\s*(?:am|pm|a\.?\s*m\.?|p\.?\s*m\.?|de\s+la\s+(?:mañana|manana|tarde|noche)))?\b/gi, ' ')
+        .replace(/\b(?:por|en)\s+la\s+(?:mañana|manana|tarde|noche)\b/gi, ' ')
+        .replace(/\b(?:para\s+)?(?:pasado\s+manana|pasado\s+mañana|mañana|manana|hoy|ahorita)\b/gi, ' ')
         .replace(/\b(?:para\s+)?(?:el|este|pr[oó]ximo)\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/gi, ' ')
         .replace(/\ben\s+\d{1,2}\s+d[ií]as?\b/gi, ' ')
         .replace(/\b(?:para\s+el\s+)?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/gi, ' ')
         .replace(/\b(?:para\s+el\s+)?\d{1,2}\s+de\s+[a-záéíóú]+(?:\s+(?:de|del)\s+\d{4})?\b/gi, ' ')
-        .replace(/\b(?:a\s+las?|para\s+las?|a\s+la)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.?\s*m\.?|p\.?\s*m\.?|de\s+la\s+(?:mañana|manana|tarde|noche)|hrs?|horas?)?\b/gi, ' ')
-        .replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.?\s*m\.?|p\.?\s*m\.?)\b/gi, ' ')
+        .replace(/\b(?:para\s+)?(?:el|d[ií]a)\s+\d{1,2}\b/gi, ' ')
+        .replace(/\b(?:a\s+las?|para\s+las?|a\s+la|alas)\s+\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.?\s*m\.?|p\.?\s*m\.?|de\s+la\s+(?:mañana|manana|tarde|noche)|hrs?|horas?)?\b/gi, ' ')
+        .replace(/\b\d{1,2}(?:[:.]\d{2})?\s+(?:de\s+la\s+(?:mañana|manana|tarde|noche))\b/gi, ' ')
+        .replace(/\b\d{1,2}\s*h\s*\d{2}\b/gi, ' ')
+        .replace(/\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.?\s*m\.?|p\.?\s*m\.?)\b/gi, ' ')
+        .replace(/\b\d{1,2}:\d{2}\s*(?:hrs?|horas?)?\b/gi, ' ')
         .replace(/\b(?:todos\s+los\s+d[ií]as|diario|diariamente|cada\s+semana|semanal(?:mente)?|una\s+sola\s+vez)\b/gi, ' ')
         .replace(/\s+(?:el|la|para|con|por|en|a)\s*$/i, '')
         .replace(/\s+/g, ' ')
@@ -1432,13 +1762,154 @@ function getEventosInlineMarkup(activeRange = 'semana') {
     };
 }
 
+function buildEventConfirmationMarkup(programacionId, activeRange = 'semana') {
+    const baseRows = getEventosInlineMarkup(activeRange).inline_keyboard;
+    const pid = Number(programacionId);
+    if (!Number.isFinite(pid) || pid <= 0) {
+        return { inline_keyboard: baseRows };
+    }
+    return {
+        inline_keyboard: [
+            [
+                { text: '🕐 Cambiar Fecha / Hora', callback_data: `tg_evt:re:${pid}` },
+                { text: '❌ Cancelar evento', callback_data: `tg_evt:del:${pid}` }
+            ],
+            ...baseRows
+        ]
+    };
+}
+
+function buildEventConfirmationMessage(prog, { isRescheduled = false } = {}) {
+    const meta = TIPO_META[prog?.tipo] || TIPO_META.REUNION;
+    const destNames = (prog?.destinatarios || []).map(d => escapeHtml(d.nombre_destinatario)).join(', ');
+    const header = isRescheduled
+        ? `✅ <b>🕐 FECHA / HORA ACTUALIZADA EN MIBOT</b>`
+        : `✅ <b>${meta.emoji} RECORDATORIO PROGRAMADO EN MIBOT</b>`;
+
+    return [
+        header,
+        `━━━━━━━━━━━━━━━━━━━━━`,
+        `📌 <b>${escapeHtml(prog?.titulo || 'Recordatorio')}</b>`,
+        `• 🗓️ <b>Fecha / Hora:</b> ${formatDisplayDateTimeSv(prog?.programado_para || prog?.proximo_envio_at)}`,
+        `• 🔁 <b>Frecuencia:</b> ${FRECUENCIA_LABELS[prog?.frecuencia] || prog?.frecuencia || 'Una sola vez'}`,
+        `• 👥 <b>Destinatarios:</b> ${destNames || 'Personal'}`,
+        ``,
+        `<i>MiBot notificará personalmente a cada participante en la fecha y hora programada. También puedes decirme "cambiar la hora a las 3pm" o tocar el botón abajo.</i>`
+    ].join('\n');
+}
+
+/**
+ * Resuelve un slot rápido de botón inline (ej: "rel_30", "rel_60", "h_1000", "hoy_1500") a SQL SV
+ */
+function resolveQuickTimeSlot(slot, referenceDate = null, nowSvOverride = null) {
+    const nowSv = nowSvOverride || getElSalvadorNowSql();
+    const todaySv = nowSv.slice(0, 10);
+    const tomorrowSv = shiftDate(todaySv, 1);
+
+    if (slot === 'rel_30') return addMinutesToSvSql(nowSv, 30);
+    if (slot === 'rel_60') return addMinutesToSvSql(nowSv, 60);
+    if (slot === 'rel_120') return addMinutesToSvSql(nowSv, 120);
+
+    const hoyMatch = String(slot || '').match(/^hoy_(\d{2})(\d{2})$/);
+    if (hoyMatch) {
+        return `${todaySv} ${hoyMatch[1]}:${hoyMatch[2]}:00`;
+    }
+
+    const fixedMatch = String(slot || '').match(/^h_(\d{2})(\d{2})$/);
+    if (fixedMatch) {
+        const baseDate = referenceDate && /^\d{4}-\d{2}-\d{2}$/.test(referenceDate) ? referenceDate : tomorrowSv;
+        return `${baseDate} ${fixedMatch[1]}:${fixedMatch[2]}:00`;
+    }
+
+    return null;
+}
+
+function formatEventAskTimeText(wizard, { isReschedule = false } = {}) {
+    const meta = TIPO_META[wizard.tipo] || TIPO_META.REUNION;
+    const lines = [];
+
+    if (isReschedule) {
+        lines.push(`🕐 <b>CAMBIAR FECHA / HORA DEL RECORDATORIO</b>`);
+        lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+        lines.push(`📌 <b>${escapeHtml(wizard.titulo || 'Recordatorio')}</b>`);
+        if (wizard.currentProgramadoPara) {
+            lines.push(`• 🗓️ <b>Actual:</b> ${formatDisplayDateTimeSv(wizard.currentProgramadoPara)}`);
+        }
+        lines.push(``);
+        lines.push(`✍️ <b>Digita o dicta por voz la nueva fecha y hora</b> (o elige un acceso rápido abajo):`);
+        lines.push(`<i>Ejemplos: "hoy 3:30 pm", "mañana 10:15 am", "25/11 14:30", "viernes mediodía", "en 2 horas" o solo la hora "2:30 pm".</i>`);
+        return lines.join('\n');
+    }
+
+    const selSet = new Set((wizard.selectedTgIds || []).map(Number));
+    const names = (wizard.candidates || [])
+        .filter(c => selSet.has(Number(c.telegram_usuario_id)))
+        .map(c => escapeHtml(c.nombre));
+
+    lines.push(`🕐 <b>¿QUÉ DÍA Y A QUÉ HORA LO PROGRAMO?</b>`);
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+    lines.push(`📌 <b>${escapeHtml(wizard.titulo || 'Recordatorio')}</b>`);
+    lines.push(`• <b>Tipo:</b> ${meta.emoji} ${meta.label}`);
+    lines.push(`• <b>Participantes:</b> ${names.join(', ') || 'Personal'}`);
+    lines.push(`• <b>Frecuencia:</b> 🔁 ${FRECUENCIA_LABELS[wizard.frecuencia] || 'Una sola vez'}`);
+    if (wizard.targetDate) {
+        lines.push(`• 📆 <b>Fecha seleccionada:</b> ${toDisplayDate(wizard.targetDate)}`);
+    }
+    lines.push(``);
+    lines.push(`✍️ <b>Digita o dicta la fecha y hora exacta</b> (o toca un botón rápido abajo):`);
+    lines.push(
+        wizard.targetDate
+            ? `<i>Ejemplos: "9:30 am", "2:15 pm", "15:00", "al mediodía", "3 y media" (o cambia la fecha: "jueves 10am").</i>`
+            : `<i>Ejemplos: "hoy 3:30 pm", "mañana 10:15 am", "25/11 14:30", "viernes mediodía", "en 45 minutos" o "2:30 pm".</i>`
+    );
+    return lines.join('\n');
+}
+
+function buildEventTimePickerMarkup(wizard, { isReschedule = false, nowSvOverride = null } = {}) {
+    const prefix = isReschedule ? 'tg_evt:rtime:' : 'tg_evt:wtime:';
+    const nowSv = nowSvOverride || getElSalvadorNowSql();
+    const curHour = Number(nowSv.slice(11, 13)) || 8;
+    const hasSpecificDate = Boolean(wizard?.targetDate && /^\d{4}-\d{2}-\d{2}$/.test(wizard.targetDate));
+    const dateTag = hasSpecificDate ? formatShortDM(wizard.targetDate) : 'Mañana';
+
+    const row1 = [
+        { text: '⏱️ En 30 min', callback_data: `${prefix}rel_30` },
+        { text: '⏱️ En 1 hora', callback_data: `${prefix}rel_60` }
+    ];
+    if (curHour < 15) {
+        row1.push({ text: '🕒 Hoy 3:00 PM', callback_data: `${prefix}hoy_1500` });
+    } else if (curHour < 17) {
+        row1.push({ text: '🕔 Hoy 5:00 PM', callback_data: `${prefix}hoy_1700` });
+    } else {
+        row1.push({ text: '⏱️ En 2 horas', callback_data: `${prefix}rel_120` });
+    }
+
+    const row2 = [
+        { text: `🌅 ${dateTag} 8:00 AM`, callback_data: `${prefix}h_0800` },
+        { text: `🕙 ${dateTag} 10:00 AM`, callback_data: `${prefix}h_1000` }
+    ];
+    const row3 = [
+        { text: `🕑 ${dateTag} 2:00 PM`, callback_data: `${prefix}h_1400` },
+        { text: `🕓 ${dateTag} 4:00 PM`, callback_data: `${prefix}h_1600` }
+    ];
+
+    return {
+        inline_keyboard: [
+            row1,
+            row2,
+            row3,
+            [{ text: '❌ Cancelar', callback_data: 'tg_evt:wcancel' }]
+        ]
+    };
+}
+
 /**
  * Parsea un comando/frase para agendar un evento, reunión o recordatorio en MiBot
  */
 function parseScheduleEventInput(rawText = '', candidates = [], selfTgUserId = null, referenceNowSv = null) {
     const raw = String(rawText || '').trim();
     const norm = normalizeText(raw);
-    const { targetDate, dateExplicit, timeHHMM, timeExplicit } = extractDateAndTimeFromSpanish(raw, referenceNowSv);
+    const { targetDate, dateExplicit, timeHHMM, timeExplicit, isRelativeTime } = extractDateAndTimeFromSpanish(raw, referenceNowSv);
 
     let tipo = 'REUNION';
     if (/\b(reunion|reuniones|junta|llamada|cita|comite|sesion)\b/i.test(norm)) {
@@ -1447,7 +1918,7 @@ function parseScheduleEventInput(rawText = '', candidates = [], selfTgUserId = n
         tipo = 'VALIDACION';
     } else if (/\b(pagar|pago|abono|abonar|factura|control de pagos)\b/i.test(norm) && !/\b(reunion|junta)\b/i.test(norm)) {
         tipo = 'RECORDATORIO_PAGO';
-    } else if (/^\/?recordatorio|recuerdame/i.test(norm)) {
+    } else if (/^\/?recordatorio|recuerdame|avisame|no\s+me\s+dejes\s+olvidar/i.test(norm)) {
         tipo = 'TAREA';
     }
 
@@ -1458,10 +1929,11 @@ function parseScheduleEventInput(rawText = '', candidates = [], selfTgUserId = n
         frecuencia = 'SEMANAL';
     }
 
-    // Buscar participantes mencionados después de "con" o "a"
+    // Buscar participantes mencionados después de "con" o "para"
     const participants = [];
     const seen = new Set();
-    const withMatch = raw.match(/\b(?:con|para)\s+([a-záéíóúñÁÉÍÓÚÑ\s,@]+?)(?=\s+(?:hoy|mañana|manana|pasado|el|este|pr[oó]ximo|a\s+las|para|sobre|de|:)|\s*$)/i);
+    let matchedWithClause = null;
+    const withMatch = raw.match(/\b(?:con|para)\s+([a-záéíóúñÁÉÍÓÚÑ\s,@]+?)(?=\s+(?:hoy|mañana|manana|pasado|el|este|pr[oó]ximo|a\s+las?|para|sobre|de|en\s+\d|en\s+media|al\s+mediod[ií]a|:)|\s*$)/i);
     if (withMatch) {
         const res = splitAndMatchCandidates(withMatch[1], candidates);
         for (const c of res.matched) {
@@ -1470,12 +1942,15 @@ function parseScheduleEventInput(rawText = '', candidates = [], selfTgUserId = n
                 participants.push(c);
             }
         }
+        if (res.matched.length > 0 && res.unmatchedCount === 0) {
+            matchedWithClause = withMatch[0];
+        }
     }
 
     // Siempre incluir al usuario creador en recordatorios personales o reuniones si no especificó otros
     if (selfTgUserId) {
         const selfCand = candidates.find(c => Number(c.telegram_usuario_id) === Number(selfTgUserId));
-        if (selfCand && (participants.length === 0 || /\b(recuerdame|recordarme|reunion|junta)\b/i.test(norm))) {
+        if (selfCand && (participants.length === 0 || /\b(recuerdame|recordarme|avisame|avisarme|reunion|junta|cita|llamada|ponme|anotame|apuntame|tengo|no\s+me\s+dejes\s+olvidar)\b/i.test(norm))) {
             if (!seen.has(selfCand.telegram_usuario_id)) {
                 seen.add(selfCand.telegram_usuario_id);
                 participants.unshift(selfCand);
@@ -1483,13 +1958,25 @@ function parseScheduleEventInput(rawText = '', candidates = [], selfTgUserId = n
         }
     }
 
-    // Limpiar título
+    // Limpiar título preservando "Reunión <Entidad>" (ej. "Reunión Bancovi") y "Reunión con Bancovi" si no era colaborador
     let body = raw
-        .replace(/^\/?(?:agendar|reunion|recordatorio|evento)\s*/i, '')
-        .replace(/^(?:recuerdame|recuérdame|agenda(?:r|me)?|programa(?:r|me)?)\s*(?:que\s+|de\s+)?/i, '')
-        .replace(/^(?:una\s+|un\s+)?(?:reuni[oó]n|junta|evento|recordatorio|aviso)\s*/i, '')
-        .replace(/\bcon\s+[a-záéíóúñÁÉÍÓÚÑ,\s]+?(?=\s+(?:hoy|mañana|manana|sobre|de|a\s+las|el|este|pr[oó]ximo)|:|$)/i, ' ')
+        .replace(/^\/(?:agendar|reunion|recordatorio|evento)\s*/i, '')
+        .replace(/^(?:agendar|recordatorio|evento)\s+/i, '')
+        .replace(/^(?:recuerdame|recuérdame|recordarme|av[ií]same|avisarme|agenda(?:r|me)?|programa(?:r|me)?|p[oó]nme|an[oó]tame|ap[uú]ntame|anota(?:r)?|apunta(?:r)?|no\s+me\s+dejes\s+olvidar|tengo|tendr[eé])\s*(?:que\s+|de\s+)?/i, '')
+        .replace(/^(?:una?\s+|un\s+|el\s+|la\s+)?(?:evento|recordatorio|aviso)\s+(?:de\s+|para\s+|sobre\s+)?/i, '')
+        .replace(/^(?:una?\s+|un\s+)(?=(?:reuni[oó]n|junta|cita|llamada)\b)/i, '')
         .trim();
+
+    if (matchedWithClause) {
+        body = body
+            .replace(matchedWithClause, ' ')
+            .replace(/^(?:una?\s+|un\s+)?(?:reuni[oó]n|junta|cita|llamada)\s+(?=(?:sobre|de|para|hoy|mañana|manana|pasado|el|este|pr[oó]ximo|a\s+las?|en\s+\d|en\s+media|al\s+mediod[ií]a|\d))/i, '')
+            .trim();
+    } else {
+        body = body
+            .replace(/^(?:una?\s+|un\s+)?(?:reuni[oó]n|junta|cita|llamada)\s+(?=(?:sobre|para|hoy|mañana|manana|pasado|el|este|pr[oó]ximo|a\s+las?|en\s+\d|en\s+media|al\s+mediod[ií]a|\d))/i, '')
+            .trim();
+    }
 
     body = cleanExtractedTitle(body);
     if (body && body.length > 1) {
@@ -1507,6 +1994,7 @@ function parseScheduleEventInput(rawText = '', candidates = [], selfTgUserId = n
         hora: timeHHMM || '08:00',
         dateExplicit,
         timeExplicit,
+        isRelativeTime,
         participants,
         isComplete: body.length >= 3 && participants.length > 0
     };
@@ -1550,7 +2038,7 @@ function formatEventWizardText(wizard) {
         `• <b>Participantes (${names.length}):</b> ${names.length > 0 ? names.join(', ') : '<i>Selecciona al menos uno</i>'}`,
         `• <b>Frecuencia:</b> 🔁 ${FRECUENCIA_LABELS[wizard.frecuencia] || 'Una sola vez'}`,
         ``,
-        `📝 <i>Ahora escribe el asunto y opcionalmente fecha/hora (ej: "Junta de cierre de mes mañana 10am") o ajusta tipo/participantes abajo:</i>`
+        `📝 <i>Ahora escribe el asunto (ej: "Reunión Bancovi" o "Reunión Bancovi mañana 2:30 pm"). Si no pones hora, te pediré elegirla o digitarla en el siguiente paso:</i>`
     ].join('\n');
 }
 
@@ -2137,9 +2625,155 @@ function getCumpleanosInlineMarkup(activeScope = 'semana') {
 }
 
 /**
+ * Inicia directamente el paso de elegir/digitar fecha y hora para un evento ya parseado sin hora explícita
+ */
+async function startEventTimeStepFromParsed({ chatId, tgUser, parsedEvt, rawText, candidates = [], voicePrefix = '', transport = {} }) {
+    const sendFn = transport.sendTelegramMessage || sendTelegramMessage;
+    const tgUserIdStr = String(tgUser?.telegram_user_id || '');
+    const wizard = {
+        step: 'ENTER_DATETIME',
+        tipo: parsedEvt.tipo || 'REUNION',
+        frecuencia: parsedEvt.frecuencia || 'UNA_VEZ',
+        candidates,
+        selectedTgIds: (parsedEvt.participants || []).map(p => Number(p.telegram_usuario_id)).filter(Boolean),
+        titulo: parsedEvt.titulo,
+        mensaje: String(rawText || parsedEvt.titulo || '').trim(),
+        targetDate: parsedEvt.dateExplicit ? parsedEvt.targetDate : null,
+        updatedAt: Date.now()
+    };
+    pendingEventWizards.set(tgUserIdStr, wizard);
+    await sendFn(chatId, voicePrefix + formatEventAskTimeText(wizard), buildEventTimePickerMarkup(wizard));
+    return wizard;
+}
+
+/**
+ * Resuelve el actor SIPE para auditoría MiBot
+ */
+function buildActorUserFromTelegram(user, effectivePerms) {
+    return {
+        id: effectivePerms?.linkedUser?.id || user?.user_id || 1,
+        nombre: effectivePerms?.linkedUser?.nombre || `${user?.first_name || ''} ${user?.last_name || ''}`.trim() || 'Telegram',
+        username: effectivePerms?.linkedUser?.username || user?.telegram_username || 'telegram'
+    };
+}
+
+/**
+ * Maneja solicitudes en lenguaje natural para cambiar fecha/hora de un recordatorio o reunión MiBot
+ * Ejemplos: "Cambiar la hora", "Cambiar la hora a las 2:30 pm", "Mejor mañana a las 10am", "Mover para el viernes a mediodía"
+ */
+async function handleRescheduleEventNaturalLanguage({
+    db,
+    rawText,
+    chatId,
+    user,
+    effectivePerms,
+    voicePrefix = '',
+    transport = {},
+    referenceNowSv = null,
+    skipAiFallback = false
+}) {
+    const sendFn = transport.sendTelegramMessage || sendTelegramMessage;
+    const tgUserIdStr = String(user?.telegram_user_id || '');
+    const sipeUserId = effectivePerms?.linkedUser?.id ? Number(effectivePerms.linkedUser.id) : (user?.user_id ? Number(user.user_id) : null);
+    const isAdmin = Boolean(effectivePerms?.isAdmin);
+
+    // 1. Buscar último recordatorio en memoria reciente o en BD
+    let targetProg = null;
+    const recent = getLastScheduledEvent(tgUserIdStr);
+    if (recent && recent.programacionId) {
+        targetProg = await getMibotProgramacionById(db, recent.programacionId).catch(() => null);
+        if (targetProg && String(targetProg.estado || '').toUpperCase() === 'CANCELADO') {
+            targetProg = null;
+        }
+    }
+    if (!targetProg) {
+        targetProg = await getLatestEditableMibotProgramacionForUser(db, {
+            telegramUserId: tgUserIdStr,
+            sipeUserId
+        }).catch(() => null);
+    }
+
+    if (!targetProg) {
+        await sendFn(
+            chatId,
+            `${voicePrefix}ℹ️ No encontré un recordatorio o reunión activa reciente para cambiarle la hora.\n\n` +
+            `<i>Puedes consultar tu agenda o programar uno nuevo con los botones abajo:</i>`,
+            getEventosInlineMarkup('semana')
+        );
+        return true;
+    }
+
+    // 2. Verificar si el mismo mensaje ya trae la nueva fecha u hora (ej. "Cambiar la hora a las 3:30 pm")
+    let dt = extractDateAndTimeFromSpanish(rawText, referenceNowSv, { allowBareHour: false });
+    const hasExtraWords = normalizeText(rawText).replace(/\b(?:cambiar|la|el|hora|fecha|horario|reprogramar|mover|posponer|evento|reunion|recordatorio|aviso)\b/gi, '').trim().length >= 3;
+    if (!dt.timeExplicit && !dt.dateExplicit && hasExtraWords) {
+        const aiDt = await parseNaturalScheduleWithGemini(rawText, referenceNowSv, { skipAiFallback });
+        if (aiDt) {
+            dt = {
+                ...dt,
+                targetDate: aiDt.targetDate || dt.targetDate,
+                dateExplicit: aiDt.dateExplicit,
+                timeHHMM: aiDt.timeHHMM || dt.timeHHMM,
+                timeExplicit: aiDt.timeExplicit
+            };
+        }
+    }
+
+    const existingSql = String(targetProg.programado_para || targetProg.proximo_envio_at || '');
+    const existingDate = /^\d{4}-\d{2}-\d{2}/.test(existingSql) ? existingSql.slice(0, 10) : (referenceNowSv || getElSalvadorNowSql()).slice(0, 10);
+    const existingTime = /^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}/.test(existingSql) ? existingSql.slice(11, 16) : '08:00';
+
+    if (dt.timeExplicit || dt.dateExplicit) {
+        const finalDate = dt.dateExplicit ? dt.targetDate : existingDate;
+        const finalTime = dt.timeExplicit ? dt.timeHHMM : existingTime;
+        const newScheduleSql = `${finalDate} ${finalTime}:00`;
+
+        try {
+            const updated = await rescheduleMibotProgramacion({
+                db,
+                programacionId: targetProg.id,
+                programadoPara: newScheduleSql,
+                actorTgUserId: tgUserIdStr,
+                actorSipeUserId: sipeUserId,
+                isAdmin
+            });
+            pendingEventWizards.delete(tgUserIdStr);
+            rememberLastScheduledEvent(tgUserIdStr, updated);
+            await sendFn(
+                chatId,
+                voicePrefix + buildEventConfirmationMessage(updated, { isRescheduled: true }),
+                buildEventConfirmationMarkup(updated.id)
+            );
+        } catch (err) {
+            await sendFn(chatId, `${voicePrefix}❌ ${escapeHtml(err.message)}`, getEventosInlineMarkup('semana'));
+        }
+        return true;
+    }
+
+    // 3. El usuario solo dijo "Cambiar la hora" -> abrir paso interactivo para digitar o elegir hora
+    const wizard = {
+        step: 'RESCHEDULE_TIME',
+        programacionId: Number(targetProg.id),
+        tipo: targetProg.tipo || 'REUNION',
+        frecuencia: targetProg.frecuencia || 'UNA_VEZ',
+        titulo: targetProg.titulo,
+        targetDate: existingDate,
+        currentProgramadoPara: existingSql,
+        updatedAt: Date.now()
+    };
+    pendingEventWizards.set(tgUserIdStr, wizard);
+    await sendFn(
+        chatId,
+        voicePrefix + formatEventAskTimeText(wizard, { isReschedule: true }),
+        buildEventTimePickerMarkup(wizard, { isReschedule: true, nowSvOverride: referenceNowSv })
+    );
+    return true;
+}
+
+/**
  * Intercepta texto libre o nota de voz cuando un usuario está dentro de un wizard activo
  */
-async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawText, chatId, user, effectivePerms, voicePrefix = '', transport = {} }) {
+async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawText, chatId, user, effectivePerms, voicePrefix = '', transport = {}, referenceNowSv = null, skipAiFallback = false }) {
     const tgUserIdStr = String(user?.telegram_user_id || '');
     const sendFn = transport.sendTelegramMessage || sendTelegramMessage;
     const keyboard = transport.getMainReplyKeyboard ? transport.getMainReplyKeyboard() : getMainReplyKeyboard();
@@ -2158,7 +2792,7 @@ async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawTe
         }
 
         if (taskWiz.step === 'ENTER_TITLE') {
-            const parsedDetails = extractDateAndTimeFromSpanish(rawText);
+            const parsedDetails = extractDateAndTimeFromSpanish(rawText, referenceNowSv);
             const tituloClean = cleanExtractedTitle(rawText);
             if (tituloClean.length < 3) {
                 await sendFn(chatId, `${voicePrefix}⚠️ El título es muy corto. Escribe claramente qué actividad deben realizar los colaboradores (o envía /cancelar).`, keyboard);
@@ -2177,7 +2811,7 @@ async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawTe
         }
     }
 
-    // 2. Wizard de Programación de Evento / Reunión / Recordatorio
+    // 2. Wizard de Programación / Reprogramación de Evento / Reunión / Recordatorio
     const evtWiz = getActiveWizard(pendingEventWizards, tgUserIdStr);
     if (evtWiz) {
         if (['cancelar', 'salir', 'menu', 'start', 'inicio'].includes(cleanLower)) {
@@ -2189,24 +2823,176 @@ async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawTe
             return false;
         }
 
+        const actorUser = buildActorUserFromTelegram(user, effectivePerms);
+        const sipeUserId = effectivePerms?.linkedUser?.id ? Number(effectivePerms.linkedUser.id) : (user?.user_id ? Number(user.user_id) : null);
+        const isAdmin = Boolean(effectivePerms?.isAdmin);
+
+        // Paso 2B: Reprogramar fecha/hora de un recordatorio existente
+        if (evtWiz.step === 'RESCHEDULE_TIME') {
+            let dt = extractDateAndTimeFromSpanish(rawText, referenceNowSv, { allowBareHour: true });
+            if (!dt.timeExplicit && !dt.dateExplicit) {
+                const aiDt = await parseNaturalScheduleWithGemini(rawText, referenceNowSv, { skipAiFallback });
+                if (aiDt) {
+                    dt = {
+                        ...dt,
+                        targetDate: aiDt.targetDate || dt.targetDate,
+                        dateExplicit: aiDt.dateExplicit,
+                        timeHHMM: aiDt.timeHHMM || dt.timeHHMM,
+                        timeExplicit: aiDt.timeExplicit
+                    };
+                }
+            }
+
+            if (!dt.timeExplicit && !dt.dateExplicit) {
+                await sendFn(
+                    chatId,
+                    `${voicePrefix}⚠️ No logré identificar la nueva fecha u hora.\n` +
+                    `<i>Prueba escribiendo por ejemplo: "hoy 3:30 pm", "mañana 10:15 am", "25/11 14:30", "en 2 horas" o "2:30 pm".</i>`,
+                    buildEventTimePickerMarkup(evtWiz, { isReschedule: true, nowSvOverride: referenceNowSv })
+                );
+                return true;
+            }
+
+            const existingSql = String(evtWiz.currentProgramadoPara || '');
+            const existingDate = /^\d{4}-\d{2}-\d{2}/.test(existingSql)
+                ? existingSql.slice(0, 10)
+                : (evtWiz.targetDate || (referenceNowSv || getElSalvadorNowSql()).slice(0, 10));
+            const existingTime = /^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}/.test(existingSql)
+                ? existingSql.slice(11, 16)
+                : '08:00';
+
+            // Si el usuario solo cambió la fecha (sin hora), fijar nueva fecha y preguntar si mantiene o cambia la hora?
+            // Mejor: aplicar la nueva fecha conservando la hora actual (o si cambió solo hora, conservar fecha actual).
+            const finalDate = dt.dateExplicit ? dt.targetDate : existingDate;
+            const finalTime = dt.timeExplicit ? dt.timeHHMM : existingTime;
+            const newScheduleSql = `${finalDate} ${finalTime}:00`;
+
+            try {
+                const updated = await rescheduleMibotProgramacion({
+                    db,
+                    programacionId: evtWiz.programacionId,
+                    programadoPara: newScheduleSql,
+                    actorTgUserId: tgUserIdStr,
+                    actorSipeUserId: sipeUserId,
+                    isAdmin
+                });
+                pendingEventWizards.delete(tgUserIdStr);
+                rememberLastScheduledEvent(tgUserIdStr, updated);
+                await sendFn(
+                    chatId,
+                    voicePrefix + buildEventConfirmationMessage(updated, { isRescheduled: true }),
+                    buildEventConfirmationMarkup(updated.id)
+                );
+            } catch (reErr) {
+                pendingEventWizards.delete(tgUserIdStr);
+                await sendFn(chatId, `${voicePrefix}❌ ${escapeHtml(reErr.message)}`, keyboard);
+            }
+            return true;
+        }
+
+        // Paso 2A: Esperando que el usuario digite o dicte fecha y hora del nuevo evento
+        if (evtWiz.step === 'ENTER_DATETIME') {
+            let dt = extractDateAndTimeFromSpanish(rawText, referenceNowSv, { allowBareHour: true });
+            if (!dt.timeExplicit && !dt.dateExplicit) {
+                const aiDt = await parseNaturalScheduleWithGemini(rawText, referenceNowSv, { skipAiFallback });
+                if (aiDt) {
+                    dt = {
+                        ...dt,
+                        targetDate: aiDt.targetDate || dt.targetDate,
+                        dateExplicit: aiDt.dateExplicit,
+                        timeHHMM: aiDt.timeHHMM || dt.timeHHMM,
+                        timeExplicit: aiDt.timeExplicit
+                    };
+                }
+            }
+
+            if (!dt.timeExplicit && !dt.dateExplicit) {
+                await sendFn(
+                    chatId,
+                    `${voicePrefix}⚠️ No reconocí una fecha u hora válida en tu mensaje.\n` +
+                    `<i>Digita por ejemplo: "hoy 3:30 pm", "mañana 10:15 am", "25/11 14:30", "en 45 minutos", "viernes mediodía" o elige un botón abajo:</i>`,
+                    buildEventTimePickerMarkup(evtWiz, { nowSvOverride: referenceNowSv })
+                );
+                return true;
+            }
+
+            // Si el usuario solo digitó la fecha (ej. "el viernes" o "26/11") sin hora, guardar fecha y pedir la hora exacta
+            if (dt.dateExplicit && !dt.timeExplicit) {
+                evtWiz.targetDate = dt.targetDate;
+                evtWiz.updatedAt = Date.now();
+                await sendFn(
+                    chatId,
+                    `${voicePrefix}📆 Fecha fijada para el <b>${toDisplayDate(evtWiz.targetDate)}</b>.\n` +
+                    `🕐 Ahora digita la hora exacta (ej: <i>"9:30 am"</i>, <i>"2:15 pm"</i>, <i>"15:00"</i>, <i>"al mediodía"</i>) o toca una hora rápida:`,
+                    buildEventTimePickerMarkup(evtWiz, { nowSvOverride: referenceNowSv })
+                );
+                return true;
+            }
+
+            const finalDate = dt.dateExplicit ? dt.targetDate : (evtWiz.targetDate || dt.targetDate);
+            const finalProgramadoPara = `${finalDate} ${dt.timeHHMM}:00`;
+            const selSet = new Set((evtWiz.selectedTgIds || []).map(Number));
+
+            try {
+                const created = await createMibotProgramacion({
+                    db,
+                    externalDb,
+                    payload: {
+                        tipo: evtWiz.tipo,
+                        titulo: String(evtWiz.titulo || 'Recordatorio').slice(0, 175),
+                        mensaje: evtWiz.mensaje || evtWiz.titulo,
+                        destinatario_ids: [...selSet],
+                        enviar_ahora: false,
+                        programado_para: finalProgramadoPara,
+                        frecuencia: evtWiz.frecuencia
+                    },
+                    actorUser,
+                    sendTelegramFn: sendFn,
+                    io: io || getRealtimeIo(),
+                    skipSystemNotification: true
+                });
+                pendingEventWizards.delete(tgUserIdStr);
+                const prog = created.programacion;
+                rememberLastScheduledEvent(tgUserIdStr, prog);
+                await sendFn(chatId, voicePrefix + buildEventConfirmationMessage(prog), buildEventConfirmationMarkup(prog.id));
+            } catch (evtErr) {
+                await sendFn(chatId, `${voicePrefix}❌ No se pudo programar el evento: ${escapeHtml(evtErr.message)}`, keyboard);
+            }
+            return true;
+        }
+
+        // Paso 1 (SELECT_DETAILS): El usuario envió el asunto (y opcionalmente fecha/hora)
         const selSet = new Set((evtWiz.selectedTgIds || []).map(Number));
         if (selSet.size === 0) {
             await sendFn(chatId, `${voicePrefix}⚠️ Selecciona primero al menos un participante arriba antes de escribir el asunto.`, buildEventWizardMarkup(evtWiz));
             return true;
         }
 
-        const parsedEvt = parseScheduleEventInput(rawText, evtWiz.candidates || [], user.id);
+        const parsedEvt = parseScheduleEventInput(rawText, evtWiz.candidates || [], user.id, referenceNowSv);
         const titulo = parsedEvt.titulo || cleanExtractedTitle(rawText);
         if (!titulo || titulo.length < 3) {
-            await sendFn(chatId, `${voicePrefix}⚠️ Indícame el motivo o asunto del recordatorio/reunión (por ejemplo: <i>"Revisar cierre mañana 10am"</i>).`, buildEventWizardMarkup(evtWiz));
+            await sendFn(chatId, `${voicePrefix}⚠️ Indícame el motivo o asunto del recordatorio/reunión (por ejemplo: <i>"Reunión Bancovi mañana 2:30 pm"</i>).`, buildEventWizardMarkup(evtWiz));
             return true;
         }
 
-        const actorUser = {
-            id: effectivePerms?.linkedUser?.id || user?.user_id || 1,
-            nombre: effectivePerms?.linkedUser?.nombre || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Telegram',
-            username: effectivePerms?.linkedUser?.username || user.telegram_username || 'telegram'
-        };
+        // Si el usuario NO especificó una hora explícita (ej. solo escribió "Reunión Bancovi"),
+        // NO programar silenciosamente a las 8:00 AM -> pasar al paso 2 para que elija o digite fecha/hora!
+        if (!parsedEvt.timeExplicit) {
+            evtWiz.step = 'ENTER_DATETIME';
+            evtWiz.titulo = titulo.slice(0, 175);
+            evtWiz.mensaje = String(rawText).trim();
+            evtWiz.targetDate = parsedEvt.dateExplicit ? parsedEvt.targetDate : null;
+            if (parsedEvt.frecuencia && parsedEvt.frecuencia !== 'UNA_VEZ') {
+                evtWiz.frecuencia = parsedEvt.frecuencia;
+            }
+            evtWiz.updatedAt = Date.now();
+            await sendFn(
+                chatId,
+                voicePrefix + formatEventAskTimeText(evtWiz),
+                buildEventTimePickerMarkup(evtWiz, { nowSvOverride: referenceNowSv })
+            );
+            return true;
+        }
 
         try {
             const created = await createMibotProgramacion({
@@ -2219,7 +3005,7 @@ async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawTe
                     destinatario_ids: [...selSet],
                     enviar_ahora: false,
                     programado_para: parsedEvt.programado_para,
-                    frecuencia: evtWiz.frecuencia
+                    frecuencia: parsedEvt.frecuencia !== 'UNA_VEZ' ? parsedEvt.frecuencia : evtWiz.frecuencia
                 },
                 actorUser,
                 sendTelegramFn: sendFn,
@@ -2228,19 +3014,8 @@ async function handleActiveProductivityWizardMessage({ db, externalDb, io, rawTe
             });
             pendingEventWizards.delete(tgUserIdStr);
             const prog = created.programacion;
-            const meta = TIPO_META[prog.tipo] || TIPO_META.REUNION;
-            const destNames = (prog.destinatarios || []).map(d => escapeHtml(d.nombre_destinatario)).join(', ');
-            const okMsg = [
-                `✅ <b>${meta.emoji} RECORDATORIO PROGRAMADO EN MIBOT</b>`,
-                `━━━━━━━━━━━━━━━━━━━━━`,
-                `📌 <b>${escapeHtml(prog.titulo)}</b>`,
-                `• 🗓️ <b>Fecha / Hora:</b> ${formatDisplayDateTimeSv(prog.programado_para)}`,
-                `• 🔁 <b>Frecuencia:</b> ${FRECUENCIA_LABELS[prog.frecuencia] || prog.frecuencia}`,
-                `• 👥 <b>Destinatarios:</b> ${destNames}`,
-                ``,
-                `<i>MiBot notificará personalmente a cada participante en la fecha y hora programada.</i>`
-            ].join('\n');
-            await sendFn(chatId, voicePrefix + okMsg, getEventosInlineMarkup('semana'));
+            rememberLastScheduledEvent(tgUserIdStr, prog);
+            await sendFn(chatId, voicePrefix + buildEventConfirmationMessage(prog), buildEventConfirmationMarkup(prog.id));
         } catch (evtErr) {
             await sendFn(chatId, `${voicePrefix}❌ No se pudo programar el evento: ${escapeHtml(evtErr.message)}`, keyboard);
         }
@@ -2542,6 +3317,168 @@ async function handleProductivityCallbackQuery({
             return true;
         }
 
+        if (data.startsWith('tg_evt:wtime:')) {
+            const wiz = getActiveWizard(pendingEventWizards, tgUserIdStr);
+            if (!wiz || wiz.step !== 'ENTER_DATETIME') {
+                await answerFn(cq.id, '⌛ Sesión expirada. Envía /agendar.');
+                return true;
+            }
+            const slot = data.slice('tg_evt:wtime:'.length);
+            const scheduledSql = resolveQuickTimeSlot(slot, wiz.targetDate);
+            if (!scheduledSql) {
+                await answerFn(cq.id, '⚠️ Hora rápida no válida.');
+                return true;
+            }
+            const selSet = new Set((wiz.selectedTgIds || []).map(Number));
+            if (selSet.size === 0) {
+                await answerFn(cq.id, '⚠️ Sin participantes seleccionados.');
+                return true;
+            }
+            await answerFn(cq.id, `Programando para ${formatDisplayDateTimeSv(scheduledSql)}...`);
+            try {
+                const created = await createMibotProgramacion({
+                    db,
+                    externalDb,
+                    payload: {
+                        tipo: wiz.tipo,
+                        titulo: String(wiz.titulo || 'Recordatorio').slice(0, 175),
+                        mensaje: wiz.mensaje || wiz.titulo,
+                        destinatario_ids: [...selSet],
+                        enviar_ahora: false,
+                        programado_para: scheduledSql,
+                        frecuencia: wiz.frecuencia
+                    },
+                    actorUser: buildActorUserFromTelegram(tgUser, effPerms),
+                    sendTelegramFn: sendFn,
+                    io: io || getRealtimeIo(),
+                    skipSystemNotification: true
+                });
+                pendingEventWizards.delete(tgUserIdStr);
+                const prog = created.programacion;
+                rememberLastScheduledEvent(tgUserIdStr, prog);
+                if (chatId && messageId) {
+                    await editMarkupFn(chatId, messageId, {
+                        inline_keyboard: [[{ text: `✅ Programado · ${formatDisplayDateTimeSv(prog.programado_para)}`, callback_data: 'noop' }]]
+                    });
+                }
+                await sendFn(chatId, buildEventConfirmationMessage(prog), buildEventConfirmationMarkup(prog.id));
+            } catch (evtErr) {
+                await sendFn(chatId, `❌ No se pudo programar el evento: ${escapeHtml(evtErr.message)}`, keyboard);
+            }
+            return true;
+        }
+
+        if (data.startsWith('tg_evt:rtime:')) {
+            const wiz = getActiveWizard(pendingEventWizards, tgUserIdStr);
+            if (!wiz || wiz.step !== 'RESCHEDULE_TIME' || !wiz.programacionId) {
+                await answerFn(cq.id, '⌛ Sesión expirada. Toca Cambiar Fecha / Hora de nuevo.');
+                return true;
+            }
+            const slot = data.slice('tg_evt:rtime:'.length);
+            const scheduledSql = resolveQuickTimeSlot(slot, wiz.targetDate);
+            if (!scheduledSql) {
+                await answerFn(cq.id, '⚠️ Hora rápida no válida.');
+                return true;
+            }
+            await answerFn(cq.id, `Actualizando a ${formatDisplayDateTimeSv(scheduledSql)}...`);
+            try {
+                const updated = await rescheduleMibotProgramacion({
+                    db,
+                    programacionId: wiz.programacionId,
+                    programadoPara: scheduledSql,
+                    actorTgUserId: tgUserIdStr,
+                    actorSipeUserId: sipeUserId,
+                    isAdmin: Boolean(effPerms?.isAdmin)
+                });
+                pendingEventWizards.delete(tgUserIdStr);
+                rememberLastScheduledEvent(tgUserIdStr, updated);
+                if (chatId && messageId) {
+                    await editMarkupFn(chatId, messageId, {
+                        inline_keyboard: [[{ text: `✅ Reprogramado · ${formatDisplayDateTimeSv(updated.programado_para)}`, callback_data: 'noop' }]]
+                    });
+                }
+                await sendFn(chatId, buildEventConfirmationMessage(updated, { isRescheduled: true }), buildEventConfirmationMarkup(updated.id));
+            } catch (reErr) {
+                pendingEventWizards.delete(tgUserIdStr);
+                await sendFn(chatId, `❌ ${escapeHtml(reErr.message)}`, keyboard);
+            }
+            return true;
+        }
+
+        if (data.startsWith('tg_evt:re:')) {
+            const progId = parseInt(data.split(':')[2], 10);
+            if (!progId) {
+                await answerFn(cq.id, '⚠️ ID de recordatorio inválido.');
+                return true;
+            }
+            const prog = await getMibotProgramacionById(db, progId).catch(() => null);
+            if (!prog) {
+                await answerFn(cq.id, 'Este recordatorio ya no existe.');
+                return true;
+            }
+            const isAllowed = Boolean(effPerms?.isAdmin) ||
+                (sipeUserId && prog.created_by_user_id && Number(prog.created_by_user_id) === sipeUserId) ||
+                (prog.destinatarios || []).some(d => String(d.telegram_user_id) === tgUserIdStr);
+            if (!isAllowed) {
+                await answerFn(cq.id, '⛔ No tienes permiso para editar este recordatorio.');
+                return true;
+            }
+            if (String(prog.estado || '').toUpperCase() === 'CANCELADO') {
+                await answerFn(cq.id, '⚠️ Este recordatorio ya fue cancelado.');
+                return true;
+            }
+            const currentSql = String(prog.programado_para || prog.proximo_envio_at || '');
+            const wizard = {
+                step: 'RESCHEDULE_TIME',
+                programacionId: Number(prog.id),
+                tipo: prog.tipo || 'REUNION',
+                frecuencia: prog.frecuencia || 'UNA_VEZ',
+                titulo: prog.titulo,
+                targetDate: /^\d{4}-\d{2}-\d{2}/.test(currentSql) ? currentSql.slice(0, 10) : null,
+                currentProgramadoPara: currentSql,
+                updatedAt: Date.now()
+            };
+            pendingEventWizards.set(tgUserIdStr, wizard);
+            await answerFn(cq.id, 'Digita o elige la nueva fecha y hora');
+            await sendFn(chatId, formatEventAskTimeText(wizard, { isReschedule: true }), buildEventTimePickerMarkup(wizard, { isReschedule: true }));
+            return true;
+        }
+
+        if (data.startsWith('tg_evt:del:')) {
+            const progId = parseInt(data.split(':')[2], 10);
+            if (!progId) {
+                await answerFn(cq.id, '⚠️ ID de recordatorio inválido.');
+                return true;
+            }
+            try {
+                const cancelled = await cancelMibotProgramacion({
+                    db,
+                    programacionId: progId,
+                    actorTgUserId: tgUserIdStr,
+                    actorSipeUserId: sipeUserId,
+                    isAdmin: Boolean(effPerms?.isAdmin)
+                });
+                const curWiz = getActiveWizard(pendingEventWizards, tgUserIdStr);
+                if (curWiz && Number(curWiz.programacionId) === progId) {
+                    pendingEventWizards.delete(tgUserIdStr);
+                }
+                const lastEvt = getLastScheduledEvent(tgUserIdStr);
+                if (lastEvt && Number(lastEvt.programacionId) === progId) {
+                    lastScheduledEventByUser.delete(tgUserIdStr);
+                }
+                await answerFn(cq.id, '❌ Recordatorio cancelado');
+                if (chatId && messageId) {
+                    await editMarkupFn(chatId, messageId, {
+                        inline_keyboard: [[{ text: '❌ Recordatorio cancelado', callback_data: 'noop' }]]
+                    });
+                }
+                await sendFn(chatId, `🗑️ Recordatorio <b>${escapeHtml(cancelled?.titulo || `#${progId}`)}</b> cancelado correctamente.`, getEventosInlineMarkup('semana'));
+            } catch (delErr) {
+                await answerFn(cq.id, delErr.message || '⛔ No se pudo cancelar.');
+            }
+            return true;
+        }
+
         if (data.startsWith('tg_evt:r:')) {
             const reqRange = data.split(':')[2] || 'semana';
             await answerFn(cq.id, 'Consultando agenda...');
@@ -2637,6 +3574,7 @@ async function handleProductivityCallbackQuery({
                 });
 
                 const prog = res.programacion;
+                rememberLastScheduledEvent(tgUserIdStr, prog);
                 await sendFn(
                     chatId,
                     `🔔 <b>Recordatorio de Pago Programado en MiBot</b>\n\n` +
@@ -2671,10 +3609,14 @@ async function handleProductivityCallbackQuery({
 module.exports = {
     pendingTaskWizards,
     pendingEventWizards,
+    lastScheduledEventByUser,
+    rememberLastScheduledEvent,
+    getLastScheduledEvent,
     clearProductivityWizards,
     pruneProductivityWizards,
     resolveCollaboratorCandidates,
     extractDateAndTimeFromSpanish,
+    parseNaturalScheduleWithGemini,
     parseMultiUserTaskInput,
     createMultiUserTasksFromTelegram,
     formatMultiTaskCreationResultMessage,
@@ -2685,8 +3627,15 @@ module.exports = {
     getEventosProgramadosData,
     formatEventosProgramadosMessage,
     getEventosInlineMarkup,
+    buildEventConfirmationMarkup,
+    buildEventConfirmationMessage,
+    resolveQuickTimeSlot,
+    formatEventAskTimeText,
+    buildEventTimePickerMarkup,
     parseScheduleEventInput,
     startEventScheduleWizard,
+    startEventTimeStepFromParsed,
+    handleRescheduleEventNaturalLanguage,
     parseControlPagosQuery,
     getControlPagosDetailedData,
     formatControlPagosMessage,

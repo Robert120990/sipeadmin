@@ -159,6 +159,10 @@ const parseSpanishDateText = (text, ref = 2026) => {
     if (ref instanceof Date && !isNaN(ref.getTime())) {
         refDate = ref;
         defaultYear = ref.getFullYear();
+    } else if (typeof ref === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ref.trim())) {
+        const [ry, rm, rd] = ref.trim().split('-').map(Number);
+        refDate = new Date(ry, rm - 1, rd, 12, 0, 0);
+        defaultYear = ry;
     } else if (typeof ref === 'number' && ref > 1900 && ref < 3000) {
         defaultYear = ref;
         refDate.setFullYear(ref);
@@ -243,6 +247,10 @@ const parseSpanishPeriodOrDate = (text, ref = 2026) => {
     if (ref instanceof Date && !isNaN(ref.getTime())) {
         refDate = ref;
         defaultYear = ref.getFullYear();
+    } else if (typeof ref === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ref.trim())) {
+        const [ry, rm, rd] = ref.trim().split('-').map(Number);
+        refDate = new Date(ry, rm - 1, rd, 12, 0, 0);
+        defaultYear = ry;
     } else if (typeof ref === 'number' && ref > 1900 && ref < 3000) {
         defaultYear = ref;
         refDate.setFullYear(ref);
@@ -728,28 +736,40 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         /\b(?:asigna(?:le|les|me)?|asignar|pon(?:le|les|er)?|manda(?:le|les)?|crea(?:r|le)?)\s+(?:una\s+|la\s+|estas?\s+)?(?:nueva\s+)?(?:tarea|tareas|actividad|pendiente)\b/i.test(normalized) ||
         /\b(?:asignale|asignales|asignar)\s+(?:a|para)\s+[a-z0-9@]+\b/i.test(normalized);
 
-    const isAgendarEvento = !isAsignarTarea && (
-        /^\/?(?:agendar|reunion|recordatorio)\b/i.test(rawLower) ||
-        /\b(?:recuerdame|recordarme|programa(?:r|me)?|agenda(?:r|me)?|agendar)\s+(?:una?\s+)?(?:reunion|junta|llamada|cita|evento|recordatorio|aviso)\b/i.test(normalized) ||
-        /\b(?:recuerdame|recordarme)\s+(?:que\s+|de\s+|el\s+|hoy|manana|a\s+las|[a-z]{3,})\b/i.test(normalized)
+    const isCambiarHoraEvento = !isAsignarTarea && (
+        /^\/?(?:reprogramar|cambiar_?hora|mover_?evento)\b/i.test(rawLower) ||
+        /\b(?:cambiar|cambia(?:la|lo|me)?|modificar|modifica(?:la|lo)?|ajustar|ajusta(?:la|lo)?|actualizar|mover|mueve(?:la|lo)?|reprogramar|reprograma(?:la|lo)?|posponer|pospon(?:la|lo)?|correr|corre(?:la|lo)?|pasar|pasa(?:la|lo)?|pon(?:la|lo|erla|erlo)?)\s+(?:la\s+|el\s+)?(?:hora|fecha|horario|reunion|cita|junta|evento|recordatorio|aviso)\b/i.test(normalized) ||
+        /\b(?:cambiala|cambialo|muevela|muevelo|reprogramala|reprogramalo|posponla|posponlo|ponla|ponlo|pasala|pasalo)\s+(?:a\s+las?|para\s+(?:las?|el|hoy|manana|pasado|este|proximo)|en\s+\d+|al\s+mediodia)\b/i.test(normalized) ||
+        /\b(?:mejor|mas\s+bien)\s+(?:a\s+las?|(?:para\s+)?(?:las?|hoy|manana|pasado|el\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d{1,2}\b)|este|proximo)|en\s+\d+\s*(?:min|hora)|al\s+mediodia)\b/i.test(normalized)
     );
 
-    const isConsultaTareas = !isAsignarTarea && !isAgendarEvento && (
+    const hasNaturalScheduleTimeOrDate =
+        /\b(?:hoy|manana|pasado\s+manana|a\s+las?\s+\d+|para\s+las?\s+\d+|\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)|en\s+(?:\d+|una?|media)\s*(?:min|minutos?|horas?|dias?)|al\s+mediodia|mediodia|este\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)|proximo\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)|el\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d{1,2}\b))\b/i.test(normalized);
+
+    const isAgendarEvento = !isAsignarTarea && !isCambiarHoraEvento && (
+        /^\/?(?:agendar|reunion|recordatorio)\b/i.test(rawLower) ||
+        /\b(?:recuerdame|recordarme|avisame|avisarme|programa(?:r|me)?|agenda(?:r|me)?|agendar|ponme|anotame|apuntame)\s+(?:una?\s+|un\s+|el\s+|la\s+)?(?:reunion|junta|llamada|cita|evento|recordatorio|aviso)\b/i.test(normalized) ||
+        /\b(?:recuerdame|recordarme|avisame|avisarme|no\s+me\s+dejes\s+olvidar)\s+(?:que\s+|de\s+|el\s+|hoy|manana|pasado|a\s+las|en\s+\d+|en\s+media|en\s+una|[a-z]{3,})\b/i.test(normalized) ||
+        (/\b(?:tengo|tendre|anota(?:r)?|apunta(?:r)?)\s+(?:una?\s+)?(?:reunion|junta|llamada|cita)\b/i.test(normalized) && !/\b(?:que\s+reuniones|cuantas\s+reuniones)\b/i.test(normalized)) ||
+        (/^(?:una?\s+)?(?:reunion|junta|cita|llamada)\s+(?:con|de|en|para|sobre|[a-z]{3,})/i.test(normalized) && hasNaturalScheduleTimeOrDate)
+    );
+
+    const isConsultaTareas = !isAsignarTarea && !isCambiarHoraEvento && !isAgendarEvento && (
         /^\/?(?:tareas|mistareas|mis_?tareas)\b/i.test(rawLower) ||
         /\b(?:mis\s+tareas|tareas\s+pendientes|tareas\s+vencidas|tareas\s+atrasadas|tareas\s+activas|tareas\s+del\s+equipo|que\s+tareas\s+(?:tengo|tiene|tenemos|hay)|cuales\s+son\s+(?:mis|las)\s+tareas|estado\s+de\s+(?:mis\s+|las\s+)?tareas|tareas\s+de\s+[a-z0-9]+)\b/i.test(normalized)
     );
 
-    const isEventosAgenda = !isAsignarTarea && !isAgendarEvento && !isConsultaTareas && (
+    const isEventosAgenda = !isAsignarTarea && !isCambiarHoraEvento && !isAgendarEvento && !isConsultaTareas && (
         /^\/?(?:agenda|eventos)\b/i.test(rawLower) ||
         /\b(?:eventos?\s+programados?|agenda\s+(?:de\s+hoy|de\s+manana|de\s+esta\s+semana|semanal|del\s+mes|completa|mibot)?|que\s+eventos?\s+(?:hay|tengo|tenemos|vienen)|que\s+reuniones?\s+(?:hay|tengo|tenemos)|proximas?\s+reuniones?|proximos?\s+eventos?|mis\s+eventos?|mis\s+reuniones?|mis\s+recordatorios?|mis\s+avisos?)\b/i.test(normalized)
     );
 
-    const isCumpleanos = !isAsignarTarea && !isAgendarEvento && (
+    const isCumpleanos = !isAsignarTarea && !isCambiarHoraEvento && !isAgendarEvento && (
         /^\/?cumplea(?:nos|ños)\b/i.test(rawLower) ||
         /\b(?:cumpleanos|cumple\s+anos|quien\s+cumple|quienes\s+cumplen|cumpleaneros?|cumple\s+hoy|cumple\s+esta\s+semana|cumple\s+este\s+mes)\b/i.test(normalized)
     );
 
-    const isProductivityCommand = isAsignarTarea || isAgendarEvento || isConsultaTareas || isEventosAgenda || isCumpleanos;
+    const isProductivityCommand = isAsignarTarea || isCambiarHoraEvento || isAgendarEvento || isConsultaTareas || isEventosAgenda || isCumpleanos;
 
     // 0.1 Detección temprana de Pagos Programados / Control de Pagos (antes de Solar/Competencia/Andelsa)
     const isAndelsaCxcWords = /\b(?:cuentas?\s+por\s+cobrar|cxc|clientes?\s+andelsa|cartera\s+de\s+clientes?)\b/i.test(normalized);
@@ -1168,6 +1188,7 @@ const parseNaturalLanguageQuery = (rawText, userContext = null) => {
         peakDayOrder,
         isPagosProgramados,
         isAsignarTarea,
+        isCambiarHoraEvento,
         isConsultaTareas,
         isAgendarEvento,
         isEventosAgenda,
