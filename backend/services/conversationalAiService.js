@@ -353,7 +353,7 @@ const buildLiveProjectContext = async (targetDate = null) => {
 };
 
 /**
- * Procesar consulta conversacional con Gemini 2.0 Flash
+ * Procesar consulta conversacional con Gemini (rotación automática vía generateWithGeminiFallback)
  */
 const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms, extraSystemNote = null }) => {
     const apiKey = await getGeminiApiKey();
@@ -362,8 +362,7 @@ const askConversationalAgent = async ({ user, prompt, chatId, effectivePerms, ex
     }
 
     try {
-        const { GoogleGenAI } = require('@google/genai');
-        const ai = new GoogleGenAI({ apiKey });
+        const { generateWithGeminiFallback } = require('./telegramGeminiService');
         const liveContext = await buildLiveProjectContext();
 
         // Aplicar restricciones de seguridad según los permisos efectivos del usuario
@@ -427,16 +426,16 @@ ${JSON.stringify(liveContext)}`;
             }
         ];
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.0-flash',
+        const aiRes = await generateWithGeminiFallback({
             contents,
             config: {
                 systemInstruction,
                 temperature: 0.2
-            }
+            },
+            logPrefix: '[ConversationalAI]'
         });
 
-        const reply = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text;
+        const reply = aiRes?.text || '';
         if (!reply) return null;
 
         const cleanReply = reply.trim();

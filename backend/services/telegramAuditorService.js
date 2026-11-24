@@ -449,8 +449,12 @@ const getHealthDiagnostics = async () => {
 
     // 3. Estado de Gemini API (verificar tanto process.env como tabla telegram_config descartando placeholders)
     let geminiConfigured = false;
+    let geminiModel = 'gemini-2.5-flash-lite';
     try {
-        const { getGeminiApiKey } = require('./telegramGeminiService');
+        const { getGeminiApiKey, GEMINI_FALLBACK_MODELS } = require('./telegramGeminiService');
+        if (Array.isArray(GEMINI_FALLBACK_MODELS) && GEMINI_FALLBACK_MODELS[0]) {
+            geminiModel = GEMINI_FALLBACK_MODELS[0];
+        }
         if (typeof getGeminiApiKey === 'function') {
             const resolvedKey = await getGeminiApiKey();
             geminiConfigured = Boolean(resolvedKey);
@@ -460,7 +464,7 @@ const getHealthDiagnostics = async () => {
     }
     const gemini = {
         configured: geminiConfigured,
-        model: 'gemini-2.0-flash'
+        model: geminiModel
     };
 
     // 4. Memoria activa de conversaciones (usuarios activos en los últimos 20 minutos)

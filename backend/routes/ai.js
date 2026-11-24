@@ -3,11 +3,11 @@ const router = express.Router();
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { GoogleGenAI } = require('@google/genai');
 const dbModule = require('../db');
 const getDb = (...args) => dbModule.getDb(...args);
 const { authenticateToken, requirePermission, isAdminUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { generateWithGeminiFallback } = require('../services/telegramGeminiService');
 const {
     getGeminiApiKey,
     parseNaturalLanguageQuery,
@@ -273,7 +273,6 @@ router.post('/pagos/chat', authenticateToken, requirePermission(recordatoriosPer
             return res.status(400).json({ error: 'Falta configurar GEMINI_API_KEY en el backend.' });
         }
 
-        const ai = new GoogleGenAI({ apiKey: resolvedApiKey });
         const todayStr = new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
         const systemInstruction = `Eres un asistente financiero y operativo experto del sistema SIPE Admin, enfocado en el "Control de Múltiples Pagos y Recordatorios".
@@ -307,16 +306,16 @@ DEBES RESPONDER ÚNICAMENTE EN UN JSON VÁLIDO CON ESTA ESTRUCTURA:
             vence: c.vence
         }));
 
-        const result = await ai.models.generateContent({
-            model: 'gemini-2.0-flash',
+        const aiRes = await generateWithGeminiFallback({
             contents: [{ role: 'user', parts: [{ text: `CONTEXTO DE DATOS ACTUALES: ${JSON.stringify(cleanContext)}\n\nCOMANDO DEL USUARIO: ${prompt}` }] }],
             config: {
                 systemInstruction: systemInstruction,
                 responseMimeType: 'application/json'
-            }
+            },
+            logPrefix: '[PagosChatAI]'
         });
 
-        let rawText = result.text || result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        let rawText = aiRes?.text || '';
         if (rawText.startsWith('```json')) {
             rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
         }

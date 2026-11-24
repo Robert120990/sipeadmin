@@ -443,7 +443,10 @@ router.post('/test-gemini', authenticateToken, requirePermission(telegramPerms),
         const { GoogleGenAI } = require('@google/genai');
         const ai = new GoogleGenAI({ apiKey });
 
-        const candidateModels = ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+        const { GEMINI_FALLBACK_MODELS } = require('../services/telegramGeminiService');
+        const candidateModels = Array.isArray(GEMINI_FALLBACK_MODELS) && GEMINI_FALLBACK_MODELS.length > 0
+            ? GEMINI_FALLBACK_MODELS
+            : ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.8-flash', 'gemini-flash-latest'];
         let modelUsed = candidateModels[0];
         let response = null;
         let lastErr = null;
