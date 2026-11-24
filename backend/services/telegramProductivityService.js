@@ -2798,7 +2798,7 @@ async function tryLocalLlmScheduleOrRescheduleFallback({
     if (!isLocalLlmConfigured()) return false;
 
     const nowSv = referenceNowSv || getElSalvadorNowSql();
-    const nlu = await classifyNaturalIntentWithLocalLlm(rawText, nowSv, { timeoutMs: 9000 });
+    const nlu = await classifyNaturalIntentWithLocalLlm(rawText, nowSv, { timeoutMs: 16000 });
     if (!nlu || nlu.confidence < 0.72) return false;
 
     const sendFn = transport.sendTelegramMessage || sendTelegramMessage;

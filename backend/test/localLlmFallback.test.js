@@ -213,10 +213,13 @@ describe('Local LLM Fallback Service (Ollama + sipe-nlu en rsboosted)', () => {
         assert.equal(health.modelAvailable, true);
         assert.equal(health.model, 'sipe-nlu');
 
-        // Sanitización HTML Telegram (elimina <br>, <p>, **markdown**)
-        const sanitizedHtml = sanitizeTelegramHtmlOutput('<b>Andelsa</b>: 55 kWp<br>**La Loma**: 40 kWp<p>Total: 95 kWp</p>');
+        // Sanitización HTML Telegram (elimina <br>, <p>, <table>, **markdown**)
+        const sanitizedHtml = sanitizeTelegramHtmlOutput('<table><tr><td><b>Andelsa</b></td><td>55 kWp</td></tr><tr><td>**La Loma**</td><td>40 kWp</td></tr></table><br><p>Total: 95 kWp</p>');
+        assert.equal(sanitizedHtml.includes('<table'), false);
+        assert.equal(sanitizedHtml.includes('<td'), false);
         assert.equal(sanitizedHtml.includes('<br>'), false);
         assert.equal(sanitizedHtml.includes('<p>'), false);
-        assert.equal(sanitizedHtml.includes('<b>La Loma</b>'), true);
+        assert.equal(sanitizedHtml.includes('<b>Andelsa</b> · 55 kWp'), true);
+        assert.equal(sanitizedHtml.includes('<b>La Loma</b> · 40 kWp'), true);
     });
 });

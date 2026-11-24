@@ -113,16 +113,27 @@ function convertGeminiContentsToOllamaMessages(contents, systemInstruction = '')
 }
 
 /**
- * Sanitiza etiquetas HTML no soportadas por Telegram (como <br>, <p>, <li>) en texto libre
+ * Sanitiza salidas de texto libre para compatibilidad estricta con Telegram HTML:
+ * convierte <br>, <p>, <li>, <tr>/<td> y **markdown**, y elimina cualquier etiqueta no soportada
+ * por Telegram (conservando únicamente <b>, <strong>, <i>, <em>, <code>, <pre>, <u>, <s>, <a>).
  */
 function sanitizeTelegramHtmlOutput(rawText = '') {
+    const allowedTags = new Set(['b', 'strong', 'i', 'em', 'code', 'pre', 'u', 's', 'a']);
     return String(rawText || '')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
-        .replace(/<\/?(?:p|div|ul|ol|html|body|span)[^>]*>/gi, '')
+        .replace(/<\/tr>\s*/gi, '\n')
+        .replace(/<\/t[dh]>\s*<t[dh][^>]*>/gi, ' · ')
         .replace(/<li[^>]*>/gi, '• ')
         .replace(/<\/li>/gi, '\n')
+        .replace(/<h[1-6][^>]*>/gi, '\n<b>')
+        .replace(/<\/h[1-6]>/gi, '</b>\n')
+        .replace(/<\/?([a-z0-9]+)(?:\s[^>]*)?>/gi, (full, tagName) => {
+            const lower = String(tagName || '').toLowerCase();
+            return allowedTags.has(lower) ? full : '';
+        })
         .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+        .replace(/[ \t]+\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
 }
