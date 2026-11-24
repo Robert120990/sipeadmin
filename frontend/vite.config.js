@@ -44,7 +44,25 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom', 'lucide-react']
+    include: [
+      'react',
+      'react/jsx-runtime',
+      'react/jsx-dev-runtime',
+      'react-dom',
+      'react-dom/client',
+      'react-router-dom',
+      'lucide-react',
+      '@iconify/react',
+      'axios',
+      'socket.io-client',
+      'xlsx',
+      'jspdf',
+      'jspdf-autotable',
+      'html2canvas',
+      'konva',
+      'react-konva',
+      'uuid'
+    ]
   },
   build: {
     rollupOptions: {
