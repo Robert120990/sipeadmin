@@ -5,6 +5,9 @@ const dbModule = require('../db');
 const aiRouter = require('../routes/ai');
 const {
     getMainReplyKeyboard,
+    getHideReplyKeyboard,
+    getMainInlineMenuMarkup,
+    getCollapsedInlineMenuMarkup,
     parseNaturalLanguageQuery,
     getPreciosCompetenciaData,
     formatPreciosCompetenciaMessage,
@@ -148,9 +151,23 @@ describe('Telegram Bot & AI Gateway — Precios de la Competencia (DGEHM)', () =
         it('debe incluir el botón "📊 Precios Competencia" en getMainReplyKeyboard()', () => {
             const kb = getMainReplyKeyboard();
             assert.ok(kb && Array.isArray(kb.keyboard));
+            assert.strictEqual(kb.is_persistent, false, 'No debe quedar anclado permanentemente en pantalla');
+            assert.strictEqual(kb.one_time_keyboard, true, 'Debe ocultarse al usarse');
             const allLabels = kb.keyboard.flat().map(btn => btn.text);
             assert.ok(allLabels.includes('📊 Precios Competencia'), 'Debe incluir botón 📊 Precios Competencia');
             assert.ok(allLabels.includes('❓ Ayuda'), 'Debe conservar botón de Ayuda');
+
+            const hideKb = getHideReplyKeyboard();
+            assert.deepStrictEqual(hideKb, { remove_keyboard: true });
+
+            const inlineMenu = getMainInlineMenuMarkup();
+            const inlineCbs = inlineMenu.inline_keyboard.flat().map(b => b.callback_data);
+            assert.ok(inlineCbs.includes('menu_act:ventas_hoy'));
+            assert.ok(inlineCbs.includes('menu_act:pagos'));
+            assert.ok(inlineCbs.includes('menu_act:hide'));
+
+            const collapsed = getCollapsedInlineMenuMarkup();
+            assert.strictEqual(collapsed.inline_keyboard[0][0].callback_data, 'menu_act:show');
         });
 
         it('getCompetenciaInlineMarkup debe generar botones interactivos por estación, filtro y PDF', () => {
@@ -394,6 +411,29 @@ describe('Telegram Bot & AI Gateway — Precios de la Competencia (DGEHM)', () =
 
             assert.strictEqual(sentMessages.length, 2);
             assert.ok(sentMessages[1].text.includes('SHELL CHALCHUAPA'));
+        });
+
+        it('handleCallbackQuery menu_act:open muestra el menú inline en pantalla y /ocultar quita teclado inferior', async () => {
+            dbModule.getDb = () => ({
+                query: async (sql) => {
+                    if (sql.includes('FROM telegram_usuarios')) {
+                        return [[{ id: 1, telegram_user_id: '777001', activo: 1, permiso_ventas: 1, user_id: null }]];
+                    }
+                    return [[]];
+                }
+            });
+
+            await handleCallbackQuery({
+                id: 'cq-menu-open',
+                data: 'menu_act:open',
+                from: { id: 777001, first_name: 'Raul' },
+                message: { chat: { id: 777001 }, message_id: 52 }
+            });
+
+            assert.strictEqual(sentMessages.length, 1);
+            assert.ok(sentMessages[0].text.includes('Menú Principal'));
+            assert.ok(Array.isArray(sentMessages[0].reply_markup?.inline_keyboard));
+            assert.ok(sentMessages[0].reply_markup.inline_keyboard.flat().some(b => b.callback_data === 'menu_act:hide'));
         });
 
         it('buildAndSendTopicPdf("competencia") debe generar y enviar un documento PDF válido en tamaño Carta (Letter)', async () => {

@@ -35,6 +35,9 @@ const {
     runtimeState,
     getBotToken,
     getMainReplyKeyboard,
+    getHideReplyKeyboard,
+    getMainInlineMenuMarkup,
+    getCollapsedInlineMenuMarkup,
     testTelegramConnection,
     sendTelegramMessage,
     sendChatAction,
@@ -454,7 +457,7 @@ const sendTelegramResponseWithFeedback = async (chatId, text, { user, query, res
     } else if (extraRows.length > 0) {
         finalMarkup = { inline_keyboard: extraRows };
     } else {
-        finalMarkup = getMainReplyKeyboard();
+        finalMarkup = undefined;
     }
 
     const sent = await sendTelegramMessage(chatId, finalText, finalMarkup);
@@ -476,6 +479,25 @@ const sendTelegramResponseWithFeedback = async (chatId, text, { user, query, res
     return sent;
 };
 
+const clearedLegacyKeyboardChats = new Set();
+
+const MENU_ACTION_TEXT_MAP = {
+    ventas_hoy: '⛽ Ventas de Hoy',
+    ventas_ayer: '⛽ Ventas de Ayer',
+    competencia: '📊 Precios Competencia',
+    alertas: '🚨 Alertas en Estaciones',
+    bancos: '🏦 Saldo en Banco',
+    chequera: '🧾 Saldo en Chequera',
+    solar: '☀️ Paneles Solares',
+    andelsa: '🏛️ Andelsa (sys)',
+    tareas: '📋 Tareas & Agenda',
+    pagos: '💳 Control de Pagos',
+    perfil: 'ℹ️ Mi Perfil',
+    ayuda: '❓ Ayuda'
+};
+
+const noReplyKeyboardFn = () => undefined;
+
 /**
  * Manejar eventos de callback_query provenientes de botones inline en Telegram
  */
@@ -490,6 +512,73 @@ const handleCallbackQuery = async (cq) => {
     if (data === 'noop') {
         await answerCallbackQuery(cq.id, 'Ya has calificado esta respuesta.');
         return;
+    }
+
+    // Callbacks del Menú Principal en pantalla (mostrar / ocultar / ejecutar acceso rápido) — fail-closed
+    if (data.startsWith('menu_act:')) {
+        const action = data.slice('menu_act:'.length);
+        try {
+            const db = getDb();
+            if (!db || !cq.from) {
+                await answerCallbackQuery(cq.id, '⛔ No fue posible verificar tu autorización.');
+                return;
+            }
+            const tgUser = await resolveTelegramUser(cq.from);
+            if (!tgUser || !tgUser.activo) {
+                await answerCallbackQuery(cq.id, '⛔ Tu cuenta de Telegram no está autorizada.');
+                return;
+            }
+            const effPerms = await getUserEffectivePermissions(tgUser);
+            if (effPerms.inactiveInSipe) {
+                await answerCallbackQuery(cq.id, '⛔ Tu usuario vinculado en SIPE está inactivo.');
+                return;
+            }
+
+            if (action === 'hide') {
+                await answerCallbackQuery(cq.id, 'Menú ocultado');
+                if (chatId && messageId) {
+                    await editMessageReplyMarkup(chatId, messageId, getCollapsedInlineMenuMarkup());
+                }
+                return;
+            }
+
+            if (action === 'show') {
+                await answerCallbackQuery(cq.id, 'Menú mostrado');
+                if (chatId && messageId) {
+                    await editMessageReplyMarkup(chatId, messageId, getMainInlineMenuMarkup());
+                }
+                return;
+            }
+
+            if (action === 'open') {
+                await answerCallbackQuery(cq.id, 'Abriendo menú...');
+                await sendTelegramMessage(
+                    chatId,
+                    `📋 <b>Menú Principal · SIPE Admin</b>\nSelecciona una opción o toca <b>🙈 Ocultar menú</b> cuando termines:`,
+                    getMainInlineMenuMarkup()
+                );
+                return;
+            }
+
+            const mappedText = MENU_ACTION_TEXT_MAP[action];
+            if (mappedText) {
+                await answerCallbackQuery(cq.id, 'Consultando...');
+                await handleIncomingMessage({
+                    message_id: messageId,
+                    from: cq.from,
+                    chat: cq.message?.chat || { id: chatId },
+                    text: mappedText
+                });
+                return;
+            }
+
+            await answerCallbackQuery(cq.id, 'Opción de menú no reconocida.');
+            return;
+        } catch (menuErr) {
+            console.error('[TelegramBot] Error en callback menu_act:', menuErr.message);
+            await answerCallbackQuery(cq.id, '⚠️ Error procesando acción del menú.');
+            return;
+        }
     }
 
     // Registrar callbacks de alerta o interactivos en el auditor forense
@@ -601,7 +690,7 @@ const handleCallbackQuery = async (cq) => {
             const promptMsg = `✍️ <b>Lamento no haber respondido como esperabas.</b>\n\n` +
                 `Indícame brevemente qué dato exacto buscabas o qué faltó (por ejemplo: <i>"quería el saldo de Promerica"</i>, <i>"era todo el mes de octubre"</i> o <i>"nivel de tanques"</i>) y <b>te generaré la respuesta corregida de inmediato</b>.`;
 
-            await sendTelegramMessage(chatId, promptMsg, getMainReplyKeyboard());
+            await sendTelegramMessage(chatId, promptMsg);
         }
         return;
     }
@@ -676,7 +765,7 @@ const handleCallbackQuery = async (cq) => {
                     answerCallbackQuery,
                     editMessageReplyMarkup,
                     sendChatAction,
-                    getMainReplyKeyboard
+                    getMainReplyKeyboard: noReplyKeyboardFn
                 }
             });
             if (handled) return;
@@ -720,7 +809,7 @@ const handleCallbackQuery = async (cq) => {
                 answerCallbackQuery,
                 editMessageReplyMarkup,
                 sendChatAction,
-                getMainReplyKeyboard
+                getMainReplyKeyboard: noReplyKeyboardFn
             };
 
             if (data.startsWith('tg_rcp:')) {
@@ -1086,10 +1175,10 @@ const handleCallbackQuery = async (cq) => {
             }
 
             dtlMsg += `<i>Acción registrada en auditoría de SIPE Admin.</i>`;
-            await sendTelegramMessage(chatId, dtlMsg, getMainReplyKeyboard());
+            await sendTelegramMessage(chatId, dtlMsg);
         } catch (err) {
             console.error('[TelegramBot] Error en alert_dtl:', err);
-            await sendTelegramMessage(chatId, '❌ Error al consultar detalle: ' + escapeHtml(err.message), getMainReplyKeyboard());
+            await sendTelegramMessage(chatId, '❌ Error al consultar detalle: ' + escapeHtml(err.message));
         }
         return;
     }
@@ -1119,7 +1208,7 @@ const handleCallbackQuery = async (cq) => {
             `(ej. calibración de mangueras, derrame menor reportado, turno en proceso de conciliación):\n\n` +
             `<i>(Escribe tu justificación en el chat para registrarla en la bitácora de auditoría, o escribe /cancelar para abortar)</i>`;
 
-        await sendTelegramMessage(chatId, justMsg, getMainReplyKeyboard());
+        await sendTelegramMessage(chatId, justMsg);
         return;
     }
 
@@ -1159,10 +1248,10 @@ const handleCallbackQuery = async (cq) => {
                 recheckMsg += `\n<i>Recomendación: Contactar al encargado de estación para completar la captura del cierre.</i>`;
             }
 
-            await sendTelegramMessage(chatId, recheckMsg, getMainReplyKeyboard());
+            await sendTelegramMessage(chatId, recheckMsg);
         } catch (err) {
             console.error('[TelegramBot] Error en alert_recheck:', err);
-            await sendTelegramMessage(chatId, '❌ Error al re-verificar estado: ' + escapeHtml(err.message), getMainReplyKeyboard());
+            await sendTelegramMessage(chatId, '❌ Error al re-verificar estado: ' + escapeHtml(err.message));
         }
         return;
     }
@@ -1175,10 +1264,10 @@ const handleCallbackQuery = async (cq) => {
         try {
             const consolData = await getConsolidadoVentas(targetDate);
             const sumMsg = formatVentasMessage(consolData, targetDate);
-            await sendTelegramMessage(chatId, sumMsg, getMainReplyKeyboard());
+            await sendTelegramMessage(chatId, sumMsg);
         } catch (err) {
             console.error('[TelegramBot] Error en alert_sum:', err);
-            await sendTelegramMessage(chatId, '❌ Error al cargar resumen del día: ' + escapeHtml(err.message), getMainReplyKeyboard());
+            await sendTelegramMessage(chatId, '❌ Error al cargar resumen del día: ' + escapeHtml(err.message));
         }
         return;
     }
@@ -1564,7 +1653,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             chatId,
             tgUser: user,
             effPerms: effectivePerms,
-            transport: { sendTelegramMessage, getMainReplyKeyboard }
+            transport: { sendTelegramMessage, getMainReplyKeyboard: noReplyKeyboardFn }
         });
         return true;
     }
@@ -1580,7 +1669,7 @@ const handleSmartNaturalLanguageQuery = async (user, rawText, chatId, effectiveP
             user,
             effectivePerms,
             voicePrefix: contextOptions.voicePrefix || '',
-            transport: { sendTelegramMessage, getMainReplyKeyboard }
+            transport: { sendTelegramMessage, getMainReplyKeyboard: noReplyKeyboardFn }
         });
     }
 
@@ -3145,8 +3234,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                 '🎙️ <b>Servicio de voz no disponible</b>\n\n' +
                 'La clave de API de Gemini no se encuentra configurada en el servidor ni en la base de datos.\n' +
                 'Un administrador puede ingresarla desde <b>Seguridad &gt; Usuarios de Telegram &gt; Configuración</b> en SIPE Admin.\n\n' +
-                'Por favor, escribe tu consulta por texto para atenderte de inmediato.',
-                getMainReplyKeyboard()
+                'Por favor, escribe tu consulta por texto para atenderte de inmediato.'
             );
             return;
         }
@@ -3194,8 +3282,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                 chatId,
                 '🎙️ <b>No se pudo procesar la nota de voz</b>\n\n' +
                 friendlyReason + '\n\n' +
-                'Por favor, intenta nuevamente o escribe tu consulta por texto para atenderte de inmediato.',
-                getMainReplyKeyboard()
+                'Por favor, intenta nuevamente o escribe tu consulta por texto para atenderte de inmediato.'
             );
             return;
         }
@@ -3205,8 +3292,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                 chatId,
                 '🎙️ <b>Nota de voz no comprensible</b>\n\n' +
                 'No fue posible entender el audio o la grabación no contenía voz clara.\n' +
-                'Por favor, intenta enviar una nueva nota de voz o escribe tu consulta por texto.',
-                getMainReplyKeyboard()
+                'Por favor, intenta enviar una nueva nota de voz o escribe tu consulta por texto.'
             );
             return;
         }
@@ -3238,8 +3324,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                 chatId,
                 '📸 <b>Servicio de visión IA no disponible</b>\n\n' +
                 'La clave de API de Gemini no se encuentra configurada en el servidor ni en la base de datos.\n' +
-                'Un administrador puede ingresarla desde <b>Seguridad &gt; Usuarios de Telegram &gt; Configuración</b> en SIPE Admin.',
-                getMainReplyKeyboard()
+                'Un administrador puede ingresarla desde <b>Seguridad &gt; Usuarios de Telegram &gt; Configuración</b> en SIPE Admin.'
             );
             return;
         }
@@ -3341,8 +3426,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                 chatId,
                 '📸 <b>No se pudo procesar el comprobante</b>\n\n' +
                 'Ocurrió un inconveniente al analizar la imagen o PDF.\n' +
-                'Por favor, asegúrate de que el archivo sea legible e intenta nuevamente.',
-                getMainReplyKeyboard()
+                'Por favor, asegúrate de que el archivo sea legible e intenta nuevamente.'
             );
             return;
         }
@@ -3350,7 +3434,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
 
     if (!rawText) return;
 
-    const keyboard = getMainReplyKeyboard();
+    const keyboard = undefined;
     const cleanLower = rawText.toLowerCase().replace(/^[/\s]+/, '');
 
     // A. Interceptar respuesta si el usuario tiene una retroalimentación de mejora pendiente
@@ -3486,7 +3570,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
             user,
             effectivePerms,
             voicePrefix,
-            transport: { sendTelegramMessage, getMainReplyKeyboard }
+            transport: { sendTelegramMessage, getMainReplyKeyboard: noReplyKeyboardFn }
         });
         if (handledWizard) return;
     } catch (wizErr) {
@@ -3592,16 +3676,51 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
         return;
     }
 
-    // Comandos de Saludo / Inicio (Limpia contexto multi-turno y wizards activos)
-    if (cleanLower === 'start' || cleanLower === 'menu' || cleanLower === 'hola' || cleanLower === 'inicio' || cleanLower === 'cancelar') {
+    // Comandos para ocultar explícitamente el teclado inferior
+    const normalizedMenuCmd = normalizeText(cleanLower);
+    if (
+        normalizedMenuCmd === 'ocultar' ||
+        normalizedMenuCmd === 'ocultar menu' ||
+        normalizedMenuCmd === 'ocultar teclado' ||
+        normalizedMenuCmd === 'quitar menu' ||
+        normalizedMenuCmd === 'cerrar menu'
+    ) {
+        clearedLegacyKeyboardChats.add(String(chatId));
+        await logTelegramQuery(user.telegram_user_id, '/ocultar', 'Ocultar teclado fijo inferior', 1);
+        await sendTelegramMessage(
+            chatId,
+            voicePrefix + `✅ <b>Teclado inferior ocultado.</b>\nCuando necesites ver el menú en la conversación escribe <b>/menu</b> o tócalo en <b>☰ Menú</b>.`,
+            getHideReplyKeyboard()
+        );
+        return;
+    }
+
+    // Comandos de Saludo / Inicio / Menú en conversación (Limpia contexto multi-turno y wizards activos)
+    if (
+        normalizedMenuCmd === 'start' ||
+        normalizedMenuCmd === 'menu' ||
+        normalizedMenuCmd === 'hola' ||
+        normalizedMenuCmd === 'inicio' ||
+        normalizedMenuCmd === 'cancelar' ||
+        normalizedMenuCmd === 'mostrar menu' ||
+        normalizedMenuCmd === 'ver menu'
+    ) {
         clearUserConversationContext(user.telegram_user_id);
         clearProductivityWizards(user.telegram_user_id);
-        await logTelegramQuery(user.telegram_user_id, `/${cleanLower}`, 'Menú principal / Reinicio de contexto', 1);
+        await logTelegramQuery(user.telegram_user_id, `/${normalizedMenuCmd}`, 'Menú principal en conversación / Reinicio de contexto', 1);
         const name = escapeHtml(user.first_name || 'Usuario');
-        const welcome = `👋 ¡Hola <b>${name}</b>!\n` +
-            `Bienvenido al asistente de consultas gerenciales de <b>SIPE Admin</b>.\n\n` +
-            `Usa los botones inferiores para consultar información en tiempo real:`;
-        await sendTelegramMessage(chatId, voicePrefix + welcome, keyboard);
+        const chatKey = String(chatId);
+        if (!clearedLegacyKeyboardChats.has(chatKey)) {
+            clearedLegacyKeyboardChats.add(chatKey);
+            await sendTelegramMessage(
+                chatId,
+                `👋 ¡Hola <b>${name}</b>! Oculté el teclado fijo inferior para darte más espacio en pantalla.`,
+                getHideReplyKeyboard()
+            );
+        }
+        const welcome = `📋 <b>Menú Principal · SIPE Admin</b>\n` +
+            `Selecciona una opción directamente en la conversación (o toca <b>🙈 Ocultar menú</b> para plegarlo):`;
+        await sendTelegramMessage(chatId, voicePrefix + welcome, getMainInlineMenuMarkup());
         return;
     }
 
@@ -4015,7 +4134,7 @@ const handleIncomingMessage = async (msg, contextOptions = {}) => {
                 user,
                 effectivePerms,
                 voicePrefix,
-                transport: { sendTelegramMessage, getMainReplyKeyboard }
+                transport: { sendTelegramMessage, getMainReplyKeyboard: noReplyKeyboardFn }
             });
             if (handledLocalAction) {
                 await logTelegramQuery(user.telegram_user_id, rawText, 'Acción NLU sipe-nlu (rsboosted)', 1);
@@ -4341,6 +4460,8 @@ const initTelegramBot = async (io = null) => {
         runtimeState.isPollingActive = true;
         startBotMemorySweeper();
         setTelegramBotCommands([
+            { command: 'menu', description: 'Mostrar menú interactivo en la conversación' },
+            { command: 'ocultar', description: 'Ocultar teclado fijo inferior' },
             { command: 'tareas', description: 'Ver y gestionar tareas activas' },
             { command: 'asignar', description: 'Asignar tarea a uno o más usuarios' },
             { command: 'agenda', description: 'Agenda de eventos, reuniones y pagos' },
@@ -4989,6 +5110,9 @@ module.exports = {
     KNOWN_COMPETITOR_BRANDS,
     COMPETENCIA_STATION_NAMES,
     getMainReplyKeyboard,
+    getHideReplyKeyboard,
+    getMainInlineMenuMarkup,
+    getCollapsedInlineMenuMarkup,
     createFeedbackEntry,
     getFeedbackInlineMarkup,
     sendTelegramResponseWithFeedback,

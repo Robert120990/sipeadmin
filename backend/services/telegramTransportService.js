@@ -82,7 +82,7 @@ const splitTelegramMessageChunks = (rawText, maxLen = 4000) => {
 };
 
 /**
- * Teclado interactivo principal para Telegram
+ * Teclado interactivo principal para Telegram (no persistente para no ocupar pantalla fija)
  */
 const getMainReplyKeyboard = () => {
     return {
@@ -95,9 +95,62 @@ const getMainReplyKeyboard = () => {
             [{ text: 'ℹ️ Mi Perfil' }, { text: '❓ Ayuda' }]
         ],
         resize_keyboard: true,
-        is_persistent: true
+        one_time_keyboard: true,
+        is_persistent: false
     };
 };
+
+/**
+ * Oculta/remueve el teclado fijo inferior en el cliente de Telegram del usuario
+ */
+const getHideReplyKeyboard = () => ({
+    remove_keyboard: true
+});
+
+/**
+ * Menú principal interactivo en pantalla dentro de la conversación (Inline Keyboard)
+ * con botón para ocultar/colapsar el menú sin ocupar el teclado inferior.
+ */
+const getMainInlineMenuMarkup = () => ({
+    inline_keyboard: [
+        [
+            { text: '⛽ Ventas de Hoy', callback_data: 'menu_act:ventas_hoy' },
+            { text: '⛽ Ventas de Ayer', callback_data: 'menu_act:ventas_ayer' }
+        ],
+        [
+            { text: '📊 Precios Competencia', callback_data: 'menu_act:competencia' },
+            { text: '🚨 Alertas en Estaciones', callback_data: 'menu_act:alertas' }
+        ],
+        [
+            { text: '🏦 Saldo en Banco', callback_data: 'menu_act:bancos' },
+            { text: '🧾 Saldo en Chequera', callback_data: 'menu_act:chequera' }
+        ],
+        [
+            { text: '☀️ Paneles Solares', callback_data: 'menu_act:solar' },
+            { text: '🏛️ Andelsa (sys)', callback_data: 'menu_act:andelsa' }
+        ],
+        [
+            { text: '📋 Tareas & Agenda', callback_data: 'menu_act:tareas' },
+            { text: '💳 Control de Pagos', callback_data: 'menu_act:pagos' }
+        ],
+        [
+            { text: 'ℹ️ Mi Perfil', callback_data: 'menu_act:perfil' },
+            { text: '❓ Ayuda', callback_data: 'menu_act:ayuda' }
+        ],
+        [
+            { text: '🙈 Ocultar menú', callback_data: 'menu_act:hide' }
+        ]
+    ]
+});
+
+/**
+ * Estado colapsado del menú inline dentro de la conversación (1 botón discreto para volver a mostrarlo)
+ */
+const getCollapsedInlineMenuMarkup = () => ({
+    inline_keyboard: [
+        [{ text: '📋 Mostrar menú', callback_data: 'menu_act:show' }]
+    ]
+});
 
 /**
  * Registra la lista oficial de comandos slash (/) en Telegram Bot API (best-effort)
@@ -517,6 +570,9 @@ module.exports = {
     splitTelegramMessageChunks,
     getBotToken,
     getMainReplyKeyboard,
+    getHideReplyKeyboard,
+    getMainInlineMenuMarkup,
+    getCollapsedInlineMenuMarkup,
     testTelegramConnection,
     sendTelegramMessage,
     sendTelegramMessageDetailed,
