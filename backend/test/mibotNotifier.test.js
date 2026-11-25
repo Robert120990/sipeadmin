@@ -592,3 +592,151 @@ test('createMibotProgramacion vincula task_id, formatea Detalle de Tarea y emite
     assert.equal(notifPayload.data.taskId, 42);
     assert.match(notifPayload.data.mibot_status_label, /Enviado por Telegram/i);
 });
+
+test('RECORDATORIO_PAGO emite notificación payment_reminder en SIPE Admin al crear y al disparar el cron sin duplicar', async () => {
+    const tgUsers = [
+        { id: 1, user_id: 7, telegram_user_id: '8831585056', first_name: 'Marcela', last_name: 'Sosa', cargo: 'Gerencia', activo: 1, recibir_mibot: 1 }
+    ];
+    const insertedNotifs = [];
+    const baseDb = createMockMibotDb({ tgUsers });
+    const db = {
+        _state: baseDb._state,
+        async query(sql, params = []) {
+            const q = String(sql).replace(/\s+/g, ' ').trim();
+            if (/^INSERT INTO notifications\b/i.test(q)) {
+                const row = { id: insertedNotifs.length + 1, user_id: params[0], type: params[1], title: params[2], message: params[3], data: JSON.parse(params[4]) };
+                insertedNotifs.push(row);
+                return [{ insertId: row.id, affectedRows: 1 }];
+            }
+            return baseDb.query(sql, params);
+        }
+    };
+    const externalDb = createMockExternalDb([
+        { id: 88, id_recordatorio: 20, vencimiento: '2026-11-28', estado: 'P', descripcion: 'ALQUILER ESTACION', monto: 2500, ubicacion: 'ANDELSA' }
+    ]);
+    const emitted = [];
+    const mockIo = {
+        to(room) {
+            return { emit(event, payload) { emitted.push({ room, event, payload }); } };
+        },
+        emit(event, payload) { emitted.push({ room: 'all', event, payload }); }
+    };
+
+    const sent = [];
+    const mockSend = async (chatId, html) => {
+        sent.push({ chatId, html });
+        return { message_id: 950 + sent.length };
+    };
+
+    // 1. Aviso inmediato de Control de Pagos -> exactamente 1 Telegram + 1 notificación in-app (sin duplicar)
+    const immediate = await createMibotProgramacion({
+        db,
+        externalDb,
+        payload: {
+            tipo: 'RECORDATORIO_PAGO',
+            titulo: 'Pago pendiente: ALQUILER ESTACION',
+            mensaje: 'Favor gestionar pago de $2,500.00.',
+            vencimiento_id: 88,
+            destinatario_ids: [1],
+            enviar_ahora: true,
+            frecuencia: 'UNA_VEZ'
+        },
+        actorUser: { id: 2, nombre: 'Raul Sosa' },
+        sendTelegramFn: mockSend,
+        io: mockIo
+    });
+
+    assert.equal(immediate.dispatch.sent, 1);
+    assert.equal(immediate.dispatch.failed, 0);
+    assert.deepEqual(immediate.dispatch.errors, []);
+    assert.equal(insertedNotifs.length, 1);
+    assert.equal(insertedNotifs[0].user_id, 7);
+    assert.equal(insertedNotifs[0].type, 'payment_reminder');
+    assert.equal(insertedNotifs[0].data.link, '/dashboard/operaciones/recordatorios');
+    assert.equal(insertedNotifs[0].data.vencimientoId, 88);
+    assert.equal(insertedNotifs[0].data.monto_pendiente, 2500);
+    assert.equal(emitted.filter(e => e.room === 'user_7' && e.event === 'notification:new').length, 1);
+
+    // 2. Aviso programado a futuro -> al dispararse en dispatchMibotProgramacion (cron) emite notificación in-app con is_scheduled_dispatch=true
+    const scheduled = await createMibotProgramacion({
+        db,
+        externalDb,
+        payload: {
+            tipo: 'RECORDATORIO_PAGO',
+            titulo: 'Recordatorio programado: ALQUILER ESTACION',
+            mensaje: 'Recordatorio automático del vencimiento.',
+            vencimiento_id: 88,
+            destinatario_ids: [1],
+            enviar_ahora: false,
+            programado_para: '2026-11-28 08:00:00',
+            frecuencia: 'UNA_VEZ'
+        },
+        actorUser: { id: 2, nombre: 'Raul Sosa' },
+        sendTelegramFn: mockSend,
+        io: mockIo
+    });
+    assert.equal(insertedNotifs.length, 2);
+
+    const cronDispatch = await dispatchMibotProgramacion({
+        db,
+        externalDb,
+        programacionId: scheduled.programacion.id,
+        sendTelegramFn: mockSend,
+        isAutomaticCron: true,
+        nowSqlOverride: '2026-11-28 08:00:05',
+        io: mockIo
+    });
+    assert.equal(cronDispatch.sent, 1);
+    assert.equal(insertedNotifs.length, 3);
+    assert.equal(insertedNotifs[2].type, 'payment_reminder');
+    assert.equal(insertedNotifs[2].data.is_scheduled_dispatch, true);
+});
+
+test('createMibotProgramacion permite notificar usuarios de SIPE Admin sin Telegram (sipe_user_ids)', async () => {
+    const insertedNotifs = [];
+    const baseDb = createMockMibotDb({ tgUsers: [] });
+    const db = {
+        _state: baseDb._state,
+        async query(sql, params = []) {
+            const q = String(sql).replace(/\s+/g, ' ').trim();
+            if (/FROM users u/i.test(q) && /WHERE u\.id IN/i.test(q)) {
+                return [[
+                    { user_id: 8, username: 'Wendy', nombre: 'Wendy', role_name: 'Asistente' }
+                ]];
+            }
+            if (/^INSERT INTO notifications\b/i.test(q)) {
+                const row = { id: insertedNotifs.length + 1, user_id: params[0], type: params[1], title: params[2], message: params[3], data: JSON.parse(params[4]) };
+                insertedNotifs.push(row);
+                return [{ insertId: row.id, affectedRows: 1 }];
+            }
+            return baseDb.query(sql, params);
+        }
+    };
+    const emitted = [];
+    const mockIo = {
+        to(room) {
+            return { emit(event, payload) { emitted.push({ room, event, payload }); } };
+        }
+    };
+
+    const res = await createMibotProgramacion({
+        db,
+        payload: {
+            tipo: 'RECORDATORIO_PAGO',
+            titulo: 'Pago pendiente: SCORPION SECURITY',
+            mensaje: 'Favor verificar factura antes del viernes.',
+            sipe_user_ids: [8],
+            enviar_ahora: true
+        },
+        actorUser: { id: 2, nombre: 'Raul Sosa' },
+        io: mockIo
+    });
+
+    assert.equal(res.programacion, null);
+    assert.equal(res.sipe_notifications.sent, 1);
+    assert.deepEqual(res.sipe_notifications.recipients, ['Wendy']);
+    assert.equal(insertedNotifs.length, 1);
+    assert.equal(insertedNotifs[0].user_id, 8);
+    assert.equal(insertedNotifs[0].type, 'payment_reminder');
+    assert.equal(emitted.filter(e => e.room === 'user_8' && e.event === 'notification:new').length, 1);
+});

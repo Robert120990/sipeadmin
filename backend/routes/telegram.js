@@ -7,6 +7,7 @@ const { sendSafeError } = require('../utils/errorHandler');
 const {
     ensureMibotSchema,
     getEligibleMibotRecipients,
+    getEligibleSipeOnlyUsers,
     listMibotProgramaciones,
     createMibotProgramacion,
     dispatchMibotProgramacion,
@@ -46,7 +47,7 @@ const {
     resolveTelegramUser,
     getUserEffectivePermissions
 } = require('../services/telegramBotService');
-const { invalidateBotTokenCache } = require('../services/telegramTransportService');
+const { invalidateBotTokenCache, getBotToken } = require('../services/telegramTransportService');
 const {
     getHealthDiagnostics,
     getErrors,
@@ -1422,12 +1423,18 @@ router.get('/mibot/destinatarios', authenticateToken, requirePermission(mibotAcc
 
         const tipo = req.query.tipo ? String(req.query.tipo).trim().toUpperCase() : null;
         const includeAllActive = req.query.include_all === '1' || req.query.include_all === 'true';
-        const destinatarios = await getEligibleMibotRecipients(db, { tipo, includeAllActive });
+        const [destinatarios, sipeOnlyUsers, botTokenInfo] = await Promise.all([
+            getEligibleMibotRecipients(db, { tipo, includeAllActive }),
+            getEligibleSipeOnlyUsers(db),
+            getBotToken().catch(() => ({ token: null, isActive: false }))
+        ]);
 
         res.json({
             ok: true,
             server_time_sv: getElSalvadorNowSql(),
-            destinatarios
+            bot_active: Boolean(botTokenInfo?.token && botTokenInfo?.isActive !== false),
+            destinatarios,
+            sipe_only_users: sipeOnlyUsers
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al cargar destinatarios de MiBot');
@@ -1489,15 +1496,38 @@ router.post('/mibot/programaciones', authenticateToken, requirePermission(mibotA
         });
 
         const totalDest = result.programacion?.destinatarios?.length || 0;
-        const sentMsg = result.dispatch
-            ? `Aviso MiBot enviado personalmente a ${result.dispatch.sent} de ${result.dispatch.total} usuario(s) en Telegram.`
-            : `Aviso MiBot programado para ${totalDest} usuario(s) en Telegram.`;
+        const sipeSent = Number(result.sipe_notifications?.sent || 0);
+        const dispatchErrors = Array.isArray(result.dispatch?.errors) ? result.dispatch.errors : [];
+        let deliveryStatus = 'scheduled';
+        let sentMsg = '';
+
+        if (!result.programacion && sipeSent > 0) {
+            deliveryStatus = 'sent';
+            sentMsg = `Notificación enviada en tiempo real dentro de SIPE Admin a ${sipeSent} usuario(s).`;
+        } else if (result.dispatch) {
+            if (result.dispatch.sent === 0 && result.dispatch.failed > 0) {
+                deliveryStatus = 'failed';
+                const firstErr = dispatchErrors[0]?.error || 'verifica chat ID o bot activo';
+                sentMsg = `No se pudo entregar por Telegram (0 de ${result.dispatch.total}): ${firstErr}.${sipeSent > 0 ? ` Sí se envió alerta dentro de SIPE Admin (${sipeSent}).` : ''}`;
+            } else if (result.dispatch.failed > 0) {
+                deliveryStatus = 'partial';
+                sentMsg = `Aviso enviado por Telegram a ${result.dispatch.sent} de ${result.dispatch.total} usuario(s) (${result.dispatch.failed} con error: ${dispatchErrors[0]?.error || 'error'}).${sipeSent > 0 ? ` Notificaciones SIPE Admin: ${sipeSent}.` : ''}`;
+            } else {
+                deliveryStatus = 'sent';
+                sentMsg = `Aviso MiBot enviado personalmente a ${result.dispatch.sent} de ${result.dispatch.total} usuario(s) en Telegram${sipeSent > 0 ? ` y a ${sipeSent} en SIPE Admin` : ''}.`;
+            }
+        } else {
+            deliveryStatus = 'scheduled';
+            sentMsg = `Recordatorio MiBot programado para ${totalDest} usuario(s) en Telegram${sipeSent > 0 ? ` (con notificación en SIPE Admin)` : ''}.`;
+        }
 
         res.status(201).json({
             ok: true,
+            delivery_status: deliveryStatus,
             message: sentMsg,
             programacion: result.programacion,
             dispatch: result.dispatch,
+            sipe_notifications: result.sipe_notifications || null,
             task: result.task || null
         });
     } catch (error) {
@@ -1510,7 +1540,7 @@ router.post('/mibot/programaciones', authenticateToken, requirePermission(mibotA
 
 /**
  * POST /api/telegram/mibot/programaciones/:id/enviar-ahora
- * Envía de inmediato una programación MiBot a cada uno de sus destinatarios en Telegram
+ * Envía de inmediato una programación MiBot a cada uno de sus destinatarios en Telegram y SIPE Admin
  */
 router.post('/mibot/programaciones/:id/enviar-ahora', authenticateToken, requirePermission(mibotAccessPerms), async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -1522,19 +1552,34 @@ router.post('/mibot/programaciones/:id/enviar-ahora', authenticateToken, require
         const db = getDb();
         if (!db) return res.status(500).json({ message: 'Base de datos no inicializada' });
         const externalDb = await Promise.resolve(getExternalDb()).catch(() => null);
+        const io = req.app?.get('io') || req.io || null;
 
         const dispatch = await dispatchMibotProgramacion({
             db,
             externalDb,
             programacionId: id,
             sendTelegramFn: sendTelegramMessage,
-            isAutomaticCron: false
+            isAutomaticCron: false,
+            io,
+            emitSystemNotif: true
         });
 
         const programacion = await getMibotProgramacionById(db, id);
+        const firstErr = Array.isArray(dispatch.errors) && dispatch.errors[0]?.error ? dispatch.errors[0].error : null;
+        let deliveryStatus = 'sent';
+        let message = `MiBot envió el mensaje personalmente a ${dispatch.sent} de ${dispatch.total} destinatario(s) en Telegram y SIPE Admin.`;
+        if (dispatch.sent === 0 && dispatch.failed > 0) {
+            deliveryStatus = 'failed';
+            message = `No se pudo entregar en Telegram (0 de ${dispatch.total}): ${firstErr || 'verifica chat ID o bot activo'}.`;
+        } else if (dispatch.failed > 0) {
+            deliveryStatus = 'partial';
+            message = `MiBot envió a ${dispatch.sent} de ${dispatch.total} destinatario(s) (${dispatch.failed} con error: ${firstErr || 'error'}).`;
+        }
+
         res.json({
             ok: true,
-            message: `MiBot envió el mensaje personalmente a ${dispatch.sent} de ${dispatch.total} destinatario(s).`,
+            delivery_status: deliveryStatus,
+            message,
             dispatch,
             programacion
         });

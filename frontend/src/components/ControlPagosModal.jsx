@@ -632,6 +632,30 @@ export default function ControlPagosModal({
         return { bg: 'rgba(245, 158, 11, 0.18)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.45)', label: 'PENDIENTE' };
     }, [resumen.estado_pago, resumen.porcentaje_pagado]);
 
+    const mibotVencimientoRow = useMemo(() => {
+        if (!vencimientoRow) return null;
+        return {
+            ...vencimientoRow,
+            descripcion: detail?.vencimiento?.descripcion || vencimientoRow.descripcion,
+            ubicacion: detail?.vencimiento?.ubicacion || vencimientoRow.ubicacion,
+            vence: detail?.vencimiento?.vence || vencimientoRow.vence,
+            monto: resumen.monto_total,
+            monto_total: resumen.monto_total,
+            monto_pagado: resumen.monto_pagado,
+            saldo_pendiente: resumen.saldo_pendiente,
+            estado_pago: resumen.estado_pago
+        };
+    }, [
+        vencimientoRow,
+        detail?.vencimiento?.descripcion,
+        detail?.vencimiento?.ubicacion,
+        detail?.vencimiento?.vence,
+        resumen.monto_total,
+        resumen.monto_pagado,
+        resumen.saldo_pendiente,
+        resumen.estado_pago
+    ]);
+
     return (
         <>
             <Modal
@@ -1732,17 +1756,7 @@ export default function ControlPagosModal({
             <MibotProgramarModal
                 open={mibotOpen}
                 onClose={() => setMibotOpen(false)}
-                vencimientoRow={vencimientoRow ? {
-                    ...vencimientoRow,
-                    descripcion: detail?.vencimiento?.descripcion || vencimientoRow.descripcion,
-                    ubicacion: detail?.vencimiento?.ubicacion || vencimientoRow.ubicacion,
-                    vence: detail?.vencimiento?.vence || vencimientoRow.vence,
-                    monto: resumen.monto_total,
-                    monto_total: resumen.monto_total,
-                    monto_pagado: resumen.monto_pagado,
-                    saldo_pendiente: resumen.saldo_pendiente,
-                    estado_pago: resumen.estado_pago
-                } : null}
+                vencimientoRow={mibotVencimientoRow}
                 defaultTipo={resumen.saldo_pendiente > 0 ? 'RECORDATORIO_PAGO' : 'VALIDACION'}
                 onSaved={onSaved}
             />

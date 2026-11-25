@@ -24,6 +24,7 @@ const {
     formatDisplayDateTimeSv,
     getMibotProgramacionById,
     createMibotProgramacion,
+    dispatchMibotProgramacion,
     rescheduleMibotProgramacion,
     cancelMibotProgramacion,
     getLatestEditableMibotProgramacionForUser,
@@ -2467,11 +2468,11 @@ function getControlPagosInlineMarkup(data) {
         ]
     ];
 
-    const firstPending = (data?.pagos || []).find(p => p.estado_pago !== 'CANCELADO' && p.id > 0);
-    if (firstPending) {
-        const shortDesc = String(firstPending.descripcion || 'Pago').slice(0, 24);
+    const pendingItems = (data?.pagos || []).filter(p => p.estado_pago !== 'CANCELADO' && p.id > 0).slice(0, 2);
+    for (const pending of pendingItems) {
+        const shortDesc = String(pending.descripcion || 'Pago').slice(0, 24);
         rows.push([
-            { text: `🔔 Programar Aviso MiBot: ${shortDesc}`, callback_data: `tg_pago:rm:${firstPending.id}` }
+            { text: `🔔 Programar Aviso MiBot: ${shortDesc}`, callback_data: `tg_pago:rm:${pending.id}` }
         ]);
     }
 
@@ -3623,6 +3624,36 @@ async function handleProductivityCallbackQuery({
             return true;
         }
 
+        if (data.startsWith('tg_pago:now:')) {
+            const progId = parseInt(data.split(':')[2], 10);
+            if (!progId) {
+                await answerFn(cq.id, '⚠️ Recordatorio inválido.');
+                return true;
+            }
+            await answerFn(cq.id, '⚡ Enviando aviso ahora...');
+            try {
+                const ext = externalDb || await getExternalDb().catch(() => null);
+                const dispatch = await dispatchMibotProgramacion({
+                    db,
+                    externalDb: ext,
+                    programacionId: progId,
+                    sendTelegramFn: sendFn,
+                    isAutomaticCron: false,
+                    io: io || getRealtimeIo(),
+                    emitSystemNotif: true
+                });
+                if (dispatch.sent > 0) {
+                    await sendFn(chatId, `✅ Aviso de pago enviado a <b>${dispatch.sent}</b> destinatario(s) en Telegram y SIPE Admin.`, getControlPagosInlineMarkup({ filterMode: 'resumen', pagos: [] }));
+                } else {
+                    const reason = dispatch.errors?.[0]?.error || 'verifica chat o permisos';
+                    await sendFn(chatId, `⚠️ No se pudo entregar en Telegram: ${escapeHtml(reason)}`, keyboard);
+                }
+            } catch (nowErr) {
+                await sendFn(chatId, `❌ Error enviando aviso: ${escapeHtml(nowErr.message)}`, keyboard);
+            }
+            return true;
+        }
+
         if (data.startsWith('tg_pago:rm:')) {
             const venId = parseInt(data.split(':')[2], 10);
             if (!venId || !tgUser?.id) {
@@ -3675,7 +3706,7 @@ async function handleProductivityCallbackQuery({
                     actorUser,
                     sendTelegramFn: sendFn,
                     io: io || getRealtimeIo(),
-                    skipSystemNotification: true
+                    skipSystemNotification: false
                 });
 
                 const prog = res.programacion;
@@ -3685,8 +3716,20 @@ async function handleProductivityCallbackQuery({
                     `🔔 <b>Recordatorio de Pago Programado en MiBot</b>\n\n` +
                     `💳 <b>${escapeHtml(prog.titulo)}</b>\n` +
                     `• 🗓️ <b>Próximo aviso:</b> ${formatDisplayDateTimeSv(prog.proximo_envio_at || prog.programado_para)}\n` +
-                    `• 🔁 <b>Frecuencia:</b> Diario hasta cancelar pago`,
-                    getControlPagosInlineMarkup({ filterMode: 'resumen', pagos: [] })
+                    `• 🔁 <b>Frecuencia:</b> Diario hasta cancelar pago\n\n` +
+                    `<i>También puedes pulsar un botón abajo o escribir "cambiar la hora a las 4 pm".</i>`,
+                    {
+                        inline_keyboard: [
+                            [
+                                { text: '⚡ Enviar ahora', callback_data: `tg_pago:now:${prog.id}` },
+                                { text: '🕐 Cambiar fecha/hora', callback_data: `tg_evt:re:${prog.id}` }
+                            ],
+                            [
+                                { text: '❌ Cancelar aviso', callback_data: `tg_evt:del:${prog.id}` },
+                                { text: '💳 Control de Pagos', callback_data: 'tg_pago:f:resumen' }
+                            ]
+                        ]
+                    }
                 );
             } catch (rmErr) {
                 await sendFn(chatId, `❌ No se pudo programar el recordatorio: ${escapeHtml(rmErr.message)}`, keyboard);

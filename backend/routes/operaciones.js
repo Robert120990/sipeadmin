@@ -1497,6 +1497,7 @@ router.post('/operaciones/recordatorios', authenticateToken, requirePermission([
                     [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, safeFormaPago]);
                 recordatorioId = result.insertId;
             }
+            let firstVencimientoId = null;
             if (!preservePaidSchedule) {
                 await connection.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?", [recordatorioId]);
                 for (let n = 1; n <= repetir; n++) {
@@ -1504,15 +1505,25 @@ router.post('/operaciones/recordatorios', authenticateToken, requirePermission([
                     let isPagado = false;
                     if (repetir_desc === 'VEZ') { if (pagado) isPagado = true; }
                     if (isPagado) {
-                        await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, safeFormaPago2]);
+                        const [vRes] = await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, safeFormaPago2]);
+                        if (!firstVencimientoId && vRes?.insertId) firstVencimientoId = vRes.insertId;
                     } else {
-                        await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'P', NULL, '')", [recordatorioId, formattedDate]);
+                        const [vRes] = await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'P', NULL, '')", [recordatorioId, formattedDate]);
+                        if (!firstVencimientoId && vRes?.insertId) firstVencimientoId = vRes.insertId;
                     }
                 }
+            } else {
+                const [firstRow] = await connection.query(
+                    "SELECT id FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ? ORDER BY vencimiento ASC, id ASC LIMIT 1",
+                    [recordatorioId]
+                );
+                firstVencimientoId = firstRow?.[0]?.id || null;
             }
             await connection.commit();
             res.json({
                 success: true,
+                recordatorio_id: Number(recordatorioId),
+                first_vencimiento_id: firstVencimientoId ? Number(firstVencimientoId) : null,
                 message: preservePaidSchedule
                     ? 'Recordatorio actualizado (se conservaron las cuotas existentes con pagos o abonos registrados).'
                     : 'Recordatorio Guardado!'

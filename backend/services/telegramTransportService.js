@@ -129,11 +129,21 @@ const testTelegramConnection = async (customToken = null) => {
 };
 
 /**
- * Enviar mensaje a un chat de Telegram (con fragmentación automática <= 4000 chars y fallback seguro)
+ * Enviar mensaje a un chat de Telegram retornando detalle de resultado/error
+ * (con fragmentación automática <= 4000 chars y fallback seguro a texto plano).
  */
-const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
-    const { token } = await getBotToken();
-    if (!token) return null;
+const sendTelegramMessageDetailed = async (chatId, text, replyMarkup = null) => {
+    const { token, isActive } = await getBotToken();
+    if (!token) {
+        return {
+            ok: false,
+            result: null,
+            error: isActive === false
+                ? 'El bot de Telegram está desactivado en Configuración de Telegram.'
+                : 'Token de Telegram no configurado en el servidor.',
+            statusCode: null
+        };
+    }
 
     const chunks = splitTelegramMessageChunks(text, 4000);
     let lastResult = null;
@@ -156,7 +166,9 @@ const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
             const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
             lastResult = res.data?.result || null;
         } catch (err) {
-            if (err.response?.data?.description?.includes('can\'t parse entities')) {
+            const tgDescription = err.response?.data?.description ? String(err.response.data.description) : '';
+            const statusCode = err.response?.status || null;
+            if (tgDescription.includes('can\'t parse entities')) {
                 const plainText = chunkText.replace(/<[^>]*>?/gm, '');
                 delete payload.parse_mode;
                 payload.text = plainText;
@@ -164,17 +176,37 @@ const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
                     const fallbackRes = await axios.post(`${TELEGRAM_API_BASE}${token}/sendMessage`, payload, { timeout: 15000 });
                     lastResult = fallbackRes.data?.result || null;
                 } catch (fbErr) {
-                    console.error('[TelegramBot] Error enviando mensaje plano fallback:', redactSecrets(fbErr.message));
-                    return null;
+                    const fbDesc = fbErr.response?.data?.description || redactSecrets(fbErr.message);
+                    console.error('[TelegramBot] Error enviando mensaje plano fallback:', redactSecrets(fbDesc));
+                    return {
+                        ok: false,
+                        result: null,
+                        error: redactSecrets(fbDesc),
+                        statusCode: fbErr.response?.status || null
+                    };
                 }
             } else {
-                console.error('[TelegramBot] Error enviando mensaje a chat:', chatId, redactSecrets(err.message));
-                return null;
+                const detailErr = tgDescription || redactSecrets(err.message);
+                console.error('[TelegramBot] Error enviando mensaje a chat:', chatId, redactSecrets(detailErr));
+                return {
+                    ok: false,
+                    result: null,
+                    error: redactSecrets(detailErr),
+                    statusCode
+                };
             }
         }
     }
 
-    return lastResult;
+    return { ok: Boolean(lastResult), result: lastResult, error: null, statusCode: 200 };
+};
+
+/**
+ * Enviar mensaje a un chat de Telegram (con fragmentación automática <= 4000 chars y fallback seguro)
+ */
+const sendTelegramMessage = async (chatId, text, replyMarkup = null) => {
+    const detailed = await sendTelegramMessageDetailed(chatId, text, replyMarkup);
+    return detailed.ok ? detailed.result : null;
 };
 
 /**
@@ -487,6 +519,7 @@ module.exports = {
     getMainReplyKeyboard,
     testTelegramConnection,
     sendTelegramMessage,
+    sendTelegramMessageDetailed,
     sendChatAction,
     sendTelegramDocument,
     sendTelegramPhoto,

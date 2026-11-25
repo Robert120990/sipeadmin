@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
     Bot, Send, Clock, Calendar, Users, CheckCircle2, Bell,
     CreditCard, ClipboardList, ShieldCheck, CalendarClock,
-    Search, Trash2, XCircle, RefreshCw, AlertCircle
+    Search, Trash2, XCircle, RefreshCw, AlertCircle, UserCheck
 } from 'lucide-react';
 import api from '../services/api';
 import Modal from './Modal';
@@ -133,13 +133,16 @@ export default function MibotProgramarModal({
 
     const [loadingRecipients, setLoadingRecipients] = useState(false);
     const [recipients, setRecipients] = useState([]);
+    const [sipeOnlyUsers, setSipeOnlyUsers] = useState([]);
+    const [botActive, setBotActive] = useState(true);
     const [recipientSearch, setRecipientSearch] = useState('');
     const [selectedIds, setSelectedIds] = useState([]);
+    const [selectedSipeUserIds, setSelectedSipeUserIds] = useState([]);
 
     const [tipo, setTipo] = useState('RECORDATORIO_PAGO');
     const [titulo, setTitulo] = useState('');
     const [mensaje, setMensaje] = useState('');
-    const [enviarAhora, setEnviarAhora] = useState(false);
+    const [enviarAhora, setEnviarAhora] = useState(true);
     const [fechaProg, setFechaProg] = useState('');
     const [horaProg, setHoraProg] = useState('08:00');
     const [frecuencia, setFrecuencia] = useState('UNA_VEZ');
@@ -151,6 +154,22 @@ export default function MibotProgramarModal({
     const [existingList, setExistingList] = useState([]);
     const [loadingExisting, setLoadingExisting] = useState(false);
     const [sendingExistingId, setSendingExistingId] = useState(null);
+
+    const vencimientoRowRef = useRef(vencimientoRow);
+    const taskRowRef = useRef(taskRow);
+    vencimientoRowRef.current = vencimientoRow;
+    taskRowRef.current = taskRow;
+
+    const currentUser = useMemo(() => {
+        try {
+            return JSON.parse(localStorage.getItem('user')) || {};
+        } catch {
+            return {};
+        }
+    }, []);
+
+    const vencimientoKey = vencimientoRow ? `${vencimientoRow.id || ''}:${vencimientoRow.id_recordatorio || ''}` : '';
+    const taskKey = taskRow ? `${taskRow.id || ''}` : '';
 
     const paymentSaldo = useMemo(() => {
         if (!vencimientoRow) return null;
@@ -170,7 +189,12 @@ export default function MibotProgramarModal({
         try {
             const res = await api.get('/telegram/mibot/destinatarios');
             const list = Array.isArray(res.data?.destinatarios) ? res.data.destinatarios : [];
+            const sipeList = Array.isArray(res.data?.sipe_only_users) ? res.data.sipe_only_users : [];
             setRecipients(list);
+            setSipeOnlyUsers(sipeList);
+            if (res.data?.bot_active !== undefined) {
+                setBotActive(Boolean(res.data.bot_active));
+            }
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al cargar usuarios de Telegram para MiBot', 'error');
         } finally {
@@ -217,58 +241,62 @@ export default function MibotProgramarModal({
     useEffect(() => {
         if (!open) return;
 
+        const currentVencimiento = vencimientoRowRef.current;
+        const currentTask = taskRowRef.current;
+
         loadRecipients();
         setRecipientSearch('');
         setSelectedIds([]);
+        setSelectedSipeUserIds([]);
 
         const inOneHour = getSvNowDateTimeParts(60);
 
-        if (vencimientoRow) {
-            const isParcial = vencimientoRow.estado_pago === 'PARCIAL';
-            const saldoVal = vencimientoRow.saldo_pendiente !== undefined && vencimientoRow.saldo_pendiente !== null
-                ? Number(vencimientoRow.saldo_pendiente || 0)
-                : Number(vencimientoRow.monto || 0);
-            const desc = vencimientoRow.descripcion || `Pago #${vencimientoRow.id_recordatorio || vencimientoRow.id}`;
-            const ubic = vencimientoRow.ubicacion || 'General';
-            const venceTxt = formatDateDMY(vencimientoRow.vence);
+        if (currentVencimiento) {
+            const isParcial = currentVencimiento.estado_pago === 'PARCIAL';
+            const saldoVal = currentVencimiento.saldo_pendiente !== undefined && currentVencimiento.saldo_pendiente !== null
+                ? Number(currentVencimiento.saldo_pendiente || 0)
+                : Number(currentVencimiento.monto || 0);
+            const desc = currentVencimiento.descripcion || `Pago #${currentVencimiento.id_recordatorio || currentVencimiento.id}`;
+            const ubic = currentVencimiento.ubicacion || 'General';
+            const venceTxt = formatDateDMY(currentVencimiento.vence);
 
             setTipo(defaultTipo || 'RECORDATORIO_PAGO');
             setTitulo(isParcial ? `Saldo parcial pendiente: ${desc}` : `Pago pendiente: ${desc}`);
             setMensaje(
                 isParcial
-                    ? `Queda un saldo pendiente de ${formatMoney(saldoVal)} (de ${formatMoney(vencimientoRow.monto)}) para ${ubic} con vencimiento ${venceTxt}. Favor coordinar el pago restante o validar en Control de Pagos.`
+                    ? `Queda un saldo pendiente de ${formatMoney(saldoVal)} (de ${formatMoney(currentVencimiento.monto)}) para ${ubic} con vencimiento ${venceTxt}. Favor coordinar el pago restante o validar en Control de Pagos.`
                     : `Recordatorio de pago pendiente por ${formatMoney(saldoVal)} para ${ubic}, con vencimiento el ${venceTxt}. Favor gestionar y subir comprobante en SIPE Admin.`
             );
-            setEnviarAhora(false);
+            setEnviarAhora(true);
             setFechaProg(inOneHour.date);
             setHoraProg(inOneHour.time);
             setFrecuencia(saldoVal > 0 ? 'DIARIO_HASTA_PAGAR' : 'UNA_VEZ');
             setCrearTareaSistema(false);
-            loadExistingForVencimiento(vencimientoRow.id);
-        } else if (taskRow) {
-            const prioTxt = String(taskRow.prioridad || 'media').toUpperCase();
-            const catTxt = taskRow.categoria || 'General';
-            const dueTxt = formatDateDMY(taskRow.fecha_vencimiento);
-            const horaTxt = taskRow.hora_limite ? ` a las ${String(taskRow.hora_limite).slice(0, 5)}` : '';
-            const checklistArr = Array.isArray(taskRow.checklist) ? taskRow.checklist : [];
+            loadExistingForVencimiento(currentVencimiento.id);
+        } else if (currentTask) {
+            const prioTxt = String(currentTask.prioridad || 'media').toUpperCase();
+            const catTxt = currentTask.categoria || 'General';
+            const dueTxt = formatDateDMY(currentTask.fecha_vencimiento);
+            const horaTxt = currentTask.hora_limite ? ` a las ${String(currentTask.hora_limite).slice(0, 5)}` : '';
+            const checklistArr = Array.isArray(currentTask.checklist) ? currentTask.checklist : [];
             const subTxt = checklistArr.length > 0
                 ? `\nSub-tareas (${checklistArr.length}):\n` + checklistArr.map(c => `• ${c.texto}`).join('\n')
                 : '';
 
             setTipo(defaultTipo || 'TAREA');
-            setTitulo(`Tarea #${taskRow.id}: ${taskRow.titulo}`);
+            setTitulo(`Tarea #${currentTask.id}: ${currentTask.titulo}`);
             setMensaje(
-                `${taskRow.descripcion ? `${taskRow.descripcion}\n` : 'Se te ha asignado esta actividad en SIPE Admin.\n'}` +
+                `${currentTask.descripcion ? `${currentTask.descripcion}\n` : 'Se te ha asignado esta actividad en SIPE Admin.\n'}` +
                 `Prioridad: ${prioTxt} · Categoría: ${catTxt} · Plazo límite: ${dueTxt}${horaTxt}${subTxt}`
             );
             setEnviarAhora(true);
-            setFechaProg(taskRow.fecha_vencimiento ? String(taskRow.fecha_vencimiento).slice(0, 10) : inOneHour.date);
-            setHoraProg(taskRow.hora_limite ? String(taskRow.hora_limite).slice(0, 5) : inOneHour.time);
+            setFechaProg(currentTask.fecha_vencimiento ? String(currentTask.fecha_vencimiento).slice(0, 10) : inOneHour.date);
+            setHoraProg(currentTask.hora_limite ? String(currentTask.hora_limite).slice(0, 5) : inOneHour.time);
             setFrecuencia('UNA_VEZ');
             setCrearTareaSistema(false);
-            loadExistingForTask(taskRow.id);
+            loadExistingForTask(currentTask.id);
         } else {
-            const initTipo = defaultTipo || 'REUNION';
+            const initTipo = defaultTipo || 'RECORDATORIO_PAGO';
             setTipo(initTipo);
             setTitulo(
                 initTipo === 'REUNION'
@@ -277,14 +305,14 @@ export default function MibotProgramarModal({
                         ? 'Nueva Tarea Asignada'
                         : initTipo === 'VALIDACION'
                             ? 'Validación de Actividad'
-                            : ''
+                            : 'Recordatorio de Pago'
             );
             setMensaje(
                 initTipo === 'REUNION'
                     ? 'Se les recuerda nuestra reunión programada. Por favor confirmar asistencia desde este mensaje.'
                     : ''
             );
-            setEnviarAhora(false);
+            setEnviarAhora(true);
             setFechaProg(inOneHour.date);
             setHoraProg(inOneHour.time);
             setFrecuencia('UNA_VEZ');
@@ -293,7 +321,7 @@ export default function MibotProgramarModal({
             setCategoriaTarea('Operaciones');
             setExistingList([]);
         }
-    }, [open, vencimientoRow, taskRow, defaultTipo, loadRecipients, loadExistingForVencimiento, loadExistingForTask]);
+    }, [open, vencimientoKey, taskKey, defaultTipo, loadRecipients, loadExistingForVencimiento, loadExistingForTask]);
 
     // Auto-seleccionar el usuario de Telegram vinculado al colaborador asignado de la tarea
     useEffect(() => {
@@ -319,10 +347,26 @@ export default function MibotProgramarModal({
         });
     }, [recipients, recipientSearch]);
 
+    const filteredSipeOnlyUsers = useMemo(() => {
+        const q = recipientSearch.trim().toLowerCase();
+        if (!q) return sipeOnlyUsers;
+        return sipeOnlyUsers.filter(u => {
+            const blob = `${u.nombre_completo || ''} ${u.cargo || ''} ${u.username || ''}`.toLowerCase();
+            return blob.includes(q);
+        });
+    }, [sipeOnlyUsers, recipientSearch]);
+
     const selectedRecipientObjects = useMemo(() => {
         const set = new Set(selectedIds);
         return recipients.filter(u => set.has(u.id));
     }, [recipients, selectedIds]);
+
+    const selectedSipeObjects = useMemo(() => {
+        const set = new Set(selectedSipeUserIds);
+        return sipeOnlyUsers.filter(u => set.has(u.user_id));
+    }, [sipeOnlyUsers, selectedSipeUserIds]);
+
+    const totalSelectedCount = selectedIds.length + selectedSipeUserIds.length;
 
     const toggleRecipient = (id) => {
         setSelectedIds(prev => (
@@ -330,16 +374,38 @@ export default function MibotProgramarModal({
         ));
     };
 
+    const toggleSipeUser = (userId) => {
+        setSelectedSipeUserIds(prev => (
+            prev.includes(userId) ? prev.filter(x => x !== userId) : [...prev, userId]
+        ));
+    };
+
     const handleSelectAllFiltered = () => {
-        const enabledIds = filteredRecipients
-            .filter(u => u[currentTipoMeta.capField] !== false)
-            .map(u => u.id);
-        const idsToUse = enabledIds.length > 0 ? enabledIds : filteredRecipients.map(u => u.id);
-        setSelectedIds(prev => [...new Set([...prev, ...idsToUse])]);
+        const tgIds = filteredRecipients.map(u => u.id);
+        if (tgIds.length > 0) {
+            setSelectedIds(prev => [...new Set([...prev, ...tgIds])]);
+        }
+    };
+
+    const handleSelectMe = () => {
+        const myId = Number(currentUser?.id || 0);
+        if (!myId) return;
+        const myTgRows = recipients.filter(r => Number(r.user_id) === myId).map(r => r.id);
+        if (myTgRows.length > 0) {
+            setSelectedIds(prev => [...new Set([...prev, ...myTgRows])]);
+            return;
+        }
+        const mySipeRow = sipeOnlyUsers.find(u => Number(u.user_id) === myId);
+        if (mySipeRow) {
+            setSelectedSipeUserIds(prev => [...new Set([...prev, mySipeRow.user_id])]);
+        } else {
+            addToast('Tu usuario aún no está vinculado a Telegram en Seguridad → Telegram.', 'warning');
+        }
     };
 
     const handleClearSelection = () => {
         setSelectedIds([]);
+        setSelectedSipeUserIds([]);
     };
 
     const applyPresetSchedule = (preset) => {
@@ -348,7 +414,11 @@ export default function MibotProgramarModal({
             return;
         }
         setEnviarAhora(false);
-        if (preset === '1H') {
+        if (preset === '15M') {
+            const p = getSvNowDateTimeParts(15);
+            setFechaProg(p.date);
+            setHoraProg(p.time);
+        } else if (preset === '1H') {
             const p = getSvNowDateTimeParts(60);
             setFechaProg(p.date);
             setHoraProg(p.time);
@@ -382,8 +452,8 @@ export default function MibotProgramarModal({
     const handleSubmit = async (e) => {
         if (e && e.preventDefault) e.preventDefault();
 
-        if (selectedIds.length === 0) {
-            addToast('Selecciona al menos un usuario registrado en Telegram para enviar el aviso', 'warning');
+        if (selectedIds.length === 0 && selectedSipeUserIds.length === 0) {
+            addToast('Selecciona al menos un usuario (Telegram o SIPE Admin) para enviar el aviso', 'warning');
             return;
         }
         if (!titulo.trim() || titulo.trim().length < 3) {
@@ -394,8 +464,8 @@ export default function MibotProgramarModal({
             addToast('Escribe el mensaje que MiBot enviará a cada usuario', 'warning');
             return;
         }
-        if (!enviarAhora && (!fechaProg || !horaProg)) {
-            addToast('Indica la fecha y hora de envío o selecciona "Enviar ahora"', 'warning');
+        if (!enviarAhora && selectedIds.length > 0 && (!fechaProg || !horaProg)) {
+            addToast('Indica la fecha y hora de envío o selecciona "Notificar ahora"', 'warning');
             return;
         }
 
@@ -406,6 +476,7 @@ export default function MibotProgramarModal({
                 titulo: titulo.trim(),
                 mensaje: mensaje.trim(),
                 destinatario_ids: selectedIds,
+                sipe_user_ids: selectedSipeUserIds,
                 enviar_ahora: enviarAhora,
                 programado_para: enviarAhora ? undefined : `${fechaProg} ${horaProg}:00`,
                 frecuencia,
@@ -432,16 +503,20 @@ export default function MibotProgramarModal({
             };
 
             const res = await api.post('/telegram/mibot/programaciones', payload);
-            addToast(res.data?.message || 'Aviso MiBot guardado con éxito', 'success');
+            const deliveryStatus = res.data?.delivery_status;
+            const toastType = deliveryStatus === 'failed'
+                ? 'error'
+                : deliveryStatus === 'partial'
+                    ? 'warning'
+                    : 'success';
+            addToast(res.data?.message || 'Aviso MiBot guardado con éxito', toastType);
 
             if (onSaved) onSaved(res.data);
 
             if (vencimientoRow) {
                 await loadExistingForVencimiento(vencimientoRow.id);
-                setEnviarAhora(false);
             } else if (taskRow) {
                 await loadExistingForTask(taskRow.id);
-                setEnviarAhora(false);
             } else {
                 onClose();
             }
@@ -456,7 +531,13 @@ export default function MibotProgramarModal({
         setSendingExistingId(prog.id);
         try {
             const res = await api.post(`/telegram/mibot/programaciones/${prog.id}/enviar-ahora`);
-            addToast(res.data?.message || 'Aviso enviado por Telegram', 'success');
+            const deliveryStatus = res.data?.delivery_status;
+            const toastType = deliveryStatus === 'failed'
+                ? 'error'
+                : deliveryStatus === 'partial'
+                    ? 'warning'
+                    : 'success';
+            addToast(res.data?.message || 'Aviso enviado por Telegram', toastType);
             if (vencimientoRow?.id) await loadExistingForVencimiento(vencimientoRow.id);
             if (taskRow?.id) await loadExistingForTask(taskRow.id);
             if (onSaved) onSaved(res.data);
@@ -508,9 +589,9 @@ export default function MibotProgramarModal({
             footer={
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', width: '100%' }}>
                     <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                        {selectedIds.length > 0
-                            ? `🤖 MiBot enviará ${selectedIds.length} mensaje(s) personal(es) en Telegram`
-                            : 'Selecciona 1 o más usuarios registrados en Telegram'}
+                        {totalSelectedCount > 0
+                            ? `🤖 ${selectedIds.length > 0 ? `${selectedIds.length} Telegram + SIPE` : ''}${selectedIds.length > 0 && selectedSipeUserIds.length > 0 ? ' · ' : ''}${selectedSipeUserIds.length > 0 ? `${selectedSipeUserIds.length} solo SIPE Admin` : ''}`
+                            : 'Selecciona 1 o más usuarios (Telegram o SIPE Admin)'}
                     </span>
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <button
@@ -526,7 +607,7 @@ export default function MibotProgramarModal({
                             type="submit"
                             form="mibot-programar-form"
                             className="btn-primary"
-                            disabled={saving || selectedIds.length === 0}
+                            disabled={saving || totalSelectedCount === 0}
                             style={{ height: '36px', fontSize: '0.8rem', padding: '0 1.1rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
                         >
                             {saving ? (
@@ -534,15 +615,15 @@ export default function MibotProgramarModal({
                                     <RefreshCw size={14} className="spin" />
                                     {enviarAhora ? 'Enviando...' : 'Programando...'}
                                 </>
-                            ) : enviarAhora ? (
+                            ) : enviarAhora || selectedIds.length === 0 ? (
                                 <>
                                     <Send size={14} />
-                                    Enviar Ahora ({selectedIds.length})
+                                    Notificar Ahora ({totalSelectedCount})
                                 </>
                             ) : (
                                 <>
                                     <Bell size={14} />
-                                    Programar Aviso ({selectedIds.length})
+                                    Programar Recordatorio ({totalSelectedCount})
                                 </>
                             )}
                         </button>
@@ -648,7 +729,7 @@ export default function MibotProgramarModal({
                         </div>
                     </div>
 
-                    {/* 2. SELECCIÓN MÚLTIPLE DE USUARIOS REGISTRADOS EN TELEGRAM */}
+                    {/* 2. SELECCIÓN MÚLTIPLE DE USUARIOS (TELEGRAM + SIPE ADMIN) */}
                     <div style={{
                         display: 'flex',
                         flexDirection: 'column',
@@ -658,21 +739,46 @@ export default function MibotProgramarModal({
                         border: '1px solid var(--border)',
                         backgroundColor: 'rgba(255,255,255,0.02)'
                     }}>
+                        {!botActive && (
+                            <div style={{
+                                padding: '0.5rem 0.65rem',
+                                borderRadius: '7px',
+                                backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                                border: '1px solid rgba(239, 68, 68, 0.35)',
+                                fontSize: '0.75rem',
+                                color: '#fca5a5',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.4rem'
+                            }}>
+                                <AlertCircle size={14} style={{ flexShrink: 0 }} />
+                                <span>El bot de Telegram aparece desactivado en Seguridad → Telegram. Las alertas se entregarán dentro de SIPE Admin, pero Telegram no enviará hasta reactivar el bot.</span>
+                            </div>
+                        )}
+
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
                             <label style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', margin: 0 }}>
                                 <Users size={15} color="#0088cc" />
-                                2. Usuarios de Telegram a Notificar Personalmente ({selectedIds.length} seleccionados)
+                                2. Destinatarios ({totalSelectedCount} seleccionados)
                             </label>
                             <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={handleSelectMe}
+                                    style={{ height: '26px', padding: '0 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                >
+                                    <UserCheck size={12} /> Notificarme a mí
+                                </button>
                                 <button
                                     type="button"
                                     className="btn-secondary"
                                     onClick={handleSelectAllFiltered}
                                     style={{ height: '26px', padding: '0 0.55rem', fontSize: '0.72rem' }}
                                 >
-                                    Seleccionar todos
+                                    Todos Telegram
                                 </button>
-                                {selectedIds.length > 0 && (
+                                {totalSelectedCount > 0 && (
                                     <button
                                         type="button"
                                         className="btn-secondary"
@@ -699,68 +805,133 @@ export default function MibotProgramarModal({
 
                         {loadingRecipients ? (
                             <div style={{ padding: '0.85rem', textAlign: 'center', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                                Cargando usuarios registrados en Telegram...
+                                Cargando usuarios registrados en Telegram y SIPE Admin...
                             </div>
-                        ) : filteredRecipients.length === 0 ? (
+                        ) : filteredRecipients.length === 0 && filteredSipeOnlyUsers.length === 0 ? (
                             <div style={{ padding: '0.75rem', borderRadius: '6px', backgroundColor: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', fontSize: '0.78rem', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                 <AlertCircle size={15} style={{ flexShrink: 0 }} />
                                 <span>No se encontraron usuarios activos con MiBot habilitado. Regístralos en Seguridad → Usuarios y Bot de Telegram.</span>
                             </div>
                         ) : (
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', maxHeight: '175px', overflowY: 'auto', paddingRight: '0.15rem' }}>
-                                {filteredRecipients.map(u => {
-                                    const isSelected = selectedIds.includes(u.id);
-                                    const capEnabled = u[currentTipoMeta.capField] !== false;
-                                    return (
-                                        <label
-                                            key={u.id}
-                                            style={{
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                gap: '0.45rem',
-                                                padding: '0.4rem 0.65rem',
-                                                borderRadius: '8px',
-                                                cursor: 'pointer',
-                                                userSelect: 'none',
-                                                fontSize: '0.78rem',
-                                                border: isSelected ? '1px solid #0088cc' : '1px solid var(--border)',
-                                                backgroundColor: isSelected ? 'rgba(0, 136, 204, 0.16)' : 'rgba(255,255,255,0.025)',
-                                                flex: '1 1 215px',
-                                                maxWidth: '100%'
-                                            }}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={isSelected}
-                                                onChange={() => toggleRecipient(u.id)}
-                                                style={{ width: '16px', height: '16px', flexShrink: 0 }}
-                                            />
-                                            <div style={{ minWidth: 0, flex: 1 }}>
-                                                <div style={{ fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                    {u.nombre_completo}
-                                                </div>
-                                                <div style={{ fontSize: '0.69rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-                                                    {u.cargo && (
-                                                        <span style={{ color: '#38bdf8', fontWeight: 600 }}>{u.cargo}</span>
-                                                    )}
-                                                    {u.telegram_username && <span>{u.telegram_username}</span>}
-                                                    {!capEnabled && (
-                                                        <span style={{ color: '#f59e0b', fontWeight: 600 }}>({currentTipoMeta.short} desact.)</span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </label>
-                                    );
-                                })}
-                            </div>
+                            <>
+                                {filteredRecipients.length > 0 && (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', maxHeight: '175px', overflowY: 'auto', paddingRight: '0.15rem' }}>
+                                        {filteredRecipients.map(u => {
+                                            const isSelected = selectedIds.includes(u.id);
+                                            const capEnabled = u[currentTipoMeta.capField] !== false;
+                                            return (
+                                                <label
+                                                    key={u.id}
+                                                    title={!capEnabled ? 'Tiene desactivado el resumen automático de este tipo en su perfil Telegram, pero SÍ recibirá este aviso puntual al seleccionarlo.' : undefined}
+                                                    style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.45rem',
+                                                        padding: '0.4rem 0.65rem',
+                                                        borderRadius: '8px',
+                                                        cursor: 'pointer',
+                                                        userSelect: 'none',
+                                                        fontSize: '0.78rem',
+                                                        border: isSelected ? '1px solid #0088cc' : '1px solid var(--border)',
+                                                        backgroundColor: isSelected ? 'rgba(0, 136, 204, 0.16)' : 'rgba(255,255,255,0.025)',
+                                                        flex: '1 1 215px',
+                                                        maxWidth: '100%'
+                                                    }}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isSelected}
+                                                        onChange={() => toggleRecipient(u.id)}
+                                                        style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                                                    />
+                                                    <div style={{ minWidth: 0, flex: 1 }}>
+                                                        <div style={{ fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {u.nombre_completo}
+                                                        </div>
+                                                        <div style={{ fontSize: '0.69rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                                                            {u.cargo && (
+                                                                <span style={{ color: '#38bdf8', fontWeight: 600 }}>{u.cargo}</span>
+                                                            )}
+                                                            {u.telegram_username && <span>{u.telegram_username}</span>}
+                                                            <span style={{ color: '#34d399', fontWeight: 600 }}>Telegram{u.user_id ? ' + SIPE' : ''}</span>
+                                                            {!capEnabled && (
+                                                                <span style={{ color: '#f59e0b', fontWeight: 600 }}>(Auto {currentTipoMeta.short} off)</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {filteredSipeOnlyUsers.length > 0 && (
+                                    <div style={{ marginTop: '0.25rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--border)', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                        <span style={{ fontSize: '0.71rem', fontWeight: 700, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                            <Bell size={12} color="#f59e0b" />
+                                            Usuarios de SIPE Admin sin Telegram vinculado (reciben alerta en campana + tarjeta en vivo):
+                                        </span>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', maxHeight: '115px', overflowY: 'auto' }}>
+                                            {filteredSipeOnlyUsers.map(su => {
+                                                const isSelected = selectedSipeUserIds.includes(su.user_id);
+                                                return (
+                                                    <label
+                                                        key={`sipe-${su.user_id}`}
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.4rem',
+                                                            padding: '0.32rem 0.6rem',
+                                                            borderRadius: '8px',
+                                                            cursor: 'pointer',
+                                                            userSelect: 'none',
+                                                            fontSize: '0.76rem',
+                                                            border: isSelected ? '1px solid #f59e0b' : '1px solid var(--border)',
+                                                            backgroundColor: isSelected ? 'rgba(245, 158, 11, 0.14)' : 'rgba(255,255,255,0.02)',
+                                                            flex: '1 1 195px',
+                                                            maxWidth: '100%'
+                                                        }}
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isSelected}
+                                                            onChange={() => toggleSipeUser(su.user_id)}
+                                                            style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                                                        />
+                                                        <div style={{ minWidth: 0, flex: 1 }}>
+                                                            <div style={{ fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                {su.nombre_completo}
+                                                            </div>
+                                                            <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)' }}>
+                                                                {su.cargo || su.username} · Solo SIPE Admin
+                                                            </div>
+                                                        </div>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+                            </>
                         )}
 
-                        {selectedRecipientObjects.length > 0 && (
+                        {(selectedRecipientObjects.length > 0 || selectedSipeObjects.length > 0) && (
                             <div style={{ fontSize: '0.73rem', color: '#7dd3fc', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
                                 <Bot size={14} style={{ flexShrink: 0 }} />
                                 <span>
-                                    Se enviará mensaje personal por separado a <strong>{selectedRecipientObjects.length}</strong> persona(s):{' '}
-                                    {selectedRecipientObjects.map(u => u.cargo ? `${u.nombre_completo} (${u.cargo})` : u.nombre_completo).join(', ')}
+                                    {selectedRecipientObjects.length > 0 && (
+                                        <>
+                                            Telegram + SIPE (<strong>{selectedRecipientObjects.length}</strong>):{' '}
+                                            {selectedRecipientObjects.map(u => u.cargo ? `${u.nombre_completo} (${u.cargo})` : u.nombre_completo).join(', ')}
+                                        </>
+                                    )}
+                                    {selectedRecipientObjects.length > 0 && selectedSipeObjects.length > 0 ? ' · ' : ''}
+                                    {selectedSipeObjects.length > 0 && (
+                                        <>
+                                            Solo SIPE Admin (<strong>{selectedSipeObjects.length}</strong>):{' '}
+                                            {selectedSipeObjects.map(u => u.nombre_completo).join(', ')}
+                                        </>
+                                    )}
                                 </span>
                             </div>
                         )}
@@ -814,26 +985,37 @@ export default function MibotProgramarModal({
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
                             <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                                 <Clock size={14} color="#f59e0b" />
-                                4. Cuándo enviar (Hora de El Salvador)
+                                4. Modo de Envío (Hora de El Salvador)
                             </span>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
                                 <button
                                     type="button"
                                     onClick={() => applyPresetSchedule('NOW')}
                                     style={{
-                                        height: '26px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer',
+                                        height: '28px', padding: '0 0.7rem', borderRadius: '6px', fontSize: '0.73rem', fontWeight: 700, cursor: 'pointer',
                                         border: enviarAhora ? '1px solid #10b981' : '1px solid var(--border)',
-                                        backgroundColor: enviarAhora ? 'rgba(16, 185, 129, 0.18)' : 'transparent',
+                                        backgroundColor: enviarAhora ? 'rgba(16, 185, 129, 0.2)' : 'transparent',
                                         color: enviarAhora ? '#34d399' : 'var(--text-muted)'
                                     }}
                                 >
-                                    ⚡ Enviar ahora
+                                    ⚡ Notificar ahora
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => applyPresetSchedule('15M')}
+                                    style={{
+                                        height: '28px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
+                                        border: !enviarAhora ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid var(--border)',
+                                        backgroundColor: 'transparent', color: 'var(--text-muted)'
+                                    }}
+                                >
+                                    ⏱️ En 15 min
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => applyPresetSchedule('1H')}
                                     style={{
-                                        height: '26px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
+                                        height: '28px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
                                         border: '1px solid var(--border)', backgroundColor: 'transparent', color: 'var(--text-muted)'
                                     }}
                                 >
@@ -843,7 +1025,7 @@ export default function MibotProgramarModal({
                                     type="button"
                                     onClick={() => applyPresetSchedule('TOMORROW_8AM')}
                                     style={{
-                                        height: '26px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
+                                        height: '28px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
                                         border: '1px solid var(--border)', backgroundColor: 'transparent', color: 'var(--text-muted)'
                                     }}
                                 >
@@ -854,7 +1036,7 @@ export default function MibotProgramarModal({
                                         type="button"
                                         onClick={() => applyPresetSchedule('DAY_BEFORE_DUE')}
                                         style={{
-                                            height: '26px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
+                                            height: '28px', padding: '0 0.6rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
                                             border: '1px solid var(--border)', backgroundColor: 'transparent', color: 'var(--text-muted)'
                                         }}
                                     >
@@ -862,6 +1044,19 @@ export default function MibotProgramarModal({
                                     </button>
                                 )}
                             </div>
+                        </div>
+
+                        <div style={{
+                            fontSize: '0.72rem',
+                            padding: '0.4rem 0.6rem',
+                            borderRadius: '6px',
+                            backgroundColor: enviarAhora ? 'rgba(16, 185, 129, 0.1)' : 'rgba(56, 189, 248, 0.1)',
+                            border: enviarAhora ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(56, 189, 248, 0.3)',
+                            color: enviarAhora ? '#6ee7b7' : '#7dd3fc'
+                        }}>
+                            {enviarAhora
+                                ? '⚡ Se enviará de inmediato por Telegram y aparecerá en tiempo real en la campana de notificaciones de SIPE Admin.'
+                                : `🗓️ Quedará programado para enviarse automáticamente el ${formatDateDMY(fechaProg)} a las ${horaProg || '--:--'} (hora El Salvador) en Telegram y SIPE Admin.`}
                         </div>
 
                         <div className="form-grid form-grid-3" style={{ gap: '0.6rem' }}>
@@ -1105,7 +1300,7 @@ export default function MibotProgramarModal({
                                                             fontWeight: 600
                                                         }}
                                                     >
-                                                        {d.nombre_destinatario}{d.cargo ? ` (${d.cargo})` : ''} · {st.label}
+                                                        {d.nombre_destinatario}{d.cargo ? ` (${d.cargo})` : ''} · {st.label}{d.estado_entrega === 'ERROR' && d.error_msg ? `: ${d.error_msg}` : ''}
                                                     </span>
                                                 );
                                             })}

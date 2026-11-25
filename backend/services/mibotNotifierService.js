@@ -5,6 +5,7 @@ const getExternalDb = (...args) => dbModule.getExternalDb(...args);
 const { escapeHtml } = require('./telegramTextAndDates');
 const {
     sendTelegramMessage,
+    sendTelegramMessageDetailed,
     answerCallbackQuery,
     editMessageReplyMarkup
 } = require('./telegramTransportService');
@@ -608,6 +609,155 @@ async function getEligibleMibotRecipients(db, { tipo = null, includeAllActive = 
 }
 
 /**
+ * Obtiene usuarios activos de SIPE Admin que aún NO tienen un usuario activo de Telegram vinculado,
+ * para permitir enviarles notificaciones en tiempo real dentro del sistema (campana + tarjeta).
+ */
+async function getEligibleSipeOnlyUsers(db) {
+    if (!db) return [];
+    try {
+        const [rows] = await db.query(`
+            SELECT u.id, u.username, u.nombre, u.email, r.name AS role_name
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.status = 'active'
+              AND NOT EXISTS (
+                  SELECT 1 FROM telegram_usuarios tu
+                  WHERE tu.user_id = u.id AND tu.activo = 1
+              )
+            ORDER BY COALESCE(NULLIF(TRIM(u.nombre), ''), u.username) ASC
+        `);
+        return (rows || []).map(u => ({
+            id: Number(u.id),
+            user_id: Number(u.id),
+            username: u.username,
+            nombre_completo: (u.nombre || u.username || `Usuario #${u.id}`).trim(),
+            email: u.email || null,
+            cargo: u.role_name || null,
+            sipe_only: true
+        }));
+    } catch (err) {
+        console.warn('[MiBot] Aviso listando usuarios SIPE sin Telegram:', err.message);
+        return [];
+    }
+}
+
+/**
+ * Emite notificaciones en tiempo real dentro de SIPE Admin (tabla notifications + Socket.io)
+ * para recordatorios de pago, tareas, validaciones y reuniones de MiBot.
+ */
+async function emitMibotSystemNotifications({
+    db,
+    io = null,
+    tipo = 'RECORDATORIO_PAGO',
+    titulo = '',
+    mensaje = '',
+    programacionId = null,
+    vencimientoId = null,
+    recordatorioId = null,
+    taskId = null,
+    ubicacion = null,
+    montoTotal = null,
+    montoPendiente = null,
+    fechaVencimiento = null,
+    programadoPara = null,
+    prioridad = 'media',
+    createdByName = 'SIPE Admin',
+    targetUsers = [],
+    mibotStatusLabel = null,
+    isScheduledDispatch = false
+}) {
+    if (!db || !Array.isArray(targetUsers) || targetUsers.length === 0) {
+        return { sent: 0, userIds: [] };
+    }
+
+    const effectiveIo = io || getRealtimeIo();
+    const isPayment = tipo === 'RECORDATORIO_PAGO' || Boolean(vencimientoId && tipo === 'VALIDACION');
+    const notifType = tipo === 'RECORDATORIO_PAGO' ? 'payment_reminder' : 'task_assigned';
+    const notifLink = isPayment ? '/dashboard/operaciones/recordatorios' : '/dashboard/operaciones/tareas';
+
+    const notifTitle = tipo === 'RECORDATORIO_PAGO'
+        ? (isScheduledDispatch ? '⏰ Recordatorio de Pago Programado (MiBot)' : '💳 Aviso de Control de Pagos (MiBot)')
+        : tipo === 'REUNION'
+            ? (isScheduledDispatch ? '⏰ Recordatorio de Reunión (MiBot)' : 'Nueva Reunión Agendada (MiBot)')
+            : tipo === 'VALIDACION'
+                ? (isPayment ? '✅ Validación de Pago Solicitada (MiBot)' : 'Actividad Asignada para Validación')
+                : (isScheduledDispatch ? '⏰ Recordatorio de Tarea (MiBot)' : 'Nueva Tarea / Actividad Asignada');
+
+    const notifiedUserIds = new Set();
+    const emittedIds = [];
+
+    for (const target of targetUsers) {
+        const targetSipeUserId = target?.user_id ? Number(target.user_id) : null;
+        if (!targetSipeUserId || !Number.isFinite(targetSipeUserId) || notifiedUserIds.has(targetSipeUserId)) {
+            continue;
+        }
+        notifiedUserIds.add(targetSipeUserId);
+
+        const recipientName = target.nombre_completo || target.nombre || 'Colaborador';
+        const notifMessage = tipo === 'RECORDATORIO_PAGO'
+            ? (isScheduledDispatch
+                ? `Recordatorio programado: "${titulo}"${ubicacion ? ` · ${ubicacion}` : ''}${Number.isFinite(Number(montoPendiente)) && montoPendiente !== null ? ` · Saldo ${formatMoney(montoPendiente)}` : ''}`
+                : `${createdByName} envió aviso de pago: "${titulo}"${ubicacion ? ` · ${ubicacion}` : ''}${Number.isFinite(Number(montoPendiente)) && montoPendiente !== null ? ` · Saldo ${formatMoney(montoPendiente)}` : ''}`)
+            : (isScheduledDispatch
+                ? `Recordatorio MiBot: "${titulo}"`
+                : `${createdByName} te asignó vía MiBot: "${titulo}"`);
+
+        const notifData = {
+            taskId: taskId || null,
+            programacionId: programacionId || null,
+            vencimientoId: vencimientoId || null,
+            recordatorioId: recordatorioId || null,
+            tipo,
+            titulo,
+            descripcion: mensaje,
+            ubicacion: ubicacion || null,
+            categoria: ubicacion || (isPayment ? 'Control de Pagos' : 'Operaciones'),
+            monto_total: Number.isFinite(Number(montoTotal)) && montoTotal !== null ? Number(montoTotal) : null,
+            monto_pendiente: Number.isFinite(Number(montoPendiente)) && montoPendiente !== null ? Number(montoPendiente) : null,
+            priority: prioridad || (tipo === 'RECORDATORIO_PAGO' ? 'alta' : 'media'),
+            fecha_vencimiento: fechaVencimiento || (programadoPara ? String(programadoPara).slice(0, 10) : null),
+            hora_limite: programadoPara ? String(programadoPara).slice(11, 16) : null,
+            created_user_name: createdByName,
+            assigned_user_name: recipientName,
+            mibot_status_label: mibotStatusLabel || null,
+            is_scheduled_dispatch: Boolean(isScheduledDispatch),
+            link: notifLink
+        };
+
+        try {
+            const [nRes] = await db.query(
+                `INSERT INTO notifications (user_id, type, title, message, data)
+                 VALUES (?, ?, ?, ?, ?)`,
+                [
+                    targetSipeUserId,
+                    notifType,
+                    notifTitle,
+                    notifMessage,
+                    JSON.stringify(notifData)
+                ]
+            );
+            emittedIds.push(targetSipeUserId);
+            if (effectiveIo) {
+                effectiveIo.to(`user_${targetSipeUserId}`).emit('notification:new', {
+                    id: nRes.insertId,
+                    user_id: targetSipeUserId,
+                    type: notifType,
+                    title: notifTitle,
+                    message: notifMessage,
+                    data: notifData,
+                    is_read: false,
+                    created_at: new Date().toISOString()
+                });
+            }
+        } catch (insertErr) {
+            console.warn(`[MiBot] Aviso enviando notificación en sistema a user_${targetSipeUserId}:`, insertErr.message);
+        }
+    }
+
+    return { sent: emittedIds.length, userIds: emittedIds };
+}
+
+/**
  * Carga una programación por ID con todos sus destinatarios y resumen de entrega
  */
 async function getMibotProgramacionById(db, programacionId) {
@@ -933,26 +1083,53 @@ async function createMibotProgramacion({
 
     const rawDestIds = Array.isArray(payload.destinatario_ids) ? payload.destinatario_ids : [];
     const uniqueDestIds = [...new Set(rawDestIds.map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0))];
-    if (uniqueDestIds.length === 0) {
-        const err = new Error('Debes seleccionar al menos un usuario registrado en Telegram para enviar el aviso.');
+    const rawSipeUserIds = Array.isArray(payload.sipe_user_ids) ? payload.sipe_user_ids : [];
+    const uniqueSipeUserIds = [...new Set(rawSipeUserIds.map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0))];
+
+    if (uniqueDestIds.length === 0 && uniqueSipeUserIds.length === 0) {
+        const err = new Error('Debes seleccionar al menos un usuario (Telegram o SIPE Admin) para enviar el aviso.');
         err.status = 400;
         throw err;
     }
 
-    const placeholders = uniqueDestIds.map(() => '?').join(',');
-    const [tgUsers] = await db.query(
-        `SELECT tu.id, tu.user_id, tu.telegram_user_id, tu.telegram_username, tu.first_name, tu.last_name,
-                tu.cargo, tu.activo, tu.recibir_mibot, u.nombre AS sipe_nombre, r.name AS sipe_role_name
-         FROM telegram_usuarios tu
-         LEFT JOIN users u ON tu.user_id = u.id
-         LEFT JOIN roles r ON u.role_id = r.id
-         WHERE tu.id IN (${placeholders}) AND tu.activo = 1`,
-        uniqueDestIds
-    );
+    let eligibleUsers = [];
+    if (uniqueDestIds.length > 0) {
+        const placeholders = uniqueDestIds.map(() => '?').join(',');
+        const [tgUsers] = await db.query(
+            `SELECT tu.id, tu.user_id, tu.telegram_user_id, tu.telegram_username, tu.first_name, tu.last_name,
+                    tu.cargo, tu.activo, tu.recibir_mibot, u.nombre AS sipe_nombre, r.name AS sipe_role_name
+             FROM telegram_usuarios tu
+             LEFT JOIN users u ON tu.user_id = u.id
+             LEFT JOIN roles r ON u.role_id = r.id
+             WHERE tu.id IN (${placeholders}) AND tu.activo = 1`,
+            uniqueDestIds
+        );
+        eligibleUsers = (tgUsers || []).filter(u => Boolean(u.recibir_mibot ?? 1));
+    }
 
-    const eligibleUsers = (tgUsers || []).filter(u => Boolean(u.recibir_mibot ?? 1));
-    if (eligibleUsers.length === 0) {
-        const err = new Error('Ninguno de los usuarios seleccionados está activo y habilitado para MiBot en Telegram.');
+    let extraSipeUsers = [];
+    if (uniqueSipeUserIds.length > 0) {
+        try {
+            const sPlaceholders = uniqueSipeUserIds.map(() => '?').join(',');
+            const [sRows] = await db.query(
+                `SELECT u.id AS user_id, u.username, u.nombre, r.name AS role_name
+                 FROM users u
+                 LEFT JOIN roles r ON u.role_id = r.id
+                 WHERE u.id IN (${sPlaceholders}) AND u.status = 'active'`,
+                uniqueSipeUserIds
+            );
+            extraSipeUsers = (sRows || []).map(u => ({
+                user_id: Number(u.user_id),
+                nombre_completo: (u.nombre || u.username || `Usuario #${u.user_id}`).trim(),
+                cargo: u.role_name || null
+            }));
+        } catch (sErr) {
+            console.warn('[MiBot] Aviso consultando usuarios SIPE adicionales:', sErr.message);
+        }
+    }
+
+    if (eligibleUsers.length === 0 && extraSipeUsers.length === 0) {
+        const err = new Error('Ninguno de los usuarios seleccionados está activo y habilitado para recibir avisos.');
         err.status = 400;
         throw err;
     }
@@ -992,6 +1169,40 @@ async function createMibotProgramacion({
 
     const createdByUserId = actorUser?.id ? Number(actorUser.id) : null;
     const createdByName = String(actorUser?.nombre || actorUser?.username || 'SIPE Admin').trim().slice(0, 120);
+
+    // Si solo se seleccionaron usuarios de SIPE Admin (sin Telegram vinculado), emitir notificación interna inmediata
+    if (eligibleUsers.length === 0 && extraSipeUsers.length > 0) {
+        const sipeNotifRes = await emitMibotSystemNotifications({
+            db,
+            io,
+            tipo,
+            titulo,
+            mensaje,
+            programacionId: null,
+            vencimientoId: vencimientoId || null,
+            recordatorioId: recordatorioId || null,
+            taskId: taskId || null,
+            ubicacion,
+            montoTotal: Number.isFinite(montoTotal) ? montoTotal : null,
+            montoPendiente: Number.isFinite(montoPendiente) ? montoPendiente : null,
+            fechaVencimiento,
+            programadoPara,
+            prioridad: payload.prioridad || (tipo === 'RECORDATORIO_PAGO' ? 'alta' : 'media'),
+            createdByName,
+            targetUsers: extraSipeUsers,
+            mibotStatusLabel: `Notificación directa en SIPE Admin (${extraSipeUsers.map(u => u.nombre_completo).join(', ')})`,
+            isScheduledDispatch: false
+        });
+        return {
+            programacion: null,
+            dispatch: null,
+            task: null,
+            sipe_notifications: {
+                sent: sipeNotifRes.sent,
+                recipients: extraSipeUsers.map(u => u.nombre_completo)
+            }
+        };
+    }
 
     // Si es una Tarea, Validación o Reunión agendada desde MiBot y solicita crear tarea en el tablero de Tareas
     let autoCreatedTask = null;
@@ -1092,70 +1303,64 @@ async function createMibotProgramacion({
             externalDb,
             programacionId,
             sendTelegramFn,
-            isAutomaticCron: false
+            isAutomaticCron: false,
+            emitSystemNotif: false
         });
     }
 
     const fullProgramacion = await getMibotProgramacionById(db, programacionId);
 
-    // Emitir eventos de actualización de tablero y tarjeta informativa en sistema para destinatarios vinculados
-    if (!skipSystemNotification && ['TAREA', 'VALIDACION', 'REUNION'].includes(tipo)) {
+    // Emitir notificaciones en sistema (campana + tarjeta flotante en tiempo real) para TODOS los tipos MiBot,
+    // incluyendo RECORDATORIO_PAGO, además de usuarios SIPE sin Telegram vinculados.
+    let sipeNotifications = { sent: 0, recipients: [] };
+    if (!skipSystemNotification) {
         try {
-            const notifiedUserIds = new Set();
             const recipientNames = eligibleUsers.map(u => resolveRecipientDisplayName(u)).join(', ');
-            for (const u of eligibleUsers) {
-                const targetSipeUserId = u.user_id ? Number(u.user_id) : null;
-                if (targetSipeUserId && !notifiedUserIds.has(targetSipeUserId)) {
-                    notifiedUserIds.add(targetSipeUserId);
-                    const notifTitle = tipo === 'REUNION'
-                        ? 'Nueva Reunión Agendada (MiBot)'
-                        : tipo === 'VALIDACION'
-                            ? 'Actividad Asignada para Validación'
-                            : 'Nueva Tarea / Actividad Asignada';
-                    const notifData = {
-                        taskId: taskId || null,
-                        programacionId,
-                        tipo,
-                        titulo,
-                        descripcion: mensaje,
-                        categoria: ubicacion || 'Operaciones',
-                        priority: payload.prioridad || 'media',
-                        fecha_vencimiento: fechaVencimiento || String(programadoPara).slice(0, 10),
-                        hora_limite: String(programadoPara).slice(11, 16),
-                        created_user_name: createdByName,
-                        assigned_user_name: resolveRecipientDisplayName(u),
-                        mibot_status_label: enviarAhora ? `Enviado por Telegram a ${recipientNames}` : `Programado en MiBot (${formatDisplayDateTimeSv(programadoPara)})`,
-                        link: '/dashboard/operaciones/tareas'
-                    };
-                    const [nRes] = await db.query(
-                        `INSERT INTO notifications (user_id, type, title, message, data)
-                         VALUES (?, 'task_assigned', ?, ?, ?)`,
-                        [
-                            targetSipeUserId,
-                            notifTitle,
-                            `${createdByName} te asignó vía MiBot: "${titulo}"`,
-                            JSON.stringify(notifData)
-                        ]
-                    );
-                    if (io) {
-                        io.to(`user_${targetSipeUserId}`).emit('notification:new', {
-                            id: nRes.insertId,
-                            user_id: targetSipeUserId,
-                            type: 'task_assigned',
-                            title: notifTitle,
-                            message: `${createdByName} te asignó vía MiBot: "${titulo}"`,
-                            data: notifData,
-                            is_read: false,
-                            created_at: new Date().toISOString()
-                        });
-                    }
-                }
-            }
-            if (io) {
+            const combinedSystemTargets = [
+                ...eligibleUsers
+                    .filter(u => Number(u.user_id) > 0)
+                    .map(u => ({ user_id: Number(u.user_id), nombre_completo: resolveRecipientDisplayName(u) })),
+                ...extraSipeUsers
+            ];
+
+            const statusLabel = enviarAhora
+                ? (dispatchResult && dispatchResult.sent > 0
+                    ? `Enviado por Telegram a ${recipientNames}`
+                    : `Aviso creado en SIPE Admin (Telegram: ${dispatchResult?.sent || 0}/${dispatchResult?.total || eligibleUsers.length})`)
+                : `Programado en MiBot (${formatDisplayDateTimeSv(programadoPara)})`;
+
+            const emitRes = await emitMibotSystemNotifications({
+                db,
+                io,
+                tipo,
+                titulo,
+                mensaje,
+                programacionId,
+                vencimientoId: vencimientoId || null,
+                recordatorioId: recordatorioId || null,
+                taskId: taskId || null,
+                ubicacion,
+                montoTotal: Number.isFinite(montoTotal) ? montoTotal : null,
+                montoPendiente: Number.isFinite(montoPendiente) ? montoPendiente : null,
+                fechaVencimiento,
+                programadoPara,
+                prioridad: payload.prioridad || (tipo === 'RECORDATORIO_PAGO' ? 'alta' : 'media'),
+                createdByName,
+                targetUsers: combinedSystemTargets,
+                mibotStatusLabel: statusLabel,
+                isScheduledDispatch: false
+            });
+            sipeNotifications = {
+                sent: emitRes.sent,
+                recipients: extraSipeUsers.map(u => u.nombre_completo)
+            };
+
+            const effectiveIo = io || getRealtimeIo();
+            if (effectiveIo) {
                 if (autoCreatedTask) {
-                    io.emit('tasks:changed', { action: 'created', task: autoCreatedTask });
+                    effectiveIo.emit('tasks:changed', { action: 'created', task: autoCreatedTask });
                 } else if (taskId) {
-                    io.emit('tasks:changed', { action: 'mibot_scheduled', taskId, programacion: fullProgramacion });
+                    effectiveIo.emit('tasks:changed', { action: 'mibot_scheduled', taskId, programacion: fullProgramacion });
                 }
             }
         } catch (notifErr) {
@@ -1166,7 +1371,8 @@ async function createMibotProgramacion({
     return {
         programacion: fullProgramacion,
         dispatch: dispatchResult,
-        task: autoCreatedTask
+        task: autoCreatedTask,
+        sipe_notifications: sipeNotifications
     };
 }
 
@@ -1181,7 +1387,9 @@ async function dispatchMibotProgramacion({
     onlyDestinatarioIds = null,
     isSnoozeFollowup = false,
     isAutomaticCron = false,
-    nowSqlOverride = null
+    nowSqlOverride = null,
+    io = null,
+    emitSystemNotif = null
 }) {
     await ensureMibotSchema(db);
     const prog = await getMibotProgramacionById(db, programacionId);
@@ -1192,7 +1400,7 @@ async function dispatchMibotProgramacion({
     }
 
     if (prog.estado === 'CANCELADO' && isAutomaticCron) {
-        return { skipped: true, reason: 'CANCELADO', sent: 0, failed: 0 };
+        return { skipped: true, reason: 'CANCELADO', sent: 0, failed: 0, errors: [] };
     }
 
     // Verificar en vivo estado de pago vinculado si aplica
@@ -1207,7 +1415,7 @@ async function dispatchMibotProgramacion({
                      WHERE id = ?`,
                     [prog.id]
                 );
-                return { skipped: true, reason: 'PAGO_YA_CANCELADO', sent: 0, failed: 0 };
+                return { skipped: true, reason: 'PAGO_YA_CANCELADO', sent: 0, failed: 0, errors: [] };
             }
             if (livePaymentStatus.saldoPendiente !== prog.monto_pendiente) {
                 await db.query(
@@ -1230,6 +1438,8 @@ async function dispatchMibotProgramacion({
     const nowSv = nowSqlOverride || getElSalvadorNowSql();
     let sent = 0;
     let failed = 0;
+    const errors = [];
+    const useDetailedTransport = sendTelegramFn === sendTelegramMessage;
 
     for (const dest of targetDests) {
         const others = allDests.filter(o => Number(o.id) !== Number(dest.id));
@@ -1243,7 +1453,16 @@ async function dispatchMibotProgramacion({
         const keyboard = buildMibotInlineKeyboard(dest.id, prog.tipo);
 
         try {
-            const tgRes = await sendTelegramFn(dest.telegram_user_id, htmlText, keyboard);
+            let tgRes = null;
+            let detailedError = null;
+            if (useDetailedTransport) {
+                const detailed = await sendTelegramMessageDetailed(dest.telegram_user_id, htmlText, keyboard);
+                tgRes = detailed.ok ? detailed.result : null;
+                detailedError = detailed.error || null;
+            } else {
+                tgRes = await sendTelegramFn(dest.telegram_user_id, htmlText, keyboard);
+            }
+
             if (tgRes) {
                 const msgId = tgRes.message_id ? Number(tgRes.message_id) : null;
                 await db.query(
@@ -1258,26 +1477,30 @@ async function dispatchMibotProgramacion({
                 );
                 sent += 1;
             } else {
+                const errText = String(detailedError || 'Telegram no confirmó entrega (verifique chat ID o bot activo)').slice(0, 240);
                 await db.query(
                     `UPDATE mibot_programaciones_destinatarios
                      SET estado_entrega = 'ERROR',
                          pospuesto_hasta = NULL,
-                         error_msg = 'Telegram no confirmó entrega (verifique chat ID o bot activo)'
+                         error_msg = ?
                      WHERE id = ?`,
-                    [dest.id]
+                    [errText, dest.id]
                 );
                 failed += 1;
+                errors.push({ destinatario_id: dest.id, nombre: dest.nombre_destinatario, error: errText });
             }
         } catch (sendErr) {
+            const errText = String(sendErr.message || 'Error enviando mensaje').slice(0, 240);
             await db.query(
                 `UPDATE mibot_programaciones_destinatarios
                  SET estado_entrega = 'ERROR',
                      pospuesto_hasta = NULL,
                      error_msg = ?
                  WHERE id = ?`,
-                [String(sendErr.message || 'Error enviando mensaje').slice(0, 240), dest.id]
+                [errText, dest.id]
             );
             failed += 1;
+            errors.push({ destinatario_id: dest.id, nombre: dest.nombre_destinatario, error: errText });
         }
     }
 
@@ -1296,12 +1519,64 @@ async function dispatchMibotProgramacion({
         );
     }
 
+    // Emitir notificación en tiempo real dentro de SIPE Admin cuando el aviso se dispara por cron o reenvío manual
+    const shouldEmitNotif = emitSystemNotif !== null ? Boolean(emitSystemNotif) : Boolean(isAutomaticCron);
+    if (shouldEmitNotif && targetDests.length > 0) {
+        try {
+            const tgRowIds = [...new Set(targetDests.map(d => Number(d.telegram_usuario_id)).filter(n => Number.isFinite(n) && n > 0))];
+            if (tgRowIds.length > 0) {
+                const placeholders = tgRowIds.map(() => '?').join(',');
+                const [uRows] = await db.query(
+                    `SELECT tu.id, tu.user_id, tu.first_name, tu.last_name, u.nombre AS sipe_nombre
+                     FROM telegram_usuarios tu
+                     LEFT JOIN users u ON tu.user_id = u.id
+                     WHERE tu.id IN (${placeholders}) AND tu.activo = 1`,
+                    tgRowIds
+                );
+                const sipeTargets = (uRows || [])
+                    .filter(u => Number(u.user_id) > 0)
+                    .map(u => ({
+                        user_id: Number(u.user_id),
+                        nombre_completo: resolveRecipientDisplayName(u)
+                    }));
+                if (sipeTargets.length > 0) {
+                    const effectiveSaldo = livePaymentStatus ? livePaymentStatus.saldoPendiente : prog.monto_pendiente;
+                    await emitMibotSystemNotifications({
+                        db,
+                        io,
+                        tipo: prog.tipo,
+                        titulo: prog.titulo,
+                        mensaje: prog.mensaje,
+                        programacionId: prog.id,
+                        vencimientoId: prog.vencimiento_id,
+                        recordatorioId: prog.recordatorio_id,
+                        taskId: prog.task_id,
+                        ubicacion: livePaymentStatus?.ubicacion || prog.ubicacion,
+                        montoTotal: livePaymentStatus?.montoTotal ?? prog.monto_total,
+                        montoPendiente: effectiveSaldo,
+                        fechaVencimiento: livePaymentStatus?.fechaVencimiento || prog.fecha_vencimiento,
+                        programadoPara: nowSv,
+                        createdByName: prog.created_by_name || 'MiBot SIPE',
+                        targetUsers: sipeTargets,
+                        mibotStatusLabel: sent > 0
+                            ? `Despachado por Telegram (${sent}/${targetDests.length})`
+                            : `Recordatorio disparado en SIPE Admin (Telegram falló: ${errors[0]?.error || 'verifique chat'})`,
+                        isScheduledDispatch: true
+                    });
+                }
+            }
+        } catch (_) {
+            // En mocks mínimos de pruebas unitarias sin tabla users/telegram_usuarios completa, no bloquear el despacho
+        }
+    }
+
     return {
         skipped: false,
         programacion_id: prog.id,
         total: targetDests.length,
         sent,
-        failed
+        failed,
+        errors
     };
 }
 
@@ -1671,7 +1946,8 @@ async function processDueMibotSchedules({
                 programacionId: row.id,
                 sendTelegramFn,
                 isAutomaticCron: true,
-                nowSqlOverride: nowSv
+                nowSqlOverride: nowSv,
+                io: getRealtimeIo()
             });
             processed += 1;
         } catch (err) {
@@ -1704,7 +1980,8 @@ async function processDueMibotSchedules({
                 onlyDestinatarioIds: [sr.dest_id],
                 isSnoozeFollowup: true,
                 isAutomaticCron: true,
-                nowSqlOverride: nowSv
+                nowSqlOverride: nowSv,
+                io: getRealtimeIo()
             });
             snoozedProcessed += 1;
         } catch (err) {
@@ -2008,6 +2285,8 @@ module.exports = {
     buildMibotInlineKeyboard,
     checkLinkedPaymentStatus,
     getEligibleMibotRecipients,
+    getEligibleSipeOnlyUsers,
+    emitMibotSystemNotifications,
     getMibotProgramacionById,
     listMibotProgramaciones,
     createMibotProgramacion,

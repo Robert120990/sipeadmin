@@ -49,12 +49,12 @@ export function NotificationProvider({ children }) {
             setNotifications(list);
             setUnreadCount(res.data.unreadCount || 0);
 
-            // Mostrar Tarjeta Informativa en sistema si existe una tarea/actividad asignada no leída
-            const unreadTaskNotif = list.find(n => !n.is_read && n.type === 'task_assigned');
-            if (unreadTaskNotif) {
-                const dismissKey = `sipe_dismissed_task_card_${unreadTaskNotif.id}`;
+            // Mostrar Tarjeta Informativa en sistema si existe una tarea o recordatorio de pago no leído
+            const unreadCardNotif = list.find(n => !n.is_read && (n.type === 'task_assigned' || n.type === 'payment_reminder'));
+            if (unreadCardNotif) {
+                const dismissKey = `sipe_dismissed_task_card_${unreadCardNotif.id}`;
                 if (!sessionStorage.getItem(dismissKey)) {
-                    setActiveToast(prev => prev || unreadTaskNotif);
+                    setActiveToast(prev => prev || unreadCardNotif);
                 }
             }
         } catch (err) {
@@ -75,8 +75,10 @@ export function NotificationProvider({ children }) {
     useEffect(() => {
         if (!currentUser.id) return;
 
-        // Join personal user room on socket connection
-        socket.emit('join', currentUser.id);
+        // Join personal user room on socket connection & after reconnects
+        const joinUserRoom = () => socket.emit('join', currentUser.id);
+        joinUserRoom();
+        socket.on('connect', joinUserRoom);
 
         const handleNewNotification = (notification) => {
             // Verify notification belongs to this user
@@ -127,15 +129,16 @@ export function NotificationProvider({ children }) {
         socket.on('tasks:assigned_card', handleTaskAssignedCard);
 
         return () => {
+            socket.off('connect', joinUserRoom);
             socket.off('notification:new', handleNewNotification);
             socket.off('tasks:assigned_card', handleTaskAssignedCard);
         };
     }, [currentUser.id]);
 
-    // Auto-dismiss active toast (15s for task assignment cards, 6s for standard notifications)
+    // Auto-dismiss active toast (15s for task/payment cards, 6s for standard notifications)
     useEffect(() => {
         if (!activeToast) return undefined;
-        const duration = activeToast.type === 'task_assigned' ? 15000 : 6000;
+        const duration = (activeToast.type === 'task_assigned' || activeToast.type === 'payment_reminder') ? 15000 : 6000;
         const timer = setTimeout(() => {
             setActiveToast(null);
         }, duration);

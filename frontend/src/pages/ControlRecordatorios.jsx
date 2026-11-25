@@ -226,6 +226,7 @@ export default function ControlRecordatorios() {
         activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ',
         forma_pago: '', pagado: false, fecPago: todayStr(), formaPago2: ''
     });
+    const [openMibotAfterCreate, setOpenMibotAfterCreate] = useState(false);
 
     // Payment / Edit Forma de Pago Modal State
     const [pagoData, setPagoData] = useState({
@@ -615,10 +616,30 @@ export default function ControlRecordatorios() {
                 forma_pago: resolveFinalFormaPago(formData.forma_pago, selectedFormUbicacionName),
                 formaPago2: resolveFinalFormaPago(formData.formaPago2, selectedFormUbicacionName)
             };
-            await api.post('/operaciones/recordatorios', payload);
+            const res = await api.post('/operaciones/recordatorios', payload);
             addToast('Recordatorio guardado correctamente', 'success');
+            const shouldOpenMibot = !formData.id && openMibotAfterCreate;
+            const createdVenId = res.data?.first_vencimiento_id || null;
+            const createdRecId = res.data?.recordatorio_id || null;
             setIsFormModalOpen(false);
+            setOpenMibotAfterCreate(false);
             fetchData();
+
+            if (shouldOpenMibot && createdVenId) {
+                setMibotTargetRow({
+                    id: createdVenId,
+                    id_recordatorio: createdRecId,
+                    descripcion: formData.descripcion,
+                    ubicacion: selectedFormUbicacionName || 'General',
+                    vence: formData.iniciar,
+                    monto: Number(formData.monto || 0),
+                    monto_total: Number(formData.monto || 0),
+                    saldo_pendiente: formData.pagado ? 0 : Number(formData.monto || 0),
+                    estado: formData.pagado ? 'CANCELADO' : 'PENDIENTE',
+                    estado_pago: formData.pagado ? 'CANCELADO' : 'PENDIENTE'
+                });
+                setMibotModalOpen(true);
+            }
         } catch (error) {
             addToast('Error al guardar recordatorio', 'error');
         }
@@ -995,6 +1016,7 @@ export default function ControlRecordatorios() {
                         style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', height: '36px', padding: '0 1rem', fontSize: '0.8rem' }}
                         onClick={() => {
                             setFormData({ id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr(), activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', forma_pago: '', pagado: false, fecPago: todayStr(), formaPago2: '' });
+                            setOpenMibotAfterCreate(false);
                             setIsFormModalOpen(true);
                         }}
                     >
@@ -1940,7 +1962,7 @@ export default function ControlRecordatorios() {
                         )}
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                         <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', userSelect: 'none', cursor: 'pointer', fontWeight: 700 }}>
                             <input
                                 type="checkbox"
@@ -1950,6 +1972,17 @@ export default function ControlRecordatorios() {
                             />
                             ESTADO ACTIVO
                         </label>
+                        {!formData.id && (
+                            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', userSelect: 'none', cursor: 'pointer', fontWeight: 700, color: '#38bdf8' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={openMibotAfterCreate}
+                                    onChange={e => setOpenMibotAfterCreate(e.target.checked)}
+                                    style={{ width: '16px', height: '16px' }}
+                                />
+                                🔔 Notificar o programar aviso MiBot (Telegram + SIPE) al guardar
+                            </label>
+                        )}
                     </div>
 
                     {formData.repetir_desc === 'VEZ' && (
