@@ -537,16 +537,19 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb, optio
 
                 const [rows] = await accountingDb.query(`
                     SELECT 
+                        fecha,
                         tipo_combustible,
                         SUM(GREATEST(0, COALESCE(diferencia, 0))) as total_galones
                     FROM (
                         SELECT 
+                            DATE_FORMAT(c.fecha_turno, '%Y-%m-%d') as fecha,
                             r.diferencia,
                             CASE 
                                 WHEN p.tipo_combustible = 1 OR r.descripcion_producto LIKE '%REGULAR%' THEN 'R'
                                 WHEN p.tipo_combustible = 2 OR r.descripcion_producto LIKE '%SUPER%' OR r.descripcion_producto LIKE '%V-POWER%' THEN 'S'
                                 WHEN p.tipo_combustible = 4 OR r.descripcion_producto LIKE '%ION%' OR r.descripcion_producto LIKE '%ULSD%' THEN 'I'
-                                ELSE 'D'
+                                WHEN p.tipo_combustible IN (3, 5) OR r.descripcion_producto LIKE '%DIESEL%' THEN 'D'
+                                ELSE NULL
                             END as tipo_combustible
                         FROM gas_station_closeouts c
                         JOIN gas_station_closeout_readings r ON r.closeout_id = c.id
@@ -555,27 +558,52 @@ async function fetchPromedios(id_empresa, fecha, externalDb, accountingDb, optio
                           AND c.fecha_turno BETWEEN ? AND ? 
                           AND c.estado = 'cerrado'
                     ) sub
-                    GROUP BY tipo_combustible
+                    WHERE tipo_combustible IS NOT NULL
+                    GROUP BY fecha, tipo_combustible
+                    ORDER BY fecha ASC
                 `, [branchId, dateDesde, dateHasta]);
 
-                let totalProm = 0;
+                const totalsByFuel = { D: 0, R: 0, S: 0, I: 0 };
+                const dailyMap = new Map();
+                let hasDailyRows = false;
+
                 (rows || []).forEach(r => {
-                    if (['D', 'R', 'S', 'I'].includes(r.tipo_combustible)) {
-                        const val = Math.round((Number(r.total_galones || 0) / activeDays) * 100) / 100;
-                        agg[r.tipo_combustible] = Math.round((agg[r.tipo_combustible] + val) * 100) / 100;
-                        totalProm += val;
+                    if (!['D', 'R', 'S', 'I'].includes(r.tipo_combustible)) return;
+                    const gal = Number(r.total_galones || 0);
+                    totalsByFuel[r.tipo_combustible] += gal;
+                    if (r.fecha) {
+                        hasDailyRows = true;
+                        const dateKey = formatDateYMD(r.fecha) || String(r.fecha);
+                        if (!dailyMap.has(dateKey)) {
+                            dailyMap.set(dateKey, { fecha: dateKey, D: 0, R: 0, S: 0, I: 0 });
+                        }
+                        dailyMap.get(dateKey)[r.tipo_combustible] = Math.round((dailyMap.get(dateKey)[r.tipo_combustible] + gal) * 100) / 100;
                     }
                 });
 
+                let totalProm = 0;
+                ['D', 'R', 'S', 'I'].forEach(k => {
+                    const val = Math.round((totalsByFuel[k] / activeDays) * 100) / 100;
+                    agg[k] = val;
+                    totalProm += val;
+                });
+
                 if (totalProm > 0) {
+                    const meta = {
+                        fecha_desde: dateDesde,
+                        fecha_hasta: dateHasta,
+                        dias_activos: activeDays,
+                        fuente: 'saas'
+                    };
+                    if (hasDailyRows) {
+                        meta.desglose_diario = Array.from(dailyMap.values()).sort((a, b) => a.fecha.localeCompare(b.fecha));
+                        meta.totales_ventana = Object.fromEntries(
+                            Object.entries(totalsByFuel).map(([k, v]) => [k, Math.round(v * 100) / 100])
+                        );
+                    }
                     return {
                         ...agg,
-                        meta: {
-                            fecha_desde: dateDesde,
-                            fecha_hasta: dateHasta,
-                            dias_activos: activeDays,
-                            fuente: 'saas'
-                        }
+                        meta
                     };
                 }
             }

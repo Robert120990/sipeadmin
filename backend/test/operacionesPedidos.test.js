@@ -356,4 +356,32 @@ describe('Operaciones - Pedidos Combustible Pagination Tests', () => {
             assert.strictEqual(res[2].descarga_parcial, false);
         });
     });
+
+    describe('ADM-0018: Desglose diario y filtrado estricto de Venta Promedio', () => {
+        it('debe calcular promedios, totales_ventana y desglose_diario cuando SQL retorna filas diarias e ignorar tipo_combustible null', async () => {
+            const mockAccountingDb = {
+                query: async (sql) => {
+                    if (sql.includes('MAX(fecha_turno)')) return [[{ max_fecha: '2026-11-23' }]];
+                    if (sql.includes('COUNT(DISTINCT fecha_turno) as dias_activos')) return [[{ dias_activos: 2 }]];
+                    if (sql.includes('SUM(GREATEST(0, COALESCE(diferencia, 0)))')) {
+                        assert.ok(sql.includes('WHERE tipo_combustible IS NOT NULL'));
+                        return [[
+                            { fecha: '2026-11-22', tipo_combustible: 'D', total_galones: 2000 },
+                            { fecha: '2026-11-22', tipo_combustible: 'R', total_galones: 1000 },
+                            { fecha: '2026-11-23', tipo_combustible: 'D', total_galones: 3000 },
+                            { fecha: '2026-11-23', tipo_combustible: 'R', total_galones: 1500 }
+                        ]];
+                    }
+                    return [[]];
+                }
+            };
+
+            const fixedNow = new Date('2026-11-24T18:00:00Z');
+            const res = await fetchPromedios('002', '2026-11-24', null, mockAccountingDb, { now: fixedNow });
+            assert.strictEqual(res.D, 2500);
+            assert.strictEqual(res.R, 1250);
+            assert.strictEqual(res.meta.desglose_diario.length, 2);
+            assert.deepStrictEqual(res.meta.totales_ventana, { D: 5000, R: 2500, S: 0, I: 0 });
+        });
+    });
 });

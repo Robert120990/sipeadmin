@@ -265,6 +265,7 @@ export default function PedidosCombustible() {
 
     const [showDetalleModal, setShowDetalleModal] = useState(false);
     const [selectedOrderDetalle, setSelectedOrderDetalle] = useState(null);
+    const [promedioDetalleModal, setPromedioDetalleModal] = useState(null);
 
     // Diagnóstico Portal Puma
     const [showDiagnosticoModal, setShowDiagnosticoModal] = useState(false);
@@ -1332,7 +1333,27 @@ export default function PedidosCombustible() {
                             <tr style={{ background: 'rgba(168,85,247,0.06)' }}>
                                 <td style={{ padding: '0.45rem 0.65rem', fontWeight: 'bold', borderBottom: '1px solid var(--border)', color: '#7c3aed' }}
                                     title={matrixData.meta ? `Promedio diario sobre ${matrixData.meta.dias_activos} días completos (${fmtDateArray(matrixData.meta.fecha_desde)} al ${fmtDateArray(matrixData.meta.fecha_hasta)})` : 'Promedio diario de los últimos 7 días completos'}>
-                                    <div>VENTA PROMEDIO</div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                        <span>VENTA PROMEDIO</span>
+                                        {matrixData.meta?.desglose_diario?.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setPromedioDetalleModal({ stationTitle, matrixData })}
+                                                style={{
+                                                    fontSize: '0.62rem',
+                                                    fontWeight: 'bold',
+                                                    padding: '0.1rem 0.35rem',
+                                                    borderRadius: '4px',
+                                                    border: '1px solid rgba(124, 58, 237, 0.35)',
+                                                    background: 'rgba(124, 58, 237, 0.1)',
+                                                    color: '#7c3aed',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                Ver suma
+                                            </button>
+                                        )}
+                                    </div>
                                     {matrixData.meta?.fecha_desde && matrixData.meta?.fecha_hasta && (
                                         <div style={{ fontSize: '0.64rem', fontWeight: 'normal', color: 'var(--text-muted)' }}>
                                             {matrixData.meta.dias_activos}d: {fmtDateArray(matrixData.meta.fecha_desde).slice(0, 5)}–{fmtDateArray(matrixData.meta.fecha_hasta).slice(0, 5)}
@@ -3695,6 +3716,82 @@ export default function PedidosCombustible() {
                         </>
                     ) : null}
                 </div>
+            </Modal>
+
+            <Modal
+                isOpen={Boolean(promedioDetalleModal)}
+                onClose={() => setPromedioDetalleModal(null)}
+                title={`Desglose de Venta Promedio — ${promedioDetalleModal?.stationTitle || ''}`}
+                size="md"
+                footer={
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => setPromedioDetalleModal(null)}
+                        style={{ height: '36px', padding: '0 1rem', fontSize: '0.8rem' }}
+                    >
+                        Cerrar
+                    </button>
+                }
+            >
+                {promedioDetalleModal?.matrixData?.meta && (() => {
+                    const meta = promedioDetalleModal.matrixData.meta;
+                    const days = Array.isArray(meta.desglose_diario) ? meta.desglose_diario : [];
+                    const tot = meta.totales_ventana || {};
+                    const md = promedioDetalleModal.matrixData;
+                    return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', fontSize: '0.8rem' }}>
+                            <div style={{ padding: '0.65rem 0.85rem', borderRadius: '6px', background: 'rgba(124, 58, 237, 0.08)', border: '1px solid rgba(124, 58, 237, 0.25)' }}>
+                                <div>
+                                    <b>Ventana evaluada:</b> {fmtDateArray(meta.fecha_desde)} al {fmtDateArray(meta.fecha_hasta)} ({meta.dias_activos} días completos cerrados).
+                                </div>
+                                <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                                    Suma los galones vendidos de todas las pistolas/grados asociados a cada tanque (incluyendo Diesel Auto, Full y Especial/Master), netos de calibraciones y excluyendo el día en curso.
+                                </div>
+                            </div>
+                            <div className="table-responsive">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.76rem', minWidth: '420px' }}>
+                                    <thead>
+                                        <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border)' }}>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>FECHA</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#d97706' }}>DIESEL</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#059669' }}>REGULAR</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#dc2626' }}>SUPER</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', color: '#7c3aed' }}>ION</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {days.map(row => (
+                                            <tr key={row.fecha} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                <td style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>{fmtDateArray(row.fecha)}</td>
+                                                <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{numFmt(row.D)}</td>
+                                                <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{numFmt(row.R)}</td>
+                                                <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{numFmt(row.S)}</td>
+                                                <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{numFmt(row.I)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                    <tfoot>
+                                        <tr style={{ background: 'rgba(0,0,0,0.03)', borderTop: '2px solid var(--border)', fontWeight: 'bold' }}>
+                                            <td style={{ padding: '0.45rem 0.5rem' }}>Total ({meta.dias_activos} días)</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(tot.D)}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(tot.R)}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(tot.S)}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(tot.I)}</td>
+                                        </tr>
+                                        <tr style={{ background: 'rgba(124, 58, 237, 0.08)', fontWeight: 'bold', color: '#7c3aed' }}>
+                                            <td style={{ padding: '0.45rem 0.5rem' }}>Promedio Diario (÷ {meta.dias_activos})</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(md.D?.promedio)}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(md.R?.promedio)}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(md.S?.promedio)}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>{numFmt(md.I?.promedio)}</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+                    );
+                })()}
             </Modal>
         </div>
     );
