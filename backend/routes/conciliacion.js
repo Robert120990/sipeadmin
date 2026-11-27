@@ -4,29 +4,32 @@ const { getDb, withTransaction } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const { formatDateYMD, formatDisplayDMY, getElSalvadorTodayYMD } = require('../utils/dateSv');
+const {
+    round2,
+    parseStrictPositiveAmount,
+    parseStrictFiniteAmount,
+    parseStrictDBDate,
+    normalizeMovementDirection,
+    computeMovementFingerprint,
+    computeAccountReconciliationSummary,
+    isDateInClosedPeriod,
+    recordBankAudit,
+    beginIdempotentRequest,
+    saveIdempotentResponse,
+    canApproveReapertura,
+    canCloseConciliacion,
+    canEditMontoConciliacion,
+    getReaperturaApproverIds,
+    notifyReaperturaEvent,
+    emitBankUpdate
+} = require('../services/bancosIntegrityService');
+const {
+    parseAndMatchBankStatement
+} = require('../services/bankStatementParserService');
 
 const toDisplayDate = (dateVal) => {
     const formatted = formatDisplayDMY(dateVal);
     return formatted || null;
-};
-
-const toDBDate = (dateStr) => {
-    if (!dateStr) return null;
-    if (dateStr instanceof Date) {
-        return isNaN(dateStr.getTime()) ? null : formatDateYMD(dateStr);
-    }
-    const parsed = formatDateYMD(dateStr);
-    if (parsed) return parsed;
-    if (typeof dateStr === 'string' && dateStr.includes('/')) {
-        const parts = dateStr.trim().split('/');
-        if (parts.length === 3) {
-            const day = parts[0].padStart(2, '0');
-            const month = parts[1].padStart(2, '0');
-            const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-            return `${year}-${month}-${day}`;
-        }
-    }
-    return null;
 };
 
 const withRetry = async (fn, retries = 2) => {
@@ -42,67 +45,23 @@ const withRetry = async (fn, retries = 2) => {
     }
 };
 
-// Helper para parsear CSV/TSV respetando comillas dobles y saltos de linea dentro de celdas
-const parseCSVorTSV = (text) => {
-    if (!text || typeof text !== 'string') return [];
-    const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const hasTabs = cleanText.includes('\t');
-    const isDelimiter = (char) => {
-        if (hasTabs) return char === '\t';
-        return char === ',' || char === ';';
-    };
-
-    const rows = [];
-    let currentRow = [];
-    let currentCell = '';
-    let inQuotes = false;
-    
-    for (let i = 0; i < cleanText.length; i++) {
-        const char = cleanText[i];
-        const nextChar = cleanText[i + 1];
-        
-        if (char === '"') {
-            if (inQuotes && nextChar === '"') {
-                currentCell += '"';
-                i++; // Saltear comilla escapada
-            } else {
-                inQuotes = !inQuotes;
-            }
-        } else if (isDelimiter(char) && !inQuotes) {
-            currentRow.push(currentCell.trim().replace(/^"+|"+$/g, ''));
-            currentCell = '';
-        } else if (char === '\n' && !inQuotes) {
-            currentRow.push(currentCell.trim().replace(/^"+|"+$/g, ''));
-            if (currentRow.some(c => c !== '')) {
-                rows.push(currentRow);
-            }
-            currentRow = [];
-            currentCell = '';
-        } else {
-            // Si está dentro de comillas y es un salto de línea, reemplazar por espacio
-            if (inQuotes && char === '\n') {
-                currentCell += ' ';
-            } else {
-                currentCell += char;
-            }
-        }
-    }
-    
-    if (currentCell !== '' || currentRow.length > 0) {
-        currentRow.push(currentCell.trim().replace(/^"+|"+$/g, ''));
-        if (currentRow.some(c => c !== '')) {
-            rows.push(currentRow);
-        }
-    }
-    return rows;
-};
-
 const conciliacionViewPerms = [
+    'view_conciliacion_bancaria',
     'manage_conciliacion_bancaria',
     '/dashboard/bancos/conciliacion',
     'manage_movimientos',
     '/dashboard/bancos/movimientos'
 ];
+
+const conciliacionManagePerms = [
+    'manage_conciliacion_bancaria',
+    '/dashboard/bancos/conciliacion'
+];
+
+const getIdempotencyKey = (req) => {
+    const hdr = req.headers?.['x-idempotency-key'] || req.headers?.['idempotency-key'];
+    return typeof hdr === 'string' && hdr.trim() ? hdr.trim().slice(0, 128) : null;
+};
 
 // ── 1. Catálogos para la pantalla ─────────────────────────────────────────────
 router.get('/catalogos', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
@@ -112,7 +71,7 @@ router.get('/catalogos', authenticateToken, requirePermission(conciliacionViewPe
         const [cuentas] = await withRetry(() => db.query(
             'SELECT cb.id, cb.empresa_id, e.codigo as empresa_codigo, e.nombre as empresa_nombre, ' +
             'cb.banco_id, b.codigo as banco_codigo, b.descripcion as banco_nombre, ' +
-            'cb.numero, cb.nombre, cb.cod_cta, cb.orden ' +
+            'cb.numero, cb.nombre, cb.cod_cta, cb.orden, cb.saldo_inicial, cb.fecha_saldo_inicial ' +
             'FROM cuentas_bancarias cb ' +
             'LEFT JOIN empresas e ON cb.empresa_id = e.id ' +
             'LEFT JOIN bancos b ON cb.banco_id = b.id ' +
@@ -122,7 +81,16 @@ router.get('/catalogos', authenticateToken, requirePermission(conciliacionViewPe
         const [tiposRemesas] = await withRetry(() => db.query(
             'SELECT id, empresa_id, codigo, descripcion FROM tipos_remesas ORDER BY id ASC'
         ));
-        res.json({ empresas, cuentas, tipos_remesas: tiposRemesas });
+        res.json({
+            empresas,
+            cuentas,
+            tipos_remesas: tiposRemesas,
+            permissions: {
+                can_close_periodo: canCloseConciliacion(req.user),
+                can_approve_reapertura: canApproveReapertura(req.user),
+                can_edit_monto: canEditMontoConciliacion(req.user)
+            }
+        });
     } catch (error) {
         sendSafeError(res, error, 'Error al cargar catálogos');
     }
@@ -131,14 +99,23 @@ router.get('/catalogos', authenticateToken, requirePermission(conciliacionViewPe
 // ── 2. Datos Principales de Conciliación ─────────────────────────────────────
 router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
     const { cuenta_id, desde, hasta } = req.query;
-    if (!cuenta_id) {
-        return res.status(400).json({ message: 'Debe especificar el ID de la cuenta bancaria.' });
+    const cuentaId = parseInt(cuenta_id, 10);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0) {
+        return res.status(400).json({ message: 'Debe especificar un ID de cuenta bancaria válido.' });
+    }
+
+    const dbDesde = desde ? parseStrictDBDate(desde) : '2000-01-01';
+    const dbHasta = hasta ? parseStrictDBDate(hasta) : '2099-12-31';
+    if ((desde && !dbDesde) || (hasta && !dbHasta)) {
+        return res.status(400).json({ message: 'El rango de fechas indicado no es válido (use YYYY-MM-DD).' });
+    }
+    if (dbDesde > dbHasta) {
+        return res.status(400).json({ message: 'La fecha inicial no puede ser mayor que la fecha final.' });
     }
 
     try {
         const db = getDb();
 
-        // 1. Obtener datos de la cuenta bancaria
         const [[cuenta]] = await withRetry(() => db.query(
             'SELECT cb.*, e.codigo as empresa_codigo, e.nombre as empresa_nombre, ' +
             'b.codigo as banco_codigo, b.descripcion as banco_nombre ' +
@@ -146,22 +123,21 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             'LEFT JOIN empresas e ON cb.empresa_id = e.id ' +
             'LEFT JOIN bancos b ON cb.banco_id = b.id ' +
             'WHERE cb.id = ?',
-            [cuenta_id]
+            [cuentaId]
         ));
 
         if (!cuenta) {
             return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
         }
 
-        const dbDesde = desde ? toDBDate(desde) : '2000-01-01';
-        const dbHasta = hasta ? toDBDate(hasta) : '2099-12-31';
+        const fechaSaldoInicial = cuenta.fecha_saldo_inicial ? parseStrictDBDate(cuenta.fecha_saldo_inicial) : null;
 
         // 2. Última validación registrada para la cuenta
         let ultimaValidacion = null;
         try {
             const [valRows] = await withRetry(() => db.query(
                 'SELECT * FROM validaciones_saldo_banco WHERE cuenta_bancaria_id = ? ORDER BY fecha_validacion DESC, id DESC LIMIT 1',
-                [cuenta_id]
+                [cuentaId]
             ));
             ultimaValidacion = valRows[0] || null;
         } catch (e) {
@@ -169,71 +145,93 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
         }
 
         // 3. Movimientos bancarios APLICADOS (Conciliados)
+        const movAplParams = [cuentaId, dbDesde, dbHasta];
+        let movFloorSql = '';
+        if (fechaSaldoInicial) {
+            movFloorSql = ' AND m.fecha >= ?';
+            movAplParams.push(fechaSaldoInicial);
+        }
         const [movimientosAplicadosRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, m.tipo_remesa_id, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
-            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta ' +
+            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version ' +
             'FROM movimientos_bancarios m ' +
             'LEFT JOIN tipos_remesas tr ON m.tipo_remesa_id = tr.id ' +
             'WHERE m.cuenta_bancaria_id = ? ' +
+            'AND m.deleted_at IS NULL ' +
             'AND m.fecha_aplicado IS NOT NULL ' +
-            'AND m.fecha_aplicado BETWEEN ? AND ? ' +
+            `AND m.fecha_aplicado BETWEEN ? AND ?${movFloorSql} ` +
             'ORDER BY m.fecha_aplicado DESC, m.id DESC',
-            [cuenta_id, dbDesde, dbHasta]
+            movAplParams
         ));
 
-        // 4. Cheques APLICADOS (Cobrados)
+        // 4. Cheques APLICADOS (Cobrados) — excluyendo anulados, no emitidos y reservados
+        const chkAplParams = [cuentaId, dbDesde, dbHasta];
+        let chkFloorSql = '';
+        if (fechaSaldoInicial) {
+            chkFloorSql = ' AND ch.fecha >= ?';
+            chkAplParams.push(fechaSaldoInicial);
+        }
         const [chequesAplicadosRows] = await withRetry(() => db.query(
             'SELECT ch.id, "CK" as origen_tipo, "CH" as tipo_doc, ' +
             'ch.fecha, ch.fecha_aplicado, ch.cheque as documento, ch.concepto, ch.a_nombre as beneficiario, ' +
-            'ch.valor as monto, ch.valor as cargo, 0 as abono, ch.num_partida, "" as cod_cta ' +
+            'ch.valor as monto, ch.valor as cargo, 0 as abono, ch.num_partida, "" as cod_cta, ch.es_contabilizado, ch.version ' +
             'FROM cheques ch ' +
             'WHERE ch.cuenta_bancaria_id = ? ' +
+            'AND ch.deleted_at IS NULL ' +
             'AND ch.fecha_aplicado IS NOT NULL ' +
-            'AND ch.cheque_anulado = FALSE AND ch.fue_noemitido = FALSE ' +
-            'AND ch.fecha_aplicado BETWEEN ? AND ? ' +
+            'AND ch.cheque_anulado = FALSE AND ch.fue_noemitido = FALSE AND ch.es_reservado = FALSE ' +
+            `AND ch.fecha_aplicado BETWEEN ? AND ?${chkFloorSql} ` +
             'ORDER BY ch.fecha_aplicado DESC, ch.id DESC',
-            [cuenta_id, dbDesde, dbHasta]
+            chkAplParams
         ));
 
-        // Unificar y ordenar movimientos conciliados
         const movimientosConciliados = [...movimientosAplicadosRows, ...chequesAplicadosRows]
             .sort((a, b) => new Date(b.fecha_aplicado) - new Date(a.fecha_aplicado) || b.id - a.id)
             .map(r => ({
                 ...r,
                 key: `${r.origen_tipo}_${r.id}`,
-                tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (r.abono > 0 ? 'RM' : 'NC')),
+                tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (Number(r.abono) > 0 ? 'RM' : 'NC')),
+                fecha_ymd: parseStrictDBDate(r.fecha),
+                fecha_aplicado_ymd: parseStrictDBDate(r.fecha_aplicado),
                 fecha_display: toDisplayDate(r.fecha),
                 fecha_aplicado_display: toDisplayDate(r.fecha_aplicado),
-                monto_display: Number(r.monto || r.cargo || r.abono || 0)
+                monto_display: Number(r.monto || r.cargo || r.abono || 0),
+                es_contabilizado: Boolean(r.es_contabilizado)
             }));
 
         // 5. Movimientos bancarios PENDIENTES (Sin fecha aplicado o posterior al rango)
+        const movPendParams = [cuentaId, dbHasta, dbHasta];
+        if (fechaSaldoInicial) movPendParams.push(fechaSaldoInicial);
         const [movimientosPendientesRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
-            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta ' +
+            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version ' +
             'FROM movimientos_bancarios m ' +
             'LEFT JOIN tipos_remesas tr ON m.tipo_remesa_id = tr.id ' +
             'WHERE m.cuenta_bancaria_id = ? ' +
+            'AND m.deleted_at IS NULL ' +
             'AND (m.fecha_aplicado IS NULL OR m.fecha_aplicado > ?) ' +
-            'AND m.fecha <= ? ' +
+            `AND m.fecha <= ?${movFloorSql} ` +
             'ORDER BY m.fecha DESC, m.id DESC',
-            [cuenta_id, dbHasta, dbHasta]
+            movPendParams
         ));
 
         // 6. Cheques PENDIENTES (En tránsito / No cobrados)
+        const chkPendParams = [cuentaId, dbHasta, dbHasta];
+        if (fechaSaldoInicial) chkPendParams.push(fechaSaldoInicial);
         const [chequesPendientesRows] = await withRetry(() => db.query(
             'SELECT ch.id, "CK" as origen_tipo, "CH" as tipo_doc, ' +
             'ch.fecha, ch.fecha_aplicado, ch.cheque as documento, ch.concepto, ch.a_nombre as beneficiario, ' +
-            'ch.valor as monto, ch.valor as cargo, 0 as abono, ch.num_partida, "" as cod_cta ' +
+            'ch.valor as monto, ch.valor as cargo, 0 as abono, ch.num_partida, "" as cod_cta, ch.es_contabilizado, ch.version ' +
             'FROM cheques ch ' +
             'WHERE ch.cuenta_bancaria_id = ? ' +
+            'AND ch.deleted_at IS NULL ' +
             'AND (ch.fecha_aplicado IS NULL OR ch.fecha_aplicado > ?) ' +
-            'AND ch.fecha <= ? ' +
-            'AND ch.cheque_anulado = FALSE AND ch.fue_noemitido = FALSE ' +
+            `AND ch.fecha <= ?${chkFloorSql} ` +
+            'AND ch.cheque_anulado = FALSE AND ch.fue_noemitido = FALSE AND ch.es_reservado = FALSE ' +
             'ORDER BY ch.fecha DESC, ch.id DESC',
-            [cuenta_id, dbHasta, dbHasta]
+            chkPendParams
         ));
 
         const pendientes = [...movimientosPendientesRows, ...chequesPendientesRows]
@@ -241,34 +239,65 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             .map(r => ({
                 ...r,
                 key: `${r.origen_tipo}_${r.id}`,
-                tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (r.abono > 0 ? 'RM' : 'NC')),
+                tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (Number(r.abono) > 0 ? 'RM' : 'NC')),
+                fecha_ymd: parseStrictDBDate(r.fecha),
+                fecha_aplicado_ymd: parseStrictDBDate(r.fecha_aplicado),
                 fecha_display: toDisplayDate(r.fecha),
                 fecha_aplicado_display: toDisplayDate(r.fecha_aplicado),
-                monto_display: Number(r.monto || r.cargo || r.abono || 0)
+                monto_display: Number(r.monto || r.cargo || r.abono || 0),
+                es_contabilizado: Boolean(r.es_contabilizado)
             }));
 
-        // 7. Cálculo del Saldo en Chequera (Acumulado de todos los abonos menos cargos y cheques hasta la fecha fin)
-        const [[movTotales]] = await withRetry(() => db.query(
-            'SELECT COALESCE(SUM(abono), 0) as total_abonos, COALESCE(SUM(cargo), 0) as total_cargos ' +
-            'FROM movimientos_bancarios ' +
-            'WHERE cuenta_bancaria_id = ? AND fecha <= ?',
-            [cuenta_id, dbHasta]
-        ));
+        // 7. Cálculo oficial de Saldos (Chequera + Tránsitos + Saldo Conciliado en Libros)
+        const summary = await withRetry(() => computeAccountReconciliationSummary(db, cuentaId, dbHasta));
 
-        const [[chkTotales]] = await withRetry(() => db.query(
-            'SELECT COALESCE(SUM(valor), 0) as total_cheques ' +
-            'FROM cheques ' +
-            'WHERE cuenta_bancaria_id = ? AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND fecha <= ?',
-            [cuenta_id, dbHasta]
-        ));
+        const saldoBanco = ultimaValidacion ? Number(ultimaValidacion.monto_banco) : summary.saldo_conciliado_libros;
+        const diferencia = round2(saldoBanco - summary.saldo_conciliado_libros);
+        const diferenciaVsChequera = round2(saldoBanco - summary.saldo_chequera);
 
-        const saldoChequeraCalculado = Number((Number(movTotales.total_abonos) - Number(movTotales.total_cargos) - Number(chkTotales.total_cheques)).toFixed(2));
+        // 7.1 Estado de períodos cerrados y solicitudes de reapertura pendientes
+        let periodoCerradoHasta = null;
+        let periodosRecientes = [];
+        let solicitudesPendientes = [];
+        try {
+            const [perRows] = await withRetry(() => db.query(
+                `SELECT id, cuenta_bancaria_id, fecha_corte, estado, saldo_banco, saldo_chequera,
+                        saldo_conciliado_libros, abonos_en_transito, cargos_cheques_en_transito,
+                        diferencia, cerrado_por_nombre, cerrado_at, reabierto_por_nombre, reabierto_at, motivo_reapertura
+                 FROM conciliacion_periodos
+                 WHERE cuenta_bancaria_id = ?
+                 ORDER BY fecha_corte DESC
+                 LIMIT 24`,
+                [cuentaId]
+            ));
+            periodosRecientes = (perRows || []).map(p => ({
+                ...p,
+                fecha_corte_ymd: parseStrictDBDate(p.fecha_corte),
+                fecha_corte_display: toDisplayDate(p.fecha_corte)
+            }));
+            const closedLatest = periodosRecientes.find(p => p.estado === 'CERRADO');
+            periodoCerradoHasta = closedLatest ? closedLatest.fecha_corte_ymd : null;
 
-        // Saldo banco por defecto toma la última validación o saldo calculado
-        const saldoBanco = ultimaValidacion ? Number(ultimaValidacion.monto_banco) : saldoChequeraCalculado;
-        const diferencia = Number((saldoBanco - saldoChequeraCalculado).toFixed(2));
+            const [reqRows] = await withRetry(() => db.query(
+                `SELECT s.*, p.estado AS periodo_estado
+                 FROM conciliacion_reapertura_solicitudes s
+                 LEFT JOIN conciliacion_periodos p ON s.periodo_id = p.id
+                 WHERE s.cuenta_bancaria_id = ? AND s.estado = 'PENDIENTE'
+                 ORDER BY s.solicitado_at DESC`,
+                [cuentaId]
+            ));
+            solicitudesPendientes = (reqRows || []).map(s => ({
+                ...s,
+                fecha_corte_ymd: parseStrictDBDate(s.fecha_corte),
+                fecha_corte_display: toDisplayDate(s.fecha_corte)
+            }));
+        } catch (_errPer) {
+            periodoCerradoHasta = null;
+            periodosRecientes = [];
+            solicitudesPendientes = [];
+        }
 
-        // 8. Sugerencias desde Control de Pagos (abonos bancarios aún sin conciliar, sin insertar automáticamente en movimientos)
+        // 8. Sugerencias desde Control de Pagos
         let sugerenciasControlPagos = [];
         try {
             const [abRows] = await withRetry(() => db.query(
@@ -287,7 +316,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
                    AND a.fecha_pago <= ?
                  ORDER BY a.fecha_pago DESC, a.id DESC
                  LIMIT 100`,
-                [cuenta_id, dbHasta]
+                [cuentaId, dbHasta]
             ));
 
             const allCandidates = [...pendientes, ...movimientosConciliados];
@@ -323,7 +352,6 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
                 };
             });
         } catch (_errSug) {
-            // Si aún no existen tablas de control de pagos, no interrumpir conciliación
             sugerenciasControlPagos = [];
         }
 
@@ -332,15 +360,30 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             movimientos_conciliados: movimientosConciliados,
             pendientes,
             sugerencias_control_pagos: sugerenciasControlPagos,
+            periodos_recientes: periodosRecientes,
+            solicitudes_reapertura_pendientes: solicitudesPendientes,
             resumen: {
                 saldo_banco: saldoBanco,
-                saldo_chequera: saldoChequeraCalculado,
-                diferencia: diferencia,
+                saldo_chequera: summary.saldo_chequera,
+                saldo_conciliado_libros: summary.saldo_conciliado_libros,
+                abonos_en_transito: summary.abonos_en_transito,
+                cargos_en_transito: summary.cargos_en_transito,
+                cheques_en_transito: summary.cheques_en_transito,
+                cargos_cheques_en_transito: summary.cargos_cheques_en_transito,
+                saldo_inicial: summary.saldo_inicial,
+                fecha_saldo_inicial: summary.fecha_saldo_inicial,
+                cheques_reservados_count: summary.cheques_reservados_count,
+                cheques_reservados_monto: summary.cheques_reservados_monto,
+                diferencia,
+                diferencia_vs_chequera: diferenciaVsChequera,
+                periodo_cerrado_hasta: periodoCerradoHasta,
                 ultima_validacion: ultimaValidacion ? {
                     id: ultimaValidacion.id,
                     fecha_validacion: ultimaValidacion.fecha_validacion,
+                    fecha_corte: parseStrictDBDate(ultimaValidacion.fecha_corte),
                     monto_banco: Number(ultimaValidacion.monto_banco),
                     saldo_chequera: Number(ultimaValidacion.saldo_chequera),
+                    saldo_conciliado_libros: Number(ultimaValidacion.saldo_conciliado_libros || ultimaValidacion.saldo_chequera || 0),
                     diferencia: Number(ultimaValidacion.diferencia),
                     notas: ultimaValidacion.notas
                 } : null
@@ -352,75 +395,395 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
 });
 
 // ── 3. Aplicar o Desconciliar Masivamente ────────────────────────────────────
-router.post('/aplicar', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
-    const { items, fecha_aplicado, accion } = req.body;
-    // accion: 'CONCILIAR' o 'DESCONCILIAR'
+router.post('/aplicar', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const { items, fecha_aplicado, accion, cuenta_bancaria_id } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ message: 'Debe seleccionar al menos un documento.' });
     }
+    if (items.length > 500) {
+        return res.status(400).json({ message: 'Máximo 500 documentos por lote de conciliación.' });
+    }
 
     const esConciliar = accion !== 'DESCONCILIAR';
-    const dbFecha = esConciliar ? toDBDate(fecha_aplicado || getElSalvadorTodayYMD()) : null;
-    if (esConciliar && !dbFecha) {
+    const defaultDbFecha = esConciliar ? parseStrictDBDate(fecha_aplicado || getElSalvadorTodayYMD()) : null;
+    if (esConciliar && !defaultDbFecha) {
         return res.status(400).json({ message: 'La fecha de aplicación enviada no es válida (use YYYY-MM-DD).' });
     }
 
+    const expectedCuentaId = cuenta_bancaria_id ? parseInt(cuenta_bancaria_id, 10) : null;
+    const normalizedItems = [];
+    for (const raw of items) {
+        const id = parseInt(raw?.id, 10);
+        const tipo = String(raw?.origen_tipo || raw?.tipo || '').toUpperCase();
+        if (!Number.isInteger(id) || id <= 0 || (tipo !== 'MOV' && tipo !== 'CK')) {
+            return res.status(400).json({ message: 'Uno o más documentos seleccionados tienen identificador o tipo inválido.' });
+        }
+        let itemFecha = defaultDbFecha;
+        if (esConciliar && raw?.fecha_aplicado) {
+            itemFecha = parseStrictDBDate(raw.fecha_aplicado);
+            if (!itemFecha) {
+                return res.status(400).json({ message: `Fecha de aplicación inválida para documento #${id}.` });
+            }
+        }
+        normalizedItems.push({ id, tipo, fecha_aplicado: itemFecha });
+    }
+
+    const idempotencyKey = getIdempotencyKey(req);
+
     try {
-        const movIds = items.filter(i => i.tipo === 'MOV' || i.origen_tipo === 'MOV').map(i => i.id);
-        const chkIds = items.filter(i => i.tipo === 'CK' || i.origen_tipo === 'CK').map(i => i.id);
+        const txResult = await withTransaction(async (conn) => {
+            if (idempotencyKey) {
+                const idem = await beginIdempotentRequest(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_aplicar',
+                    userId: req.user?.id,
+                    payload: { items: normalizedItems, accion: esConciliar ? 'CONCILIAR' : 'DESCONCILIAR' }
+                });
+                if (idem.replayed) return { replayed: true, statusCode: idem.statusCode, body: idem.responseBody };
+                if (idem.conflict) return { conflict: true };
+            }
 
-        await withTransaction(async (conn) => {
+            const movItems = normalizedItems.filter(i => i.tipo === 'MOV');
+            const chkItems = normalizedItems.filter(i => i.tipo === 'CK');
+            const movIds = [...new Set(movItems.map(i => i.id))];
+            const chkIds = [...new Set(chkItems.map(i => i.id))];
+
+            const foundAccounts = new Set();
+            const datesToVerifyByAccount = new Map();
+            const addDateCheck = (ctaId, d) => {
+                if (!d) return;
+                if (!datesToVerifyByAccount.has(ctaId)) datesToVerifyByAccount.set(ctaId, []);
+                datesToVerifyByAccount.get(ctaId).push(d);
+            };
+
+            let movRows = [];
             if (movIds.length > 0) {
-                await conn.query(
-                    `UPDATE movimientos_bancarios SET fecha_aplicado = ? WHERE id IN (${movIds.map(() => '?').join(',')})`,
-                    [dbFecha, ...movIds]
+                const [rows] = await conn.query(
+                    `SELECT id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, deleted_at
+                     FROM movimientos_bancarios WHERE id IN (${movIds.map(() => '?').join(',')}) FOR UPDATE`,
+                    movIds
                 );
+                movRows = rows || [];
+                if (movRows.length !== movIds.length) {
+                    return { errorStatus: 404, errorBody: { message: 'Uno o más movimientos bancarios no existen.' } };
+                }
+                for (const m of movRows) {
+                    if (m.deleted_at) {
+                        return { errorStatus: 409, errorBody: { message: `El movimiento #${m.id} fue eliminado y no puede modificarse.` } };
+                    }
+                    foundAccounts.add(Number(m.cuenta_bancaria_id));
+                    const targetItem = movItems.find(x => x.id === m.id);
+                    addDateCheck(Number(m.cuenta_bancaria_id), m.fecha_aplicado);
+                    if (esConciliar) addDateCheck(Number(m.cuenta_bancaria_id), targetItem?.fecha_aplicado);
+                }
             }
 
+            let chkRows = [];
             if (chkIds.length > 0) {
-                await conn.query(
-                    `UPDATE cheques SET fecha_aplicado = ? WHERE id IN (${chkIds.map(() => '?').join(',')})`,
-                    [dbFecha, ...chkIds]
+                const [rows] = await conn.query(
+                    `SELECT id, cuenta_bancaria_id, fecha, fecha_aplicado, cheque, concepto, valor, cheque_anulado, fue_noemitido, es_reservado, deleted_at
+                     FROM cheques WHERE id IN (${chkIds.map(() => '?').join(',')}) FOR UPDATE`,
+                    chkIds
                 );
+                chkRows = rows || [];
+                if (chkRows.length !== chkIds.length) {
+                    return { errorStatus: 404, errorBody: { message: 'Uno o más cheques no existen.' } };
+                }
+                for (const ch of chkRows) {
+                    if (ch.deleted_at) {
+                        return { errorStatus: 409, errorBody: { message: `El cheque #${ch.cheque || ch.id} fue eliminado y no puede modificarse.` } };
+                    }
+                    if (ch.cheque_anulado || ch.fue_noemitido || ch.es_reservado) {
+                        return { errorStatus: 409, errorBody: { message: `El cheque #${ch.cheque || ch.id} está anulado, reservado o no emitido.` } };
+                    }
+                    foundAccounts.add(Number(ch.cuenta_bancaria_id));
+                    const targetItem = chkItems.find(x => x.id === ch.id);
+                    addDateCheck(Number(ch.cuenta_bancaria_id), ch.fecha_aplicado);
+                    if (esConciliar) addDateCheck(Number(ch.cuenta_bancaria_id), targetItem?.fecha_aplicado);
+                }
             }
+
+            if (foundAccounts.size > 1) {
+                return { errorStatus: 400, errorBody: { message: 'Todos los documentos del lote deben pertenecer a la misma cuenta bancaria.' } };
+            }
+            const targetCuentaId = [...foundAccounts][0];
+            if (expectedCuentaId && targetCuentaId !== expectedCuentaId) {
+                return { errorStatus: 403, errorBody: { message: 'Los documentos no pertenecen a la cuenta bancaria seleccionada.' } };
+            }
+
+            // Verificar período cerrado
+            const lockCheck = await isDateInClosedPeriod(conn, targetCuentaId, datesToVerifyByAccount.get(targetCuentaId) || []);
+            if (lockCheck.closed) {
+                return {
+                    errorStatus: 423,
+                    errorBody: {
+                        message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para modificar movimientos en fecha ${toDisplayDate(lockCheck.offendingDate)}.`,
+                        locked_until: lockCheck.lockedDate,
+                        periodo_id: lockCheck.periodo?.id
+                    }
+                };
+            }
+
+            let actualizados = 0;
+            if (esConciliar) {
+                for (const item of movItems) {
+                    const [upd] = await conn.query(
+                        'UPDATE movimientos_bancarios SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ? AND deleted_at IS NULL',
+                        [item.fecha_aplicado, req.user?.id || null, item.id]
+                    );
+                    actualizados += Number(upd.affectedRows || 0);
+                }
+                for (const item of chkItems) {
+                    const [upd] = await conn.query(
+                        'UPDATE cheques SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ? AND deleted_at IS NULL',
+                        [item.fecha_aplicado, req.user?.id || null, item.id]
+                    );
+                    actualizados += Number(upd.affectedRows || 0);
+                }
+            } else {
+                if (movIds.length > 0) {
+                    const [upd] = await conn.query(
+                        `UPDATE movimientos_bancarios SET fecha_aplicado = NULL, conciliado_by = NULL, conciliado_at = NULL, version = version + 1 WHERE id IN (${movIds.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+                        movIds
+                    );
+                    actualizados += Number(upd.affectedRows || 0);
+                    // Revertir estado_conciliacion en recordatorios_pagos_abonos vinculados si existen
+                    try {
+                        await conn.query(
+                            `UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'PENDIENTE' WHERE movimiento_bancario_id IN (${movIds.map(() => '?').join(',')}) AND estado_conciliacion = 'CONCILIADO'`,
+                            movIds
+                        );
+                    } catch (_) { /* tabla opcional */ }
+                }
+                if (chkIds.length > 0) {
+                    const [upd] = await conn.query(
+                        `UPDATE cheques SET fecha_aplicado = NULL, conciliado_by = NULL, conciliado_at = NULL, version = version + 1 WHERE id IN (${chkIds.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+                        chkIds
+                    );
+                    actualizados += Number(upd.affectedRows || 0);
+                }
+            }
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: targetCuentaId,
+                entidad: 'conciliacion_lote',
+                entidadId: `${movIds.length}M_${chkIds.length}C`,
+                accion: esConciliar ? 'CONCILIAR' : 'DESCONCILIAR',
+                user: req.user,
+                ipAddress: req.ip,
+                before: {
+                    movimientos: movRows.map(m => ({ id: m.id, fecha_aplicado: parseStrictDBDate(m.fecha_aplicado), monto: Number(m.monto) })),
+                    cheques: chkRows.map(c => ({ id: c.id, fecha_aplicado: parseStrictDBDate(c.fecha_aplicado), valor: Number(c.valor) }))
+                },
+                after: {
+                    fecha_aplicado: defaultDbFecha,
+                    items: normalizedItems,
+                    actualizados
+                }
+            });
+
+            const body = {
+                message: esConciliar
+                    ? `Se conciliaron ${actualizados} documento(s) con fecha ${toDisplayDate(defaultDbFecha)}.`
+                    : `Se desconciliaron ${actualizados} documento(s) exitosamente.`,
+                actualizados,
+                cuenta_bancaria_id: targetCuentaId
+            };
+
+            if (idempotencyKey) {
+                await saveIdempotentResponse(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_aplicar',
+                    statusCode: 200,
+                    responseBody: body
+                });
+            }
+
+            return { statusCode: 200, body, targetCuentaId, actualizados };
         });
 
-        if (req.io) {
-            req.io.emit('conciliacion_updated', { count: items.length, accion });
+        if (txResult.conflict) {
+            return res.status(409).json({ message: 'Solicitud duplicada en proceso. Espere unos segundos.' });
+        }
+        if (txResult.replayed) {
+            return res.status(txResult.statusCode).json(txResult.body);
+        }
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
 
-        res.json({
-            message: esConciliar 
-                ? `Se conciliaron ${items.length} documento(s) con fecha ${toDisplayDate(dbFecha)}.`
-                : `Se desconciliaron ${items.length} documento(s) exitosamente.`,
-            actualizados: items.length
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.targetCuentaId,
+            count: txResult.actualizados,
+            accion: esConciliar ? 'CONCILIAR' : 'DESCONCILIAR',
+            actor_user_id: req.user?.id || null
         });
+
+        res.json(txResult.body);
     } catch (error) {
         sendSafeError(res, error, 'Error al aplicar cambios en conciliación');
     }
 });
 
-// ── 4. Registrar Validación de Saldo en Banco ───────────────────────────────
-router.post('/validar-saldo', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
-    const { cuenta_bancaria_id, monto_banco, saldo_chequera, diferencia, notas } = req.body;
+// ── 4. Registrar Validación de Saldo en Banco (y Cierre Opcional de Período) ──
+router.post('/validar-saldo', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const {
+        cuenta_bancaria_id,
+        monto_banco,
+        fecha_corte,
+        hasta,
+        notas,
+        cerrar_periodo = false,
+        confirmar_con_diferencia = false
+    } = req.body || {};
 
-    if (!cuenta_bancaria_id) {
+    const cuentaId = parseInt(cuenta_bancaria_id, 10);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0) {
         return res.status(400).json({ message: 'Cuenta bancaria requerida.' });
     }
 
-    try {
-        const db = getDb();
-        const [result] = await db.query(
-            'INSERT INTO validaciones_saldo_banco (cuenta_bancaria_id, fecha_validacion, monto_banco, saldo_chequera, diferencia, notas, created_by) ' +
-            'VALUES (?, NOW(), ?, ?, ?, ?, ?)',
-            [cuenta_bancaria_id, Number(monto_banco || 0), Number(saldo_chequera || 0), Number(diferencia || 0), notas || '', req.user?.id || null]
-        );
+    const montoBancoNum = parseStrictFiniteAmount(monto_banco);
+    if (montoBancoNum === null) {
+        return res.status(400).json({ message: 'El saldo en banco ingresado no es válido.' });
+    }
 
-        const [[saved]] = await db.query('SELECT * FROM validaciones_saldo_banco WHERE id = ?', [result.insertId]);
+    const dbFechaCorte = parseStrictDBDate(fecha_corte || hasta || getElSalvadorTodayYMD());
+    if (!dbFechaCorte) {
+        return res.status(400).json({ message: 'La fecha de corte no es válida.' });
+    }
+
+    if (cerrar_periodo && !canCloseConciliacion(req.user)) {
+        return res.status(403).json({ message: 'No cuenta con permisos para cerrar períodos de conciliación.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const summary = await computeAccountReconciliationSummary(conn, cuentaId, dbFechaCorte);
+            if (!summary) {
+                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+            }
+
+            const diferenciaReal = round2(montoBancoNum - summary.saldo_conciliado_libros);
+            if (cerrar_periodo && Math.abs(diferenciaReal) >= 0.01 && !confirmar_con_diferencia) {
+                return {
+                    errorStatus: 400,
+                    errorBody: {
+                        message: `Existe una diferencia de $${diferenciaReal.toFixed(2)} respecto al saldo conciliado en libros. Confirme explícitamente si desea cerrar con diferencia.`,
+                        requires_confirmation: true,
+                        diferencia: diferenciaReal
+                    }
+                };
+            }
+
+            const snapshotObj = {
+                ...summary,
+                monto_banco: montoBancoNum,
+                diferencia: diferenciaReal,
+                fecha_corte: dbFechaCorte
+            };
+
+            const [result] = await conn.query(
+                `INSERT INTO validaciones_saldo_banco
+                    (cuenta_bancaria_id, fecha_validacion, fecha_corte, monto_banco, saldo_chequera,
+                     saldo_conciliado_libros, abonos_en_transito, cargos_cheques_en_transito,
+                     diferencia, notas, snapshot_json, created_by)
+                 VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    cuentaId,
+                    dbFechaCorte,
+                    montoBancoNum,
+                    summary.saldo_chequera,
+                    summary.saldo_conciliado_libros,
+                    summary.abonos_en_transito,
+                    summary.cargos_cheques_en_transito,
+                    diferenciaReal,
+                    String(notas || '').slice(0, 1000),
+                    JSON.stringify(snapshotObj),
+                    req.user?.id || null
+                ]
+            );
+
+            let periodoRow = null;
+            if (cerrar_periodo) {
+                const actorName = req.user?.nombre || req.user?.username || 'Usuario';
+                await conn.query(
+                    `INSERT INTO conciliacion_periodos
+                        (cuenta_bancaria_id, fecha_corte, estado, saldo_banco, saldo_chequera,
+                         saldo_conciliado_libros, abonos_en_transito, cargos_cheques_en_transito,
+                         diferencia, snapshot_json, notas, cerrado_by, cerrado_por_nombre, cerrado_at)
+                     VALUES (?, ?, 'CERRADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                     ON DUPLICATE KEY UPDATE
+                        estado = 'CERRADO',
+                        saldo_banco = VALUES(saldo_banco),
+                        saldo_chequera = VALUES(saldo_chequera),
+                        saldo_conciliado_libros = VALUES(saldo_conciliado_libros),
+                        abonos_en_transito = VALUES(abonos_en_transito),
+                        cargos_cheques_en_transito = VALUES(cargos_cheques_en_transito),
+                        diferencia = VALUES(diferencia),
+                        snapshot_json = VALUES(snapshot_json),
+                        notas = VALUES(notas),
+                        cerrado_by = VALUES(cerrado_by),
+                        cerrado_por_nombre = VALUES(cerrado_por_nombre),
+                        cerrado_at = NOW()`,
+                    [
+                        cuentaId,
+                        dbFechaCorte,
+                        montoBancoNum,
+                        summary.saldo_chequera,
+                        summary.saldo_conciliado_libros,
+                        summary.abonos_en_transito,
+                        summary.cargos_cheques_en_transito,
+                        diferenciaReal,
+                        JSON.stringify(snapshotObj),
+                        String(notas || '').slice(0, 1000),
+                        req.user?.id || null,
+                        String(actorName).slice(0, 150)
+                    ]
+                );
+
+                const [[pSaved]] = await conn.query(
+                    'SELECT * FROM conciliacion_periodos WHERE cuenta_bancaria_id = ? AND fecha_corte = ? LIMIT 1',
+                    [cuentaId, dbFechaCorte]
+                );
+                periodoRow = pSaved || null;
+            }
+
+            const [[saved]] = await conn.query('SELECT * FROM validaciones_saldo_banco WHERE id = ?', [result.insertId]);
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cuentaId,
+                entidad: cerrar_periodo ? 'conciliacion_periodo' : 'validacion_saldo',
+                entidadId: cerrar_periodo ? (periodoRow?.id || dbFechaCorte) : result.insertId,
+                accion: cerrar_periodo ? 'VALIDAR_Y_CERRAR_PERIODO' : 'VALIDAR_SALDO',
+                user: req.user,
+                ipAddress: req.ip,
+                after: snapshotObj
+            });
+
+            return { saved, periodoRow, summary, diferenciaReal };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: cuentaId,
+            accion: cerrar_periodo ? 'PERIODO_CERRADO' : 'VALIDAR_SALDO',
+            actor_user_id: req.user?.id || null
+        });
 
         res.json({
-            message: 'Validación de saldo guardada exitosamente.',
-            validacion: saved
+            message: cerrar_periodo
+                ? `Validación guardada y período cerrado al ${toDisplayDate(dbFechaCorte)}.`
+                : 'Validación de saldo guardada exitosamente (recalculada en servidor).',
+            validacion: txResult.saved,
+            periodo: txResult.periodoRow,
+            resumen_recalculado: {
+                ...txResult.summary,
+                monto_banco: montoBancoNum,
+                diferencia: txResult.diferenciaReal
+            }
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al guardar validación');
@@ -428,206 +791,72 @@ router.post('/validar-saldo', authenticateToken, requirePermission(['manage_conc
 });
 
 // ── 5. Parser y Auto-Matcher de Extractos Bancarios ─────────────────────────
-router.post('/parse-extracto', express.json({ limit: '20mb' }), authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
-    const { cuenta_id, raw_data, banco_formato } = req.body;
-    if (!cuenta_id || !raw_data) {
-        return res.status(400).json({ message: 'Faltan datos requeridos (cuenta y datos de extracto).' });
+router.post('/parse-extracto', express.json({ limit: '20mb' }), authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const { cuenta_id, raw_data, banco_formato } = req.body || {};
+    const cuentaId = parseInt(cuenta_id, 10);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0 || !raw_data) {
+        return res.status(400).json({ message: 'Faltan datos requeridos (cuenta válida y datos de extracto).' });
     }
 
     try {
         const db = getDb();
 
-        const [movPendientes] = await db.query(
+        const [movPendientes] = await withRetry(() => db.query(
             'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha ' +
             'FROM movimientos_bancarios ' +
-            'WHERE cuenta_bancaria_id = ? AND fecha_aplicado IS NULL',
-            [cuenta_id]
-        );
+            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NULL',
+            [cuentaId]
+        ));
 
-        const [chkPendientes] = await db.query(
+        const [chkPendientes] = await withRetry(() => db.query(
             'SELECT id, "CK" as origen_tipo, cheque as documento, concepto, valor as monto, valor as cargo, 0 as abono, fecha, a_nombre as beneficiario ' +
             'FROM cheques ' +
-            'WHERE cuenta_bancaria_id = ? AND fecha_aplicado IS NULL AND cheque_anulado = FALSE AND fue_noemitido = FALSE',
-            [cuenta_id]
-        );
+            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NULL ' +
+            'AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND es_reservado = FALSE',
+            [cuentaId]
+        ));
 
-        const todosPendientes = [...movPendientes, ...chkPendientes];
+        const [movConciliados] = await withRetry(() => db.query(
+            'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha, fecha_aplicado ' +
+            'FROM movimientos_bancarios ' +
+            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NOT NULL ' +
+            'AND fecha >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)',
+            [cuentaId]
+        ));
 
-        // Parsear líneas o filas usando parser robusto con soporte de comillas
-        let rows = [];
-        if (Array.isArray(raw_data)) {
-            rows = raw_data;
-        } else if (typeof raw_data === 'string') {
-            rows = parseCSVorTSV(raw_data);
-        }
+        const [chkConciliados] = await withRetry(() => db.query(
+            'SELECT id, "CK" as origen_tipo, cheque as documento, concepto, valor as monto, valor as cargo, 0 as abono, fecha, fecha_aplicado, a_nombre as beneficiario ' +
+            'FROM cheques ' +
+            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NOT NULL ' +
+            'AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND es_reservado = FALSE ' +
+            'AND fecha >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)',
+            [cuentaId]
+        ));
 
-        const parsedTransactions = [];
+        const parsed = parseAndMatchBankStatement({
+            rawData: raw_data,
+            bancoFormato: banco_formato || 'AUTO',
+            pendientes: [...movPendientes, ...chkPendientes],
+            conciliadosExistentes: [...movConciliados, ...chkConciliados]
+        });
 
-        // Conceptos sugeridos frecuentes para enriquecer descripciones
-        const conceptosSugeridos = [
-            'LIQUIDACION APP PUMA PRIS',
-            'REMESA CUENTA CORRIENTE SERSAPROSA',
-            'TRANSFERENCIA POR TRANSFER365',
-            'LIQUIDACION VERSATEC FLOTA',
-            'PAGO DE PRESTAMO',
-            'PAGO MINISTERIO DE HACIENDA',
-            'CHEQUES COMPENSACION',
-            'ARRENDAMIENTO ATM',
-            'NOTA DE DEBITO X PLANILLA',
-            'INTERESES',
-            'COMPRA DE CHEQUERA',
-            'IMPUESTO POR LIQUIDEZ'
-        ];
-
-        for (const row of rows) {
-            if (!Array.isArray(row) || row.length === 0) continue;
-            // Omitir encabezados comunes
-            const firstCell = String(row[0] || '').toLowerCase();
-            if (firstCell.includes('fecha') || firstCell.includes('usuario') || firstCell.includes('banco') || firstCell.includes('saldo')) {
-                continue;
+        let extractoYaImportado = null;
+        try {
+            const [impRows] = await withRetry(() => db.query(
+                `SELECT id, created_at, total_filas, creados_count, conciliados_count
+                 FROM conciliacion_importaciones
+                 WHERE cuenta_bancaria_id = ? AND file_hash = ?
+                 ORDER BY id DESC LIMIT 1`,
+                [cuentaId, parsed.file_hash]
+            ));
+            if (impRows && impRows.length > 0) {
+                extractoYaImportado = impRows[0];
             }
-
-            let fecha = null;
-            let documento = '';
-            let descripcion = '';
-            let cargo = 0;
-            let abono = 0;
-            let monto = 0;
-            let saldo = 0;
-            let foundNegative = false;
-
-            // Extraer números y fechas de las columnas
-            for (let i = 0; i < row.length; i++) {
-                const cell = String(row[i] || '').trim();
-                if (!cell) continue;
-
-                if (!fecha && (/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(cell) || /\d{4}-\d{2}-\d{2}/.test(cell))) {
-                    fecha = cell;
-                } else if (!documento && /^\d{4,12}$/.test(cell.replace(/^#/, ''))) {
-                    documento = cell.replace(/^#/, '');
-                } else if (!descripcion && cell.length > 2 && isNaN(Number(cell.replace(/[$,]/g, '')))) {
-                    descripcion = cell;
-                } else {
-                    const numVal = parseFloat(cell.replace(/[$,]/g, ''));
-                    if (!isNaN(numVal) && Math.abs(numVal) > 0) {
-                        if (numVal < 0) {
-                            cargo = Math.abs(numVal);
-                            foundNegative = true;
-                        } else if (monto === 0) {
-                            monto = numVal;
-                        } else if (saldo === 0) {
-                            saldo = numVal;
-                        }
-                    }
-                }
-            }
-
-            if (cargo > 0 && abono === 0) {
-                monto = cargo;
-            } else if (abono > 0) {
-                monto = abono;
-            }
-
-            if (!fecha && !descripcion && monto === 0) continue;
-
-            const descUpper = (descripcion || '').toUpperCase();
-            
-            // Determinar si es Cargo o Abono
-            let tipo = 'ABONO';
-            if (foundNegative || cargo > 0) {
-                tipo = 'CARGO';
-            } else if (
-                descUpper.includes('CHEQUE') || 
-                descUpper.includes('PAGO') || 
-                descUpper.includes('DEBITO') || 
-                descUpper.includes('CARGO') || 
-                descUpper.includes('COMISION') ||
-                descUpper.includes('COBRADO') ||
-                descUpper.includes('INTERES')
-            ) {
-                tipo = 'CARGO';
-            } else if (
-                descUpper.includes('REMESA') || 
-                descUpper.includes('ABONO') || 
-                descUpper.includes('DEPOSITO') || 
-                descUpper.includes('ENTRANTE') || 
-                descUpper.includes('LIQUIDACION')
-            ) {
-                tipo = 'ABONO';
-            }
-
-            // Determinar código de remesa sugerido (NC, RM, NA, CH)
-            let tipoRemesaCodigo = tipo === 'CARGO' ? 'NC' : 'RM';
-            if (descUpper.includes('CHEQUE') || descUpper.includes('CHQ') || descUpper.includes('CAMARA')) {
-                tipoRemesaCodigo = 'CH';
-            } else if (tipo === 'CARGO') {
-                tipoRemesaCodigo = 'NC';
-            } else if (descUpper.includes('REMESA')) {
-                tipoRemesaCodigo = 'RM';
-            } else {
-                tipoRemesaCodigo = 'NA';
-            }
-
-            // Intentar cruce automático con los pendientes
-            let match = null;
-            let matchType = 'NINGUNO';
-
-            // 1. Coincidencia exacta por número de documento/cheque y monto
-            if (documento) {
-                match = todosPendientes.find(p => String(p.documento || '').trim() === documento && Math.abs(Number(p.monto) - monto) < 0.01);
-                if (match) matchType = 'EXACTO_DOC_MONTO';
-            }
-
-            // 2. Coincidencia por número de documento
-            if (!match && documento) {
-                match = todosPendientes.find(p => String(p.documento || '').trim() === documento);
-                if (match) matchType = 'SUGERIDO_DOC';
-            }
-
-            // 3. Coincidencia por monto exacto único
-            if (!match && monto > 0) {
-                const matchesByAmount = todosPendientes.filter(p => Math.abs(Number(p.monto) - monto) < 0.01);
-                if (matchesByAmount.length === 1) {
-                    match = matchesByAmount[0];
-                    matchType = 'SUGERIDO_MONTO_UNICO';
-                }
-            }
-
-            // Detectar concepto sugerido
-            const conceptoSugerido = conceptosSugeridos.find(cs => 
-                descUpper.includes(cs) || 
-                (match && match.concepto && match.concepto.toUpperCase().includes(cs))
-            ) || '';
-
-            parsedTransactions.push({
-                fecha: fecha || toDisplayDate(new Date()),
-                documento: documento || (match ? match.documento : ''),
-                descripcion: (descripcion || (match ? match.concepto : '')).toUpperCase(),
-                conceptoSugerido,
-                monto: monto,
-                cargo: tipo === 'CARGO' ? monto : 0,
-                abono: tipo === 'ABONO' ? monto : 0,
-                tipo: tipo,
-                tipo_remesa_codigo: tipoRemesaCodigo,
-                saldo: saldo,
-                match: match ? {
-                    id: match.id,
-                    origen_tipo: match.origen_tipo,
-                    documento: match.documento,
-                    concepto: match.concepto,
-                    beneficiario: match.beneficiario || '',
-                    monto: match.monto,
-                    fecha: toDisplayDate(match.fecha)
-                } : null,
-                matchType
-            });
-        }
+        } catch (_) { /* ignore */ }
 
         res.json({
-            banco_formato: banco_formato || 'AUTO',
-            total_procesadas: parsedTransactions.length,
-            transacciones: parsedTransactions,
-            conceptos_sugeridos: conceptosSugeridos
+            ...parsed,
+            extracto_ya_importado: extractoYaImportado
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al parsear extracto bancario');
@@ -635,7 +864,7 @@ router.post('/parse-extracto', express.json({ limit: '20mb' }), authenticateToke
 });
 
 // ── 5.1. Crear Movimiento y Conciliar Directamente ─────────────────────────
-router.post('/crear-y-aplicar', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
+router.post('/crear-y-aplicar', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
     const {
         cuenta_bancaria_id,
         fecha,
@@ -643,209 +872,721 @@ router.post('/crear-y-aplicar', authenticateToken, requirePermission(['manage_co
         documento,
         concepto,
         monto,
-        tipo, // 'CARGO' o 'ABONO'
-        tipo_remesa_codigo, // 'RM', 'NC', 'NA', 'CH'
+        tipo,
+        tipo_remesa_codigo,
         tipo_remesa_id,
         num_partida,
         cod_cta,
-        aplicar_inmediatamente
-    } = req.body;
+        aplicar_inmediatamente,
+        permitir_duplicado = false
+    } = req.body || {};
 
-    if (!cuenta_bancaria_id) {
+    const cuentaId = parseInt(cuenta_bancaria_id, 10);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0) {
         return res.status(400).json({ message: 'Cuenta bancaria requerida.' });
     }
-    const montoNum = Math.abs(parseFloat(monto) || 0);
-    if (montoNum <= 0) {
-        return res.status(400).json({ message: 'El monto debe ser mayor a 0.' });
+
+    const montoNum = parseStrictPositiveAmount(monto);
+    if (montoNum === null) {
+        return res.status(400).json({ message: 'El monto debe ser un valor numérico mayor a $0.00.' });
     }
 
+    const dbFecha = fecha ? parseStrictDBDate(fecha) : getElSalvadorTodayYMD();
+    if (!dbFecha) {
+        return res.status(400).json({ message: 'La fecha de emisión no es válida.' });
+    }
+
+    const aplicarNow = aplicar_inmediatamente !== false;
+    const dbFechaAplicado = aplicarNow ? parseStrictDBDate(fecha_aplicado || dbFecha) : null;
+    if (aplicarNow && !dbFechaAplicado) {
+        return res.status(400).json({ message: 'La fecha de aplicación no es válida.' });
+    }
+
+    const direction = normalizeMovementDirection({
+        tipo,
+        codRemesa: tipo_remesa_codigo,
+        descripcion: concepto
+    });
+    const cargo = direction === 'CARGO' ? montoNum : 0;
+    const abono = direction === 'ABONO' ? montoNum : 0;
+    const cleanConcepto = String(concepto || '').trim().toUpperCase().slice(0, 255);
+    if (!cleanConcepto) {
+        return res.status(400).json({ message: 'El concepto es requerido.' });
+    }
+    const cleanDocumento = String(documento || '').trim().slice(0, 100);
+    const fingerprint = computeMovementFingerprint({
+        cuentaBancariaId: cuentaId,
+        fecha: dbFecha,
+        documento: cleanDocumento,
+        cargo,
+        abono,
+        concepto: cleanConcepto
+    });
+
+    const idempotencyKey = getIdempotencyKey(req);
+
     try {
-        const db = getDb();
-        const [[cuenta]] = await withRetry(() => db.query(
-            'SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ?',
-            [cuenta_bancaria_id]
-        ));
-        if (!cuenta) {
-            return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
-        }
-
-        const empresaId = cuenta.empresa_id;
-        const esCargo = (tipo || '').toUpperCase() === 'CARGO' || tipo_remesa_codigo === 'NC' || tipo_remesa_codigo === 'CH' || tipo_remesa_codigo === '02';
-        const cargo = esCargo ? montoNum : 0;
-        const abono = !esCargo ? montoNum : 0;
-
-        let remesaId = tipo_remesa_id || null;
-        if (!remesaId && tipo_remesa_codigo) {
-            const [remRows] = await withRetry(() => db.query(
-                'SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ?',
-                [empresaId, tipo_remesa_codigo]
-            ));
-            if (remRows.length > 0) {
-                remesaId = remRows[0].id;
-            } else {
-                const [anyRem] = await withRetry(() => db.query(
-                    'SELECT id FROM tipos_remesas WHERE codigo = ? LIMIT 1',
-                    [tipo_remesa_codigo]
-                ));
-                if (anyRem.length > 0) remesaId = anyRem[0].id;
+        const txResult = await withTransaction(async (conn) => {
+            if (idempotencyKey) {
+                const idem = await beginIdempotentRequest(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_crear_y_aplicar',
+                    userId: req.user?.id,
+                    payload: { cuentaId, dbFecha, dbFechaAplicado, cleanDocumento, cleanConcepto, montoNum, direction }
+                });
+                if (idem.replayed) return { replayed: true, statusCode: idem.statusCode, body: idem.responseBody };
+                if (idem.conflict) return { conflict: true };
             }
-        }
 
-        const dbFecha = fecha ? toDBDate(fecha) : toDBDate(new Date());
-        const dbFechaAplicado = (aplicar_inmediatamente !== false)
-            ? toDBDate(fecha_aplicado || dbFecha)
-            : null;
+            const [[cuenta]] = await conn.query(
+                'SELECT id, empresa_id, activa FROM cuentas_bancarias WHERE id = ? LIMIT 1',
+                [cuentaId]
+            );
+            if (!cuenta) {
+                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+            }
+            if (!cuenta.activa) {
+                return { errorStatus: 409, errorBody: { message: 'La cuenta bancaria se encuentra inactiva.' } };
+            }
 
-        const [result] = await withRetry(() => db.query(
-            'INSERT INTO movimientos_bancarios (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [
-                empresaId,
-                cuenta_bancaria_id,
-                dbFecha,
-                dbFechaAplicado,
-                documento || '',
-                (concepto || '').toUpperCase(),
-                montoNum,
-                cargo,
-                abono,
-                remesaId,
-                cod_cta || null,
-                num_partida || null
-            ]
-        ));
+            const lockCheck = await isDateInClosedPeriod(conn, cuentaId, [dbFecha, dbFechaAplicado]);
+            if (lockCheck.closed) {
+                return {
+                    errorStatus: 423,
+                    errorBody: {
+                        message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para registrar en fecha ${toDisplayDate(lockCheck.offendingDate)}.`,
+                        locked_until: lockCheck.lockedDate,
+                        periodo_id: lockCheck.periodo?.id
+                    }
+                };
+            }
 
-        if (req.io) {
-            req.io.emit('conciliacion_updated', { id: result.insertId, accion: 'CREAR' });
-        }
+            if (!permitir_duplicado) {
+                const [dupRows] = await conn.query(
+                    `SELECT id, fecha, documento, monto, concepto
+                     FROM movimientos_bancarios
+                     WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fingerprint = ?
+                     LIMIT 1 FOR UPDATE`,
+                    [cuentaId, fingerprint]
+                );
+                if (dupRows && dupRows.length > 0) {
+                    return {
+                        errorStatus: 409,
+                        errorBody: {
+                            message: `Ya existe un movimiento idéntico registrado (#${dupRows[0].id} · ${toDisplayDate(dupRows[0].fecha)} · $${Number(dupRows[0].monto).toFixed(2)}).`,
+                            duplicate_of: dupRows[0]
+                        }
+                    };
+                }
+            }
 
-        res.status(201).json({
-            message: dbFechaAplicado 
-                ? 'Movimiento registrado y conciliado exitosamente' 
-                : 'Movimiento registrado como pendiente',
-            id: result.insertId,
-            fecha_aplicado: dbFechaAplicado
+            let remesaId = tipo_remesa_id ? parseInt(tipo_remesa_id, 10) || null : null;
+            if (!remesaId && tipo_remesa_codigo) {
+                const [remRows] = await conn.query(
+                    'SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1',
+                    [cuenta.empresa_id, tipo_remesa_codigo]
+                );
+                if (remRows.length > 0) {
+                    remesaId = remRows[0].id;
+                } else {
+                    const [anyRem] = await conn.query(
+                        'SELECT id FROM tipos_remesas WHERE codigo = ? LIMIT 1',
+                        [tipo_remesa_codigo]
+                    );
+                    if (anyRem.length > 0) remesaId = anyRem[0].id;
+                }
+            }
+
+            const [result] = await conn.query(
+                `INSERT INTO movimientos_bancarios
+                    (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
+                     monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida,
+                     created_by, conciliado_by, conciliado_at, fingerprint, version)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                [
+                    cuenta.empresa_id,
+                    cuentaId,
+                    dbFecha,
+                    dbFechaAplicado,
+                    cleanDocumento,
+                    cleanConcepto,
+                    montoNum,
+                    cargo,
+                    abono,
+                    remesaId,
+                    cod_cta || null,
+                    num_partida || null,
+                    req.user?.id || null,
+                    dbFechaAplicado ? (req.user?.id || null) : null,
+                    dbFechaAplicado ? new Date() : null,
+                    fingerprint
+                ]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cuentaId,
+                entidad: 'movimientos_bancarios',
+                entidadId: result.insertId,
+                accion: 'CREAR_CONCILIACION',
+                user: req.user,
+                ipAddress: req.ip,
+                after: {
+                    id: result.insertId,
+                    fecha: dbFecha,
+                    fecha_aplicado: dbFechaAplicado,
+                    documento: cleanDocumento,
+                    concepto: cleanConcepto,
+                    monto: montoNum,
+                    cargo,
+                    abono
+                }
+            });
+
+            const body = {
+                message: dbFechaAplicado
+                    ? 'Movimiento registrado y conciliado exitosamente'
+                    : 'Movimiento registrado como pendiente',
+                id: result.insertId,
+                fecha_aplicado: dbFechaAplicado
+            };
+
+            if (idempotencyKey) {
+                await saveIdempotentResponse(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_crear_y_aplicar',
+                    statusCode: 201,
+                    responseBody: body
+                });
+            }
+
+            return { statusCode: 201, body };
         });
+
+        if (txResult.conflict) {
+            return res.status(409).json({ message: 'Solicitud duplicada en proceso. Espere unos segundos.' });
+        }
+        if (txResult.replayed) {
+            return res.status(txResult.statusCode).json(txResult.body);
+        }
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: cuentaId,
+            id: txResult.body.id,
+            accion: 'CREAR',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.status(201).json(txResult.body);
     } catch (error) {
         sendSafeError(res, error, 'Error al registrar movimiento');
     }
 });
 
-// ── 5.2. Crear y Aplicar Movimientos Masivamente ───────────────────────────
-router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
-    const { cuenta_bancaria_id, items, fecha_aplicado_general, aplicar_inmediatamente } = req.body;
-    if (!cuenta_bancaria_id || !Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({ message: 'Debe especificar la cuenta bancaria y al menos un movimiento.' });
+// ── 5.2. Crear y Aplicar Movimientos Masivamente (100% Atómico) ──────────────
+router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const {
+        cuenta_bancaria_id,
+        items = [],
+        coincidencias_a_aplicar = [],
+        fecha_aplicado_general,
+        aplicar_inmediatamente = true,
+        omitir_duplicados = true,
+        file_hash = null,
+        archivo_nombre = null,
+        banco_formato = 'AUTO',
+        saldo_final_extracto = null
+    } = req.body || {};
+
+    const cuentaId = parseInt(cuenta_bancaria_id, 10);
+    const itemsArr = Array.isArray(items) ? items : [];
+    const coincArr = Array.isArray(coincidencias_a_aplicar) ? coincidencias_a_aplicar : [];
+
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0 || (itemsArr.length === 0 && coincArr.length === 0)) {
+        return res.status(400).json({ message: 'Debe especificar la cuenta bancaria y al menos un movimiento o coincidencia.' });
+    }
+    if (itemsArr.length + coincArr.length > 2000) {
+        return res.status(400).json({ message: 'El lote supera el límite máximo permitido de 2,000 filas.' });
     }
 
-    try {
-        const db = getDb();
-        const [[cuenta]] = await withRetry(() => db.query(
-            'SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ?',
-            [cuenta_bancaria_id]
-        ));
-        if (!cuenta) {
-            return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+    const aplicarNow = aplicar_inmediatamente !== false;
+    const generalFechaApl = fecha_aplicado_general ? parseStrictDBDate(fecha_aplicado_general) : getElSalvadorTodayYMD();
+    if (aplicarNow && fecha_aplicado_general && !generalFechaApl) {
+        return res.status(400).json({ message: 'La fecha de aplicación general no es válida.' });
+    }
+
+    // Pre-validación estricta de todas las filas antes de tocar la base de datos
+    const validationErrors = [];
+    const preparedItems = [];
+    for (let idx = 0; idx < itemsArr.length; idx++) {
+        const item = itemsArr[idx] || {};
+        const montoNum = parseStrictPositiveAmount(item.monto);
+        if (montoNum === null) {
+            validationErrors.push(`Fila #${idx + 1}: monto inválido (${item.monto}).`);
+            continue;
         }
-
-        const empresaId = cuenta.empresa_id;
-        const [tiposRemesas] = await withRetry(() => db.query(
-            'SELECT id, codigo FROM tipos_remesas WHERE empresa_id = ?',
-            [empresaId]
-        ));
-        const remesaMap = new Map();
-        tiposRemesas.forEach(tr => remesaMap.set(tr.codigo, tr.id));
-
-        let creadosCount = 0;
-        for (const item of items) {
-            const montoNum = Math.abs(parseFloat(item.monto) || 0);
-            if (montoNum <= 0) continue;
-
-            const esCargo = (item.tipo || '').toUpperCase() === 'CARGO' || item.tipo_remesa_codigo === 'NC' || item.tipo_remesa_codigo === 'CH';
-            const cargo = esCargo ? montoNum : 0;
-            const abono = !esCargo ? montoNum : 0;
-            const tipoCodigo = item.tipo_remesa_codigo || (esCargo ? 'NC' : 'RM');
-            const remesaId = remesaMap.get(tipoCodigo) || null;
-
-            const dbFecha = item.fecha ? toDBDate(item.fecha) : toDBDate(new Date());
-            const itemFechaAplicado = item.fecha_aplicado || fecha_aplicado_general || dbFecha;
-            const dbFechaAplicado = (aplicar_inmediatamente !== false) ? toDBDate(itemFechaAplicado) : null;
-
-            await withRetry(() => db.query(
-                'INSERT INTO movimientos_bancarios (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [
-                    empresaId,
-                    cuenta_bancaria_id,
-                    dbFecha,
-                    dbFechaAplicado,
-                    item.documento || '',
-                    (item.descripcion || item.concepto || '').toUpperCase(),
-                    montoNum,
-                    cargo,
-                    abono,
-                    remesaId,
-                    null,
-                    null
-                ]
-            ));
-            creadosCount++;
+        const dbFecha = parseStrictDBDate(item.fecha_ymd || item.fecha);
+        if (!dbFecha) {
+            validationErrors.push(`Fila #${idx + 1}: fecha inválida (${item.fecha}).`);
+            continue;
         }
-
-        if (req.io) {
-            req.io.emit('conciliacion_updated', { count: creadosCount, accion: 'CREAR_MASIVO' });
+        const dbFechaApl = aplicarNow
+            ? parseStrictDBDate(item.fecha_aplicado || dbFecha || generalFechaApl)
+            : null;
+        if (aplicarNow && !dbFechaApl) {
+            validationErrors.push(`Fila #${idx + 1}: fecha de aplicación inválida.`);
+            continue;
         }
-
-        res.json({
-            message: `Se crearon y ${aplicar_inmediatamente !== false ? 'conciliaron' : 'registraron'} ${creadosCount} movimientos con éxito.`,
-            creados: creadosCount
+        const direction = normalizeMovementDirection({
+            tipo: item.tipo,
+            codRemesa: item.tipo_remesa_codigo,
+            descripcion: item.descripcion || item.concepto
         });
+        const cargo = direction === 'CARGO' ? montoNum : 0;
+        const abono = direction === 'ABONO' ? montoNum : 0;
+        const tipoCodigo = item.tipo_remesa_codigo || (direction === 'CARGO' ? 'NC' : 'RM');
+        const cleanDoc = String(item.documento || '').trim().slice(0, 100);
+        const cleanConcepto = String(item.descripcion || item.concepto || `${tipoCodigo} EXTRACTO`).trim().toUpperCase().slice(0, 255);
+        const fingerprint = computeMovementFingerprint({
+            cuentaBancariaId: cuentaId,
+            fecha: dbFecha,
+            documento: cleanDoc,
+            cargo,
+            abono,
+            concepto: cleanConcepto
+        });
+
+        preparedItems.push({
+            idx,
+            dbFecha,
+            dbFechaApl,
+            cleanDoc,
+            cleanConcepto,
+            montoNum,
+            cargo,
+            abono,
+            tipoCodigo,
+            fingerprint
+        });
+    }
+
+    const preparedCoincidencias = [];
+    for (let idx = 0; idx < coincArr.length; idx++) {
+        const c = coincArr[idx] || {};
+        const id = parseInt(c.id, 10);
+        const tipo = String(c.origen_tipo || c.tipo || '').toUpperCase();
+        const fApl = parseStrictDBDate(c.fecha_aplicado || generalFechaApl);
+        if (!Number.isInteger(id) || id <= 0 || (tipo !== 'MOV' && tipo !== 'CK') || !fApl) {
+            validationErrors.push(`Coincidencia #${idx + 1}: datos inválidos.`);
+            continue;
+        }
+        preparedCoincidencias.push({ id, tipo, fecha_aplicado: fApl });
+    }
+
+    if (validationErrors.length > 0) {
+        return res.status(400).json({
+            message: `El lote contiene ${validationErrors.length} fila(s) con errores y no fue procesado.`,
+            errors: validationErrors.slice(0, 25)
+        });
+    }
+
+    const idempotencyKey = getIdempotencyKey(req);
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            if (idempotencyKey) {
+                const idem = await beginIdempotentRequest(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_crear_masivo',
+                    userId: req.user?.id,
+                    payload: { cuentaId, file_hash, itemsCount: preparedItems.length, coincCount: preparedCoincidencias.length }
+                });
+                if (idem.replayed) return { replayed: true, statusCode: idem.statusCode, body: idem.responseBody };
+                if (idem.conflict) return { conflict: true };
+            }
+
+            const [[cuenta]] = await conn.query(
+                'SELECT id, empresa_id, activa FROM cuentas_bancarias WHERE id = ? LIMIT 1',
+                [cuentaId]
+            );
+            if (!cuenta) {
+                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+            }
+            if (!cuenta.activa) {
+                return { errorStatus: 409, errorBody: { message: 'La cuenta bancaria se encuentra inactiva.' } };
+            }
+
+            // Validar fechas contra período cerrado antes de insertar nada
+            const allDates = [
+                ...preparedItems.flatMap(i => [i.dbFecha, i.dbFechaApl]),
+                ...preparedCoincidencias.map(c => c.fecha_aplicado)
+            ];
+            const lockCheck = await isDateInClosedPeriod(conn, cuentaId, allDates);
+            if (lockCheck.closed) {
+                return {
+                    errorStatus: 423,
+                    errorBody: {
+                        message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. El lote incluye la fecha ${toDisplayDate(lockCheck.offendingDate)}. Solicite reapertura primero.`,
+                        locked_until: lockCheck.lockedDate,
+                        periodo_id: lockCheck.periodo?.id
+                    }
+                };
+            }
+
+            // 1. Aplicar coincidencias dentro de la misma transacción
+            let conciliadosCount = 0;
+            const movCoinc = preparedCoincidencias.filter(c => c.tipo === 'MOV');
+            const chkCoinc = preparedCoincidencias.filter(c => c.tipo === 'CK');
+
+            if (movCoinc.length > 0) {
+                const movIds = movCoinc.map(c => c.id);
+                const [existingMovs] = await conn.query(
+                    `SELECT id, cuenta_bancaria_id, fecha_aplicado, deleted_at FROM movimientos_bancarios WHERE id IN (${movIds.map(() => '?').join(',')}) FOR UPDATE`,
+                    movIds
+                );
+                if (existingMovs.length !== new Set(movIds).size) {
+                    return { errorStatus: 404, errorBody: { message: 'Una o más coincidencias de movimientos no existen.' } };
+                }
+                for (const m of existingMovs) {
+                    if (Number(m.cuenta_bancaria_id) !== cuentaId || m.deleted_at) {
+                        return { errorStatus: 409, errorBody: { message: `El movimiento #${m.id} no pertenece a la cuenta o fue eliminado.` } };
+                    }
+                }
+                for (const mc of movCoinc) {
+                    const [u] = await conn.query(
+                        'UPDATE movimientos_bancarios SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ? AND deleted_at IS NULL',
+                        [mc.fecha_aplicado, req.user?.id || null, mc.id]
+                    );
+                    conciliadosCount += Number(u.affectedRows || 0);
+                }
+            }
+
+            if (chkCoinc.length > 0) {
+                const chkIds = chkCoinc.map(c => c.id);
+                const [existingChks] = await conn.query(
+                    `SELECT id, cuenta_bancaria_id, cheque_anulado, fue_noemitido, es_reservado, deleted_at FROM cheques WHERE id IN (${chkIds.map(() => '?').join(',')}) FOR UPDATE`,
+                    chkIds
+                );
+                if (existingChks.length !== new Set(chkIds).size) {
+                    return { errorStatus: 404, errorBody: { message: 'Una o más coincidencias de cheques no existen.' } };
+                }
+                for (const ch of existingChks) {
+                    if (Number(ch.cuenta_bancaria_id) !== cuentaId || ch.deleted_at || ch.cheque_anulado || ch.fue_noemitido || ch.es_reservado) {
+                        return { errorStatus: 409, errorBody: { message: `El cheque #${ch.id} no es conciliable.` } };
+                    }
+                }
+                for (const cc of chkCoinc) {
+                    const [u] = await conn.query(
+                        'UPDATE cheques SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ? AND deleted_at IS NULL',
+                        [cc.fecha_aplicado, req.user?.id || null, cc.id]
+                    );
+                    conciliadosCount += Number(u.affectedRows || 0);
+                }
+            }
+
+            // 2. Verificar duplicados por fingerprint contra BD y dentro del mismo lote
+            const existingFingerprints = new Set();
+            if (preparedItems.length > 0) {
+                const fps = [...new Set(preparedItems.map(p => p.fingerprint))];
+                const [dupRows] = await conn.query(
+                    `SELECT fingerprint FROM movimientos_bancarios WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fingerprint IN (${fps.map(() => '?').join(',')}) FOR UPDATE`,
+                    [cuentaId, ...fps]
+                );
+                for (const d of (dupRows || [])) {
+                    if (d.fingerprint) existingFingerprints.add(d.fingerprint);
+                }
+            }
+
+            const [tiposRemesas] = await conn.query(
+                'SELECT id, codigo FROM tipos_remesas WHERE empresa_id = ?',
+                [cuenta.empresa_id]
+            );
+            const remesaMap = new Map();
+            tiposRemesas.forEach(tr => remesaMap.set(tr.codigo, tr.id));
+
+            // 3. Registrar cabecera de importación
+            const [batchRes] = await conn.query(
+                `INSERT INTO conciliacion_importaciones
+                    (cuenta_bancaria_id, banco_formato, file_hash, archivo_nombre, total_filas,
+                     creados_count, conciliados_count, duplicados_omitidos, saldo_final_extracto, created_by)
+                 VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`,
+                [
+                    cuentaId,
+                    String(banco_formato || 'AUTO').slice(0, 40),
+                    String(file_hash || 'MANUAL').slice(0, 64),
+                    archivo_nombre ? String(archivo_nombre).slice(0, 255) : null,
+                    preparedItems.length + preparedCoincidencias.length,
+                    saldo_final_extracto !== null && saldo_final_extracto !== undefined ? parseStrictFiniteAmount(saldo_final_extracto) : null,
+                    req.user?.id || null
+                ]
+            );
+            const batchId = batchRes.insertId;
+
+            let creadosCount = 0;
+            let duplicadosOmitidos = 0;
+            const seenBatchFps = new Set();
+
+            for (const item of preparedItems) {
+                const isDup = existingFingerprints.has(item.fingerprint) || seenBatchFps.has(item.fingerprint);
+                if (isDup) {
+                    if (!omitir_duplicados) {
+                        throw Object.assign(new Error(`Movimiento duplicado en fila #${item.idx + 1}: ${item.cleanConcepto} ($${item.montoNum.toFixed(2)})`), { status: 409 });
+                    }
+                    duplicadosOmitidos++;
+                    continue;
+                }
+                seenBatchFps.add(item.fingerprint);
+
+                const remesaId = remesaMap.get(item.tipoCodigo) || null;
+                await conn.query(
+                    `INSERT INTO movimientos_bancarios
+                        (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
+                         monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida,
+                         created_by, conciliado_by, conciliado_at, import_batch_id, fingerprint, version)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 1)`,
+                    [
+                        cuenta.empresa_id,
+                        cuentaId,
+                        item.dbFecha,
+                        item.dbFechaApl,
+                        item.cleanDoc,
+                        item.cleanConcepto,
+                        item.montoNum,
+                        item.cargo,
+                        item.abono,
+                        remesaId,
+                        req.user?.id || null,
+                        item.dbFechaApl ? (req.user?.id || null) : null,
+                        item.dbFechaApl ? new Date() : null,
+                        batchId,
+                        item.fingerprint
+                    ]
+                );
+                creadosCount++;
+            }
+
+            await conn.query(
+                `UPDATE conciliacion_importaciones
+                 SET creados_count = ?, conciliados_count = ?, duplicados_omitidos = ?
+                 WHERE id = ?`,
+                [creadosCount, conciliadosCount, duplicadosOmitidos, batchId]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cuentaId,
+                entidad: 'conciliacion_importacion',
+                entidadId: batchId,
+                accion: 'IMPORTAR_LOTE_EXTRACTO',
+                user: req.user,
+                ipAddress: req.ip,
+                after: {
+                    batch_id: batchId,
+                    creados: creadosCount,
+                    conciliados: conciliadosCount,
+                    duplicados_omitidos: duplicadosOmitidos,
+                    file_hash
+                }
+            });
+
+            const body = {
+                message: `Lote procesado atómicamente: ${creadosCount} creado(s), ${conciliadosCount} conciliado(s)${duplicadosOmitidos > 0 ? `, ${duplicadosOmitidos} duplicado(s) omitido(s)` : ''}.`,
+                creados: creadosCount,
+                conciliados: conciliadosCount,
+                duplicados_omitidos: duplicadosOmitidos,
+                import_batch_id: batchId
+            };
+
+            if (idempotencyKey) {
+                await saveIdempotentResponse(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_crear_masivo',
+                    statusCode: 200,
+                    responseBody: body
+                });
+            }
+
+            return { statusCode: 200, body };
+        });
+
+        if (txResult.conflict) {
+            return res.status(409).json({ message: 'Importación duplicada en proceso. Espere unos segundos.' });
+        }
+        if (txResult.replayed) {
+            return res.status(txResult.statusCode).json(txResult.body);
+        }
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: cuentaId,
+            count: (txResult.body.creados || 0) + (txResult.body.conciliados || 0),
+            accion: 'CREAR_MASIVO',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json(txResult.body);
     } catch (error) {
+        if (error.status === 409) {
+            return res.status(409).json({ message: error.message });
+        }
         sendSafeError(res, error, 'Error al procesar movimientos en lote');
     }
 });
 
 // ── 6. Edición Controlada de Movimiento ──────────────────────────────────────
-router.put('/movimiento/:id', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
-    const { id } = req.params;
-    const { concepto, documento, fecha, monto, origen_tipo } = req.body;
+router.put('/movimiento/:id', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ message: 'ID de registro inválido.' });
+    }
+
+    const { concepto, documento, fecha, monto, origen_tipo, version } = req.body || {};
+    const isCheque = String(origen_tipo || '').toUpperCase() === 'CK';
+    const tienePermisoMonto = canEditMontoConciliacion(req.user);
 
     try {
-        const db = getDb();
-        const esAdmin = req.user?.role === 'Administrator' || req.user?.role_id === 1;
-        const tienePermisoMonto = esAdmin || req.user?.permissions?.includes('edit_monto_conciliacion');
+        const txResult = await withTransaction(async (conn) => {
+            if (isCheque) {
+                const [[chk]] = await conn.query('SELECT * FROM cheques WHERE id = ? FOR UPDATE', [id]);
+                if (!chk || chk.deleted_at) {
+                    return { errorStatus: 404, errorBody: { message: 'Cheque no encontrado' } };
+                }
+                if (chk.es_contabilizado) {
+                    return { errorStatus: 409, errorBody: { message: 'Este cheque ya está contabilizado y no puede editarse.' } };
+                }
+                if (version !== undefined && Number(version) !== Number(chk.version || 1)) {
+                    return { errorStatus: 409, errorBody: { message: 'El cheque fue modificado por otro usuario. Recargue los datos.' } };
+                }
 
-        if (origen_tipo === 'CK') {
-            const [[chk]] = await db.query('SELECT * FROM cheques WHERE id = ?', [id]);
-            if (!chk) return res.status(404).json({ message: 'Cheque no encontrado' });
+                let nuevoMonto = Number(chk.valor);
+                if (monto !== undefined && round2(monto) !== round2(chk.valor)) {
+                    if (!tienePermisoMonto) {
+                        return { errorStatus: 403, errorBody: { message: 'No tienes autorización para modificar el monto de un cheque.' } };
+                    }
+                    const parsed = parseStrictPositiveAmount(monto);
+                    if (parsed === null) {
+                        return { errorStatus: 400, errorBody: { message: 'El monto debe ser mayor a $0.00.' } };
+                    }
+                    nuevoMonto = parsed;
+                }
 
-            if (monto !== undefined && Number(monto) !== Number(chk.valor) && !tienePermisoMonto) {
-                return res.status(403).json({ message: 'No tienes autorización para modificar el monto de un cheque.' });
+                const dbFecha = fecha !== undefined ? parseStrictDBDate(fecha) : parseStrictDBDate(chk.fecha);
+                if (!dbFecha) {
+                    return { errorStatus: 400, errorBody: { message: 'Fecha inválida.' } };
+                }
+
+                const lockCheck = await isDateInClosedPeriod(conn, chk.cuenta_bancaria_id, [chk.fecha, dbFecha, chk.fecha_aplicado]);
+                if (lockCheck.closed) {
+                    return {
+                        errorStatus: 423,
+                        errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para editar este cheque.` }
+                    };
+                }
+
+                const newConcepto = concepto !== undefined ? String(concepto).trim().toUpperCase().slice(0, 255) : (chk.concepto || '');
+                const newDoc = documento !== undefined ? String(documento).trim().slice(0, 20) : (chk.cheque || '');
+
+                await conn.query(
+                    'UPDATE cheques SET concepto = ?, cheque = ?, fecha = ?, valor = ?, updated_by = ?, version = version + 1 WHERE id = ?',
+                    [newConcepto, newDoc, dbFecha, nuevoMonto, req.user?.id || null, id]
+                );
+
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: chk.cuenta_bancaria_id,
+                    entidad: 'cheques',
+                    entidadId: id,
+                    accion: 'UPDATE_CONCILIACION',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    before: { concepto: chk.concepto, cheque: chk.cheque, fecha: parseStrictDBDate(chk.fecha), valor: Number(chk.valor) },
+                    after: { concepto: newConcepto, cheque: newDoc, fecha: dbFecha, valor: nuevoMonto }
+                });
+
+                return { cuentaId: chk.cuenta_bancaria_id };
             }
 
-            const nuevoMonto = tienePermisoMonto && monto !== undefined ? Number(monto) : chk.valor;
-            const dbFecha = fecha ? toDBDate(fecha) : chk.fecha;
-
-            await db.query(
-                'UPDATE cheques SET concepto = ?, cheque = ?, fecha = ?, valor = ? WHERE id = ?',
-                [(concepto || chk.concepto || '').toUpperCase(), documento || chk.cheque, dbFecha, nuevoMonto, id]
-            );
-        } else {
-            const [[mov]] = await db.query('SELECT * FROM movimientos_bancarios WHERE id = ?', [id]);
-            if (!mov) return res.status(404).json({ message: 'Movimiento no encontrado' });
-
-            if (monto !== undefined && Number(monto) !== Number(mov.monto) && !tienePermisoMonto) {
-                return res.status(403).json({ message: 'No tienes autorización para modificar el monto de un movimiento bancario.' });
+            const [[mov]] = await conn.query('SELECT * FROM movimientos_bancarios WHERE id = ? FOR UPDATE', [id]);
+            if (!mov || mov.deleted_at) {
+                return { errorStatus: 404, errorBody: { message: 'Movimiento no encontrado' } };
+            }
+            if (mov.es_contabilizado) {
+                return { errorStatus: 409, errorBody: { message: 'Este movimiento ya está contabilizado y no puede editarse.' } };
+            }
+            if (version !== undefined && Number(version) !== Number(mov.version || 1)) {
+                return { errorStatus: 409, errorBody: { message: 'El movimiento fue modificado por otro usuario. Recargue los datos.' } };
             }
 
-            const nuevoMonto = tienePermisoMonto && monto !== undefined ? Number(monto) : mov.monto;
-            const nuevoCargo = mov.cargo > 0 ? nuevoMonto : 0;
-            const nuevoAbono = mov.abono > 0 ? nuevoMonto : 0;
-            const dbFecha = fecha ? toDBDate(fecha) : mov.fecha;
+            let nuevoMonto = Number(mov.monto);
+            if (monto !== undefined && round2(monto) !== round2(mov.monto)) {
+                if (!tienePermisoMonto) {
+                    return { errorStatus: 403, errorBody: { message: 'No tienes autorización para modificar el monto de un movimiento bancario.' } };
+                }
+                const parsed = parseStrictPositiveAmount(monto);
+                if (parsed === null) {
+                    return { errorStatus: 400, errorBody: { message: 'El monto debe ser mayor a $0.00.' } };
+                }
+                nuevoMonto = parsed;
+            }
 
-            await db.query(
-                'UPDATE movimientos_bancarios SET concepto = ?, documento = ?, fecha = ?, monto = ?, cargo = ?, abono = ? WHERE id = ?',
-                [(concepto || mov.concepto || '').toUpperCase(), documento || mov.documento, dbFecha, nuevoMonto, nuevoCargo, nuevoAbono, id]
+            const dbFecha = fecha !== undefined ? parseStrictDBDate(fecha) : parseStrictDBDate(mov.fecha);
+            if (!dbFecha) {
+                return { errorStatus: 400, errorBody: { message: 'Fecha inválida.' } };
+            }
+
+            const lockCheck = await isDateInClosedPeriod(conn, mov.cuenta_bancaria_id, [mov.fecha, dbFecha, mov.fecha_aplicado]);
+            if (lockCheck.closed) {
+                return {
+                    errorStatus: 423,
+                    errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para editar este movimiento.` }
+                };
+            }
+
+            const esCargo = Number(mov.cargo) > 0;
+            const nuevoCargo = esCargo ? nuevoMonto : 0;
+            const nuevoAbono = !esCargo ? nuevoMonto : 0;
+            const newConcepto = concepto !== undefined ? String(concepto).trim().toUpperCase().slice(0, 255) : (mov.concepto || '');
+            const newDoc = documento !== undefined ? String(documento).trim().slice(0, 100) : (mov.documento || '');
+            const newFp = computeMovementFingerprint({
+                cuentaBancariaId: mov.cuenta_bancaria_id,
+                fecha: dbFecha,
+                documento: newDoc,
+                cargo: nuevoCargo,
+                abono: nuevoAbono,
+                concepto: newConcepto
+            });
+
+            await conn.query(
+                'UPDATE movimientos_bancarios SET concepto = ?, documento = ?, fecha = ?, monto = ?, cargo = ?, abono = ?, fingerprint = ?, updated_by = ?, version = version + 1 WHERE id = ?',
+                [newConcepto, newDoc, dbFecha, nuevoMonto, nuevoCargo, nuevoAbono, newFp, req.user?.id || null, id]
             );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: mov.cuenta_bancaria_id,
+                entidad: 'movimientos_bancarios',
+                entidadId: id,
+                accion: 'UPDATE_CONCILIACION',
+                user: req.user,
+                ipAddress: req.ip,
+                before: { concepto: mov.concepto, documento: mov.documento, fecha: parseStrictDBDate(mov.fecha), monto: Number(mov.monto), cargo: Number(mov.cargo), abono: Number(mov.abono) },
+                after: { concepto: newConcepto, documento: newDoc, fecha: dbFecha, monto: nuevoMonto, cargo: nuevoCargo, abono: nuevoAbono }
+            });
+
+            return { cuentaId: mov.cuenta_bancaria_id };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.cuentaId,
+            id,
+            accion: 'EDITAR',
+            actor_user_id: req.user?.id || null
+        });
 
         res.json({ message: 'Registro actualizado correctamente' });
     } catch (error) {
@@ -854,7 +1595,7 @@ router.put('/movimiento/:id', authenticateToken, requirePermission(['manage_conc
 });
 
 // ── 7. Vincular o Crear y Conciliar Sugerencia de Control de Pagos ───────────
-router.post('/vincular-control-pago', authenticateToken, requirePermission(['manage_conciliacion_bancaria', '/dashboard/bancos/conciliacion']), async (req, res) => {
+router.post('/vincular-control-pago', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
     const {
         abono_id,
         accion = 'VINCULAR', // 'VINCULAR' | 'CREAR_Y_CONCILIAR' | 'DESCARTAR'
@@ -864,60 +1605,149 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(['man
     } = req.body || {};
 
     const parsedAbonoId = parseInt(abono_id, 10);
-    if (!parsedAbonoId) {
+    if (!Number.isInteger(parsedAbonoId) || parsedAbonoId <= 0) {
         return res.status(400).json({ message: 'Debe indicar el ID del pago de Control de Pagos.' });
     }
 
+    if (!['VINCULAR', 'CREAR_Y_CONCILIAR', 'DESCARTAR'].includes(accion)) {
+        return res.status(400).json({ message: 'Acción no válida.' });
+    }
+
     try {
-        const db = getDb();
-        const [[abono]] = await db.query('SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1', [parsedAbonoId]);
-        if (!abono) {
-            return res.status(404).json({ message: 'Registro de pago no encontrado.' });
-        }
-
-        const dbFechaAplicado = toDBDate(fecha_aplicado || abono.fecha_pago || new Date());
-
-        if (accion === 'DESCARTAR') {
-            await db.query(
-                "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'NO_APLICA' WHERE id = ?",
+        const txResult = await withTransaction(async (conn) => {
+            const [[abono]] = await conn.query(
+                'SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1 FOR UPDATE',
                 [parsedAbonoId]
             );
-            return res.json({ success: true, message: 'Sugerencia descartada de conciliación.' });
-        }
-
-        if (accion === 'VINCULAR') {
-            const movId = movimiento_bancario_id ? parseInt(movimiento_bancario_id, 10) || null : null;
-            if (movId && origen_tipo === 'CK') {
-                await db.query(
-                    'UPDATE cheques SET fecha_aplicado = COALESCE(fecha_aplicado, ?) WHERE id = ?',
-                    [dbFechaAplicado, movId]
-                );
-            } else if (movId) {
-                await db.query(
-                    'UPDATE movimientos_bancarios SET fecha_aplicado = COALESCE(fecha_aplicado, ?) WHERE id = ?',
-                    [dbFechaAplicado, movId]
-                );
+            if (!abono) {
+                return { errorStatus: 404, errorBody: { message: 'Registro de pago no encontrado.' } };
             }
-            await db.query(
-                "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ? WHERE id = ?",
-                [movId, parsedAbonoId]
-            );
-            return res.json({ success: true, message: 'Pago de Control de Pagos vinculado y conciliado.' });
-        }
+            if (abono.estado_conciliacion !== 'PENDIENTE') {
+                return { errorStatus: 409, errorBody: { message: `Este pago ya fue procesado con estado ${abono.estado_conciliacion}.` } };
+            }
 
-        if (accion === 'CREAR_Y_CONCILIAR') {
+            if (accion === 'DESCARTAR') {
+                await conn.query(
+                    "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'NO_APLICA' WHERE id = ?",
+                    [parsedAbonoId]
+                );
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: abono.cuenta_bancaria_id || null,
+                    entidad: 'control_pagos_abono',
+                    entidadId: parsedAbonoId,
+                    accion: 'DESCARTAR_CONTROL_PAGO',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    before: { estado_conciliacion: abono.estado_conciliacion },
+                    after: { estado_conciliacion: 'NO_APLICA' }
+                });
+                return {
+                    cuentaId: abono.cuenta_bancaria_id,
+                    body: { success: true, message: 'Sugerencia descartada de conciliación.' }
+                };
+            }
+
+            const dbFechaAplicado = parseStrictDBDate(fecha_aplicado || abono.fecha_pago || getElSalvadorTodayYMD());
+            if (!dbFechaAplicado) {
+                return { errorStatus: 400, errorBody: { message: 'Fecha de aplicación inválida.' } };
+            }
+
+            if (accion === 'VINCULAR') {
+                const targetId = movimiento_bancario_id ? parseInt(movimiento_bancario_id, 10) || null : null;
+                if (!targetId) {
+                    return { errorStatus: 400, errorBody: { message: 'Debe indicar el documento bancario a vincular.' } };
+                }
+
+                let linkedMovId = null;
+                if (origen_tipo === 'CK') {
+                    const [[chk]] = await conn.query(
+                        'SELECT id, cuenta_bancaria_id, fecha_aplicado, cheque_anulado, fue_noemitido, es_reservado, deleted_at FROM cheques WHERE id = ? FOR UPDATE',
+                        [targetId]
+                    );
+                    if (!chk || chk.deleted_at || chk.cheque_anulado || chk.fue_noemitido || chk.es_reservado) {
+                        return { errorStatus: 404, errorBody: { message: 'Cheque destino no encontrado o no conciliable.' } };
+                    }
+                    if (abono.cuenta_bancaria_id && Number(chk.cuenta_bancaria_id) !== Number(abono.cuenta_bancaria_id)) {
+                        return { errorStatus: 403, errorBody: { message: 'El cheque no pertenece a la misma cuenta bancaria del pago.' } };
+                    }
+                    const lockCheck = await isDateInClosedPeriod(conn, chk.cuenta_bancaria_id, [chk.fecha_aplicado || dbFechaAplicado]);
+                    if (lockCheck.closed) {
+                        return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}.` } };
+                    }
+                    if (!chk.fecha_aplicado) {
+                        await conn.query(
+                            'UPDATE cheques SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ?',
+                            [dbFechaAplicado, req.user?.id || null, targetId]
+                        );
+                    }
+                } else {
+                    const [[mov]] = await conn.query(
+                        'SELECT id, cuenta_bancaria_id, fecha_aplicado, deleted_at FROM movimientos_bancarios WHERE id = ? FOR UPDATE',
+                        [targetId]
+                    );
+                    if (!mov || mov.deleted_at) {
+                        return { errorStatus: 404, errorBody: { message: 'Movimiento bancario destino no encontrado.' } };
+                    }
+                    if (abono.cuenta_bancaria_id && Number(mov.cuenta_bancaria_id) !== Number(abono.cuenta_bancaria_id)) {
+                        return { errorStatus: 403, errorBody: { message: 'El movimiento no pertenece a la misma cuenta bancaria del pago.' } };
+                    }
+                    const lockCheck = await isDateInClosedPeriod(conn, mov.cuenta_bancaria_id, [mov.fecha_aplicado || dbFechaAplicado]);
+                    if (lockCheck.closed) {
+                        return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}.` } };
+                    }
+                    if (!mov.fecha_aplicado) {
+                        await conn.query(
+                            'UPDATE movimientos_bancarios SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ?',
+                            [dbFechaAplicado, req.user?.id || null, targetId]
+                        );
+                    }
+                    linkedMovId = targetId;
+                }
+
+                await conn.query(
+                    "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ? WHERE id = ?",
+                    [linkedMovId, parsedAbonoId]
+                );
+
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: abono.cuenta_bancaria_id,
+                    entidad: 'control_pagos_abono',
+                    entidadId: parsedAbonoId,
+                    accion: 'VINCULAR_CONTROL_PAGO',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    after: { origen_tipo, target_id: targetId, movimiento_bancario_id: linkedMovId, fecha_aplicado: dbFechaAplicado }
+                });
+
+                return {
+                    cuentaId: abono.cuenta_bancaria_id,
+                    body: { success: true, message: 'Pago de Control de Pagos vinculado y conciliado.' }
+                };
+            }
+
+            // CREAR_Y_CONCILIAR
             if (!abono.cuenta_bancaria_id) {
-                return res.status(400).json({ message: 'El pago no tiene cuenta bancaria asociada.' });
+                return { errorStatus: 400, errorBody: { message: 'El pago no tiene cuenta bancaria asociada.' } };
             }
-            const [[cuenta]] = await db.query(
-                'SELECT id, empresa_id, cod_cta FROM cuentas_bancarias WHERE id = ? LIMIT 1',
+            const [[cuenta]] = await conn.query(
+                'SELECT id, empresa_id, cod_cta, activa FROM cuentas_bancarias WHERE id = ? LIMIT 1',
                 [abono.cuenta_bancaria_id]
             );
-            if (!cuenta) {
-                return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+            if (!cuenta || !cuenta.activa) {
+                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva.' } };
             }
 
-            const monto = Number(abono.monto || 0);
+            const monto = parseStrictPositiveAmount(abono.monto);
+            if (monto === null) {
+                return { errorStatus: 400, errorBody: { message: 'El monto del pago es inválido.' } };
+            }
+
+            const fechaMov = parseStrictDBDate(abono.fecha_pago) || getElSalvadorTodayYMD();
+            const lockCheck = await isDateInClosedPeriod(conn, cuenta.id, [fechaMov, dbFechaAplicado]);
+            if (lockCheck.closed) {
+                return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}.` } };
+            }
+
             const isIngreso = abono.tipo_operacion === 'CXC';
             const cargo = isIngreso ? 0 : monto;
             const abonoVal = isIngreso ? monto : 0;
@@ -925,29 +1755,557 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(['man
             const concepto = `[CONTROL PAGOS · ${abono.metodo_pago}] ${abono.descripcion_ref || ''}${abono.beneficiario ? ` · A FAVOR DE: ${abono.beneficiario}` : ''}${abono.ubicacion ? ` (${abono.ubicacion})` : ''}${abono.notas ? ` - ${abono.notas}` : ''}`
                 .toUpperCase()
                 .slice(0, 255);
-            const fechaMov = toDBDate(abono.fecha_pago || new Date());
 
-            const [ins] = await db.query(
+            const tipoCodigo = isIngreso ? 'NA' : 'TR';
+            const [remRows] = await conn.query(
+                'SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1',
+                [cuenta.empresa_id, tipoCodigo]
+            );
+            const remesaId = remRows?.[0]?.id || null;
+            const fingerprint = computeMovementFingerprint({
+                cuentaBancariaId: cuenta.id,
+                fecha: fechaMov,
+                documento,
+                cargo,
+                abono: abonoVal,
+                concepto
+            });
+
+            const [ins] = await conn.query(
                 `INSERT INTO movimientos_bancarios
-                    (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, cod_cta, es_contabilizado)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-                [cuenta.empresa_id, cuenta.id, fechaMov, dbFechaAplicado, documento, concepto, monto, cargo, abonoVal, cuenta.cod_cta || '']
+                    (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
+                     monto, cargo, abono, tipo_remesa_id, cod_cta, es_contabilizado,
+                     created_by, conciliado_by, conciliado_at, fingerprint, version)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NOW(), ?, 1)`,
+                [
+                    cuenta.empresa_id,
+                    cuenta.id,
+                    fechaMov,
+                    dbFechaAplicado,
+                    documento,
+                    concepto,
+                    monto,
+                    cargo,
+                    abonoVal,
+                    remesaId,
+                    cuenta.cod_cta || '',
+                    req.user?.id || null,
+                    req.user?.id || null,
+                    fingerprint
+                ]
             );
 
-            await db.query(
+            await conn.query(
                 "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ? WHERE id = ?",
                 [ins.insertId, parsedAbonoId]
             );
-            return res.json({
-                success: true,
-                message: 'Movimiento bancario creado y conciliado desde Control de Pagos.',
-                movimiento_bancario_id: ins.insertId
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cuenta.id,
+                entidad: 'control_pagos_abono',
+                entidadId: parsedAbonoId,
+                accion: 'CREAR_Y_CONCILIAR_CONTROL_PAGO',
+                user: req.user,
+                ipAddress: req.ip,
+                after: { movimiento_bancario_id: ins.insertId, monto, fecha: fechaMov, fecha_aplicado: dbFechaAplicado }
             });
+
+            return {
+                cuentaId: cuenta.id,
+                body: {
+                    success: true,
+                    message: 'Movimiento bancario creado y conciliado desde Control de Pagos.',
+                    movimiento_bancario_id: ins.insertId
+                }
+            };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
 
-        return res.status(400).json({ message: 'Acción no válida.' });
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.cuentaId,
+            accion: 'CONTROL_PAGO',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json(txResult.body);
     } catch (error) {
         sendSafeError(res, error, 'Error al conciliar pago desde Control de Pagos');
+    }
+});
+
+// ── 8. Períodos Cerrados, Solicitudes de Reapertura y Auditoría ──────────────
+router.get('/periodos', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
+    const { cuenta_id, all } = req.query;
+    try {
+        const db = getDb();
+        let periodos = [];
+        if (cuenta_id) {
+            const [rows] = await withRetry(() => db.query(
+                `SELECT p.*, cb.numero as cuenta_numero, cb.nombre as cuenta_nombre, b.descripcion as banco_nombre
+                 FROM conciliacion_periodos p
+                 JOIN cuentas_bancarias cb ON p.cuenta_bancaria_id = cb.id
+                 LEFT JOIN bancos b ON cb.banco_id = b.id
+                 WHERE p.cuenta_bancaria_id = ?
+                 ORDER BY p.fecha_corte DESC
+                 LIMIT 50`,
+                [parseInt(cuenta_id, 10)]
+            ));
+            periodos = rows.map(p => ({ ...p, fecha_corte_display: toDisplayDate(p.fecha_corte) }));
+        }
+
+        let solicitudesQuery = `
+            SELECT s.*, cb.numero as cuenta_numero, cb.nombre as cuenta_nombre, b.descripcion as banco_nombre
+            FROM conciliacion_reapertura_solicitudes s
+            JOIN cuentas_bancarias cb ON s.cuenta_bancaria_id = cb.id
+            LEFT JOIN bancos b ON cb.banco_id = b.id
+            WHERE 1=1
+        `;
+        const params = [];
+        if (cuenta_id && all !== '1') {
+            solicitudesQuery += ' AND s.cuenta_bancaria_id = ?';
+            params.push(parseInt(cuenta_id, 10));
+        } else if (all === '1' && !canApproveReapertura(req.user)) {
+            return res.status(403).json({ message: 'No autorizado para listar solicitudes globales.' });
+        }
+        solicitudesQuery += ' ORDER BY FIELD(s.estado, "PENDIENTE", "APROBADA", "RECHAZADA", "CANCELADA"), s.solicitado_at DESC LIMIT 100';
+
+        const [solRows] = await withRetry(() => db.query(solicitudesQuery, params));
+        const solicitudes = solRows.map(s => ({ ...s, fecha_corte_display: toDisplayDate(s.fecha_corte) }));
+
+        res.json({
+            periodos,
+            solicitudes,
+            can_approve_reapertura: canApproveReapertura(req.user),
+            can_close_periodo: canCloseConciliacion(req.user)
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar períodos de conciliación');
+    }
+});
+
+router.post('/periodos/cerrar', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    if (!canCloseConciliacion(req.user)) {
+        return res.status(403).json({ message: 'No cuenta con permisos para cerrar períodos de conciliación.' });
+    }
+    const { cuenta_bancaria_id, fecha_corte, monto_banco, notas, confirmar_con_diferencia = false } = req.body || {};
+    const cuentaId = parseInt(cuenta_bancaria_id, 10);
+    const dbFechaCorte = parseStrictDBDate(fecha_corte);
+    const montoBancoNum = parseStrictFiniteAmount(monto_banco);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0 || !dbFechaCorte || montoBancoNum === null) {
+        return res.status(400).json({ message: 'Se requiere cuenta bancaria, fecha de corte válida y saldo en banco válido.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const summary = await computeAccountReconciliationSummary(conn, cuentaId, dbFechaCorte);
+            if (!summary) {
+                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+            }
+            const diferenciaReal = round2(montoBancoNum - summary.saldo_conciliado_libros);
+            if (Math.abs(diferenciaReal) >= 0.01 && !confirmar_con_diferencia) {
+                return {
+                    errorStatus: 400,
+                    errorBody: {
+                        message: `Diferencia pendiente de $${diferenciaReal.toFixed(2)}. Confirme explícitamente si desea cerrar el período.`,
+                        requires_confirmation: true,
+                        diferencia: diferenciaReal
+                    }
+                };
+            }
+
+            const snapshotObj = { ...summary, monto_banco: montoBancoNum, diferencia: diferenciaReal, fecha_corte: dbFechaCorte };
+            const actorName = req.user?.nombre || req.user?.username || 'Usuario';
+
+            await conn.query(
+                `INSERT INTO conciliacion_periodos
+                    (cuenta_bancaria_id, fecha_corte, estado, saldo_banco, saldo_chequera,
+                     saldo_conciliado_libros, abonos_en_transito, cargos_cheques_en_transito,
+                     diferencia, snapshot_json, notas, cerrado_by, cerrado_por_nombre, cerrado_at)
+                 VALUES (?, ?, 'CERRADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE
+                    estado = 'CERRADO',
+                    saldo_banco = VALUES(saldo_banco),
+                    saldo_chequera = VALUES(saldo_chequera),
+                    saldo_conciliado_libros = VALUES(saldo_conciliado_libros),
+                    abonos_en_transito = VALUES(abonos_en_transito),
+                    cargos_cheques_en_transito = VALUES(cargos_cheques_en_transito),
+                    diferencia = VALUES(diferencia),
+                    snapshot_json = VALUES(snapshot_json),
+                    notas = VALUES(notas),
+                    cerrado_by = VALUES(cerrado_by),
+                    cerrado_por_nombre = VALUES(cerrado_por_nombre),
+                    cerrado_at = NOW()`,
+                [
+                    cuentaId, dbFechaCorte, montoBancoNum, summary.saldo_chequera,
+                    summary.saldo_conciliado_libros, summary.abonos_en_transito,
+                    summary.cargos_cheques_en_transito, diferenciaReal,
+                    JSON.stringify(snapshotObj), String(notas || '').slice(0, 1000),
+                    req.user?.id || null, String(actorName).slice(0, 150)
+                ]
+            );
+
+            const [[periodo]] = await conn.query(
+                'SELECT * FROM conciliacion_periodos WHERE cuenta_bancaria_id = ? AND fecha_corte = ? LIMIT 1',
+                [cuentaId, dbFechaCorte]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cuentaId,
+                entidad: 'conciliacion_periodo',
+                entidadId: periodo.id,
+                accion: 'CERRAR_PERIODO',
+                user: req.user,
+                ipAddress: req.ip,
+                after: snapshotObj
+            });
+
+            return { periodo };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: cuentaId,
+            accion: 'PERIODO_CERRADO',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json({
+            message: `Período cerrado exitosamente hasta el ${toDisplayDate(dbFechaCorte)}.`,
+            periodo: txResult.periodo
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al cerrar período de conciliación');
+    }
+});
+
+router.post('/periodos/:id/solicitar-reapertura', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const periodoId = parseInt(req.params.id, 10);
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!Number.isInteger(periodoId) || periodoId <= 0) {
+        return res.status(400).json({ message: 'ID de período inválido.' });
+    }
+    if (motivo.length < 10) {
+        return res.status(400).json({ message: 'Debe indicar un motivo detallado de al menos 10 caracteres.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const [[periodo]] = await conn.query(
+                `SELECT p.*, cb.numero as cuenta_numero, cb.nombre as cuenta_nombre, b.descripcion as banco_nombre
+                 FROM conciliacion_periodos p
+                 JOIN cuentas_bancarias cb ON p.cuenta_bancaria_id = cb.id
+                 LEFT JOIN bancos b ON cb.banco_id = b.id
+                 WHERE p.id = ? FOR UPDATE`,
+                [periodoId]
+            );
+            if (!periodo) {
+                return { errorStatus: 404, errorBody: { message: 'Período de conciliación no encontrado.' } };
+            }
+            if (periodo.estado !== 'CERRADO') {
+                return { errorStatus: 409, errorBody: { message: 'Este período ya se encuentra abierto.' } };
+            }
+
+            const [existingPend] = await conn.query(
+                "SELECT id FROM conciliacion_reapertura_solicitudes WHERE periodo_id = ? AND estado = 'PENDIENTE' LIMIT 1 FOR UPDATE",
+                [periodoId]
+            );
+            if (existingPend && existingPend.length > 0) {
+                return { errorStatus: 409, errorBody: { message: 'Ya existe una solicitud de reapertura pendiente para este período.' } };
+            }
+
+            const solicitanteNombre = req.user?.nombre || req.user?.username || 'Usuario';
+            const fechaCorteYmd = parseStrictDBDate(periodo.fecha_corte);
+            const [ins] = await conn.query(
+                `INSERT INTO conciliacion_reapertura_solicitudes
+                    (periodo_id, cuenta_bancaria_id, fecha_corte, estado, motivo_solicitud, solicitado_by, solicitado_por_nombre, solicitado_at)
+                 VALUES (?, ?, ?, 'PENDIENTE', ?, ?, ?, NOW())`,
+                [periodoId, periodo.cuenta_bancaria_id, fechaCorteYmd, motivo.slice(0, 1000), req.user?.id || 0, String(solicitanteNombre).slice(0, 150)]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: periodo.cuenta_bancaria_id,
+                entidad: 'conciliacion_reapertura',
+                entidadId: ins.insertId,
+                accion: 'SOLICITAR_REAPERTURA',
+                user: req.user,
+                ipAddress: req.ip,
+                motivo: motivo.slice(0, 255),
+                after: { periodo_id: periodoId, fecha_corte: fechaCorteYmd, estado: 'PENDIENTE' }
+            });
+
+            return {
+                solicitudId: ins.insertId,
+                periodo,
+                fechaCorteDisplay: toDisplayDate(fechaCorteYmd),
+                solicitanteNombre
+            };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        // Notificar a Admins y usuarios con approve_reapertura_conciliacion
+        try {
+            const db = getDb();
+            const approvers = await getReaperturaApproverIds(db);
+            await notifyReaperturaEvent(db, req.io, {
+                targetUserIds: approvers,
+                type: 'conciliacion_reapertura_solicitud',
+                title: 'Solicitud de Reapertura de Conciliación',
+                message: `${txResult.solicitanteNombre} solicita reabrir el período cerrado al ${txResult.fechaCorteDisplay} (${txResult.periodo.banco_nombre || ''} ${txResult.periodo.cuenta_numero}). Motivo: ${motivo.slice(0, 160)}`,
+                data: {
+                    solicitud_id: txResult.solicitudId,
+                    periodo_id: periodoId,
+                    cuenta_bancaria_id: txResult.periodo.cuenta_bancaria_id,
+                    path: '/dashboard/bancos/conciliacion'
+                }
+            });
+        } catch (_) { /* notificación no bloqueante */ }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.periodo.cuenta_bancaria_id,
+            accion: 'REAPERTURA_SOLICITADA',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.status(201).json({
+            message: 'Solicitud de reapertura enviada a los administradores y usuarios autorizados.',
+            solicitud_id: txResult.solicitudId
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al solicitar reapertura de período');
+    }
+});
+
+router.post('/reaperturas/:solicitudId/resolver', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    if (!canApproveReapertura(req.user)) {
+        return res.status(403).json({ message: 'Solo administradores o usuarios designados pueden aprobar o rechazar reaperturas.' });
+    }
+
+    const solicitudId = parseInt(req.params.solicitudId, 10);
+    const decision = String(req.body?.decision || '').trim().toUpperCase();
+    const comentario = String(req.body?.comentario || '').trim();
+    if (!Number.isInteger(solicitudId) || solicitudId <= 0) {
+        return res.status(400).json({ message: 'ID de solicitud inválido.' });
+    }
+    if (decision !== 'APROBAR' && decision !== 'RECHAZAR') {
+        return res.status(400).json({ message: 'La decisión debe ser APROBAR o RECHAZAR.' });
+    }
+    if (decision === 'RECHAZAR' && comentario.length < 5) {
+        return res.status(400).json({ message: 'Debe ingresar un comentario explicando el rechazo.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const [[sol]] = await conn.query(
+                'SELECT * FROM conciliacion_reapertura_solicitudes WHERE id = ? FOR UPDATE',
+                [solicitudId]
+            );
+            if (!sol) {
+                return { errorStatus: 404, errorBody: { message: 'Solicitud de reapertura no encontrada.' } };
+            }
+            if (sol.estado !== 'PENDIENTE') {
+                return { errorStatus: 409, errorBody: { message: `La solicitud ya fue resuelta como ${sol.estado}.` } };
+            }
+
+            const [[periodo]] = await conn.query(
+                'SELECT * FROM conciliacion_periodos WHERE id = ? FOR UPDATE',
+                [sol.periodo_id]
+            );
+            if (!periodo) {
+                return { errorStatus: 404, errorBody: { message: 'Período asociado no encontrado.' } };
+            }
+
+            const resolverNombre = req.user?.nombre || req.user?.username || 'Administrador';
+            const nuevoEstadoSol = decision === 'APROBAR' ? 'APROBADA' : 'RECHAZADA';
+
+            await conn.query(
+                `UPDATE conciliacion_reapertura_solicitudes
+                 SET estado = ?, resuelto_by = ?, resuelto_por_nombre = ?, resuelto_at = NOW(), comentario_resolucion = ?
+                 WHERE id = ?`,
+                [nuevoEstadoSol, req.user?.id || null, String(resolverNombre).slice(0, 150), comentario.slice(0, 1000) || null, solicitudId]
+            );
+
+            if (decision === 'APROBAR') {
+                await conn.query(
+                    `UPDATE conciliacion_periodos
+                     SET estado = 'REABIERTO', reabierto_by = ?, reabierto_por_nombre = ?, reabierto_at = NOW(),
+                         motivo_reapertura = ?
+                     WHERE id = ?`,
+                    [
+                        req.user?.id || null,
+                        String(resolverNombre).slice(0, 150),
+                        `${sol.motivo_solicitud}${comentario ? ' | Respuesta: ' + comentario : ''}`.slice(0, 1000),
+                        periodo.id
+                    ]
+                );
+            }
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: sol.cuenta_bancaria_id,
+                entidad: 'conciliacion_reapertura',
+                entidadId: solicitudId,
+                accion: decision === 'APROBAR' ? 'APROBAR_REAPERTURA' : 'RECHAZAR_REAPERTURA',
+                user: req.user,
+                ipAddress: req.ip,
+                motivo: comentario || sol.motivo_solicitud,
+                before: { solicitud_estado: sol.estado, periodo_estado: periodo.estado },
+                after: { solicitud_estado: nuevoEstadoSol, periodo_estado: decision === 'APROBAR' ? 'REABIERTO' : periodo.estado }
+            });
+
+            return { sol, periodo, nuevoEstadoSol, resolverNombre };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        // Notificar al usuario solicitante
+        try {
+            if (txResult.sol.solicitado_by) {
+                const db = getDb();
+                const fechaDisplay = toDisplayDate(txResult.sol.fecha_corte);
+                await notifyReaperturaEvent(db, req.io, {
+                    targetUserIds: [txResult.sol.solicitado_by],
+                    type: 'conciliacion_reapertura_resolucion',
+                    title: txResult.nuevoEstadoSol === 'APROBADA' ? 'Reapertura de Conciliación Aprobada' : 'Reapertura de Conciliación Rechazada',
+                    message: `${txResult.resolverNombre} ${txResult.nuevoEstadoSol === 'APROBADA' ? 'aprobó' : 'rechazó'} tu solicitud para el corte ${fechaDisplay}.${comentario ? ' Nota: ' + comentario : ''}`,
+                    data: {
+                        solicitud_id: solicitudId,
+                        periodo_id: txResult.periodo.id,
+                        cuenta_bancaria_id: txResult.sol.cuenta_bancaria_id,
+                        decision: txResult.nuevoEstadoSol,
+                        path: '/dashboard/bancos/conciliacion'
+                    }
+                });
+            }
+        } catch (_) { /* ignore */ }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.sol.cuenta_bancaria_id,
+            accion: txResult.nuevoEstadoSol === 'APROBADA' ? 'PERIODO_REABIERTO' : 'REAPERTURA_RECHAZADA',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json({
+            message: txResult.nuevoEstadoSol === 'APROBADA'
+                ? 'Reapertura aprobada. El período quedó habilitado para ajustes.'
+                : 'Solicitud rechazada.',
+            estado: txResult.nuevoEstadoSol
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al resolver solicitud de reapertura');
+    }
+});
+
+router.post('/periodos/:id/reabrir-directo', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    if (!canApproveReapertura(req.user)) {
+        return res.status(403).json({ message: 'Solo administradores o usuarios designados pueden reabrir períodos directamente.' });
+    }
+
+    const periodoId = parseInt(req.params.id, 10);
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!Number.isInteger(periodoId) || periodoId <= 0) {
+        return res.status(400).json({ message: 'ID de período inválido.' });
+    }
+    if (motivo.length < 10) {
+        return res.status(400).json({ message: 'Debe indicar un motivo de al menos 10 caracteres para reabrir el período.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const [[periodo]] = await conn.query('SELECT * FROM conciliacion_periodos WHERE id = ? FOR UPDATE', [periodoId]);
+            if (!periodo) {
+                return { errorStatus: 404, errorBody: { message: 'Período no encontrado.' } };
+            }
+            if (periodo.estado !== 'CERRADO') {
+                return { errorStatus: 409, errorBody: { message: 'El período ya se encuentra abierto.' } };
+            }
+
+            const resolverNombre = req.user?.nombre || req.user?.username || 'Administrador';
+            await conn.query(
+                `UPDATE conciliacion_periodos
+                 SET estado = 'REABIERTO', reabierto_by = ?, reabierto_por_nombre = ?, reabierto_at = NOW(), motivo_reapertura = ?
+                 WHERE id = ?`,
+                [req.user?.id || null, String(resolverNombre).slice(0, 150), motivo.slice(0, 1000), periodoId]
+            );
+
+            await conn.query(
+                `UPDATE conciliacion_reapertura_solicitudes
+                 SET estado = 'APROBADA', resuelto_by = ?, resuelto_por_nombre = ?, resuelto_at = NOW(), comentario_resolucion = 'Reapertura directa autorizada'
+                 WHERE periodo_id = ? AND estado = 'PENDIENTE'`,
+                [req.user?.id || null, String(resolverNombre).slice(0, 150), periodoId]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: periodo.cuenta_bancaria_id,
+                entidad: 'conciliacion_periodo',
+                entidadId: periodoId,
+                accion: 'REABRIR_DIRECTO',
+                user: req.user,
+                ipAddress: req.ip,
+                motivo: motivo.slice(0, 255),
+                before: { estado: periodo.estado },
+                after: { estado: 'REABIERTO' }
+            });
+
+            return { periodo };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.periodo.cuenta_bancaria_id,
+            accion: 'PERIODO_REABIERTO',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json({ message: 'Período reabierto exitosamente.' });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al reabrir período');
+    }
+});
+
+router.get('/auditoria', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
+    const cuentaId = req.query.cuenta_id ? parseInt(req.query.cuenta_id, 10) : null;
+    const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 50));
+    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+
+    try {
+        const db = getDb();
+        let where = 'WHERE 1=1';
+        const params = [];
+        if (cuentaId) {
+            where += ' AND cuenta_bancaria_id = ?';
+            params.push(cuentaId);
+        }
+
+        const [[countRow]] = await withRetry(() => db.query(`SELECT COUNT(*) AS total FROM bancos_auditoria_detalle ${where}`, params));
+        const [rows] = await withRetry(() => db.query(
+            `SELECT * FROM bancos_auditoria_detalle ${where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+            [...params, limit, offset]
+        ));
+
+        res.json({
+            total: Number(countRow?.total || 0),
+            items: (rows || []).map(r => ({
+                ...r,
+                before_json: typeof r.before_json === 'string' ? JSON.parse(r.before_json) : r.before_json,
+                after_json: typeof r.after_json === 'string' ? JSON.parse(r.after_json) : r.after_json,
+                metadata_json: typeof r.metadata_json === 'string' ? JSON.parse(r.metadata_json) : r.metadata_json
+            }))
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar auditoría bancaria');
     }
 });
 

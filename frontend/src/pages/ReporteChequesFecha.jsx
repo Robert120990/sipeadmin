@@ -98,10 +98,10 @@ export default function ReporteChequesFecha() {
         }
     };
 
-    // Calculate totals
+    // Calculate totals (excluir anulados, reservados y no emitidos)
     const totalMontoEmitido = useMemo(() => {
         return cheques
-            .filter(c => !c.cheque_anulado)
+            .filter(c => !c.cheque_anulado && !c.es_reservado && !c.fue_noemitido)
             .reduce((sum, c) => sum + (parseFloat(c.valor) || 0), 0);
     }, [cheques]);
 
@@ -183,7 +183,7 @@ export default function ReporteChequesFecha() {
             c.fecha || '',
             c.a_nombre || '',
             c.concepto || '',
-            c.cheque_anulado ? 'ANULADO' : (c.es_reservado ? 'RESERVADO' : 'EMITIDO'),
+            c.cheque_anulado ? 'ANULADO' : (c.fue_noemitido ? 'NO EMITIDO' : (c.es_reservado ? 'RESERVADO' : 'EMITIDO')),
             `$${formatMonto(c.valor)}`
         ]);
 
@@ -215,7 +215,7 @@ export default function ReporteChequesFecha() {
                 5: { cellWidth: 24, halign: 'right', fontStyle: 'bold' }
             },
             foot: [[
-                { content: `TOTAL EMITIDO (${cheques.filter(c => !c.cheque_anulado).length} cheques):`, colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
+                { content: `TOTAL EMITIDO (${cheques.filter(c => !c.cheque_anulado && !c.es_reservado && !c.fue_noemitido).length} cheques):`, colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
                 { content: `$${formatMonto(totalMontoEmitido)}`, styles: { halign: 'right', fontStyle: 'bold' } }
             ]],
             footStyles: {
@@ -457,6 +457,10 @@ export default function ReporteChequesFecha() {
                                             badgeColor = '#ef4444';
                                             badgeBg = 'rgba(239, 68, 68, 0.1)';
                                             badgeText = 'ANULADO';
+                                        } else if (c.fue_noemitido) {
+                                            badgeColor = '#6b7280';
+                                            badgeBg = 'rgba(107, 114, 128, 0.15)';
+                                            badgeText = 'NO EMITIDO';
                                         } else if (isReservado) {
                                             badgeColor = '#f59e0b';
                                             badgeBg = 'rgba(245, 158, 11, 0.1)';

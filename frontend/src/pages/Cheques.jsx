@@ -3,7 +3,7 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
-import { Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, DollarSign, User, Printer } from 'lucide-react';
+import { Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, ChevronLeft, ChevronRight, Edit2, CheckCircle, DollarSign, User, Printer, Lock, AlertCircle } from 'lucide-react';
 import { todayStr } from '../utils/date';
 import PrintEngine from '../modules/check-designer/services/PrintEngine';
 import DesignerService from '../modules/check-designer/services/DesignerService';
@@ -12,9 +12,17 @@ import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 import { useNavigate } from 'react-router-dom';
 import { getStoredUser } from '../utils/auth';
 
+const makeIdempotencyKey = () => (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+);
+
 export default function Cheques() {
     const [cheques, setCheques] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [submitting, setSubmitting] = useState(false);
+    const [truncatedInfo, setTruncatedInfo] = useState({ truncated: false, total: 0 });
     const [showModal, setShowModal] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
@@ -74,11 +82,14 @@ export default function Cheques() {
     const fetchCheques = async () => {
         setLoading(true);
         try {
-            const res = await api.get('/cheques', { params: filters });
+            const res = await api.get('/cheques', { params: { ...filters, limit: 1500 } });
             setCheques(res.data || []);
+            const isTrunc = String(res.headers?.['x-truncated'] || '').toLowerCase() === 'true';
+            const totalCnt = Number(res.headers?.['x-total-count'] || (res.data || []).length);
+            setTruncatedInfo({ truncated: isTrunc, total: totalCnt });
             setCurrentPage(1);
         } catch (err) {
-            addToast('Error al cargar historial de cheques', 'error');
+            addToast(err.response?.data?.message || 'Error al cargar historial de cheques', 'error');
         } finally {
             setLoading(false);
         }
@@ -151,29 +162,50 @@ export default function Cheques() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (submitting) return;
+        const esActivo = !formData.cheque_anulado && !formData.es_reservado && !formData.fue_noemitido;
+        const valorNum = Number(formData.valor || 0);
+        if (esActivo && (!Number.isFinite(valorNum) || valorNum <= 0)) {
+            addToast('El valor del cheque debe ser mayor a $0.00', 'warning');
+            return;
+        }
+        if (!esActivo && (!Number.isFinite(valorNum) || valorNum < 0)) {
+            addToast('El valor del cheque no puede ser negativo', 'warning');
+            return;
+        }
+
+        setSubmitting(true);
         try {
             if (editingCheque) {
-                await api.put(`/cheques/${editingCheque.id}`, formData);
+                await api.put(`/cheques/${editingCheque.id}`, { ...formData, version: editingCheque.version });
                 addToast('Cheque actualizado con éxito', 'success');
             } else {
-                await api.post('/cheques', formData);
+                await api.post('/cheques', formData, {
+                    headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+                });
                 addToast('Cheque registrado con éxito', 'success');
             }
             setShowModal(false);
             fetchCheques();
         } catch (err) {
-            addToast(`Error al ${editingCheque ? 'actualizar' : 'registrar'} cheque`, 'error');
+            addToast(err.response?.data?.message || `Error al ${editingCheque ? 'actualizar' : 'registrar'} cheque`, 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
     const handleDelete = async (id) => {
-        if (!await confirm('¿Está seguro de eliminar este cheque?', { variant: 'danger' })) return;
+        if (submitting) return;
+        if (!await confirm('¿Está seguro de eliminar este cheque? Quedará respaldado en auditoría.', { variant: 'danger' })) return;
+        setSubmitting(true);
         try {
             await api.delete(`/cheques/${id}`);
             addToast('Cheque eliminado', 'success');
             fetchCheques();
         } catch (err) {
-            addToast('Error al eliminar cheque', 'error');
+            addToast(err.response?.data?.message || 'Error al eliminar cheque', 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -307,12 +339,12 @@ export default function Cheques() {
                 </div>
             </div>
 
-            <div className="card glass" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', alignItems: 'end' }}>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Empresa</label>
+            <div className="card glass" style={{ marginBottom: '1rem', padding: '1rem 1.25rem' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.85rem', alignItems: 'flex-end' }}>
+                    <div style={{ flex: '1 1 180px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Empresa</label>
                         <select
-                            style={{ width: '100%' }}
+                            style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
                             value={filters.id_empresa}
                             onChange={e => setFilters({...filters, id_empresa: e.target.value, numero_cuenta: ''})}
                         >
@@ -322,10 +354,10 @@ export default function Cheques() {
                             ))}
                         </select>
                     </div>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuenta</label>
+                    <div style={{ flex: '2 1 260px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Cuenta</label>
                         <select
-                            style={{ width: '100%' }}
+                            style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
                             value={filters.numero_cuenta}
                             onChange={e => setFilters({...filters, numero_cuenta: e.target.value})}
                         >
@@ -335,24 +367,30 @@ export default function Cheques() {
                             ))}
                         </select>
                     </div>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Desde</label>
-                        <input type="date" value={filters.desde} onChange={e => setFilters({...filters, desde: e.target.value})} />
+                    <div style={{ width: '140px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Desde</label>
+                        <input type="date" value={filters.desde} onChange={e => setFilters({...filters, desde: e.target.value})} style={{ height: '36px', fontSize: '0.825rem' }} />
                     </div>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Hasta</label>
-                        <input type="date" value={filters.hasta} onChange={e => setFilters({...filters, hasta: e.target.value})} />
+                    <div style={{ width: '140px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Hasta</label>
+                        <input type="date" value={filters.hasta} onChange={e => setFilters({...filters, hasta: e.target.value})} style={{ height: '36px', fontSize: '0.825rem' }} />
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', flex: '1 1 200px' }}>
                         <div style={{ position: 'relative', flex: 1 }}>
-                            <Search size={16} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                            <input type="text" placeholder="Buscar en resultados..." style={{ paddingLeft: '2.5rem', width: '100%' }} value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }} />
+                            <Search size={15} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                            <input type="text" placeholder="Buscar..." style={{ paddingLeft: '2.1rem', width: '100%', height: '36px', fontSize: '0.825rem' }} value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }} />
                         </div>
-                        <button className="btn-secondary" onClick={() => fetchCheques()} title="Actualizar">
-                            <Filter size={18} />
+                        <button className="btn-secondary" onClick={() => fetchCheques()} title="Actualizar" style={{ height: '36px', padding: '0 0.85rem' }}>
+                            <Filter size={16} />
                         </button>
                     </div>
                 </div>
+                {truncatedInfo.truncated && (
+                    <div style={{ marginTop: '0.65rem', fontSize: '0.78rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <AlertCircle size={14} />
+                        <span>Mostrando los primeros {cheques.length} de {truncatedInfo.total} cheques. Refine los filtros para ver todos.</span>
+                    </div>
+                )}
             </div>
 
             <div className="card glass table-responsive">
@@ -422,15 +460,19 @@ export default function Cheques() {
                                         <button onClick={() => handlePrint(c)} style={{ background: 'none', color: 'var(--primary)', padding: '0.25rem' }} title="Imprimir cheque">
                                             <Printer size={16} />
                                         </button>
-                                        {c.es_contabilizado !== 'S' ? (
+                                        {c.es_contabilizado !== 'S' && !c.fecha_aplicado ? (
                                             <>
                                                 <button onClick={() => handleOpenModal(c)} style={{ background: 'none', color: 'var(--text-muted)', padding: '0.25rem' }} title="Editar">
                                                     <Edit2 size={16} />
                                                 </button>
-                                                <button onClick={() => handleDelete(c.id)} style={{ background: 'none', color: '#ef4444', padding: '0.25rem' }} title="Eliminar">
+                                                <button onClick={() => handleDelete(c.id)} disabled={submitting} style={{ background: 'none', color: '#ef4444', padding: '0.25rem' }} title="Eliminar">
                                                     <Trash2 size={16} />
                                                 </button>
                                             </>
+                                        ) : c.fecha_aplicado ? (
+                                            <span title={`Conciliado (${c.fecha_aplicado}) - Desconcilie primero para editar o eliminar`} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', color: '#10b981', fontSize: '0.7rem' }}>
+                                                <Lock size={14} /> Conciliado
+                                            </span>
                                         ) : (
                                             <span title="Contabilizado - No se puede editar ni eliminar">
                                                 <CheckCircle size={16} color="var(--success)" />
@@ -558,13 +600,18 @@ export default function Cheques() {
                                 <span style={{ fontSize: '0.8rem', color: formData.fue_noemitido ? '#6b7280' : 'var(--text-muted)' }}>No Emitido</span>
                             </div>
                         </div>
+                        {formData.cheque_anulado && (
+                            <p style={{ margin: '0.45rem 0 0 0', fontSize: '0.72rem', color: '#f59e0b' }}>
+                                El valor, beneficiario y concepto original quedarán resguardados en auditoría al anular.
+                            </p>
+                        )}
                     </div>
 
                     <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
-                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
-                        <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }} disabled={submitting}>Cancelar</button>
+                        <button type="submit" className="btn-primary" disabled={submitting} style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
                             <Save size={18} />
-                            {editingCheque ? 'Actualizar Cheque' : 'Guardar Cheque'}
+                            {submitting ? 'Guardando...' : (editingCheque ? 'Actualizar Cheque' : 'Guardar Cheque')}
                         </button>
                     </div>
                 </form>

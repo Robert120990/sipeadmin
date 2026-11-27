@@ -4,13 +4,21 @@ import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
-import { Landmark, Hash, FileText, Search, Plus, Calendar, Filter, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, Tag, MapPin, CheckCircle } from 'lucide-react';
+import { Landmark, FileText, Search, Plus, Calendar, Filter, Save, Trash2, Download, ChevronLeft, ChevronRight, AlertCircle, Edit2, ArrowDownCircle, ArrowUpCircle, CheckCircle, Lock } from 'lucide-react';
 import { todayStr, offsetDaysStr } from '../utils/date';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
+
+const makeIdempotencyKey = () => (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+);
 
 export default function MovimientosBancarios() {
     const [movements, setMovements] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [submitting, setSubmitting] = useState(false);
+    const [truncatedInfo, setTruncatedInfo] = useState({ truncated: false, total: 0 });
     const [showModal, setShowModal] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
@@ -51,7 +59,7 @@ export default function MovimientosBancarios() {
     const { confirm } = useConfirm();
 
     const isTransferTipo = (cod) => cod === 'TR' || cod === 'TRANSFERENCIA';
-    const isDebitTipo = (cod) => cod === '01' || cod === '03' || cod === 'NC' || cod === 'CH';
+    const isDebitTipo = (cod) => cod === '02' || cod === 'NC' || cod === 'CH';
 
     useEffect(() => {
         fetchInitialCatalogs();
@@ -74,11 +82,14 @@ export default function MovimientosBancarios() {
     const fetchMovements = async () => {
         setLoading(true);
         try {
-            const res = await api.get('/bancos/movimientos', { params: filters });
+            const res = await api.get('/bancos/movimientos', { params: { ...filters, limit: 1500 } });
             setMovements(res.data || []);
+            const isTrunc = String(res.headers?.['x-truncated'] || '').toLowerCase() === 'true';
+            const totalCnt = Number(res.headers?.['x-total-count'] || (res.data || []).length);
+            setTruncatedInfo({ truncated: isTrunc, total: totalCnt });
             setCurrentPage(1);
         } catch (err) {
-            addToast('Error al cargar historial', 'error');
+            addToast(err.response?.data?.message || 'Error al cargar historial', 'error');
         } finally {
             setLoading(false);
         }
@@ -236,8 +247,9 @@ export default function MovimientosBancarios() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        
-        const isTransfer = isTransferTipo(formData.cod_remesa);
+        if (submitting) return;
+
+        const isTransfer = !editingMovement && isTransferTipo(formData.cod_remesa);
         if (isTransfer) {
             if (!formData.numero_cuenta_debitar || !formData.numero_cuenta_acreditar) {
                 addToast('Debe seleccionar tanto la Cuenta a Debitar como la Cuenta a Acreditar', 'warning');
@@ -254,40 +266,58 @@ export default function MovimientosBancarios() {
             }
         }
 
+        const montoNum = Number(formData.monto);
+        if (!Number.isFinite(montoNum) || montoNum <= 0) {
+            addToast('El monto debe ser mayor a $0.00', 'warning');
+            return;
+        }
+
         let calculatedTipo = 'ABONO';
         if (isDebitTipo(formData.cod_remesa)) {
             calculatedTipo = 'CARGO';
+        } else if (isTransferTipo(formData.cod_remesa) && editingMovement) {
+            calculatedTipo = formData.tipo === 'CARGO' ? 'CARGO' : 'ABONO';
         }
 
         const dataToSubmit = {
             ...formData,
             tipo: calculatedTipo,
-            is_transferencia: isTransfer
+            is_transferencia: isTransfer,
+            ...(editingMovement ? { version: editingMovement.version } : {})
         };
 
+        setSubmitting(true);
         try {
             if (editingMovement) {
                 await api.put(`/bancos/movimientos/${editingMovement.id}`, dataToSubmit);
                 addToast('Movimiento actualizado con éxito', 'success');
             } else {
-                await api.post('/bancos/movimientos', dataToSubmit);
+                await api.post('/bancos/movimientos', dataToSubmit, {
+                    headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+                });
                 addToast(isTransfer ? 'Transferencia entre cuentas registrada con éxito' : 'Movimiento registrado con éxito', 'success');
             }
             setShowModal(false);
             fetchMovements();
         } catch (err) {
             addToast(err.response?.data?.message || `Error al ${editingMovement ? 'actualizar' : 'registrar'} movimiento`, 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
     const handleDelete = async (id) => {
-        if (!await confirm('¿Está seguro de eliminar este movimiento?', { variant: 'danger' })) return;
+        if (submitting) return;
+        if (!await confirm('¿Está seguro de eliminar este movimiento? Quedará respaldado en auditoría.', { variant: 'danger' })) return;
+        setSubmitting(true);
         try {
             await api.delete(`/bancos/movimientos/${id}`);
             addToast('Movimiento eliminado', 'success');
             fetchMovements();
         } catch (err) {
-            addToast('Error al eliminar movimiento', 'error');
+            addToast(err.response?.data?.message || 'Error al eliminar movimiento', 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -320,9 +350,11 @@ export default function MovimientosBancarios() {
                 Documento: m.documento || '',
                 Empresa: m.empresa_nombre || m.id_empresa || '',
                 Cuenta: m.numero_cuenta || '',
-                Tipo: m.tipo || (m.valor >= 0 ? 'ABONO' : 'CARGO'),
+                Tipo: Number(m.cargo || 0) > 0 ? 'CARGO' : 'ABONO',
                 Concepto: m.concepto || '',
-                Monto: Number(m.valor ?? m.monto ?? 0),
+                'Cargo ($)': Number(m.cargo || 0),
+                'Abono ($)': Number(m.abono || 0),
+                Monto: Number(m.monto ?? 0),
                 Partida: m.num_partida || ''
             }));
             const wb = XLSX.utils.book_new();
@@ -359,12 +391,12 @@ export default function MovimientosBancarios() {
             </div>
 
             {/* Filters Bar */}
-            <div className="card glass" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', alignItems: 'end' }}>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Empresa</label>
+            <div className="card glass" style={{ marginBottom: '1rem', padding: '1rem 1.25rem' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.85rem', alignItems: 'flex-end' }}>
+                    <div style={{ flex: '1 1 180px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Empresa</label>
                         <select 
-                            style={{ width: '100%' }}
+                            style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
                             value={filters.id_empresa}
                             onChange={e => setFilters({...filters, id_empresa: e.target.value, numero_cuenta: ''})}
                         >
@@ -374,10 +406,10 @@ export default function MovimientosBancarios() {
                             ))}
                         </select>
                     </div>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuenta</label>
+                    <div style={{ flex: '2 1 260px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Cuenta</label>
                         <select 
-                            style={{ width: '100%' }}
+                            style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
                             value={filters.numero_cuenta}
                             onChange={e => setFilters({...filters, numero_cuenta: e.target.value})}
                         >
@@ -387,38 +419,46 @@ export default function MovimientosBancarios() {
                             ))}
                         </select>
                     </div>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Desde</label>
+                    <div style={{ width: '140px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Desde</label>
                         <input 
                             type="date" 
                             value={filters.desde}
                             onChange={e => setFilters({...filters, desde: e.target.value})}
+                            style={{ height: '36px', fontSize: '0.825rem' }}
                         />
                     </div>
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Hasta</label>
+                    <div style={{ width: '140px' }}>
+                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>Hasta</label>
                         <input 
                             type="date" 
                             value={filters.hasta}
                             onChange={e => setFilters({...filters, hasta: e.target.value})}
+                            style={{ height: '36px', fontSize: '0.825rem' }}
                         />
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', flex: '1 1 200px' }}>
                         <div style={{ position: 'relative', flex: 1 }}>
-                            <Search size={16} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                            <Search size={15} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                             <input 
                                 type="text" 
-                                placeholder="Buscar en resultados..." 
-                                style={{ paddingLeft: '2.5rem', width: '100%' }}
+                                placeholder="Buscar..." 
+                                style={{ paddingLeft: '2.1rem', width: '100%', height: '36px', fontSize: '0.825rem' }}
                                 value={searchTerm}
                                 onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
                             />
                         </div>
-                        <button className="btn-secondary" onClick={() => fetchMovements()} title="Actualizar">
-                            <Filter size={18} />
+                        <button className="btn-secondary" onClick={() => fetchMovements()} title="Actualizar" style={{ height: '36px', padding: '0 0.85rem' }}>
+                            <Filter size={16} />
                         </button>
                     </div>
                 </div>
+                {truncatedInfo.truncated && (
+                    <div style={{ marginTop: '0.65rem', fontSize: '0.78rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <AlertCircle size={14} />
+                        <span>Mostrando los primeros {movements.length} de {truncatedInfo.total} movimientos. Aplique filtros de cuenta o fechas más específicos para ver todo el detalle.</span>
+                    </div>
+                )}
             </div>
 
             {/* Main Table */}
@@ -473,7 +513,7 @@ export default function MovimientosBancarios() {
                                 </td>
                                 <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
                                     <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-                                        {m.es_contabilizado !== 'S' ? (
+                                        {m.es_contabilizado !== 'S' && !m.fecha_aplicado ? (
                                             <>
                                                 <button 
                                                     onClick={() => handleOpenModal(m)}
@@ -484,12 +524,17 @@ export default function MovimientosBancarios() {
                                                 </button>
                                                 <button 
                                                     onClick={() => handleDelete(m.id)}
+                                                    disabled={submitting}
                                                     style={{ background: 'none', color: '#ef4444', padding: '0.25rem' }} 
                                                     title="Eliminar"
                                                 >
                                                     <Trash2 size={16} />
                                                 </button>
                                             </>
+                                        ) : m.fecha_aplicado ? (
+                                            <span title={`Conciliado (${m.fecha_aplicado}) - Desconcilie primero para editar o eliminar`} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', color: '#10b981', fontSize: '0.7rem' }}>
+                                                <Lock size={14} /> Conciliado
+                                            </span>
                                         ) : (
                                             <span title="Contabilizado - No se puede editar ni eliminar">
                                                 <CheckCircle size={16} color="var(--success)" />
@@ -547,7 +592,7 @@ export default function MovimientosBancarios() {
                         </div>
                     </div>
                     {/* Cuenta Bancaria (Simple o Transferencia Debitar/Acreditar) */}
-                    {isTransferTipo(formData.cod_remesa) ? (
+                    {!editingMovement && isTransferTipo(formData.cod_remesa) ? (
                         <div className="form-grid form-grid-2" style={{ gap: '1rem' }}>
                             <div style={{ background: 'rgba(239, 68, 68, 0.05)', padding: '0.75rem', borderRadius: 'var(--border-radius)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', fontWeight: '700', color: '#ef4444' }}>
@@ -662,9 +707,9 @@ export default function MovimientosBancarios() {
                                             ? '#ef4444' 
                                             : '#10b981'
                                 }}>
-                                    {isTransferTipo(formData.cod_remesa) ? (
+                                    {!editingMovement && isTransferTipo(formData.cod_remesa) ? (
                                         <>⇄ Tipo: TRANSFERENCIA ENTRE CUENTAS (Débito y Crédito)</>
-                                    ) : isDebitTipo(formData.cod_remesa) ? (
+                                    ) : (isDebitTipo(formData.cod_remesa) || (editingMovement && formData.tipo === 'CARGO')) ? (
                                         <>↓ Tipo: CARGO (-) / Salida de Fondos</>
                                     ) : (
                                         <>↑ Tipo: ABONO (+) / Entrada de Fondos</>
@@ -704,10 +749,10 @@ export default function MovimientosBancarios() {
                     </div>
 
                     <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
-                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
-                        <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }} disabled={submitting}>Cancelar</button>
+                        <button type="submit" className="btn-primary" disabled={submitting} style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
                             <Save size={18} />
-                            {editingMovement ? 'Actualizar Movimiento' : 'Guardar Movimiento'}
+                            {submitting ? 'Guardando...' : (editingMovement ? 'Actualizar Movimiento' : 'Guardar Movimiento')}
                         </button>
                     </div>
                 </form>

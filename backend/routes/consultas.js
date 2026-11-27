@@ -7,6 +7,7 @@ const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
 const withRetry = (...args) => dbModule.withRetry(...args);
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { getElSalvadorTodayYMD } = require('../utils/dateSv');
 const {
     ventasViewPerms,
     fletesViewPerms,
@@ -2215,7 +2216,7 @@ router.get('/consultas/:type', authenticateToken, requirePermission(genericConsu
     const { type } = req.params;
     try {
         const externalDb = await getExternalDb();
-        const today = new Date().toISOString().split('T')[0];
+        const today = getElSalvadorTodayYMD();
         let results;
         if (type === 'saldos-bancos') [results] = await externalDb.query('CALL sp_saldo_en_bancos(?)', [today]);
         else if (type === 'saldos-chequera') [results] = await externalDb.query('CALL sp_saldo_en_chequera(?)', [today]);

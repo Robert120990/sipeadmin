@@ -1687,6 +1687,214 @@ const initDB = async () => {
             console.error('Migration canonicalPermissions:', permErr.message);
         }
 
+        // ==============================================================
+        // MIGRATION: Blindaje Integral Módulo Bancos y Conciliación (F1)
+        // ==============================================================
+        try {
+            const ensureColumn = async (table, column, ddl) => {
+                const [cols] = await pool.query(`SHOW COLUMNS FROM \`${table}\` LIKE ?`, [column]);
+                if (!cols || cols.length === 0) {
+                    await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN ${ddl}`);
+                }
+            };
+
+            const ensureIndex = async (table, indexName, ddl) => {
+                const [idxs] = await pool.query(`SHOW INDEX FROM \`${table}\` WHERE Key_name = ?`, [indexName]);
+                if (!idxs || idxs.length === 0) {
+                    await pool.query(`ALTER TABLE \`${table}\` ADD INDEX \`${indexName}\` ${ddl}`);
+                }
+            };
+
+            // 1. cuentas_bancarias
+            await ensureColumn('cuentas_bancarias', 'saldo_inicial', 'saldo_inicial DECIMAL(14,2) NOT NULL DEFAULT 0.00');
+            await ensureColumn('cuentas_bancarias', 'fecha_saldo_inicial', 'fecha_saldo_inicial DATE NULL DEFAULT NULL');
+
+            // 2. movimientos_bancarios
+            await ensureColumn('movimientos_bancarios', 'created_by', 'created_by INT NULL');
+            await ensureColumn('movimientos_bancarios', 'updated_by', 'updated_by INT NULL');
+            await ensureColumn('movimientos_bancarios', 'conciliado_by', 'conciliado_by INT NULL');
+            await ensureColumn('movimientos_bancarios', 'conciliado_at', 'conciliado_at DATETIME NULL');
+            await ensureColumn('movimientos_bancarios', 'deleted_at', 'deleted_at DATETIME NULL DEFAULT NULL');
+            await ensureColumn('movimientos_bancarios', 'deleted_by', 'deleted_by INT NULL');
+            await ensureColumn('movimientos_bancarios', 'motivo_eliminacion', 'motivo_eliminacion VARCHAR(255) NULL');
+            await ensureColumn('movimientos_bancarios', 'version', 'version INT NOT NULL DEFAULT 1');
+            await ensureColumn('movimientos_bancarios', 'transfer_group_id', 'transfer_group_id VARCHAR(64) NULL');
+            await ensureColumn('movimientos_bancarios', 'import_batch_id', 'import_batch_id INT NULL');
+            await ensureColumn('movimientos_bancarios', 'fingerprint', 'fingerprint VARCHAR(64) NULL');
+
+            await ensureIndex('movimientos_bancarios', 'idx_mov_cta_apl', '(cuenta_bancaria_id, fecha_aplicado)');
+            await ensureIndex('movimientos_bancarios', 'idx_mov_cta_fecha', '(cuenta_bancaria_id, fecha)');
+            await ensureIndex('movimientos_bancarios', 'idx_mov_cta_doc', '(cuenta_bancaria_id, documento)');
+            await ensureIndex('movimientos_bancarios', 'idx_mov_cta_fp', '(cuenta_bancaria_id, fingerprint)');
+            await ensureIndex('movimientos_bancarios', 'idx_mov_deleted', '(deleted_at)');
+            await ensureIndex('movimientos_bancarios', 'idx_mov_transfer_group', '(transfer_group_id)');
+
+            // 3. cheques
+            try {
+                await pool.query('ALTER TABLE cheques MODIFY COLUMN concepto VARCHAR(255)');
+            } catch (_) { /* ignore if already 255 or compatible */ }
+            await ensureColumn('cheques', 'created_by', 'created_by INT NULL');
+            await ensureColumn('cheques', 'updated_by', 'updated_by INT NULL');
+            await ensureColumn('cheques', 'conciliado_by', 'conciliado_by INT NULL');
+            await ensureColumn('cheques', 'conciliado_at', 'conciliado_at DATETIME NULL');
+            await ensureColumn('cheques', 'deleted_at', 'deleted_at DATETIME NULL DEFAULT NULL');
+            await ensureColumn('cheques', 'deleted_by', 'deleted_by INT NULL');
+            await ensureColumn('cheques', 'motivo_eliminacion', 'motivo_eliminacion VARCHAR(255) NULL');
+            await ensureColumn('cheques', 'anulado_by', 'anulado_by INT NULL');
+            await ensureColumn('cheques', 'anulado_at', 'anulado_at DATETIME NULL');
+            await ensureColumn('cheques', 'valor_original', 'valor_original DECIMAL(14,2) NULL');
+            await ensureColumn('cheques', 'beneficiario_original', 'beneficiario_original VARCHAR(150) NULL');
+            await ensureColumn('cheques', 'concepto_original', 'concepto_original VARCHAR(255) NULL');
+            await ensureColumn('cheques', 'version', 'version INT NOT NULL DEFAULT 1');
+
+            await ensureIndex('cheques', 'idx_chq_cta_apl', '(cuenta_bancaria_id, fecha_aplicado)');
+            await ensureIndex('cheques', 'idx_chq_cta_fecha', '(cuenta_bancaria_id, fecha)');
+            await ensureIndex('cheques', 'idx_chq_cta_num', '(cuenta_bancaria_id, cheque)');
+            await ensureIndex('cheques', 'idx_chq_deleted', '(deleted_at)');
+
+            // 4. validaciones_saldo_banco
+            await ensureColumn('validaciones_saldo_banco', 'fecha_corte', 'fecha_corte DATE NULL');
+            await ensureColumn('validaciones_saldo_banco', 'saldo_conciliado_libros', 'saldo_conciliado_libros DECIMAL(14,2) DEFAULT 0');
+            await ensureColumn('validaciones_saldo_banco', 'abonos_en_transito', 'abonos_en_transito DECIMAL(14,2) DEFAULT 0');
+            await ensureColumn('validaciones_saldo_banco', 'cargos_cheques_en_transito', 'cargos_cheques_en_transito DECIMAL(14,2) DEFAULT 0');
+            await ensureColumn('validaciones_saldo_banco', 'snapshot_json', 'snapshot_json JSON NULL');
+
+            // 5. Tablas de periodos, reaperturas, importaciones, auditoria e idempotencia
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS conciliacion_periodos (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    cuenta_bancaria_id INT NOT NULL,
+                    fecha_corte DATE NOT NULL,
+                    estado ENUM('CERRADO','REABIERTO') NOT NULL DEFAULT 'CERRADO',
+                    saldo_banco DECIMAL(14,2) NOT NULL DEFAULT 0,
+                    saldo_chequera DECIMAL(14,2) NOT NULL DEFAULT 0,
+                    saldo_conciliado_libros DECIMAL(14,2) NOT NULL DEFAULT 0,
+                    abonos_en_transito DECIMAL(14,2) NOT NULL DEFAULT 0,
+                    cargos_cheques_en_transito DECIMAL(14,2) NOT NULL DEFAULT 0,
+                    diferencia DECIMAL(14,2) NOT NULL DEFAULT 0,
+                    snapshot_json JSON NULL,
+                    notas TEXT NULL,
+                    cerrado_by INT NULL,
+                    cerrado_por_nombre VARCHAR(150) NULL,
+                    cerrado_at DATETIME NULL,
+                    reabierto_by INT NULL,
+                    reabierto_por_nombre VARCHAR(150) NULL,
+                    reabierto_at DATETIME NULL,
+                    motivo_reapertura TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE RESTRICT,
+                    UNIQUE KEY uk_conc_periodo_cta_corte (cuenta_bancaria_id, fecha_corte),
+                    INDEX idx_conc_periodo_estado (cuenta_bancaria_id, estado, fecha_corte)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS conciliacion_reapertura_solicitudes (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    periodo_id INT NOT NULL,
+                    cuenta_bancaria_id INT NOT NULL,
+                    fecha_corte DATE NOT NULL,
+                    estado ENUM('PENDIENTE','APROBADA','RECHAZADA','CANCELADA') NOT NULL DEFAULT 'PENDIENTE',
+                    motivo_solicitud TEXT NOT NULL,
+                    solicitado_by INT NOT NULL,
+                    solicitado_por_nombre VARCHAR(150) NULL,
+                    solicitado_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    resuelto_by INT NULL,
+                    resuelto_por_nombre VARCHAR(150) NULL,
+                    resuelto_at DATETIME NULL,
+                    comentario_resolucion TEXT NULL,
+                    FOREIGN KEY (periodo_id) REFERENCES conciliacion_periodos(id) ON DELETE RESTRICT,
+                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE RESTRICT,
+                    INDEX idx_reap_estado (estado, cuenta_bancaria_id),
+                    INDEX idx_reap_periodo (periodo_id, estado)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS conciliacion_importaciones (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    cuenta_bancaria_id INT NOT NULL,
+                    banco_formato VARCHAR(40) DEFAULT 'AUTO',
+                    file_hash VARCHAR(64) NOT NULL,
+                    archivo_nombre VARCHAR(255) NULL,
+                    total_filas INT NOT NULL DEFAULT 0,
+                    creados_count INT NOT NULL DEFAULT 0,
+                    conciliados_count INT NOT NULL DEFAULT 0,
+                    duplicados_omitidos INT NOT NULL DEFAULT 0,
+                    saldo_final_extracto DECIMAL(14,2) NULL,
+                    created_by INT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE RESTRICT,
+                    INDEX idx_imp_cta_hash (cuenta_bancaria_id, file_hash)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS bancos_auditoria_detalle (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    cuenta_bancaria_id INT NULL,
+                    entidad VARCHAR(60) NOT NULL,
+                    entidad_id VARCHAR(64) NULL,
+                    accion VARCHAR(50) NOT NULL,
+                    user_id INT NULL,
+                    username VARCHAR(100) NULL,
+                    ip_address VARCHAR(45) NULL,
+                    motivo VARCHAR(255) NULL,
+                    before_json JSON NULL,
+                    after_json JSON NULL,
+                    metadata_json JSON NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_baud_cta_fecha (cuenta_bancaria_id, created_at),
+                    INDEX idx_baud_entidad (entidad, entidad_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS bancos_idempotency_keys (
+                    idempotency_key VARCHAR(128) NOT NULL,
+                    scope VARCHAR(80) NOT NULL,
+                    user_id INT NULL,
+                    request_hash VARCHAR(64) NULL,
+                    status_code INT NULL,
+                    response_json JSON NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (idempotency_key, scope),
+                    INDEX idx_idem_created (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            // 6. Permisos granulares de Bancos y Conciliacion
+            const bancosPerms = [
+                ['close_conciliacion_periodo', 'Cerrar períodos/cortes de Conciliación Bancaria'],
+                ['approve_reapertura_conciliacion', 'Autorizar reapertura de períodos cerrados de Conciliación'],
+                ['view_conciliacion_bancaria', 'Consultar conciliaciones bancarias (solo lectura)'],
+                ['manage_conciliacion_bancaria', 'Conciliar y desconciliar movimientos bancarios'],
+                ['edit_monto_conciliacion', 'Modificar montos en conciliación bancaria'],
+                ['manage_cuentas', 'Gestionar cuentas bancarias'],
+                ['manage_movimientos', 'Gestionar movimientos bancarios'],
+                ['manage_cheques', 'Gestionar cheques bancarios']
+            ];
+            for (const [bPermName, bPermDesc] of bancosPerms) {
+                await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [bPermName, bPermDesc]);
+            }
+
+            const [adminRolesBancos] = await pool.query(
+                "SELECT id FROM roles WHERE LOWER(name) IN ('admin', 'administrator', 'administrador', 'super admin', 'superadmin', 'super administrador') OR id = 1"
+            );
+            const [bancosPermRows] = await pool.query(
+                'SELECT id FROM permissions WHERE name IN (?)',
+                [bancosPerms.map(p => p[0])]
+            );
+            for (const r of adminRolesBancos) {
+                for (const bp of bancosPermRows) {
+                    await pool.query('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [r.id, bp.id]);
+                }
+            }
+        } catch (bancosMigErr) {
+            console.error('Migration bancos integrity schema:', bancosMigErr.message);
+        }
+
         return pool;
     } catch (error) {
         console.error('DATABASE INITIALIZATION ERROR:', error.message);

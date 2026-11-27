@@ -1,6 +1,14 @@
 const PDFDocument = require('pdfkit');
 const { getAccountingDb, withRetry } = require('../db');
 const { numberToWords } = require('../utils/numberToWords');
+const { getElSalvadorTodayYMD } = require('../utils/dateSv');
+const {
+    parseStrictDBDate,
+    computeMovementFingerprint,
+    isDateInClosedPeriod,
+    recordBankAudit,
+    emitBankUpdate
+} = require('./bancosIntegrityService');
 
 const TABLE = 'rh_planillas';
 
@@ -1408,31 +1416,79 @@ const registrarPagoPlanilla = async ({ companyId, anio, mes, quincena, pagos, us
             const tipoRemesaId = remRows.length > 0 ? remRows[0].id : null;
 
             const docRef = (item.documento || '').trim();
-            const fechaPago = item.fecha_pago ? String(item.fecha_pago).slice(0, 10) : new Date().toISOString().split('T')[0];
+            const fechaPago = item.fecha_pago ? (parseStrictDBDate(item.fecha_pago) || String(item.fecha_pago).slice(0, 10)) : getElSalvadorTodayYMD();
+
+            const lockCheck = await isDateInClosedPeriod(conn, cta.id, [fechaPago]);
+            if (lockCheck.closed) {
+                throw new Error(`El período de conciliación bancaria de la cuenta #${cta.numero} está cerrado hasta ${lockCheck.lockedDate}.`);
+            }
 
             const defaultConcepto = `PAGO PLANILLA ${empresaNombre.toUpperCase()} - ${qLabel} ${mesNom} ${anio}${docRef ? ' - ' + docRef : ''}`.slice(0, 250);
             const conceptoFinal = (item.concepto || defaultConcepto).slice(0, 250);
+            const fp = computeMovementFingerprint({
+                cuentaBancariaId: cta.id,
+                fecha: fechaPago,
+                documento: docRef,
+                cargo: monto,
+                abono: 0,
+                concepto: conceptoFinal
+            });
 
             // 1. Insertar movimiento bancario con fecha_aplicado = NULL
             // CRÍTICO: fecha_aplicado = NULL permite que sea conciliable en el futuro en el módulo de Conciliación Bancaria
-            const [movResult] = await conn.query(`
-                INSERT INTO movimientos_bancarios (
-                    empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado,
-                    documento, concepto, monto, cargo, abono,
-                    tipo_remesa_id, es_contabilizado
-                ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, ?, FALSE)
-            `, [
-                cta.empresa_id,
-                cta.id,
-                fechaPago,
-                docRef,
-                conceptoFinal,
-                monto,
-                monto, // cargo = salida de dinero
-                tipoRemesaId
-            ]);
+            let movResult;
+            try {
+                [movResult] = await conn.query(`
+                    INSERT INTO movimientos_bancarios (
+                        empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado,
+                        documento, concepto, monto, cargo, abono,
+                        tipo_remesa_id, es_contabilizado, created_by, fingerprint, version
+                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, ?, FALSE, ?, ?, 1)
+                `, [
+                    cta.empresa_id,
+                    cta.id,
+                    fechaPago,
+                    docRef,
+                    conceptoFinal,
+                    monto,
+                    monto, // cargo = salida de dinero
+                    tipoRemesaId,
+                    userId || null,
+                    fp
+                ]);
+            } catch (err) {
+                if (err && (err.code === 'ER_BAD_FIELD_ERROR' || err.errno === 1054)) {
+                    [movResult] = await conn.query(`
+                        INSERT INTO movimientos_bancarios (
+                            empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado,
+                            documento, concepto, monto, cargo, abono,
+                            tipo_remesa_id, es_contabilizado
+                        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, ?, FALSE)
+                    `, [
+                        cta.empresa_id,
+                        cta.id,
+                        fechaPago,
+                        docRef,
+                        conceptoFinal,
+                        monto,
+                        monto,
+                        tipoRemesaId
+                    ]);
+                } else {
+                    throw err;
+                }
+            }
 
             const movId = movResult.insertId;
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cta.id,
+                entidad: 'movimientos_bancarios',
+                entidadId: movId,
+                accion: 'CREATE_RRHH_PLANILLA',
+                user: { id: userId || null, username: 'rrhh_planilla' },
+                after: { id: movId, monto, fecha: fechaPago, documento: docRef, concepto: conceptoFinal }
+            });
 
             // 2. Registrar pago en rh_planilla_pagos
             const [pagoResult] = await conn.query(`
@@ -1510,8 +1566,8 @@ const registrarPagoPlanilla = async ({ companyId, anio, mes, quincena, pagos, us
     // 4. Emitir eventos en tiempo real si io está disponible
     if (io) {
         try {
-            io.emit('movimientos_updated', { source: 'rrhh_planilla_pago' });
-            io.emit('conciliacion_updated', { source: 'rrhh_planilla_pago' });
+            emitBankUpdate(io, 'movimientos_updated', { source: 'rrhh_planilla_pago' });
+            emitBankUpdate(io, 'conciliacion_updated', { source: 'rrhh_planilla_pago' });
             io.emit('planillas_updated', { company_id: companyId, anio, mes, quincena });
         } catch (e) {
             // ignore
@@ -1562,14 +1618,40 @@ const anularPagoPlanilla = async ({ pagoId, io }) => {
     await withTransaction(async (conn) => {
         if (pago.movimiento_bancario_id) {
             const [movLock] = await conn.query(
-                'SELECT fecha_aplicado FROM movimientos_bancarios WHERE id = ? FOR UPDATE',
+                'SELECT id, cuenta_bancaria_id, fecha, fecha_aplicado, es_contabilizado, monto, documento, concepto FROM movimientos_bancarios WHERE id = ? FOR UPDATE',
                 [pago.movimiento_bancario_id]
             );
-            if (movLock.length > 0 && movLock[0].fecha_aplicado) {
+            const movRow = movLock?.[0];
+            if (movRow && movRow.fecha_aplicado) {
                 throw new Error(
                     `No se puede anular este pago porque el movimiento bancario (#${pago.movimiento_bancario_id}) ` +
                     `ya ha sido conciliado en el módulo de Bancos.`
                 );
+            }
+            if (movRow && movRow.es_contabilizado) {
+                throw new Error(
+                    `No se puede anular este pago porque el movimiento bancario (#${pago.movimiento_bancario_id}) ya fue contabilizado.`
+                );
+            }
+            if (movRow) {
+                const lockCheck = await isDateInClosedPeriod(conn, movRow.cuenta_bancaria_id, [movRow.fecha]);
+                if (lockCheck.closed) {
+                    throw new Error(`El período de conciliación bancaria está cerrado hasta ${lockCheck.lockedDate}. Solicite reapertura primero.`);
+                }
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: movRow.cuenta_bancaria_id,
+                    entidad: 'movimientos_bancarios',
+                    entidadId: movRow.id,
+                    accion: 'DELETE_RRHH_ANULACION',
+                    motivo: `Anulación de pago de planilla #${pagoId}`,
+                    before: {
+                        id: movRow.id,
+                        fecha: parseStrictDBDate(movRow.fecha),
+                        monto: Number(movRow.monto),
+                        documento: movRow.documento,
+                        concepto: movRow.concepto
+                    }
+                });
             }
             await conn.query('DELETE FROM movimientos_bancarios WHERE id = ?', [pago.movimiento_bancario_id]);
         }
@@ -1617,8 +1699,8 @@ const anularPagoPlanilla = async ({ pagoId, io }) => {
 
     if (io) {
         try {
-            io.emit('movimientos_updated', { source: 'rrhh_pago_anulado' });
-            io.emit('conciliacion_updated', { source: 'rrhh_pago_anulado' });
+            emitBankUpdate(io, 'movimientos_updated', { cuenta_bancaria_id: pago.cuenta_bancaria_id, source: 'rrhh_pago_anulado' });
+            emitBankUpdate(io, 'conciliacion_updated', { cuenta_bancaria_id: pago.cuenta_bancaria_id, source: 'rrhh_pago_anulado' });
             io.emit('planillas_updated', { company_id: pago.company_id, anio: pago.periodo_anio, mes: pago.periodo_mes, quincena: pago.quincena });
         } catch (e) {
             // ignore

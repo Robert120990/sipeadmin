@@ -36,8 +36,28 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
     if (saldoInicialBancos <= 0) {
         try {
             const [localBalanceRows] = await db.query(`
-                SELECT COALESCE(SUM(abono - cargo), 0) as saldo_neto
-                FROM movimientos_bancarios
+                SELECT COALESCE(SUM(
+                    COALESCE(c.saldo_inicial, 0) +
+                    COALESCE((
+                        SELECT SUM(m.abono - m.cargo)
+                        FROM movimientos_bancarios m
+                        WHERE m.cuenta_bancaria_id = c.id
+                          AND m.deleted_at IS NULL
+                          AND (c.fecha_saldo_inicial IS NULL OR m.fecha >= c.fecha_saldo_inicial)
+                    ), 0) -
+                    COALESCE((
+                        SELECT SUM(ch.valor)
+                        FROM cheques ch
+                        WHERE ch.cuenta_bancaria_id = c.id
+                          AND ch.deleted_at IS NULL
+                          AND ch.cheque_anulado = FALSE
+                          AND ch.fue_noemitido = FALSE
+                          AND ch.es_reservado = FALSE
+                          AND (c.fecha_saldo_inicial IS NULL OR ch.fecha >= c.fecha_saldo_inicial)
+                    ), 0)
+                ), 0) as saldo_neto
+                FROM cuentas_bancarias c
+                WHERE c.activa = 1
             `);
             saldoInicialBancos = Number(localBalanceRows[0]?.saldo_neto || 0);
         } catch (err) {

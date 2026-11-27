@@ -36,6 +36,12 @@ const ToggleSwitch = ({ checked, onChange }) => (
     </button>
 );
 
+const makeIdempotencyKey = () => (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+);
+
 const ChequesContado = () => {
     const { addToast } = useToast();
     const { confirm } = useConfirm();
@@ -46,6 +52,7 @@ const ChequesContado = () => {
     const [solicitudes, setSolicitudes] = useState([]);
     const [loading, setLoading] = useState(false);
     const [syncing, setSyncing] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [modalMode, setModalMode] = useState('asignar'); // 'asignar' | 'generar'
     const [selectedSolicitud, setSelectedSolicitud] = useState(null);
@@ -101,11 +108,13 @@ const ChequesContado = () => {
     };
 
     const handleGuardarAsignar = async () => {
+        if (submitting) return;
         if (!chequeNum.trim()) return addToast('Ingrese el número de cheque', 'error');
         if (registrarEnBancos && !cuentaSelected) {
             return addToast('Seleccione la cuenta bancaria para registrar en bancos', 'error');
         }
 
+        setSubmitting(true);
         try {
             await api.post('/cheques/contado/marcar-emitido', {
                 llave: selectedSolicitud.llave,
@@ -113,22 +122,28 @@ const ChequesContado = () => {
                 cheque_num: chequeNum.trim(),
                 cuenta_bancaria_id: registrarEnBancos ? cuentaSelected : null,
                 registrar_en_bancos: registrarEnBancos
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
             });
             addToast(`Solicitud marcada con el cheque #${chequeNum.trim()}`, 'success');
             setShowModal(false);
             handleConsultar();
         } catch (e) {
-            addToast('Error al asignar cheque', 'error');
+            addToast(e.response?.data?.message || 'Error al asignar cheque', 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
     const handleGenerar = async () => {
+        if (submitting) return;
         if (!cuentaSelected) return addToast('Seleccione una cuenta bancaria', 'error');
         if (!chequeNum.trim()) return addToast('Ingrese el número de cheque', 'error');
 
         const cuenta = cuentas.find(c => String(c.corr) === String(cuentaSelected));
         if (!cuenta) return addToast('Cuenta no encontrada', 'error');
 
+        setSubmitting(true);
         try {
             await api.post('/cheques/contado/generar', {
                 llave: selectedSolicitud.llave,
@@ -139,22 +154,28 @@ const ChequesContado = () => {
                 valor: selectedSolicitud.monto,
                 a_nombre: selectedSolicitud.nombre,
                 concepto: 'PAGO A PROVEEDOR (CONTADO)'
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
             });
             addToast('Cheque generado exitosamente', 'success');
             setShowModal(false);
             handleConsultar();
         } catch (e) {
-            addToast('Error al generar cheque', 'error');
+            addToast(e.response?.data?.message || 'Error al generar cheque', 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
     const handleDesvincular = async (sol) => {
+        if (submitting) return;
         const ok = await confirm(
             `¿Está seguro de desvincular el cheque #${sol.num_cheque} de la solicitud de ${sol.nombre || 'este proveedor'}?\n\nLa solicitud volverá al estado PENDIENTE.`,
             { variant: 'danger', title: 'Desvincular Cheque' }
         );
         if (!ok) return;
 
+        setSubmitting(true);
         try {
             await api.post('/cheques/contado/desvincular', {
                 llave: sol.llave,
@@ -163,7 +184,9 @@ const ChequesContado = () => {
             addToast('Cheque desvinculado exitosamente', 'success');
             handleConsultar();
         } catch (e) {
-            addToast('Error al desvincular cheque', 'error');
+            addToast(e.response?.data?.message || 'Error al desvincular cheque', 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -293,7 +316,14 @@ const ChequesContado = () => {
                                     <td style={{ padding: '0.45rem 0.5rem' }}>{sol.num_ccf}</td>
                                     <td style={{ padding: '0.45rem 0.5rem' }}>
                                         {isPending(sol) ? (
-                                            <span style={{ color: 'var(--danger)', fontSize: '0.74rem', fontWeight: 600 }}>PENDIENTE</span>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                                                <span style={{ color: 'var(--danger)', fontSize: '0.74rem', fontWeight: 600 }}>PENDIENTE</span>
+                                                {sol.suggested_cheque && (
+                                                    <span style={{ fontSize: '0.68rem', color: '#38bdf8' }} title={`Posible coincidencia en libro de bancos (${sol.suggested_cheque.banco})`}>
+                                                        Sug: #{sol.suggested_cheque.cheque}
+                                                    </span>
+                                                )}
+                                            </div>
                                         ) : (
                                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                                                 <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>{sol.num_cheque}</span>
@@ -520,8 +550,8 @@ const ChequesContado = () => {
                                 <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ padding: '0.5rem 1.5rem', fontSize: '0.825rem' }}>
                                     Cancelar
                                 </button>
-                                <button type="button" onClick={handleGuardarAsignar} className="btn-primary" style={{ padding: '0.5rem 1.5rem', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    <CheckCircle size={15} /> Asignar Cheque
+                                <button type="button" onClick={handleGuardarAsignar} disabled={submitting} className="btn-primary" style={{ padding: '0.5rem 1.5rem', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <CheckCircle size={15} /> {submitting ? 'Procesando...' : 'Asignar Cheque'}
                                 </button>
                             </div>
                         </>
@@ -567,8 +597,8 @@ const ChequesContado = () => {
                                 <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ padding: '0.5rem 1.5rem', fontSize: '0.825rem' }}>
                                     Cancelar
                                 </button>
-                                <button type="button" onClick={handleGenerar} className="btn-primary" style={{ padding: '0.5rem 1.5rem', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    <CreditCard size={15} /> Generar en Bancos
+                                <button type="button" onClick={handleGenerar} disabled={submitting} className="btn-primary" style={{ padding: '0.5rem 1.5rem', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <CreditCard size={15} /> {submitting ? 'Generando...' : 'Generar en Bancos'}
                                 </button>
                             </div>
                         </>

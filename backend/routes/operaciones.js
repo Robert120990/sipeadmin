@@ -1,7 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const { getDb, getExternalDb, getAccountingDb, withRetry } = require('../db');
+const { getDb, getExternalDb, getAccountingDb, withRetry, withTransaction } = require('../db');
+const {
+    parseStrictPositiveAmount,
+    parseStrictDBDate,
+    computeMovementFingerprint,
+    isDateInClosedPeriod,
+    recordBankAudit,
+    emitBankUpdate
+} = require('../services/bancosIntegrityService');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const energyLatamService = require('../services/energyLatamService');
@@ -2575,92 +2583,144 @@ router.post('/operaciones/portal/vincular-pago', authenticateToken, requirePermi
 
         if (!numero_orden) return res.status(400).json({ message: 'Se requiere el número de orden' });
         if (!cuenta_bancaria_id) return res.status(400).json({ message: 'Se requiere seleccionar la cuenta bancaria' });
-        if (!fecha_pago) return res.status(400).json({ message: 'Se requiere la fecha de pago' });
-        if (!monto_pagado || Number(monto_pagado) <= 0) return res.status(400).json({ message: 'El monto de pago debe ser mayor a 0' });
+        const dbFechaPago = parseStrictDBDate(fecha_pago);
+        if (!dbFechaPago) return res.status(400).json({ message: 'Se requiere una fecha de pago válida' });
+        const montoPag = parseStrictPositiveAmount(monto_pagado);
+        if (montoPag === null) return res.status(400).json({ message: 'El monto de pago debe ser mayor a $0.00' });
 
-        const db = getDb();
-        const [ordRows] = await db.query('SELECT * FROM portal_pedidos WHERE numero_orden = ?', [numero_orden]);
-        if (ordRows.length === 0) return res.status(404).json({ message: 'Pedido no encontrado' });
-        const orden = ordRows[0];
+        const txResult = await withTransaction(async (conn) => {
+            const [ordRows] = await conn.query('SELECT * FROM portal_pedidos WHERE numero_orden = ? FOR UPDATE', [numero_orden]);
+            if (ordRows.length === 0) return { errorStatus: 404, errorBody: { message: 'Pedido no encontrado' } };
+            const orden = ordRows[0];
 
-        const [ctaRows] = await db.query('SELECT c.*, b.descripcion as banco_nombre FROM cuentas_bancarias c LEFT JOIN bancos b ON c.banco_id = b.id WHERE c.id = ?', [cuenta_bancaria_id]);
-        if (ctaRows.length === 0) return res.status(404).json({ message: 'Cuenta bancaria no encontrada' });
-        const cta = ctaRows[0];
+            const [ctaRows] = await conn.query(
+                'SELECT c.*, b.descripcion as banco_nombre FROM cuentas_bancarias c LEFT JOIN bancos b ON c.banco_id = b.id WHERE c.id = ? AND c.activa = TRUE',
+                [cuenta_bancaria_id]
+            );
+            if (ctaRows.length === 0) return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
+            const cta = ctaRows[0];
 
-        let movimientoId = orden.movimiento_bancario_id;
+            let movimientoId = orden.movimiento_bancario_id;
 
-        // Si se solicita alistar para conciliación bancaria, crear o actualizar el registro en movimientos_bancarios
-        if (alistar_conciliacion) {
-            let tipoRemesaCode = (tipo_pago || '').toUpperCase().includes('CHEQ') ? 'CH' : 'TR';
-            const [remesas] = await db.query('SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1', [cta.empresa_id, tipoRemesaCode]);
-            const tipoRemesaId = remesas[0]?.id || null;
+            if (alistar_conciliacion) {
+                const lockNew = await isDateInClosedPeriod(conn, cta.id, [dbFechaPago]);
+                if (lockNew.closed) {
+                    return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${lockNew.lockedDate} para la cuenta seleccionada.` } };
+                }
 
-            const docRef = referencia_pago || orden.factura_numero || orden.numero_orden;
-            const concepto = `Pago Pedido Combustible #${orden.numero_orden} - ${orden.estacion_nombre || 'Puma'}${observaciones ? ' (' + observaciones + ')' : ''}`;
+                let tipoRemesaCode = (tipo_pago || '').toUpperCase().includes('CHEQ') ? 'CH' : 'TR';
+                const [remesas] = await conn.query('SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1', [cta.empresa_id, tipoRemesaCode]);
+                const tipoRemesaId = remesas[0]?.id || null;
 
-            if (movimientoId) {
-                await db.query(`
-                    UPDATE movimientos_bancarios SET
-                        cuenta_bancaria_id = ?,
-                        fecha = ?,
-                        documento = ?,
-                        concepto = ?,
-                        monto = ?,
-                        cargo = ?,
-                        tipo_remesa_id = ?
-                    WHERE id = ?
-                `, [cta.id, fecha_pago, docRef, concepto, monto_pagado, monto_pagado, tipoRemesaId, movimientoId]);
-            } else {
-                const [movResult] = await db.query(`
-                    INSERT INTO movimientos_bancarios (
-                        empresa_id, cuenta_bancaria_id, fecha, documento, concepto,
-                        monto, cargo, abono, tipo_remesa_id, num_partida, es_contabilizado
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, 0)
-                `, [cta.empresa_id, cta.id, fecha_pago, docRef, concepto, monto_pagado, monto_pagado, tipoRemesaId]);
-                movimientoId = movResult.insertId;
+                const docRef = String(referencia_pago || orden.factura_numero || orden.numero_orden).slice(0, 100);
+                const concepto = `Pago Pedido Combustible #${orden.numero_orden} - ${orden.estacion_nombre || 'Puma'}${observaciones ? ' (' + observaciones + ')' : ''}`.toUpperCase().slice(0, 255);
+                const fp = computeMovementFingerprint({ cuentaBancariaId: cta.id, fecha: dbFechaPago, documento: docRef, cargo: montoPag, abono: 0, concepto });
+
+                let existingMov = null;
+                if (movimientoId) {
+                    const [movRows] = await conn.query('SELECT * FROM movimientos_bancarios WHERE id = ? FOR UPDATE', [movimientoId]);
+                    existingMov = movRows?.[0] || null;
+                    if (existingMov && !existingMov.deleted_at) {
+                        if (existingMov.es_contabilizado) {
+                            return { errorStatus: 409, errorBody: { message: 'El movimiento bancario vinculado ya está contabilizado.' } };
+                        }
+                        if (existingMov.fecha_aplicado) {
+                            return { errorStatus: 409, errorBody: { message: 'El movimiento bancario vinculado ya fue conciliado. Desconcilie primero antes de modificar el pago.' } };
+                        }
+                        const lockOld = await isDateInClosedPeriod(conn, existingMov.cuenta_bancaria_id, [existingMov.fecha]);
+                        if (lockOld.closed) {
+                            return { errorStatus: 423, errorBody: { message: `El movimiento original pertenece a un período cerrado (${lockOld.lockedDate}).` } };
+                        }
+                        await conn.query(`
+                            UPDATE movimientos_bancarios SET
+                                empresa_id = ?,
+                                cuenta_bancaria_id = ?,
+                                fecha = ?,
+                                documento = ?,
+                                concepto = ?,
+                                monto = ?,
+                                cargo = ?,
+                                abono = 0,
+                                tipo_remesa_id = ?,
+                                fingerprint = ?,
+                                updated_by = ?,
+                                version = version + 1
+                            WHERE id = ?
+                        `, [cta.empresa_id, cta.id, dbFechaPago, docRef, concepto, montoPag, montoPag, tipoRemesaId, fp, req.user?.id || null, movimientoId]);
+                    } else {
+                        movimientoId = null;
+                    }
+                }
+
+                if (!movimientoId) {
+                    const [movResult] = await conn.query(`
+                        INSERT INTO movimientos_bancarios (
+                            empresa_id, cuenta_bancaria_id, fecha, documento, concepto,
+                            monto, cargo, abono, tipo_remesa_id, num_partida, es_contabilizado,
+                            created_by, fingerprint, version
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, 0, ?, ?, 1)
+                    `, [cta.empresa_id, cta.id, dbFechaPago, docRef, concepto, montoPag, montoPag, tipoRemesaId, req.user?.id || null, fp]);
+                    movimientoId = movResult.insertId;
+                }
+
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: cta.id,
+                    entidad: 'portal_pedidos_pago',
+                    entidadId: numero_orden,
+                    accion: existingMov ? 'UPDATE_PAGO_PEDIDO' : 'CREATE_PAGO_PEDIDO',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    after: { movimiento_bancario_id: movimientoId, monto: montoPag, fecha: dbFechaPago }
+                });
             }
+
+            const montoTotal = Number(orden.monto_total || 0);
+            const nuevoEstadoPago = montoPag >= montoTotal ? 'PAGADO' : 'PARCIAL';
+
+            await conn.query(`
+                UPDATE portal_pedidos SET
+                    cuenta_bancaria_id = ?,
+                    movimiento_bancario_id = ?,
+                    tipo_pago = ?,
+                    referencia_pago = ?,
+                    fecha_pago = ?,
+                    monto_pagado = ?,
+                    observaciones_pago = ?,
+                    estado_pago = ?,
+                    listo_conciliacion = ?
+                WHERE numero_orden = ?
+            `, [
+                cta.id,
+                movimientoId,
+                tipo_pago || 'Transferencia',
+                referencia_pago || null,
+                dbFechaPago,
+                montoPag,
+                observaciones || null,
+                nuevoEstadoPago,
+                alistar_conciliacion ? 1 : 0,
+                numero_orden
+            ]);
+
+            return { cta, movimientoId, nuevoEstadoPago };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
-
-        const montoTotal = Number(orden.monto_total || 0);
-        const montoPag = Number(monto_pagado || 0);
-        const nuevoEstadoPago = montoPag >= montoTotal ? 'PAGADO' : 'PARCIAL';
-
-        await db.query(`
-            UPDATE portal_pedidos SET
-                cuenta_bancaria_id = ?,
-                movimiento_bancario_id = ?,
-                tipo_pago = ?,
-                referencia_pago = ?,
-                fecha_pago = ?,
-                monto_pagado = ?,
-                observaciones_pago = ?,
-                estado_pago = ?,
-                listo_conciliacion = ?
-            WHERE numero_orden = ?
-        `, [
-            cta.id,
-            movimientoId,
-            tipo_pago || 'Transferencia',
-            referencia_pago || null,
-            fecha_pago,
-            montoPag,
-            observaciones || null,
-            nuevoEstadoPago,
-            alistar_conciliacion ? 1 : 0,
-            numero_orden
-        ]);
 
         const io = req.app.get('io');
         if (io) {
-            io.emit('portal_pedidos_updated', { numero_orden, estado_pago: nuevoEstadoPago });
-            io.emit('movimientos_updated', { cuenta_id: cta.id });
+            io.emit('portal_pedidos_updated', { numero_orden, estado_pago: txResult.nuevoEstadoPago });
+            emitBankUpdate(io, 'movimientos_updated', { cuenta_bancaria_id: txResult.cta.id });
+            emitBankUpdate(io, 'conciliacion_updated', { cuenta_bancaria_id: txResult.cta.id });
         }
 
         res.json({
             success: true,
             message: 'Pago vinculado exitosamente y alistado para conciliación bancaria',
-            movimiento_bancario_id: movimientoId,
-            estado_pago: nuevoEstadoPago
+            movimiento_bancario_id: txResult.movimientoId,
+            estado_pago: txResult.nuevoEstadoPago
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al vincular pago con pedido');
@@ -2672,43 +2732,69 @@ router.patch('/operaciones/portal/metodo-pago/:numero_orden', authenticateToken,
     try {
         const { numero_orden } = req.params;
         const { tipo_pago, cuenta_bancaria_id } = req.body;
-        const db = getDb();
-        const [ordRows] = await db.query('SELECT * FROM portal_pedidos WHERE numero_orden = ?', [numero_orden]);
-        if (ordRows.length === 0) return res.status(404).json({ message: 'Pedido no encontrado' });
-        const orden = ordRows[0];
 
-        const nextTipoPago = tipo_pago !== undefined ? (String(tipo_pago || '').trim() || 'Transferencia') : (orden.tipo_pago || 'Transferencia');
-        const nextCuentaId = cuenta_bancaria_id !== undefined ? (cuenta_bancaria_id || null) : orden.cuenta_bancaria_id;
+        const txResult = await withTransaction(async (conn) => {
+            const [ordRows] = await conn.query('SELECT * FROM portal_pedidos WHERE numero_orden = ? FOR UPDATE', [numero_orden]);
+            if (ordRows.length === 0) return { errorStatus: 404, errorBody: { message: 'Pedido no encontrado' } };
+            const orden = ordRows[0];
 
-        await db.query(
-            'UPDATE portal_pedidos SET tipo_pago = ?, cuenta_bancaria_id = ? WHERE numero_orden = ?',
-            [nextTipoPago, nextCuentaId, numero_orden]
-        );
+            const nextTipoPago = tipo_pago !== undefined ? (String(tipo_pago || '').trim() || 'Transferencia') : (orden.tipo_pago || 'Transferencia');
+            const nextCuentaId = cuenta_bancaria_id !== undefined ? (cuenta_bancaria_id || null) : orden.cuenta_bancaria_id;
 
-        if (orden.movimiento_bancario_id && nextCuentaId) {
-            const [ctaRows] = await db.query('SELECT * FROM cuentas_bancarias WHERE id = ?', [nextCuentaId]);
-            if (ctaRows.length > 0) {
-                const cta = ctaRows[0];
-                const tipoRemesaCode = nextTipoPago.toUpperCase().includes('CHEQ') ? 'CH' : 'TR';
-                const [remesas] = await db.query('SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1', [cta.empresa_id, tipoRemesaCode]);
-                const tipoRemesaId = remesas[0]?.id || null;
-                await db.query(
-                    'UPDATE movimientos_bancarios SET cuenta_bancaria_id = ?, tipo_remesa_id = ? WHERE id = ?',
-                    [cta.id, tipoRemesaId, orden.movimiento_bancario_id]
-                );
+            if (orden.movimiento_bancario_id && nextCuentaId) {
+                const [movRows] = await conn.query('SELECT * FROM movimientos_bancarios WHERE id = ? FOR UPDATE', [orden.movimiento_bancario_id]);
+                const mov = movRows?.[0];
+                if (mov && !mov.deleted_at) {
+                    if (mov.es_contabilizado || mov.fecha_aplicado) {
+                        return { errorStatus: 409, errorBody: { message: 'El movimiento bancario ya fue conciliado o contabilizado. Desconcilie primero en Bancos.' } };
+                    }
+                    const [ctaRows] = await conn.query('SELECT * FROM cuentas_bancarias WHERE id = ? AND activa = TRUE', [nextCuentaId]);
+                    if (ctaRows.length === 0) {
+                        return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria destino no encontrada o inactiva.' } };
+                    }
+                    const cta = ctaRows[0];
+                    const lockOld = await isDateInClosedPeriod(conn, mov.cuenta_bancaria_id, [mov.fecha]);
+                    const lockNew = await isDateInClosedPeriod(conn, cta.id, [mov.fecha]);
+                    if (lockOld.closed || lockNew.closed) {
+                        return { errorStatus: 423, errorBody: { message: 'La fecha del movimiento pertenece a un período cerrado en conciliación.' } };
+                    }
+
+                    const tipoRemesaCode = nextTipoPago.toUpperCase().includes('CHEQ') ? 'CH' : 'TR';
+                    const [remesas] = await conn.query('SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1', [cta.empresa_id, tipoRemesaCode]);
+                    const tipoRemesaId = remesas[0]?.id || null;
+
+                    await conn.query(
+                        'UPDATE movimientos_bancarios SET empresa_id = ?, cuenta_bancaria_id = ?, tipo_remesa_id = ?, updated_by = ?, version = version + 1 WHERE id = ?',
+                        [cta.empresa_id, cta.id, tipoRemesaId, req.user?.id || null, orden.movimiento_bancario_id]
+                    );
+                }
             }
+
+            await conn.query(
+                'UPDATE portal_pedidos SET tipo_pago = ?, cuenta_bancaria_id = ? WHERE numero_orden = ?',
+                [nextTipoPago, nextCuentaId, numero_orden]
+            );
+
+            return { nextTipoPago, nextCuentaId };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
 
         const io = req.app.get('io');
         if (io) {
-            io.emit('portal_pedidos_updated', { numero_orden, tipo_pago: nextTipoPago, cuenta_bancaria_id: nextCuentaId });
+            io.emit('portal_pedidos_updated', { numero_orden, tipo_pago: txResult.nextTipoPago, cuenta_bancaria_id: txResult.nextCuentaId });
+            if (txResult.nextCuentaId) {
+                emitBankUpdate(io, 'movimientos_updated', { cuenta_bancaria_id: txResult.nextCuentaId });
+            }
         }
 
         res.json({
             success: true,
             message: 'Método de pago actualizado',
-            tipo_pago: nextTipoPago,
-            cuenta_bancaria_id: nextCuentaId
+            tipo_pago: txResult.nextTipoPago,
+            cuenta_bancaria_id: txResult.nextCuentaId
         });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar método de pago');
@@ -2719,37 +2805,69 @@ router.patch('/operaciones/portal/metodo-pago/:numero_orden', authenticateToken,
 router.post('/operaciones/portal/desvincular-pago', authenticateToken, requirePermission(['manage_pedidos', '/dashboard/operaciones/pedidos']), async (req, res) => {
     try {
         const { numero_orden } = req.body;
-        const db = getDb();
-        const [ordRows] = await db.query('SELECT * FROM portal_pedidos WHERE numero_orden = ?', [numero_orden]);
-        if (ordRows.length === 0) return res.status(404).json({ message: 'Pedido no encontrado' });
-        const orden = ordRows[0];
+        const txResult = await withTransaction(async (conn) => {
+            const [ordRows] = await conn.query('SELECT * FROM portal_pedidos WHERE numero_orden = ? FOR UPDATE', [numero_orden]);
+            if (ordRows.length === 0) return { errorStatus: 404, errorBody: { message: 'Pedido no encontrado' } };
+            const orden = ordRows[0];
 
-        if (orden.movimiento_bancario_id) {
-            const [movRows] = await db.query('SELECT fecha_aplicado FROM movimientos_bancarios WHERE id = ?', [orden.movimiento_bancario_id]);
-            if (movRows.length > 0 && movRows[0].fecha_aplicado) {
-                return res.status(400).json({ message: 'El movimiento bancario ya fue conciliado. Desconcilie primero en Conciliación Bancaria antes de desvincular.' });
+            let cuentaAffected = orden.cuenta_bancaria_id || null;
+            if (orden.movimiento_bancario_id) {
+                const [movRows] = await conn.query('SELECT * FROM movimientos_bancarios WHERE id = ? FOR UPDATE', [orden.movimiento_bancario_id]);
+                const mov = movRows?.[0];
+                if (mov && !mov.deleted_at) {
+                    if (mov.es_contabilizado) {
+                        return { errorStatus: 409, errorBody: { message: 'El movimiento bancario ya fue contabilizado.' } };
+                    }
+                    if (mov.fecha_aplicado) {
+                        return { errorStatus: 409, errorBody: { message: 'El movimiento bancario ya fue conciliado. Desconcilie primero en Conciliación Bancaria antes de desvincular.' } };
+                    }
+                    const lockCheck = await isDateInClosedPeriod(conn, mov.cuenta_bancaria_id, [mov.fecha]);
+                    if (lockCheck.closed) {
+                        return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${lockCheck.lockedDate}.` } };
+                    }
+                    cuentaAffected = mov.cuenta_bancaria_id;
+                    await conn.query(
+                        'UPDATE movimientos_bancarios SET deleted_at = NOW(), deleted_by = ?, motivo_eliminacion = ?, version = version + 1 WHERE id = ?',
+                        [req.user?.id || null, `Desvinculación de pago pedido #${numero_orden}`, orden.movimiento_bancario_id]
+                    );
+                    await recordBankAudit(conn, {
+                        cuentaBancariaId: mov.cuenta_bancaria_id,
+                        entidad: 'movimientos_bancarios',
+                        entidadId: orden.movimiento_bancario_id,
+                        accion: 'SOFT_DELETE_PEDIDO_DESVINCULAR',
+                        user: req.user,
+                        ipAddress: req.ip,
+                        before: { id: mov.id, monto: Number(mov.monto), documento: mov.documento }
+                    });
+                }
             }
-            await db.query('DELETE FROM movimientos_bancarios WHERE id = ?', [orden.movimiento_bancario_id]);
-        }
 
-        await db.query(`
-            UPDATE portal_pedidos SET
-                cuenta_bancaria_id = NULL,
-                movimiento_bancario_id = NULL,
-                cheque_id = NULL,
-                referencia_pago = NULL,
-                fecha_pago = NULL,
-                monto_pagado = 0,
-                observaciones_pago = NULL,
-                estado_pago = 'PENDIENTE',
-                listo_conciliacion = 0
-            WHERE numero_orden = ?
-        `, [numero_orden]);
+            await conn.query(`
+                UPDATE portal_pedidos SET
+                    cuenta_bancaria_id = NULL,
+                    movimiento_bancario_id = NULL,
+                    cheque_id = NULL,
+                    referencia_pago = NULL,
+                    fecha_pago = NULL,
+                    monto_pagado = 0,
+                    observaciones_pago = NULL,
+                    estado_pago = 'PENDIENTE',
+                    listo_conciliacion = 0
+                WHERE numero_orden = ?
+            `, [numero_orden]);
+
+            return { cuentaAffected };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
 
         const io = req.app.get('io');
         if (io) {
             io.emit('portal_pedidos_updated', { numero_orden, estado_pago: 'PENDIENTE' });
-            io.emit('movimientos_updated', {});
+            emitBankUpdate(io, 'movimientos_updated', { cuenta_bancaria_id: txResult.cuentaAffected });
+            emitBankUpdate(io, 'conciliacion_updated', { cuenta_bancaria_id: txResult.cuentaAffected });
         }
 
         res.json({ success: true, message: 'Pago desvinculado del pedido' });

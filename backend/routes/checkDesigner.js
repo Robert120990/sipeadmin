@@ -9,6 +9,7 @@ const checkDesignerPerms = [
     '/dashboard/bancos/check-designer',
     '/dashboard/bancos/cheques',
     '/dashboard/bancos/impresion-cheques',
+    '/dashboard/bancos/reportes/impresion-cheques',
     'manage_cheques'
 ];
 

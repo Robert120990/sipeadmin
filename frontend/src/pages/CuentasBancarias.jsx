@@ -10,6 +10,7 @@ export default function CuentasBancarias() {
     const [empresas, setEmpresas] = useState([]);
     const [tipos, setTipos] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [submitting, setSubmitting] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [editingAccount, setEditingAccount] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -39,7 +40,9 @@ export default function CuentasBancarias() {
         activa: 'S',
         cod_tipo: '',
         cod_cta: '',
-        orden: ''
+        orden: '',
+        saldo_inicial: '0.00',
+        fecha_saldo_inicial: ''
     });
     const { addToast } = useToast();
 
@@ -197,7 +200,9 @@ export default function CuentasBancarias() {
                 activa: account.activa,
                 cod_tipo: account.cod_tipo || '',
                 cod_cta: account.cod_cta || '',
-                orden: ordenValue
+                orden: ordenValue,
+                saldo_inicial: account.saldo_inicial !== undefined && account.saldo_inicial !== null ? String(account.saldo_inicial) : '0.00',
+                fecha_saldo_inicial: account.fecha_saldo_inicial || ''
             });
             setEditingAccount(account);
             await fetchCatalogsForCompany(account.id_empresa, true);
@@ -212,7 +217,9 @@ export default function CuentasBancarias() {
                 activa: 'S',
                 cod_tipo: '',
                 cod_cta: '',
-                orden: ''
+                orden: '',
+                saldo_inicial: '0.00',
+                fecha_saldo_inicial: ''
             });
             if (firstEmp) await fetchCatalogsForCompany(firstEmp, false);
         }
@@ -221,6 +228,8 @@ export default function CuentasBancarias() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (submitting) return;
+        setSubmitting(true);
         try {
             if (editingAccount) {
                 await api.put(`/bancos/cuentas/${editingAccount.corr}`, formData);
@@ -232,7 +241,9 @@ export default function CuentasBancarias() {
             setShowModal(false);
             fetchData();
         } catch (err) {
-            addToast('Error al guardar la cuenta', 'error');
+            addToast(err.response?.data?.message || 'Error al guardar la cuenta', 'error');
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -418,6 +429,7 @@ export default function CuentasBancarias() {
                                 style={{ width: '100%', padding: '0.75rem', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', color: 'var(--text)' }}
                                 value={formData.id_empresa}
                                 onChange={e => handleCompanyChange(e.target.value)}
+                                disabled={Boolean(editingAccount)}
                                 required
                             >
                                 <option value="">Seleccione Empresa</option>
@@ -581,13 +593,37 @@ export default function CuentasBancarias() {
                         </div>
                     </div>
 
+                    <div className="form-grid form-grid-2">
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>Saldo Inicial ($) (Opcional)</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={formData.saldo_inicial}
+                                onChange={e => setFormData({ ...formData, saldo_inicial: e.target.value })}
+                            />
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                Por defecto $0.00 para cuentas que ya contienen su historial inicial migrado.
+                            </span>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>Fecha Saldo Inicial (Opcional)</label>
+                            <input
+                                type="date"
+                                value={formData.fecha_saldo_inicial || ''}
+                                onChange={e => setFormData({ ...formData, fecha_saldo_inicial: e.target.value })}
+                            />
+                        </div>
+                    </div>
+
                     <div style={{ marginTop: '0.5rem', display: 'flex', gap: '1rem' }}>
-                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }}>
+                        <button type="button" onClick={() => setShowModal(false)} className="btn-secondary" style={{ flex: 1 }} disabled={submitting}>
                             Cancelar
                         </button>
-                        <button type="submit" className="btn-primary" style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
+                        <button type="submit" className="btn-primary" disabled={submitting} style={{ flex: 2, display: 'flex', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
                             <Save size={18} />
-                            {editingAccount ? 'Actualizar Cuenta' : 'Guardar Cuenta'}
+                            {submitting ? 'Guardando...' : (editingAccount ? 'Actualizar Cuenta' : 'Guardar Cuenta')}
                         </button>
                     </div>
                 </form>

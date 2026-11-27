@@ -109,12 +109,29 @@ const getSaldosBancosData = async () => {
         if (db) {
             const [bRows] = await db.query(`
                 SELECT b.descripcion as banco, c.nombre as cuenta_desc, c.numero as cuenta,
-                       COALESCE(SUM(m.abono - m.cargo), 0) as saldo
+                       (
+                           COALESCE(c.saldo_inicial, 0) +
+                           COALESCE((
+                               SELECT SUM(m.abono - m.cargo)
+                               FROM movimientos_bancarios m
+                               WHERE m.cuenta_bancaria_id = c.id
+                                 AND m.deleted_at IS NULL
+                                 AND (c.fecha_saldo_inicial IS NULL OR m.fecha >= c.fecha_saldo_inicial)
+                           ), 0) -
+                           COALESCE((
+                               SELECT SUM(ch.valor)
+                               FROM cheques ch
+                               WHERE ch.cuenta_bancaria_id = c.id
+                                 AND ch.deleted_at IS NULL
+                                 AND ch.cheque_anulado = FALSE
+                                 AND ch.fue_noemitido = FALSE
+                                 AND ch.es_reservado = FALSE
+                                 AND (c.fecha_saldo_inicial IS NULL OR ch.fecha >= c.fecha_saldo_inicial)
+                           ), 0)
+                       ) as saldo
                 FROM cuentas_bancarias c
                 LEFT JOIN bancos b ON c.banco_id = b.id
-                LEFT JOIN movimientos_bancarios m ON c.id = m.cuenta_bancaria_id
                 WHERE c.activa = 1
-                GROUP BY c.id, b.descripcion, c.nombre, c.numero
                 HAVING saldo > 0
                 ORDER BY saldo DESC
             `);

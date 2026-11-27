@@ -638,7 +638,7 @@ async function resolveApprovalAction({
                 await activeDb.query(
                     `UPDATE cheques
                      SET es_reservado = 1,
-                         concepto = LEFT(CONCAT('[DETENIDO GERENCIA TG] ', COALESCE(concepto, '')), 255)
+                         concepto = LEFT(CONCAT('[DETENIDO GERENCIA TG] ', COALESCE(concepto, '')), 200)
                      WHERE id = ?`,
                     [chequeId]
                 );

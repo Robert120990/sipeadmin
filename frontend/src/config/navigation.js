@@ -127,6 +127,14 @@ export const systemNavItems = [
 ];
 
 export const specialActionPermissions = [
+    { name: 'Autorizar Reapertura de Períodos de Conciliación', path: 'approve_reapertura_conciliacion', icon: createColorIcon('fluent-emoji-flat:balance-scale') },
+    { name: 'Cerrar Períodos de Conciliación Bancaria', path: 'close_conciliacion_periodo', icon: createColorIcon('flat-color-icons:privacy') },
+    { name: 'Modificar Montos en Conciliación Bancaria', path: 'edit_monto_conciliacion', icon: createColorIcon('flat-color-icons:currency-exchange') },
+    { name: 'Conciliar y Desconciliar Movimientos', path: 'manage_conciliacion_bancaria', icon: createColorIcon('flat-color-icons:rules') },
+    { name: 'Consultar Conciliación Bancaria (Solo Lectura)', path: 'view_conciliacion_bancaria', icon: createColorIcon('flat-color-icons:view-details') },
+    { name: 'Gestionar Cuentas Bancarias', path: 'manage_cuentas', icon: createColorIcon('fluent-emoji-flat:bank') },
+    { name: 'Gestionar Movimientos Bancarios', path: 'manage_movimientos', icon: createColorIcon('flat-color-icons:money-transfer') },
+    { name: 'Gestionar Cheques Bancarios', path: 'manage_cheques', icon: createColorIcon('flat-color-icons:currency-exchange') },
     { name: 'Gestionar y Resolver Tickets (Soporte / AGY)', path: 'manage_support_tickets', icon: createColorIcon('flat-color-icons:online-support') },
     { name: 'Autorizar Pagos de Planillas RRHH', path: 'pay_rrhh_planillas', icon: createColorIcon('flat-color-icons:money-transfer') },
     { name: 'Consultar y Exportar Planillas RRHH', path: 'view_rrhh_planillas', icon: createColorIcon('fluent-color:people-community-24') },

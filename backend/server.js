@@ -149,12 +149,19 @@ io.on("connection", (socket) => {
             socket.join('role_admin');
             socket.join('perm_support_tickets');
             socket.join('perm_finanzas_crecimiento');
+            socket.join('perm_bancos');
         } else {
             if (perms.includes('manage_support_tickets')) {
                 socket.join('perm_support_tickets');
             }
             if (perms.includes('manage_finanzas_crecimiento') || perms.includes('/dashboard/finanzas/crecimiento')) {
                 socket.join('perm_finanzas_crecimiento');
+            }
+            if (perms.some(p =>
+                String(p).startsWith('/dashboard/bancos/') ||
+                ['manage_conciliacion_bancaria', 'view_conciliacion_bancaria', 'manage_movimientos', 'manage_cheques', 'manage_cuentas', 'approve_reapertura_conciliacion', 'close_conciliacion_periodo'].includes(p)
+            )) {
+                socket.join('perm_bancos');
             }
         }
     }
