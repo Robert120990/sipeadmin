@@ -29,7 +29,7 @@ export const TUTORIAL_CATEGORIES = [
         label: 'Bancos y Cheques',
         shortLabel: 'Bancos',
         color: '#10b981',
-        description: 'Cuentas bancarias, movimientos y transferencias, conciliación multibanco, cheques normales/contado, diseñador, impresión y reportes.'
+        description: 'Cuentas con saldo inicial, movimientos y transferencias atómicas, conciliación multibanco Excel/CSV, cierre de períodos, reaperturas, auditoría, cheques e impresión.'
     },
     {
         id: 'productividad',

@@ -88,17 +88,17 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                 verify: 'El inventario de la estación recibe la carga y el pedido figura bajo la pestaña Recibidos.'
             },
             {
-                title: 'Paso 6 · Conciliar el Pago en "Conciliación Bancaria"',
+                title: 'Paso 6 · Conciliar el Pago en "Conciliación Bancaria" y Cerrar Corte',
                 location: 'Bancos → Conciliación Bancaria',
                 route: '/dashboard/bancos/conciliacion',
                 routeLabel: 'Abrir Conciliación Bancaria',
-                summary: 'Aplica la fecha de cobro real cuando aparezca en el estado de cuenta del banco.',
+                summary: 'Aplica la fecha de cobro real mediante el Importador Multibanco o PENDIENTES y cuadra DIF REAL en $0.00.',
                 instructions: [
                     'Selecciona la cuenta bancaria desde la que se pagó la pipa.',
-                    'Cruza mediante "Importar Extracto" o aplica manualmente en PENDIENTES con la fecha real del cargo bancario.',
-                    'Valida que la diferencia del saldo bancario cierre en $0.00.'
+                    'Cruza mediante "Importar Extracto" (Excel/CSV o pegado; concilia usando la fecha real de cada transacción del banco) o aplica manualmente en PENDIENTES.',
+                    'Verifica la ecuación oficial de partidas en tránsito hasta lograr DIF REAL = $0.00 y guarda la validación en "PROCESAR Y GUARDAR" (marcando "Cerrar período" cuando sea el cierre oficial del corte).'
                 ],
-                verify: 'El ciclo completo queda 100% cerrado: tanque abastecido, inventario RRS actualizado, factura ingresada y banco cuadrado.'
+                verify: 'El ciclo completo queda 100% cerrado y blindado: tanque abastecido, inventario RRS actualizado, factura ingresada y banco cuadrado.'
             }
         ],
         successChecklist: [
@@ -135,7 +135,7 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
             '2. Subir Comprobante → Auto-OCR IA',
             '3. Confirmar Cuenta Bancaria y Guardar Abono',
             '4. Abrir Conciliación → Pestaña CONTROL PAGOS',
-            '5. Vincular o Crear y Conciliar → Validar $0.00'
+            '5. Vincular / Crear → DIF REAL $0.00 y Cerrar Período'
         ],
         steps: [
             {
@@ -175,15 +175,16 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                 verify: 'El pago aparece en la lista de sugerencias de Conciliación con su referencia, monto y ubicación.'
             },
             {
-                title: 'Paso 4 · Vincular o Crear & Conciliar y Validar Saldo en $0.00',
-                location: 'Conciliación Bancaria → Pestaña CONTROL PAGOS → Validar Saldo',
-                summary: 'Deja el movimiento reflejado y aplicado en bancos sin digitarlo dos veces.',
+                title: 'Paso 4 · Vincular o Crear & Conciliar, Validar $0.00 y Cerrar Período',
+                location: 'Conciliación Bancaria → Pestaña CONTROL PAGOS → PROCESAR Y GUARDAR',
+                summary: 'Deja el movimiento reflejado y aplicado en bancos sin digitarlo dos veces, y sella el período cerrado.',
                 instructions: [
                     'Define la Fecha Aplicado según tu estado de cuenta.',
                     'Si el movimiento ya existía en libros, pulsa "Vincular"; si no existía, pulsa "Crear y Conciliar".',
-                    'Ingresa el Saldo Real del Banco, confirma Diferencia $0.00 y guarda la Validación de Saldo.'
+                    'Ingresa "*SALDO EN BANCO", verifica la ecuación de partidas en tránsito (Chequera − Abonos en Tránsito + Cheques/Cargos en Tránsito = Saldo Conciliado) hasta confirmar DIF REAL = $0.00.',
+                    'Pulsa "PROCESAR Y GUARDAR" para registrar la validación y, si es cierre oficial, marca "Cerrar período de conciliación" para blindar las fechas contra cambios retroactivos.'
                 ],
-                verify: 'El pago está cancelado con comprobante en Operaciones, aplicado en Bancos y reflejado en Flujo de Caja.'
+                verify: 'El pago está cancelado con comprobante en Operaciones, aplicado y protegido con candado en Bancos, y reflejado en Flujo de Caja.'
             }
         ],
         successChecklist: [
@@ -223,16 +224,16 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
         ],
         steps: [
             {
-                title: 'Paso 1 · Confirmar Cuenta Bancaria activa y Formato calibrado',
+                title: 'Paso 1 · Confirmar Cuenta Bancaria (con Saldo Inicial) y Formato calibrado',
                 location: 'Bancos → Cuentas Bancarias y Diseñador de Cheques',
                 route: '/dashboard/bancos/check-designer',
                 routeLabel: 'Ir al Diseñador de Cheques',
-                summary: 'Paso único por banco: asegura que la cuenta tenga cuenta contable y el banco tenga su plantilla activa.',
+                summary: 'Paso único por banco: asegura que la cuenta esté activa con cod_cta/saldo inicial y que el banco tenga su plantilla activa.',
                 instructions: [
-                    'Verifica en Cuentas Bancarias que la cuenta esté Activa y tenga su cod_cta asignado.',
+                    'Verifica en Cuentas Bancarias que la cuenta esté Activa, tenga su cod_cta asignado y, si es nueva sin historial previo, su Saldo Inicial y Fecha Saldo Inicial.',
                     'Verifica en Diseñador de Cheques que exista un formato Activo para ese banco y que haya pasado la prueba a contraluz en hoja Carta.'
                 ],
-                verify: 'El banco cuenta con plantilla activa lista para autoselección.'
+                verify: 'El banco cuenta con plantilla activa lista para autoselección y saldos iniciales exactos.'
             },
             {
                 title: 'Paso 2 · Emitir cheques (Normales o de Contado)',
@@ -280,7 +281,7 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
             {
                 symptom: 'Un cheque se atascó en la impresora y quedó inutilizable.',
                 cause: 'Atasco físico de papel durante el lote.',
-                solution: 'Marca ese número como "Anulado" en Bancos → Cheques, crea un nuevo registro con el siguiente folio físico libre e imprime solo ese nuevo cheque.'
+                solution: 'Marca ese número como "Anulado" en Bancos → Cheques (el sistema resguarda automáticamente los datos originales en auditoría y lo excluye del Total Emitido), crea un nuevo registro con el siguiente folio físico libre e imprime solo ese nuevo cheque.'
             }
         ]
     },

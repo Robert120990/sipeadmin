@@ -42,7 +42,8 @@ import { todayStr } from '../utils/date';
 
 const QUICK_SCENARIOS = [
     { label: 'Abastecer Estación (Fin a Fin)', tutorialId: 'flujo-ciclo-combustible', color: '#8b5cf6' },
-    { label: 'Conciliar Banco a $0.00', tutorialId: 'ban-conciliacion-bancaria', color: '#10b981' },
+    { label: 'Conciliar Banco (Extracto y $0.00)', tutorialId: 'ban-conciliacion-bancaria', color: '#10b981' },
+    { label: 'Cerrar Período / Reapertura', tutorialId: 'ban-periodos-auditoria', color: '#06b6d4' },
     { label: 'Registrar Pago con OCR IA', tutorialId: 'op-control-pagos', color: '#f59e0b' },
     { label: 'Imprimir Cheques en Lote', tutorialId: 'ban-impresion-cheques', color: '#3b82f6' },
     { label: 'Recibir Pipa en RRS', tutorialId: 'op-consulta-pedidos', color: '#ef4444' }
@@ -1131,7 +1132,7 @@ export default function CentroTutoriales() {
                                     type="text"
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
-                                    placeholder="Buscar por módulo, botón o problema (ej. multiparada, OCR, extracto, cheque anulado, transferencia)..."
+                                    placeholder="Buscar por módulo, botón o problema (ej. periodo cerrado, reapertura, extracto excel, multiparada, OCR, saldo inicial, candado)..."
                                     style={{ height: '36px', fontSize: '0.825rem', paddingLeft: '32px', paddingRight: searchQuery ? '30px' : '0.75rem' }}
                                 />
                                 {searchQuery && (
