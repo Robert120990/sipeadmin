@@ -54,3 +54,4 @@ export const EnergiaSolarAndelsa = lazy(() => import('./EnergiaSolarAndelsa'));
 export const SupportTickets = lazy(() => import('./SupportTickets'));
 export const ConfiguracionAgentesIA = lazy(() => import('./ConfiguracionAgentesIA'));
 export const ControlNAS = lazy(() => import('./ControlNAS'));
+export const CentroTutoriales = lazy(() => import('./CentroTutoriales'));

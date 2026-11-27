@@ -53,7 +53,8 @@ import {
     EnergiaSolarAndelsa,
     SupportTickets,
     ConfiguracionAgentesIA,
-    ControlNAS
+    ControlNAS,
+    CentroTutoriales
 } from '../pages/lazyPages';
 
 const ADMIN_ROLE_NAMES = new Set([
@@ -79,7 +80,7 @@ export const LEGACY_ROUTE_REDIRECTS = {
  * Evaluador único de permisos por ruta en el frontend (usado por PermissionRoute y DashboardLayout).
  */
 export function hasRoutePermission(user, path) {
-    if (!path || path === '/dashboard' || path === '/dashboard/settings/theme' || path === '/dashboard/seguridad/tickets') {
+    if (!path || path === '/dashboard' || path === '/dashboard/tutoriales' || path === '/dashboard/settings/theme' || path === '/dashboard/seguridad/tickets') {
         return true;
     }
     if (!user) return false;
@@ -120,6 +121,7 @@ const defineRoute = (relativePath, render, options = {}) => ({
  */
 export const DASHBOARD_ROUTES = [
     defineRoute('', () => <Dashboard />, { requiresPermission: false }),
+    defineRoute('tutoriales', () => <CentroTutoriales />, { requiresPermission: false }),
     defineRoute('users', () => <Users />),
     defineRoute('carriers', () => <Carriers />),
     defineRoute('tankers', () => <Tankers />),

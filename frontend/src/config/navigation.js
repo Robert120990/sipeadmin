@@ -1,7 +1,15 @@
 import { createColorIcon } from '../components/ColorIcon';
 
+export const tutorialesNavItem = {
+    name: 'Centro de Tutoriales',
+    path: '/dashboard/tutoriales',
+    icon: createColorIcon('flat-color-icons:idea'),
+    keywords: ['tutorial', 'tutoriales', 'guia', 'ayuda', 'manual', 'paso a paso', 'operaciones', 'bancos', 'conciliacion', 'cheques', 'pedidos', 'capacitacion']
+};
+
 export const mainNavItems = [
     { name: 'Dashboard', path: '/dashboard', icon: createColorIcon('fluent-color:home-24') },
+    tutorialesNavItem,
 ];
 
 export const estrategiaMenu = [

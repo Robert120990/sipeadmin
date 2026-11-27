@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, Palette, GitCommit, Search, Ticket } from 'lucide-react';
+import { LogOut, ChevronDown, ChevronRight, ChevronLeft, Shield, FileText, UserCircle, LayoutDashboard, X, Sun, Moon, Menu as MenuIcon, Home, MoreHorizontal, Palette, GitCommit, Search, Ticket, BookOpen } from 'lucide-react';
 import { useTheme } from '../components/ThemeProvider';
 import { useViewport } from '../hooks/useViewport';
 import NotificationBell from '../components/NotificationBell';
 import CommandPalette from '../components/CommandPalette';
 import { useTickets } from '../context/TicketContext';
 import ColorIcon from '../components/ColorIcon';
-import { catalogItems, bancosMenu, bancosReportes, finanzasMenu, rrhhMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
+import { tutorialesNavItem, catalogItems, bancosMenu, bancosReportes, finanzasMenu, rrhhMenu, operacionesMenu, consultasItemsRoot, consultasEstaciones, consultasOtras, securityItems, configuracionMenu, estrategiaMenu } from '../config/navigation';
 
 import LoadingFallback from '../components/LoadingFallback';
 import {
@@ -94,6 +94,7 @@ export default function DashboardLayout() {
     useEffect(() => {
         // Find the module in any of our navigation lists
         const allNavItems = [
+            tutorialesNavItem,
             ...estrategiaMenu,
             ...catalogItems, 
             ...operacionesMenu, 
@@ -286,7 +287,7 @@ export default function DashboardLayout() {
 
     const commandPaletteItems = useMemo(() => {
         const groups = [
-            { category: 'General', items: [{ name: 'Dashboard Principal', path: '/dashboard', icon: LayoutDashboard }] },
+            { category: 'General', items: [{ name: 'Dashboard Principal', path: '/dashboard', icon: LayoutDashboard }, tutorialesNavItem] },
             { category: 'Dirección Estratégica', items: filteredEstrategia },
             { category: 'Catálogos', items: filteredCatalogs },
             { category: 'Operaciones', items: filteredOperaciones },
@@ -364,6 +365,7 @@ export default function DashboardLayout() {
         return (
             <nav className={navClassName} style={variant === 'drawer' ? undefined : { flex: 1, overflowY: 'auto' }}>
                 {renderNavItem({ name: 'Dashboard', path: '/dashboard', icon: (p) => <ColorIcon icon="fluent-color:home-24" size={p.size || 20} /> })}
+                {renderNavItem(tutorialesNavItem)}
 
                 {filteredEstrategia.length > 0 && (
                     <div>
@@ -729,6 +731,28 @@ export default function DashboardLayout() {
                         </button>
                         <button
                             type="button"
+                            onClick={() => openTab(tutorialesNavItem)}
+                            title="Abrir Centro de Tutoriales paso a paso (Operaciones y Bancos)"
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                height: '32px',
+                                padding: '0 0.6rem',
+                                borderRadius: '8px',
+                                border: '1px solid rgba(16, 185, 129, 0.35)',
+                                background: 'rgba(16, 185, 129, 0.1)',
+                                color: '#10b981',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                            }}
+                        >
+                            <BookOpen size={14} />
+                            <span>Tutoriales</span>
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => openQuickTicket({ autoCapture: true })}
                             title="Reportar Ticket Rápido con Captura (Ctrl + Shift + K)"
                             style={{
@@ -845,6 +869,10 @@ export default function DashboardLayout() {
                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{user.role_id === 1 ? 'Administrador' : 'Usuario'}</div>
                             </div>
                         </div>
+                        <button className="sheet-item" onClick={() => { closeMore(); openTab(tutorialesNavItem); }}>
+                            <BookOpen size={18} />
+                            Centro de Tutoriales
+                        </button>
                         <button className="sheet-item" onClick={() => { closeMore(); openQuickTicket({ autoCapture: true }); }}>
                             <Ticket size={18} />
                             Nuevo Ticket de Soporte

@@ -1631,6 +1631,7 @@ const initDB = async () => {
         try {
             const canonicalPermissions = [
                 ['/dashboard', 'Panel principal operativo'],
+                ['/dashboard/tutoriales', 'Centro de Tutoriales y Guías Paso a Paso'],
                 ['/dashboard/carriers', 'Catálogo de Transportistas'],
                 ['/dashboard/tankers', 'Catálogo de Pipas'],
                 ['/dashboard/consultas/estaciones/ventas', 'Resumen de Ventas de Estaciones'],
