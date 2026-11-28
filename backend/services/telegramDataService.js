@@ -2,6 +2,7 @@ const dbModule = require('../db');
 const getDb = (...args) => dbModule.getDb(...args);
 const getExternalDb = (...args) => dbModule.getExternalDb(...args);
 const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
+const { computeAccountReconciliationSummary, round2 } = require('./bancosIntegrityService');
 const {
     BANK_NAME_MAP,
     escapeHtml,
@@ -56,7 +57,71 @@ const clearQueryCache = () => {
 };
 
 /**
- * Consulta de Saldos en Bancos (sp_saldo_en_bancos con fallback)
+ * Carga saldos bancarios unificados desde db_sipe_admin usando computeAccountReconciliationSummary.
+ * Retorna null si el catálogo local no está disponible o no tiene cuentas activas (para habilitar fallback a externalDb).
+ */
+const buildLocalAccountBalances = async (today) => {
+    const db = getDb();
+    if (!db) return null;
+
+    const [rows] = await db.query(`
+        SELECT c.id, c.numero, c.nombre, c.empresa_id,
+               COALESCE(e.codigo, '') AS empresa_codigo,
+               COALESCE(e.nombre, '') AS empresa,
+               COALESCE(b.descripcion, 'Banco') AS banco
+        FROM cuentas_bancarias c
+        LEFT JOIN bancos b ON c.banco_id = b.id
+        LEFT JOIN empresas e ON c.empresa_id = e.id
+        WHERE c.activa = 1
+        ORDER BY b.descripcion ASC, c.numero ASC
+    `);
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+        return null;
+    }
+
+    const summaries = await Promise.all(
+        rows.map(r => computeAccountReconciliationSummary(db, r.id, today))
+    );
+
+    const accounts = [];
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const summary = summaries[i];
+        if (!summary) continue;
+
+        const rawBank = String(r.banco || 'Banco').trim();
+        const banco = BANK_NAME_MAP[rawBank] || rawBank;
+        const numCta = String(r.numero || '');
+        const cuentaLabel = numCta
+            ? (r.nombre ? `${r.nombre} (${numCta})` : numCta)
+            : (r.nombre || 'Cuenta');
+
+        accounts.push({
+            id: r.id,
+            cuenta_bancaria_id: r.id,
+            empresa: r.empresa || '',
+            empresa_codigo: r.empresa_codigo || '',
+            banco,
+            cuenta: cuentaLabel,
+            numero: numCta,
+            num_cta: numCta,
+            raw_nom_banco: `${rawBank} - ${r.nombre || ''} - ${r.empresa || ''}`.trim(),
+            saldo_conciliado_libros: summary.saldo_conciliado_libros,
+            saldo_chequera: summary.saldo_chequera,
+            saldo_inicial: summary.saldo_inicial,
+            cheques_en_transito: summary.cheques_en_transito,
+            abonos_en_transito: summary.abonos_en_transito,
+            cargos_en_transito: summary.cargos_en_transito,
+            cargos_cheques_en_transito: summary.cargos_cheques_en_transito
+        });
+    }
+
+    return accounts;
+};
+
+/**
+ * Consulta de Saldos en Bancos (fuente local autoritativa via computeAccountReconciliationSummary, con fallback a sp_saldo_en_bancos)
  */
 const getSaldosBancosData = async () => {
     const cacheKey = 'saldos:bancos';
@@ -64,95 +129,113 @@ const getSaldosBancosData = async () => {
     if (cached) return cached;
 
     const today = getDateStr(0);
-    let bancosDetalle = [];
-    let totalBancos = 0;
 
     try {
-        const externalDb = await getExternalDb();
-        if (externalDb) {
+        const localAccounts = await buildLocalAccountBalances(today);
+        if (Array.isArray(localAccounts)) {
+            const cuentas = localAccounts
+                .filter(a => Math.abs(a.saldo_conciliado_libros) > 0.001)
+                .map(a => ({
+                    ...a,
+                    saldo: a.saldo_conciliado_libros
+                }))
+                .sort((a, b) => b.saldo - a.saldo);
+
+            const total = round2(cuentas.reduce((s, c) => s + Number(c.saldo || 0), 0));
+            const totalSaldoChequera = round2(cuentas.reduce((s, c) => s + Number(c.saldo_chequera || 0), 0));
+            const totalChequesEnTransito = round2(cuentas.reduce((s, c) => s + Number(c.cheques_en_transito || 0), 0));
+            const totalAbonosEnTransito = round2(cuentas.reduce((s, c) => s + Number(c.abonos_en_transito || 0), 0));
+            const totalCargosEnTransito = round2(cuentas.reduce((s, c) => s + Number(c.cargos_en_transito || 0), 0));
+
+            const result = {
+                total,
+                total_conciliado_libros: total,
+                total_saldo_chequera: totalSaldoChequera,
+                total_cheques_en_transito: totalChequesEnTransito,
+                total_abonos_en_transito: totalAbonosEnTransito,
+                total_cargos_en_transito: totalCargosEnTransito,
+                cuentas,
+                fecha: today,
+                fuente: 'local_conciliacion'
+            };
+            setCachedQuery(cacheKey, result, 30000);
+            return result;
+        }
+    } catch (localErr) {
+        console.warn('[TelegramBot] Error en cálculo local de Saldos en Bancos, intentando externalDb:', localErr.message);
+    }
+
+    // Fallback seguro a externalDb (si catálogo local está vacío o no disponible)
+    try {
+        const externalDb = await Promise.resolve(getExternalDb()).catch(() => null);
+        if (externalDb && typeof externalDb.query === 'function') {
             const [spResults] = await externalDb.query('CALL sp_saldo_en_bancos(?)', [today]);
             const rows = spResults && spResults[0] ? spResults[0] : [];
 
-            bancosDetalle = rows
-                .filter(r => Number(r.new_saldo || r.saldo || 0) > 0)
+            const bancosDetalle = rows
+                .filter(r => Math.abs(Number(r.new_saldo || r.saldo || 0)) > 0.001)
                 .map(r => {
                     const raw = (r.nom_banco || '').replace(/^A\s*-\s*/, '').trim();
                     const parts = raw.split(/\s*-\s*/);
                     const bancoKey = parts[0]?.trim() || 'Banco';
                     const banco = BANK_NAME_MAP[bancoKey] || bancoKey;
                     const cuentaDesc = parts.slice(1).join(' - ')?.trim() || r.num_cta || '';
-                    const saldo = Number(r.new_saldo || r.saldo || 0);
+                    const saldo = round2(Number(r.new_saldo || r.saldo || 0));
                     return {
+                        empresa: '',
                         banco,
                         cuenta: r.num_cta ? (cuentaDesc ? `${cuentaDesc} (${r.num_cta})` : r.num_cta) : cuentaDesc,
+                        numero: String(r.num_cta || ''),
                         num_cta: String(r.num_cta || ''),
                         raw_nom_banco: String(r.nom_banco || ''),
-                        saldo
+                        saldo,
+                        saldo_conciliado_libros: saldo,
+                        saldo_chequera: saldo,
+                        cheques_en_transito: 0,
+                        abonos_en_transito: 0,
+                        cargos_en_transito: 0
                     };
                 })
                 .sort((a, b) => b.saldo - a.saldo);
 
             if (bancosDetalle.length > 0) {
-                totalBancos = bancosDetalle.reduce((sum, b) => sum + b.saldo, 0);
-                const result = { total: totalBancos, cuentas: bancosDetalle, fecha: today, fuente: 'sp_saldo_en_bancos' };
+                const totalBancos = round2(bancosDetalle.reduce((sum, b) => sum + b.saldo, 0));
+                const result = {
+                    total: totalBancos,
+                    total_conciliado_libros: totalBancos,
+                    total_saldo_chequera: totalBancos,
+                    total_cheques_en_transito: 0,
+                    total_abonos_en_transito: 0,
+                    total_cargos_en_transito: 0,
+                    cuentas: bancosDetalle,
+                    fecha: today,
+                    fuente: 'sp_saldo_en_bancos'
+                };
                 setCachedQuery(cacheKey, result, 30000);
                 return result;
             }
         }
     } catch (err) {
-        console.warn('[TelegramBot] Error en sp_saldo_en_bancos, ejecutando fallback local:', err.message);
+        console.warn('[TelegramBot] Error en fallback sp_saldo_en_bancos:', err.message);
     }
 
-    // Fallback a cuentas locales
-    try {
-        const db = getDb();
-        if (db) {
-            const [bRows] = await db.query(`
-                SELECT b.descripcion as banco, c.nombre as cuenta_desc, c.numero as cuenta,
-                       (
-                           COALESCE(c.saldo_inicial, 0) +
-                           COALESCE((
-                               SELECT SUM(m.abono - m.cargo)
-                               FROM movimientos_bancarios m
-                               WHERE m.cuenta_bancaria_id = c.id
-                                 AND m.deleted_at IS NULL
-                                 AND (c.fecha_saldo_inicial IS NULL OR m.fecha >= c.fecha_saldo_inicial)
-                           ), 0) -
-                           COALESCE((
-                               SELECT SUM(ch.valor)
-                               FROM cheques ch
-                               WHERE ch.cuenta_bancaria_id = c.id
-                                 AND ch.deleted_at IS NULL
-                                 AND ch.cheque_anulado = FALSE
-                                 AND ch.fue_noemitido = FALSE
-                                 AND ch.es_reservado = FALSE
-                                 AND (c.fecha_saldo_inicial IS NULL OR ch.fecha >= c.fecha_saldo_inicial)
-                           ), 0)
-                       ) as saldo
-                FROM cuentas_bancarias c
-                LEFT JOIN bancos b ON c.banco_id = b.id
-                WHERE c.activa = 1
-                HAVING saldo > 0
-                ORDER BY saldo DESC
-            `);
-            bancosDetalle = (bRows || []).map(r => ({
-                banco: r.banco || 'Banco',
-                cuenta: r.cuenta ? `${r.cuenta_desc || ''} (${r.cuenta})`.trim() : (r.cuenta_desc || 'Cuenta'),
-                saldo: Number(r.saldo || 0)
-            }));
-            totalBancos = bancosDetalle.reduce((sum, b) => sum + b.saldo, 0);
-        }
-    } catch (localErr) {
-        console.warn('[TelegramBot] Error en fallback local de bancos:', localErr.message);
-    }
-
-    const result = { total: totalBancos, cuentas: bancosDetalle, fecha: today, fuente: 'local' };
-    setCachedQuery(cacheKey, result, 30000);
-    return result;
+    const emptyResult = {
+        total: 0,
+        total_conciliado_libros: 0,
+        total_saldo_chequera: 0,
+        total_cheques_en_transito: 0,
+        total_abonos_en_transito: 0,
+        total_cargos_en_transito: 0,
+        cuentas: [],
+        fecha: today,
+        fuente: 'local'
+    };
+    setCachedQuery(cacheKey, emptyResult, 30000);
+    return emptyResult;
 };
 
 /**
- * Consulta de Saldos en Chequera (sp_saldo_en_chequera con fallback)
+ * Consulta de Saldos en Chequera (fuente local autoritativa via computeAccountReconciliationSummary, con fallback a sp_saldo_en_chequera)
  */
 const getSaldosChequeraData = async () => {
     const cacheKey = 'saldos:chequeras';
@@ -160,16 +243,50 @@ const getSaldosChequeraData = async () => {
     if (cached) return cached;
 
     const today = getDateStr(0);
-    let chequerasDetalle = [];
-    let totalChequera = 0;
 
     try {
-        const externalDb = await getExternalDb();
-        if (externalDb) {
+        const localAccounts = await buildLocalAccountBalances(today);
+        if (Array.isArray(localAccounts)) {
+            const cuentas = localAccounts
+                .filter(a => Math.abs(a.saldo_chequera) > 0.001)
+                .map(a => ({
+                    ...a,
+                    saldo: a.saldo_chequera
+                }))
+                .sort((a, b) => b.saldo - a.saldo);
+
+            const total = round2(cuentas.reduce((s, c) => s + Number(c.saldo || 0), 0));
+            const totalConciliadoLibros = round2(cuentas.reduce((s, c) => s + Number(c.saldo_conciliado_libros || 0), 0));
+            const totalChequesEnTransito = round2(cuentas.reduce((s, c) => s + Number(c.cheques_en_transito || 0), 0));
+            const totalAbonosEnTransito = round2(cuentas.reduce((s, c) => s + Number(c.abonos_en_transito || 0), 0));
+            const totalCargosEnTransito = round2(cuentas.reduce((s, c) => s + Number(c.cargos_en_transito || 0), 0));
+
+            const result = {
+                total,
+                total_saldo_chequera: total,
+                total_conciliado_libros: totalConciliadoLibros,
+                total_cheques_en_transito: totalChequesEnTransito,
+                total_abonos_en_transito: totalAbonosEnTransito,
+                total_cargos_en_transito: totalCargosEnTransito,
+                cuentas,
+                fecha: today,
+                fuente: 'local_conciliacion'
+            };
+            setCachedQuery(cacheKey, result, 30000);
+            return result;
+        }
+    } catch (localErr) {
+        console.warn('[TelegramBot] Error en cálculo local de Saldos en Chequera, intentando externalDb:', localErr.message);
+    }
+
+    // Fallback seguro a externalDb
+    try {
+        const externalDb = await Promise.resolve(getExternalDb()).catch(() => null);
+        if (externalDb && typeof externalDb.query === 'function') {
             const [spResults] = await externalDb.query('CALL sp_saldo_en_chequera(?)', [today]);
             const rows = spResults && spResults[0] ? spResults[0] : [];
 
-            chequerasDetalle = rows
+            const chequerasDetalle = rows
                 .filter(r => Number(r.new_saldo ?? r.saldo_chequera ?? r.saldo ?? r.monto ?? 0) !== 0)
                 .map(r => {
                     const raw = (r.nom_banco || r.banco || '').replace(/^A\s*-\s*/, '').trim();
@@ -178,60 +295,58 @@ const getSaldosChequeraData = async () => {
                     const banco = BANK_NAME_MAP[bancoKey] || bancoKey;
                     const numCta = r.num_cta || r.numero || r.cuenta || '';
                     const cuentaDesc = parts.slice(1).join(' - ')?.trim() || numCta;
-                    const saldo = Number(r.new_saldo ?? r.saldo_chequera ?? r.saldo ?? r.monto ?? 0);
+                    const saldo = round2(Number(r.new_saldo ?? r.saldo_chequera ?? r.saldo ?? r.monto ?? 0));
                     return {
+                        empresa: '',
                         banco,
                         cuenta: numCta ? (cuentaDesc ? `${cuentaDesc} (${numCta})` : numCta) : cuentaDesc,
+                        numero: String(numCta || ''),
                         num_cta: String(numCta || ''),
                         raw_nom_banco: String(r.nom_banco || r.banco || ''),
-                        saldo
+                        saldo,
+                        saldo_chequera: saldo,
+                        saldo_conciliado_libros: saldo,
+                        cheques_en_transito: 0,
+                        abonos_en_transito: 0,
+                        cargos_en_transito: 0
                     };
                 })
                 .sort((a, b) => b.saldo - a.saldo);
 
             if (chequerasDetalle.length > 0) {
-                totalChequera = chequerasDetalle.reduce((sum, c) => sum + c.saldo, 0);
-                const result = { total: totalChequera, cuentas: chequerasDetalle, fecha: today, fuente: 'sp_saldo_en_chequera' };
+                const totalChequera = round2(chequerasDetalle.reduce((sum, c) => sum + c.saldo, 0));
+                const result = {
+                    total: totalChequera,
+                    total_saldo_chequera: totalChequera,
+                    total_conciliado_libros: totalChequera,
+                    total_cheques_en_transito: 0,
+                    total_abonos_en_transito: 0,
+                    total_cargos_en_transito: 0,
+                    cuentas: chequerasDetalle,
+                    fecha: today,
+                    fuente: 'sp_saldo_en_chequera'
+                };
                 setCachedQuery(cacheKey, result, 30000);
                 return result;
             }
         }
     } catch (err) {
-        console.warn('[TelegramBot] Error en sp_saldo_en_chequera, ejecutando fallback:', err.message);
+        console.warn('[TelegramBot] Error en fallback sp_saldo_en_chequera:', err.message);
     }
 
-    // Fallback a validaciones_saldo_banco o movimientos de cuentas
-    try {
-        const db = getDb();
-        if (db) {
-            const [rows] = await db.query(`
-                SELECT b.descripcion as banco, c.nombre as cuenta_desc, c.numero as cuenta,
-                       v.saldo_chequera as saldo
-                FROM validaciones_saldo_banco v
-                INNER JOIN (
-                    SELECT cuenta_bancaria_id, MAX(id) as max_id 
-                    FROM validaciones_saldo_banco 
-                    GROUP BY cuenta_bancaria_id
-                ) latest ON v.id = latest.max_id
-                INNER JOIN cuentas_bancarias c ON v.cuenta_bancaria_id = c.id
-                LEFT JOIN bancos b ON c.banco_id = b.id
-                WHERE c.activa = 1
-                ORDER BY v.saldo_chequera DESC
-            `);
-            chequerasDetalle = (rows || []).map(r => ({
-                banco: r.banco || 'Banco',
-                cuenta: `${r.cuenta_desc || ''} (${r.cuenta})`.trim(),
-                saldo: Number(r.saldo || 0)
-            }));
-            totalChequera = chequerasDetalle.reduce((sum, c) => sum + c.saldo, 0);
-        }
-    } catch (e) {
-        console.warn('[TelegramBot] Error en fallback de chequeras:', e.message);
-    }
-
-    const result = { total: totalChequera, cuentas: chequerasDetalle, fecha: today, fuente: 'local' };
-    setCachedQuery(cacheKey, result, 30000);
-    return result;
+    const emptyResult = {
+        total: 0,
+        total_saldo_chequera: 0,
+        total_conciliado_libros: 0,
+        total_cheques_en_transito: 0,
+        total_abonos_en_transito: 0,
+        total_cargos_en_transito: 0,
+        cuentas: [],
+        fecha: today,
+        fuente: 'local'
+    };
+    setCachedQuery(cacheKey, emptyResult, 30000);
+    return emptyResult;
 };
 
 /**

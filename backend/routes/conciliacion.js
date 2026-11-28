@@ -1,8 +1,10 @@
 const express = require('express');
+const path = require('path');
 const router = express.Router();
 const { getDb, withTransaction } = require('../db');
 const { authenticateToken, requirePermission } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
+const { signUploadUrl } = require('../utils/uploadSigner');
 const { formatDateYMD, formatDisplayDMY, getElSalvadorTodayYMD } = require('../utils/dateSv');
 const {
     round2,
@@ -12,6 +14,8 @@ const {
     normalizeMovementDirection,
     computeMovementFingerprint,
     computeAccountReconciliationSummary,
+    classifyCheckAging,
+    summarizeChecksAging,
     isDateInClosedPeriod,
     recordBankAudit,
     beginIdempotentRequest,
@@ -24,8 +28,12 @@ const {
     emitBankUpdate
 } = require('../services/bancosIntegrityService');
 const {
-    parseAndMatchBankStatement
+    parseAndMatchBankStatement,
+    extractBankStatementWithGemini,
+    applyClassificationRules,
+    validateClassificationRulePattern
 } = require('../services/bankStatementParserService');
+const { ensureRecordatoriosPagosTables } = require('../services/recordatoriosPagosService');
 
 const toDisplayDate = (dateVal) => {
     const formatted = formatDisplayDMY(dateVal);
@@ -58,10 +66,139 @@ const conciliacionManagePerms = [
     '/dashboard/bancos/conciliacion'
 ];
 
+const conciliacionReglasViewPerms = [
+    ...conciliacionViewPerms,
+    'manage_conciliacion_reglas'
+];
+
+const conciliacionReglasManagePerms = [
+    ...conciliacionManagePerms,
+    'manage_conciliacion_reglas'
+];
+
+const isNoSuchTableError = (err) => Boolean(err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146));
+
+const canManageConciliacionReglas = (user) => {
+    if (!user) return false;
+    const roleLower = String(user.role || '').toLowerCase();
+    if (Number(user.role_id) === 1 || ['admin', 'administrator', 'administrador', 'super admin', 'superadmin', 'super administrador'].includes(roleLower)) {
+        return true;
+    }
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    return perms.includes('manage_conciliacion_reglas') ||
+        perms.includes('manage_conciliacion_bancaria') ||
+        perms.includes('/dashboard/bancos/conciliacion');
+};
+
 const getIdempotencyKey = (req) => {
     const hdr = req.headers?.['x-idempotency-key'] || req.headers?.['idempotency-key'];
     return typeof hdr === 'string' && hdr.trim() ? hdr.trim().slice(0, 128) : null;
 };
+
+async function cleanupPendingIdempotency(conn, key, scope) {
+    const cleanKey = typeof key === 'string' ? key.trim().slice(0, 128) : '';
+    if (!cleanKey) return;
+    try {
+        await conn.query(
+            'DELETE FROM bancos_idempotency_keys WHERE idempotency_key = ? AND scope = ? AND status_code IS NULL',
+            [cleanKey, String(scope).slice(0, 80)]
+        );
+    } catch (err) {
+        if (isNoSuchTableError(err)) return;
+        throw err;
+    }
+}
+
+function formatSignedMovComprobante(row) {
+    if (!row) return null;
+    const rawUrl = row.archivo_url ? String(row.archivo_url).split('?')[0] : null;
+    let parsedOcr = row.ocr_json || null;
+    if (typeof parsedOcr === 'string') {
+        try { parsedOcr = JSON.parse(parsedOcr); } catch (_) { parsedOcr = null; }
+    }
+    return {
+        ...row,
+        id: row.id !== null && row.id !== undefined ? Number(row.id) : null,
+        movimiento_id: row.movimiento_id !== undefined ? Number(row.movimiento_id) : undefined,
+        archivo_url: rawUrl,
+        signed_url: rawUrl ? signUploadUrl(rawUrl) : null,
+        tamano_bytes: Number(row.tamano_bytes || 0),
+        ocr_json: parsedOcr
+    };
+}
+
+async function loadStatementMatchingContext(db, cuentaId) {
+    const [[cuenta]] = await withRetry(() => db.query(
+        `SELECT cb.id, cb.empresa_id, cb.banco_id, cb.activa, b.codigo as banco_codigo, b.descripcion as banco_nombre
+         FROM cuentas_bancarias cb
+         LEFT JOIN bancos b ON cb.banco_id = b.id
+         WHERE cb.id = ? LIMIT 1`,
+        [cuentaId]
+    ));
+    if (!cuenta) return null;
+
+    const [movPendientes] = await withRetry(() => db.query(
+        'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha ' +
+        'FROM movimientos_bancarios ' +
+        'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NULL',
+        [cuentaId]
+    ));
+
+    const [chkPendientes] = await withRetry(() => db.query(
+        'SELECT id, "CK" as origen_tipo, cheque as documento, concepto, valor as monto, valor as cargo, 0 as abono, fecha, a_nombre as beneficiario ' +
+        'FROM cheques ' +
+        'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NULL ' +
+        'AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND es_reservado = FALSE',
+        [cuentaId]
+    ));
+
+    const [movConciliados] = await withRetry(() => db.query(
+        'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha, fecha_aplicado ' +
+        'FROM movimientos_bancarios ' +
+        'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NOT NULL ' +
+        'AND fecha >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)',
+        [cuentaId]
+    ));
+
+    const [chkConciliados] = await withRetry(() => db.query(
+        'SELECT id, "CK" as origen_tipo, cheque as documento, concepto, valor as monto, valor as cargo, 0 as abono, fecha, fecha_aplicado, a_nombre as beneficiario ' +
+        'FROM cheques ' +
+        'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NOT NULL ' +
+        'AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND es_reservado = FALSE ' +
+        'AND fecha >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)',
+        [cuentaId]
+    ));
+
+    let rules = [];
+    try {
+        const [ruleRows] = await withRetry(() => db.query(
+            'SELECT * FROM conciliacion_reglas_clasificacion WHERE activo = 1 ORDER BY prioridad ASC, id ASC'
+        ));
+        rules = ruleRows || [];
+    } catch (errRules) {
+        if (!isNoSuchTableError(errRules)) throw errRules;
+    }
+
+    let allTiposRemesas = [];
+    try {
+        const [trRows] = await withRetry(() => db.query(
+            'SELECT id, empresa_id, codigo, descripcion FROM tipos_remesas ORDER BY id ASC'
+        ));
+        allTiposRemesas = trRows || [];
+    } catch (errTr) {
+        if (!isNoSuchTableError(errTr)) throw errTr;
+    }
+    const tiposRemesas = allTiposRemesas.filter((tr) => Number(tr.empresa_id) === Number(cuenta.empresa_id));
+
+    return {
+        cuenta,
+        pendientes: [...(movPendientes || []), ...(chkPendientes || [])],
+        conciliadosExistentes: [...(movConciliados || []), ...(chkConciliados || [])],
+        rules,
+        tiposRemesas: tiposRemesas.length > 0 ? tiposRemesas : allTiposRemesas,
+        allTiposRemesas
+    };
+}
 
 // ── 1. Catálogos para la pantalla ─────────────────────────────────────────────
 router.get('/catalogos', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
@@ -88,7 +225,8 @@ router.get('/catalogos', authenticateToken, requirePermission(conciliacionViewPe
             permissions: {
                 can_close_periodo: canCloseConciliacion(req.user),
                 can_approve_reapertura: canApproveReapertura(req.user),
-                can_edit_monto: canEditMontoConciliacion(req.user)
+                can_edit_monto: canEditMontoConciliacion(req.user),
+                can_manage_reglas: canManageConciliacionReglas(req.user)
             }
         });
     } catch (error) {
@@ -154,7 +292,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
         const [movimientosAplicadosRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, m.tipo_remesa_id, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
-            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version ' +
+            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version, m.comprobante_url ' +
             'FROM movimientos_bancarios m ' +
             'LEFT JOIN tipos_remesas tr ON m.tipo_remesa_id = tr.id ' +
             'WHERE m.cuenta_bancaria_id = ? ' +
@@ -186,27 +324,13 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             chkAplParams
         ));
 
-        const movimientosConciliados = [...movimientosAplicadosRows, ...chequesAplicadosRows]
-            .sort((a, b) => new Date(b.fecha_aplicado) - new Date(a.fecha_aplicado) || b.id - a.id)
-            .map(r => ({
-                ...r,
-                key: `${r.origen_tipo}_${r.id}`,
-                tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (Number(r.abono) > 0 ? 'RM' : 'NC')),
-                fecha_ymd: parseStrictDBDate(r.fecha),
-                fecha_aplicado_ymd: parseStrictDBDate(r.fecha_aplicado),
-                fecha_display: toDisplayDate(r.fecha),
-                fecha_aplicado_display: toDisplayDate(r.fecha_aplicado),
-                monto_display: Number(r.monto || r.cargo || r.abono || 0),
-                es_contabilizado: Boolean(r.es_contabilizado)
-            }));
-
         // 5. Movimientos bancarios PENDIENTES (Sin fecha aplicado o posterior al rango)
         const movPendParams = [cuentaId, dbHasta, dbHasta];
         if (fechaSaldoInicial) movPendParams.push(fechaSaldoInicial);
         const [movimientosPendientesRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
-            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version ' +
+            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version, m.comprobante_url ' +
             'FROM movimientos_bancarios m ' +
             'LEFT JOIN tipos_remesas tr ON m.tipo_remesa_id = tr.id ' +
             'WHERE m.cuenta_bancaria_id = ? ' +
@@ -234,10 +358,157 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             chkPendParams
         ));
 
+        // 6.1 R5.3 Comprobantes firmados para movimientos bancarios
+        const allMovIds = [...new Set(
+            [...(movimientosAplicadosRows || []), ...(movimientosPendientesRows || [])]
+                .map(r => Number(r.id))
+                .filter(id => Number.isInteger(id) && id > 0)
+        )];
+        const movComprobantesMap = new Map();
+        if (allMovIds.length > 0) {
+            try {
+                const [compRows] = await withRetry(() => db.query(
+                    `SELECT id, movimiento_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, ocr_json, uploaded_by, uploaded_by_name, created_at
+                     FROM movimientos_bancarios_comprobantes
+                     WHERE movimiento_id IN (${allMovIds.map(() => '?').join(',')})
+                     ORDER BY created_at DESC, id DESC`,
+                    allMovIds
+                ));
+                for (const row of (compRows || [])) {
+                    const mid = Number(row.movimiento_id);
+                    if (!movComprobantesMap.has(mid)) movComprobantesMap.set(mid, []);
+                    movComprobantesMap.get(mid).push(formatSignedMovComprobante(row));
+                }
+            } catch (errMovComp) {
+                if (!isNoSuchTableError(errMovComp)) throw errMovComp;
+            }
+        }
+
+        const attachMovementReceipts = (r) => {
+            if (r.origen_tipo !== 'MOV') {
+                return {
+                    comprobante_url: null,
+                    signed_url: null,
+                    comprobante_signed_url: null,
+                    comprobantes_count: 0,
+                    comprobantes: []
+                };
+            }
+            const existing = (movComprobantesMap.get(Number(r.id)) || []).slice();
+            if (existing.length === 0 && r.comprobante_url) {
+                const rawUrl = String(r.comprobante_url).split('?')[0];
+                const signed = rawUrl ? signUploadUrl(rawUrl) : null;
+                if (rawUrl) {
+                    existing.push({
+                        id: null,
+                        movimiento_id: Number(r.id),
+                        nombre_original: path.basename(rawUrl),
+                        archivo_url: rawUrl,
+                        signed_url: signed,
+                        mime_type: null,
+                        tamano_bytes: 0,
+                        nota: null,
+                        ocr_json: null,
+                        created_at: null
+                    });
+                }
+            }
+            const rawPrimary = r.comprobante_url ? String(r.comprobante_url).split('?')[0] : null;
+            const primarySigned = existing[0]?.signed_url || (rawPrimary ? signUploadUrl(rawPrimary) : null);
+            return {
+                comprobante_url: primarySigned,
+                signed_url: primarySigned,
+                comprobante_signed_url: primarySigned,
+                comprobantes_count: existing.length,
+                comprobantes: existing
+            };
+        };
+
+        // 6.2 R4.2 Cruces agrupados activos para la cuenta
+        let crucesActivos = [];
+        const activeCruceByEntityKey = new Map();
+        try {
+            const [cruceRows] = await withRetry(() => db.query(
+                `SELECT * FROM conciliacion_cruces
+                 WHERE cuenta_bancaria_id = ? AND estado = 'ACTIVO'
+                 ORDER BY fecha_aplicado DESC, id DESC`,
+                [cuentaId]
+            ));
+            const filteredCruces = (cruceRows || []).filter(
+                (c) => Number(c.cuenta_bancaria_id) === cuentaId && String(c.estado || '').toUpperCase() === 'ACTIVO'
+            );
+            if (filteredCruces.length > 0) {
+                const cruceIds = filteredCruces.map((c) => Number(c.id));
+                const [itemRows] = await withRetry(() => db.query(
+                    `SELECT * FROM conciliacion_cruce_items
+                     WHERE cruce_id IN (${cruceIds.map(() => '?').join(',')})
+                     ORDER BY id ASC`,
+                    cruceIds
+                ));
+                const itemsByCruce = new Map();
+                for (const it of (itemRows || [])) {
+                    const cid = Number(it.cruce_id);
+                    if (!cruceIds.includes(cid)) continue;
+                    if (!itemsByCruce.has(cid)) itemsByCruce.set(cid, []);
+                    itemsByCruce.get(cid).push(it);
+                }
+                crucesActivos = filteredCruces.map((c) => {
+                    const items = itemsByCruce.get(Number(c.id)) || [];
+                    for (const it of items) {
+                        if ((it.origen_tipo === 'MOV' || it.origen_tipo === 'CK') && it.entidad_id) {
+                            activeCruceByEntityKey.set(`${it.origen_tipo}_${it.entidad_id}`, {
+                                cruce_id: Number(c.id),
+                                tipo_cruce: c.tipo_cruce
+                            });
+                        }
+                    }
+                    return {
+                        ...c,
+                        monto_total: Number(c.monto_total || 0),
+                        fecha_aplicado_ymd: parseStrictDBDate(c.fecha_aplicado),
+                        fecha_aplicado_display: toDisplayDate(c.fecha_aplicado),
+                        items
+                    };
+                });
+            }
+        } catch (errCruces) {
+            if (!isNoSuchTableError(errCruces)) throw errCruces;
+        }
+
+        const movimientosConciliados = [...movimientosAplicadosRows, ...chequesAplicadosRows]
+            .sort((a, b) => new Date(b.fecha_aplicado) - new Date(a.fecha_aplicado) || b.id - a.id)
+            .map(r => {
+                const key = `${r.origen_tipo}_${r.id}`;
+                const cruceMeta = activeCruceByEntityKey.get(key) || null;
+                return {
+                    ...r,
+                    ...attachMovementReceipts(r),
+                    key,
+                    tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (Number(r.abono) > 0 ? 'RM' : 'NC')),
+                    fecha_ymd: parseStrictDBDate(r.fecha),
+                    fecha_aplicado_ymd: parseStrictDBDate(r.fecha_aplicado),
+                    fecha_display: toDisplayDate(r.fecha),
+                    fecha_aplicado_display: toDisplayDate(r.fecha_aplicado),
+                    monto_display: Number(r.monto || r.cargo || r.abono || 0),
+                    es_contabilizado: Boolean(r.es_contabilizado),
+                    cruce_id: cruceMeta ? cruceMeta.cruce_id : null,
+                    cruce_tipo: cruceMeta ? cruceMeta.tipo_cruce : null
+                };
+            });
+
+        // 6.3 R3.3 Antigüedad de cheques en circulación (Aging)
+        const agingRefDate = hasta ? dbHasta : getElSalvadorTodayYMD();
+        const chequesPendingForAging = (chequesPendientesRows || []).filter(
+            (ch) => !ch.fecha_aplicado || parseStrictDBDate(ch.fecha_aplicado) > dbHasta
+        );
+        const agingSummary = summarizeChecksAging(chequesPendingForAging, agingRefDate);
+
         const pendientes = [...movimientosPendientesRows, ...chequesPendientesRows]
             .sort((a, b) => new Date(b.fecha) - new Date(a.fecha) || b.id - a.id)
             .map(r => ({
                 ...r,
+                ...attachMovementReceipts(r),
+                ...(r.origen_tipo === 'CK' ? classifyCheckAging(r.fecha, agingRefDate) : {}),
                 key: `${r.origen_tipo}_${r.id}`,
                 tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (Number(r.abono) > 0 ? 'RM' : 'NC')),
                 fecha_ymd: parseStrictDBDate(r.fecha),
@@ -304,12 +575,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
                 `SELECT a.id, a.vencimiento_id, a.recordatorio_id, a.ubicacion, a.descripcion_ref,
                         a.tipo_operacion, a.metodo_pago, a.cuenta_bancaria_id, a.cuenta_label,
                         a.beneficiario, a.referencia_doc, a.fecha_pago, a.monto, a.notas, a.estado_conciliacion,
-                        a.created_by,
-                        (SELECT COUNT(*) FROM recordatorios_pagos_comprobantes c
-                         WHERE c.vencimiento_id = a.vencimiento_id AND (c.abono_id = a.id OR c.abono_id IS NULL)) AS comprobantes_count,
-                        (SELECT c.archivo_url FROM recordatorios_pagos_comprobantes c
-                         WHERE c.vencimiento_id = a.vencimiento_id AND (c.abono_id = a.id OR c.abono_id IS NULL)
-                         ORDER BY c.id DESC LIMIT 1) AS comprobante_url
+                        a.created_by
                  FROM recordatorios_pagos_abonos a
                  WHERE a.cuenta_bancaria_id = ?
                    AND a.estado_conciliacion = 'PENDIENTE'
@@ -318,6 +584,27 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
                  LIMIT 100`,
                 [cuentaId, dbHasta]
             ));
+
+            const venIds = [...new Set(
+                (abRows || [])
+                    .map(ab => Number(ab.vencimiento_id))
+                    .filter(id => Number.isInteger(id) && id > 0)
+            )];
+            let pagoCompRows = [];
+            if (venIds.length > 0) {
+                try {
+                    const [cRows] = await withRetry(() => db.query(
+                        `SELECT id, vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by, created_at
+                         FROM recordatorios_pagos_comprobantes
+                         WHERE vencimiento_id IN (${venIds.map(() => '?').join(',')})
+                         ORDER BY created_at DESC, id DESC`,
+                        venIds
+                    ));
+                    pagoCompRows = cRows || [];
+                } catch (errPagoComp) {
+                    if (!isNoSuchTableError(errPagoComp)) throw errPagoComp;
+                }
+            }
 
             const allCandidates = [...pendientes, ...movimientosConciliados];
             sugerenciasControlPagos = (abRows || []).map(ab => {
@@ -335,11 +622,49 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
                     return Math.abs(mDate - abTime) <= 7 * 24 * 3600 * 1000;
                 }) || null;
 
+                const matchedComps = pagoCompRows
+                    .filter(c =>
+                        Number(c.vencimiento_id) === Number(ab.vencimiento_id) &&
+                        (c.abono_id === null || c.abono_id === undefined || Number(c.abono_id) === Number(ab.id))
+                    )
+                    .map(c => {
+                        const rawUrl = c.archivo_url ? String(c.archivo_url).split('?')[0] : null;
+                        return {
+                            ...c,
+                            archivo_url: rawUrl,
+                            signed_url: rawUrl ? signUploadUrl(rawUrl) : null
+                        };
+                    });
+
+                if (matchedComps.length === 0 && ab.comprobante_url) {
+                    const rawFallback = String(ab.comprobante_url).split('?')[0];
+                    if (rawFallback) {
+                        matchedComps.push({
+                            id: null,
+                            vencimiento_id: Number(ab.vencimiento_id),
+                            abono_id: Number(ab.id),
+                            nombre_original: path.basename(rawFallback),
+                            archivo_url: rawFallback,
+                            signed_url: signUploadUrl(rawFallback),
+                            mime_type: null,
+                            tamano_bytes: 0,
+                            nota: null,
+                            created_at: null
+                        });
+                    }
+                }
+
+                const primarySigned = matchedComps[0]?.signed_url || null;
+                const finalCount = matchedComps.length > 0 ? matchedComps.length : Number(ab.comprobantes_count || 0);
+
                 return {
                     ...ab,
                     monto: abMonto,
                     fecha_pago_display: toDisplayDate(ab.fecha_pago),
-                    comprobantes_count: Number(ab.comprobantes_count || 0),
+                    comprobante_url: primarySigned,
+                    signed_url: primarySigned,
+                    comprobantes_count: finalCount,
+                    comprobantes: matchedComps,
                     suggested_match: suggestedMatch ? {
                         id: suggestedMatch.id,
                         origen_tipo: suggestedMatch.origen_tipo,
@@ -362,6 +687,9 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             sugerencias_control_pagos: sugerenciasControlPagos,
             periodos_recientes: periodosRecientes,
             solicitudes_reapertura_pendientes: solicitudesPendientes,
+            aging_resumen: agingSummary,
+            aging_cheques: agingSummary,
+            cruces_activos: crucesActivos,
             resumen: {
                 saldo_banco: saldoBanco,
                 saldo_chequera: summary.saldo_chequera,
@@ -377,6 +705,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
                 diferencia,
                 diferencia_vs_chequera: diferenciaVsChequera,
                 periodo_cerrado_hasta: periodoCerradoHasta,
+                aging_resumen: agingSummary,
                 ultima_validacion: ultimaValidacion ? {
                     id: ultimaValidacion.id,
                     fecha_validacion: ultimaValidacion.fecha_validacion,
@@ -443,6 +772,11 @@ router.post('/aplicar', authenticateToken, requirePermission(conciliacionManageP
                 if (idem.conflict) return { conflict: true };
             }
 
+            const abortTx = async (errorStatus, errorBody) => {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'conciliacion_aplicar');
+                return { errorStatus, errorBody };
+            };
+
             const movItems = normalizedItems.filter(i => i.tipo === 'MOV');
             const chkItems = normalizedItems.filter(i => i.tipo === 'CK');
             const movIds = [...new Set(movItems.map(i => i.id))];
@@ -465,11 +799,11 @@ router.post('/aplicar', authenticateToken, requirePermission(conciliacionManageP
                 );
                 movRows = rows || [];
                 if (movRows.length !== movIds.length) {
-                    return { errorStatus: 404, errorBody: { message: 'Uno o más movimientos bancarios no existen.' } };
+                    return abortTx(404, { message: 'Uno o más movimientos bancarios no existen.' });
                 }
                 for (const m of movRows) {
                     if (m.deleted_at) {
-                        return { errorStatus: 409, errorBody: { message: `El movimiento #${m.id} fue eliminado y no puede modificarse.` } };
+                        return abortTx(409, { message: `El movimiento #${m.id} fue eliminado y no puede modificarse.` });
                     }
                     foundAccounts.add(Number(m.cuenta_bancaria_id));
                     const targetItem = movItems.find(x => x.id === m.id);
@@ -487,14 +821,14 @@ router.post('/aplicar', authenticateToken, requirePermission(conciliacionManageP
                 );
                 chkRows = rows || [];
                 if (chkRows.length !== chkIds.length) {
-                    return { errorStatus: 404, errorBody: { message: 'Uno o más cheques no existen.' } };
+                    return abortTx(404, { message: 'Uno o más cheques no existen.' });
                 }
                 for (const ch of chkRows) {
                     if (ch.deleted_at) {
-                        return { errorStatus: 409, errorBody: { message: `El cheque #${ch.cheque || ch.id} fue eliminado y no puede modificarse.` } };
+                        return abortTx(409, { message: `El cheque #${ch.cheque || ch.id} fue eliminado y no puede modificarse.` });
                     }
                     if (ch.cheque_anulado || ch.fue_noemitido || ch.es_reservado) {
-                        return { errorStatus: 409, errorBody: { message: `El cheque #${ch.cheque || ch.id} está anulado, reservado o no emitido.` } };
+                        return abortTx(409, { message: `El cheque #${ch.cheque || ch.id} está anulado, reservado o no emitido.` });
                     }
                     foundAccounts.add(Number(ch.cuenta_bancaria_id));
                     const targetItem = chkItems.find(x => x.id === ch.id);
@@ -504,24 +838,73 @@ router.post('/aplicar', authenticateToken, requirePermission(conciliacionManageP
             }
 
             if (foundAccounts.size > 1) {
-                return { errorStatus: 400, errorBody: { message: 'Todos los documentos del lote deben pertenecer a la misma cuenta bancaria.' } };
+                return abortTx(400, { message: 'Todos los documentos del lote deben pertenecer a la misma cuenta bancaria.' });
             }
             const targetCuentaId = [...foundAccounts][0];
             if (expectedCuentaId && targetCuentaId !== expectedCuentaId) {
-                return { errorStatus: 403, errorBody: { message: 'Los documentos no pertenecen a la cuenta bancaria seleccionada.' } };
+                return abortTx(403, { message: 'Los documentos no pertenecen a la cuenta bancaria seleccionada.' });
+            }
+
+            // Verificar si algún documento pertenece a un cruce agrupado ACTIVO antes de conciliar o desconciliar
+            try {
+                const [activeCruces] = await conn.query(
+                    `SELECT id FROM conciliacion_cruces WHERE cuenta_bancaria_id = ? AND estado = 'ACTIVO'`,
+                    [targetCuentaId]
+                );
+                const validActiveCruces = (activeCruces || []).filter(
+                    (c) => Number(c.cuenta_bancaria_id ?? targetCuentaId) === targetCuentaId &&
+                        String(c.estado || 'ACTIVO').toUpperCase() === 'ACTIVO'
+                );
+                const activeCruceIds = validActiveCruces.map((c) => Number(c.id));
+                if (activeCruceIds.length > 0) {
+                    const [cruceItems] = await conn.query(
+                        `SELECT id, cruce_id, origen_tipo, entidad_id FROM conciliacion_cruce_items WHERE cruce_id IN (${activeCruceIds.map(() => '?').join(',')})`,
+                        activeCruceIds
+                    );
+                    const activeCruceIdSet = new Set(activeCruceIds);
+                    const movIdSet = new Set(movIds.map(Number));
+                    const chkIdSet = new Set(chkIds.map(Number));
+                    const conflictingItem = (cruceItems || []).find((ci) =>
+                        activeCruceIdSet.has(Number(ci.cruce_id)) &&
+                        ((ci.origen_tipo === 'MOV' && movIdSet.has(Number(ci.entidad_id))) ||
+                         (ci.origen_tipo === 'CK' && chkIdSet.has(Number(ci.entidad_id))))
+                    );
+                    if (conflictingItem) {
+                        return abortTx(409, {
+                            message: `El documento ${conflictingItem.origen_tipo} #${conflictingItem.entidad_id} pertenece al cruce agrupado activo #${conflictingItem.cruce_id}. Debe gestionar o desconciliar el cruce completo.`,
+                            cruce_id: Number(conflictingItem.cruce_id)
+                        });
+                    }
+                }
+            } catch (errCruceGuard) {
+                if (!isNoSuchTableError(errCruceGuard)) throw errCruceGuard;
+            }
+
+            if (esConciliar) {
+                for (const m of movRows) {
+                    if (m.fecha_aplicado) {
+                        return abortTx(409, {
+                            message: `El movimiento #${m.id} ya se encuentra conciliado (${toDisplayDate(m.fecha_aplicado)}). Desconcilie primero antes de re-aplicar.`
+                        });
+                    }
+                }
+                for (const ch of chkRows) {
+                    if (ch.fecha_aplicado) {
+                        return abortTx(409, {
+                            message: `El cheque #${ch.cheque || ch.id} ya se encuentra conciliado (${toDisplayDate(ch.fecha_aplicado)}). Desconcilie primero antes de re-aplicar.`
+                        });
+                    }
+                }
             }
 
             // Verificar período cerrado
             const lockCheck = await isDateInClosedPeriod(conn, targetCuentaId, datesToVerifyByAccount.get(targetCuentaId) || []);
             if (lockCheck.closed) {
-                return {
-                    errorStatus: 423,
-                    errorBody: {
-                        message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para modificar movimientos en fecha ${toDisplayDate(lockCheck.offendingDate)}.`,
-                        locked_until: lockCheck.lockedDate,
-                        periodo_id: lockCheck.periodo?.id
-                    }
-                };
+                return abortTx(423, {
+                    message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para modificar movimientos en fecha ${toDisplayDate(lockCheck.offendingDate)}.`,
+                    locked_until: lockCheck.lockedDate,
+                    periodo_id: lockCheck.periodo?.id
+                });
             }
 
             let actualizados = 0;
@@ -550,7 +933,7 @@ router.post('/aplicar', authenticateToken, requirePermission(conciliacionManageP
                     // Revertir estado_conciliacion en recordatorios_pagos_abonos vinculados si existen
                     try {
                         await conn.query(
-                            `UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'PENDIENTE' WHERE movimiento_bancario_id IN (${movIds.map(() => '?').join(',')}) AND estado_conciliacion = 'CONCILIADO'`,
+                            `UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'PENDIENTE', movimiento_bancario_id = NULL WHERE movimiento_bancario_id IN (${movIds.map(() => '?').join(',')}) AND estado_conciliacion = 'CONCILIADO'`,
                             movIds
                         );
                     } catch (_) { /* tabla opcional */ }
@@ -561,6 +944,12 @@ router.post('/aplicar', authenticateToken, requirePermission(conciliacionManageP
                         chkIds
                     );
                     actualizados += Number(upd.affectedRows || 0);
+                    try {
+                        await conn.query(
+                            `UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'PENDIENTE', cheque_id = NULL WHERE cheque_id IN (${chkIds.map(() => '?').join(',')}) AND estado_conciliacion = 'CONCILIADO'`,
+                            chkIds
+                        );
+                    } catch (_) { /* tabla opcional */ }
                 }
             }
 
@@ -658,9 +1047,39 @@ router.post('/validar-saldo', authenticateToken, requirePermission(conciliacionM
 
     try {
         const txResult = await withTransaction(async (conn) => {
+            if (cerrar_periodo) {
+                const [[ctaLock]] = await conn.query(
+                    'SELECT id FROM cuentas_bancarias WHERE id = ? FOR UPDATE',
+                    [cuentaId]
+                );
+                if (!ctaLock) {
+                    return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+                }
+            }
+
             const summary = await computeAccountReconciliationSummary(conn, cuentaId, dbFechaCorte);
             if (!summary) {
                 return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+            }
+
+            if (cerrar_periodo) {
+                const [existingPeriodos] = await conn.query(
+                    'SELECT id, fecha_corte, estado FROM conciliacion_periodos WHERE cuenta_bancaria_id = ? FOR UPDATE',
+                    [cuentaId]
+                );
+                const blockingPeriodo = (existingPeriodos || []).find((p) => {
+                    if (p.estado !== 'CERRADO') return false;
+                    const pFecha = parseStrictDBDate(p.fecha_corte);
+                    return pFecha && pFecha >= dbFechaCorte;
+                });
+                if (blockingPeriodo) {
+                    return {
+                        errorStatus: 409,
+                        errorBody: {
+                            message: `Ya existe un período cerrado hasta el ${toDisplayDate(blockingPeriodo.fecha_corte)} que cubre la fecha solicitada (${toDisplayDate(dbFechaCorte)}). Debe solicitar y aprobar la reapertura primero.`
+                        }
+                    };
+                }
             }
 
             const diferenciaReal = round2(montoBancoNum - summary.saldo_conciliado_libros);
@@ -790,54 +1209,31 @@ router.post('/validar-saldo', authenticateToken, requirePermission(conciliacionM
     }
 });
 
-// ── 5. Parser y Auto-Matcher de Extractos Bancarios ─────────────────────────
+// ── 5. Parser y Auto-Matcher de Extractos Bancarios (CSV/TSV + Gemini PDF/Img)
 router.post('/parse-extracto', express.json({ limit: '20mb' }), authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
-    const { cuenta_id, raw_data, banco_formato } = req.body || {};
-    const cuentaId = parseInt(cuenta_id, 10);
+    const { cuenta_id, cuenta_bancaria_id, raw_data, banco_formato } = req.body || {};
+    const cuentaId = parseInt(cuenta_id || cuenta_bancaria_id, 10);
     if (!Number.isInteger(cuentaId) || cuentaId <= 0 || !raw_data) {
         return res.status(400).json({ message: 'Faltan datos requeridos (cuenta válida y datos de extracto).' });
     }
 
     try {
         const db = getDb();
-
-        const [movPendientes] = await withRetry(() => db.query(
-            'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha ' +
-            'FROM movimientos_bancarios ' +
-            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NULL',
-            [cuentaId]
-        ));
-
-        const [chkPendientes] = await withRetry(() => db.query(
-            'SELECT id, "CK" as origen_tipo, cheque as documento, concepto, valor as monto, valor as cargo, 0 as abono, fecha, a_nombre as beneficiario ' +
-            'FROM cheques ' +
-            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NULL ' +
-            'AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND es_reservado = FALSE',
-            [cuentaId]
-        ));
-
-        const [movConciliados] = await withRetry(() => db.query(
-            'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha, fecha_aplicado ' +
-            'FROM movimientos_bancarios ' +
-            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NOT NULL ' +
-            'AND fecha >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)',
-            [cuentaId]
-        ));
-
-        const [chkConciliados] = await withRetry(() => db.query(
-            'SELECT id, "CK" as origen_tipo, cheque as documento, concepto, valor as monto, valor as cargo, 0 as abono, fecha, fecha_aplicado, a_nombre as beneficiario ' +
-            'FROM cheques ' +
-            'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NOT NULL ' +
-            'AND cheque_anulado = FALSE AND fue_noemitido = FALSE AND es_reservado = FALSE ' +
-            'AND fecha >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)',
-            [cuentaId]
-        ));
+        const ctx = await loadStatementMatchingContext(db, cuentaId);
+        if (!ctx) {
+            return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+        }
 
         const parsed = parseAndMatchBankStatement({
             rawData: raw_data,
             bancoFormato: banco_formato || 'AUTO',
-            pendientes: [...movPendientes, ...chkPendientes],
-            conciliadosExistentes: [...movConciliados, ...chkConciliados]
+            pendientes: ctx.pendientes,
+            conciliadosExistentes: ctx.conciliadosExistentes,
+            rules: ctx.rules,
+            tiposRemesas: ctx.tiposRemesas,
+            allTiposRemesas: ctx.allTiposRemesas,
+            cuentaId,
+            bancoCodigo: ctx.cuenta.banco_codigo
         });
 
         let extractoYaImportado = null;
@@ -862,6 +1258,87 @@ router.post('/parse-extracto', express.json({ limit: '20mb' }), authenticateToke
         sendSafeError(res, error, 'Error al parsear extracto bancario');
     }
 });
+
+async function handleParseMultimodalStatement(req, res) {
+    const {
+        cuenta_id,
+        cuenta_bancaria_id,
+        data_url,
+        base64,
+        file_base64,
+        mime_type,
+        mimeType,
+        files,
+        pages,
+        archivos,
+        banco_formato,
+        archivo_nombre,
+        nombre_original
+    } = req.body || {};
+
+    const cuentaId = parseInt(cuenta_id || cuenta_bancaria_id, 10);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0) {
+        return res.status(400).json({ message: 'Debe especificar una cuenta bancaria válida.' });
+    }
+
+    try {
+        const db = getDb();
+        const ctx = await loadStatementMatchingContext(db, cuentaId);
+        if (!ctx) {
+            return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+        }
+
+        const parsed = await extractBankStatementWithGemini({
+            files,
+            pages,
+            archivos,
+            data_url,
+            base64,
+            file_base64,
+            mime_type,
+            mimeType,
+            bancoFormato: banco_formato || 'AUTO',
+            pendientes: ctx.pendientes,
+            conciliadosExistentes: ctx.conciliadosExistentes,
+            rules: ctx.rules,
+            tiposRemesas: ctx.tiposRemesas,
+            allTiposRemesas: ctx.allTiposRemesas,
+            cuentaId,
+            bancoCodigo: ctx.cuenta.banco_codigo
+        });
+
+        let extractoYaImportado = null;
+        try {
+            const [impRows] = await withRetry(() => db.query(
+                `SELECT id, created_at, total_filas, creados_count, conciliados_count
+                 FROM conciliacion_importaciones
+                 WHERE cuenta_bancaria_id = ? AND file_hash = ?
+                 ORDER BY id DESC LIMIT 1`,
+                [cuentaId, parsed.file_hash]
+            ));
+            if (impRows && impRows.length > 0) {
+                extractoYaImportado = impRows[0];
+            }
+        } catch (_) { /* ignore */ }
+
+        res.json({
+            ...parsed,
+            archivo_nombre: archivo_nombre || nombre_original || null,
+            extracto_ya_importado: extractoYaImportado
+        });
+    } catch (error) {
+        if (error && Number(error.statusCode) >= 400 && Number(error.statusCode) < 500) {
+            return res.status(Number(error.statusCode)).json({ message: error.message });
+        }
+        if (error && Number(error.statusCode) === 502) {
+            return res.status(502).json({ message: error.message });
+        }
+        sendSafeError(res, error, 'Error al analizar estado de cuenta con IA');
+    }
+}
+
+router.post('/parse-extracto-pdf', express.json({ limit: '20mb' }), authenticateToken, requirePermission(conciliacionManagePerms), handleParseMultimodalStatement);
+router.post('/importar-pdf', express.json({ limit: '20mb' }), authenticateToken, requirePermission(conciliacionManagePerms), handleParseMultimodalStatement);
 
 // ── 5.1. Crear Movimiento y Conciliar Directamente ─────────────────────────
 router.post('/crear-y-aplicar', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
@@ -938,27 +1415,29 @@ router.post('/crear-y-aplicar', authenticateToken, requirePermission(conciliacio
                 if (idem.conflict) return { conflict: true };
             }
 
+            const abortTx = async (errorStatus, errorBody) => {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'conciliacion_crear_y_aplicar');
+                return { errorStatus, errorBody };
+            };
+
             const [[cuenta]] = await conn.query(
                 'SELECT id, empresa_id, activa FROM cuentas_bancarias WHERE id = ? LIMIT 1',
                 [cuentaId]
             );
             if (!cuenta) {
-                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+                return abortTx(404, { message: 'Cuenta bancaria no encontrada.' });
             }
             if (!cuenta.activa) {
-                return { errorStatus: 409, errorBody: { message: 'La cuenta bancaria se encuentra inactiva.' } };
+                return abortTx(409, { message: 'La cuenta bancaria se encuentra inactiva.' });
             }
 
             const lockCheck = await isDateInClosedPeriod(conn, cuentaId, [dbFecha, dbFechaAplicado]);
             if (lockCheck.closed) {
-                return {
-                    errorStatus: 423,
-                    errorBody: {
-                        message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para registrar en fecha ${toDisplayDate(lockCheck.offendingDate)}.`,
-                        locked_until: lockCheck.lockedDate,
-                        periodo_id: lockCheck.periodo?.id
-                    }
-                };
+                return abortTx(423, {
+                    message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para registrar en fecha ${toDisplayDate(lockCheck.offendingDate)}.`,
+                    locked_until: lockCheck.lockedDate,
+                    periodo_id: lockCheck.periodo?.id
+                });
             }
 
             if (!permitir_duplicado) {
@@ -970,13 +1449,10 @@ router.post('/crear-y-aplicar', authenticateToken, requirePermission(conciliacio
                     [cuentaId, fingerprint]
                 );
                 if (dupRows && dupRows.length > 0) {
-                    return {
-                        errorStatus: 409,
-                        errorBody: {
-                            message: `Ya existe un movimiento idéntico registrado (#${dupRows[0].id} · ${toDisplayDate(dupRows[0].fecha)} · $${Number(dupRows[0].monto).toFixed(2)}).`,
-                            duplicate_of: dupRows[0]
-                        }
-                    };
+                    return abortTx(409, {
+                        message: `Ya existe un movimiento idéntico registrado (#${dupRows[0].id} · ${toDisplayDate(dupRows[0].fecha)} · $${Number(dupRows[0].monto).toFixed(2)}).`,
+                        duplicate_of: dupRows[0]
+                    });
                 }
             }
 
@@ -1147,8 +1623,11 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
         const cargo = direction === 'CARGO' ? montoNum : 0;
         const abono = direction === 'ABONO' ? montoNum : 0;
         const tipoCodigo = item.tipo_remesa_codigo || (direction === 'CARGO' ? 'NC' : 'RM');
+        const rawTipoRemesaId = item.tipo_remesa_id ? parseInt(item.tipo_remesa_id, 10) || null : null;
+        const cleanCodCta = item.cod_cta ? String(item.cod_cta).trim().slice(0, 50) : null;
+        const cleanNumPartida = item.num_partida ? String(item.num_partida).trim().slice(0, 50) : null;
         const cleanDoc = String(item.documento || '').trim().slice(0, 100);
-        const cleanConcepto = String(item.descripcion || item.concepto || `${tipoCodigo} EXTRACTO`).trim().toUpperCase().slice(0, 255);
+        const cleanConcepto = String(item.concepto_limpio || item.descripcion || item.concepto || `${tipoCodigo} EXTRACTO`).trim().toUpperCase().slice(0, 255);
         const fingerprint = computeMovementFingerprint({
             cuentaBancariaId: cuentaId,
             fecha: dbFecha,
@@ -1164,6 +1643,9 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
             dbFechaApl,
             cleanDoc,
             cleanConcepto,
+            cleanCodCta,
+            cleanNumPartida,
+            rawTipoRemesaId,
             montoNum,
             cargo,
             abono,
@@ -1207,15 +1689,20 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
                 if (idem.conflict) return { conflict: true };
             }
 
+            const abortTx = async (errorStatus, errorBody) => {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'conciliacion_crear_masivo');
+                return { errorStatus, errorBody };
+            };
+
             const [[cuenta]] = await conn.query(
                 'SELECT id, empresa_id, activa FROM cuentas_bancarias WHERE id = ? LIMIT 1',
                 [cuentaId]
             );
             if (!cuenta) {
-                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+                return abortTx(404, { message: 'Cuenta bancaria no encontrada.' });
             }
             if (!cuenta.activa) {
-                return { errorStatus: 409, errorBody: { message: 'La cuenta bancaria se encuentra inactiva.' } };
+                return abortTx(409, { message: 'La cuenta bancaria se encuentra inactiva.' });
             }
 
             // Validar fechas contra período cerrado antes de insertar nada
@@ -1225,14 +1712,11 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
             ];
             const lockCheck = await isDateInClosedPeriod(conn, cuentaId, allDates);
             if (lockCheck.closed) {
-                return {
-                    errorStatus: 423,
-                    errorBody: {
-                        message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. El lote incluye la fecha ${toDisplayDate(lockCheck.offendingDate)}. Solicite reapertura primero.`,
-                        locked_until: lockCheck.lockedDate,
-                        periodo_id: lockCheck.periodo?.id
-                    }
-                };
+                return abortTx(423, {
+                    message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. El lote incluye la fecha ${toDisplayDate(lockCheck.offendingDate)}. Solicite reapertura primero.`,
+                    locked_until: lockCheck.lockedDate,
+                    periodo_id: lockCheck.periodo?.id
+                });
             }
 
             // 1. Aplicar coincidencias dentro de la misma transacción
@@ -1247,11 +1731,11 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
                     movIds
                 );
                 if (existingMovs.length !== new Set(movIds).size) {
-                    return { errorStatus: 404, errorBody: { message: 'Una o más coincidencias de movimientos no existen.' } };
+                    return abortTx(404, { message: 'Una o más coincidencias de movimientos no existen.' });
                 }
                 for (const m of existingMovs) {
                     if (Number(m.cuenta_bancaria_id) !== cuentaId || m.deleted_at) {
-                        return { errorStatus: 409, errorBody: { message: `El movimiento #${m.id} no pertenece a la cuenta o fue eliminado.` } };
+                        return abortTx(409, { message: `El movimiento #${m.id} no pertenece a la cuenta o fue eliminado.` });
                     }
                 }
                 for (const mc of movCoinc) {
@@ -1270,11 +1754,11 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
                     chkIds
                 );
                 if (existingChks.length !== new Set(chkIds).size) {
-                    return { errorStatus: 404, errorBody: { message: 'Una o más coincidencias de cheques no existen.' } };
+                    return abortTx(404, { message: 'Una o más coincidencias de cheques no existen.' });
                 }
                 for (const ch of existingChks) {
                     if (Number(ch.cuenta_bancaria_id) !== cuentaId || ch.deleted_at || ch.cheque_anulado || ch.fue_noemitido || ch.es_reservado) {
-                        return { errorStatus: 409, errorBody: { message: `El cheque #${ch.id} no es conciliable.` } };
+                        return abortTx(409, { message: `El cheque #${ch.id} no es conciliable.` });
                     }
                 }
                 for (const cc of chkCoinc) {
@@ -1304,7 +1788,28 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
                 [cuenta.empresa_id]
             );
             const remesaMap = new Map();
-            tiposRemesas.forEach(tr => remesaMap.set(tr.codigo, tr.id));
+            const companyRemesaIds = new Set();
+            tiposRemesas.forEach(tr => {
+                remesaMap.set(String(tr.codigo || '').toUpperCase(), Number(tr.id));
+                companyRemesaIds.add(Number(tr.id));
+            });
+
+            // Si algún item trae tipo_remesa_id de otra empresa (ej. regla global), resolver por código en la empresa de la cuenta
+            const foreignRemesaCodeMap = new Map();
+            const unknownRemesaIds = [...new Set(
+                preparedItems
+                    .map(i => i.rawTipoRemesaId)
+                    .filter(id => id && !companyRemesaIds.has(id))
+            )];
+            if (unknownRemesaIds.length > 0) {
+                const [allTrRows] = await conn.query(
+                    `SELECT id, codigo FROM tipos_remesas WHERE id IN (${unknownRemesaIds.map(() => '?').join(',')})`,
+                    unknownRemesaIds
+                );
+                for (const tr of (allTrRows || [])) {
+                    foreignRemesaCodeMap.set(Number(tr.id), String(tr.codigo || '').toUpperCase());
+                }
+            }
 
             // 3. Registrar cabecera de importación
             const [batchRes] = await conn.query(
@@ -1339,13 +1844,22 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
                 }
                 seenBatchFps.add(item.fingerprint);
 
-                const remesaId = remesaMap.get(item.tipoCodigo) || null;
+                let remesaId = null;
+                if (item.rawTipoRemesaId && companyRemesaIds.has(item.rawTipoRemesaId)) {
+                    remesaId = item.rawTipoRemesaId;
+                } else if (item.rawTipoRemesaId && foreignRemesaCodeMap.has(item.rawTipoRemesaId)) {
+                    remesaId = remesaMap.get(foreignRemesaCodeMap.get(item.rawTipoRemesaId)) || null;
+                }
+                if (!remesaId) {
+                    remesaId = remesaMap.get(String(item.tipoCodigo || '').toUpperCase()) || null;
+                }
+
                 await conn.query(
                     `INSERT INTO movimientos_bancarios
                         (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
                          monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida,
                          created_by, conciliado_by, conciliado_at, import_batch_id, fingerprint, version)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 1)`,
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
                     [
                         cuenta.empresa_id,
                         cuentaId,
@@ -1357,6 +1871,8 @@ router.post('/crear-masivo-y-aplicar', express.json({ limit: '20mb' }), authenti
                         item.cargo,
                         item.abono,
                         remesaId,
+                        item.cleanCodCta,
+                        item.cleanNumPartida,
                         req.user?.id || null,
                         item.dbFechaApl ? (req.user?.id || null) : null,
                         item.dbFechaApl ? new Date() : null,
@@ -1614,6 +2130,7 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
     }
 
     try {
+        await ensureRecordatoriosPagosTables(getDb());
         const txResult = await withTransaction(async (conn) => {
             const [[abono]] = await conn.query(
                 'SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1 FOR UPDATE',
@@ -1657,11 +2174,13 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
                 if (!targetId) {
                     return { errorStatus: 400, errorBody: { message: 'Debe indicar el documento bancario a vincular.' } };
                 }
+                const abonoMonto = round2(abono.monto || 0);
 
                 let linkedMovId = null;
+                let linkedChkId = null;
                 if (origen_tipo === 'CK') {
                     const [[chk]] = await conn.query(
-                        'SELECT id, cuenta_bancaria_id, fecha_aplicado, cheque_anulado, fue_noemitido, es_reservado, deleted_at FROM cheques WHERE id = ? FOR UPDATE',
+                        'SELECT id, cuenta_bancaria_id, valor, fecha_aplicado, cheque_anulado, fue_noemitido, es_reservado, deleted_at FROM cheques WHERE id = ? FOR UPDATE',
                         [targetId]
                     );
                     if (!chk || chk.deleted_at || chk.cheque_anulado || chk.fue_noemitido || chk.es_reservado) {
@@ -1669,6 +2188,20 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
                     }
                     if (abono.cuenta_bancaria_id && Number(chk.cuenta_bancaria_id) !== Number(abono.cuenta_bancaria_id)) {
                         return { errorStatus: 403, errorBody: { message: 'El cheque no pertenece a la misma cuenta bancaria del pago.' } };
+                    }
+                    const chkMonto = round2(chk.valor || 0);
+                    if (Math.abs(chkMonto - abonoMonto) > 0.01) {
+                        return { errorStatus: 400, errorBody: { message: `El monto del cheque ($${chkMonto.toFixed(2)}) no coincide con el monto del pago ($${abonoMonto.toFixed(2)}).` } };
+                    }
+                    const [linkedAbonos] = await conn.query(
+                        'SELECT id, estado_conciliacion FROM recordatorios_pagos_abonos WHERE cheque_id = ? FOR UPDATE',
+                        [targetId]
+                    );
+                    const conflictAbono = (linkedAbonos || []).find(
+                        (a) => a.estado_conciliacion === 'CONCILIADO' && Number(a.id) !== parsedAbonoId
+                    );
+                    if (conflictAbono) {
+                        return { errorStatus: 409, errorBody: { message: `El cheque #${targetId} ya se encuentra vinculado al pago conciliado #${conflictAbono.id}.` } };
                     }
                     const lockCheck = await isDateInClosedPeriod(conn, chk.cuenta_bancaria_id, [chk.fecha_aplicado || dbFechaAplicado]);
                     if (lockCheck.closed) {
@@ -1680,9 +2213,10 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
                             [dbFechaAplicado, req.user?.id || null, targetId]
                         );
                     }
+                    linkedChkId = targetId;
                 } else {
                     const [[mov]] = await conn.query(
-                        'SELECT id, cuenta_bancaria_id, fecha_aplicado, deleted_at FROM movimientos_bancarios WHERE id = ? FOR UPDATE',
+                        'SELECT id, cuenta_bancaria_id, monto, cargo, abono, fecha_aplicado, deleted_at FROM movimientos_bancarios WHERE id = ? FOR UPDATE',
                         [targetId]
                     );
                     if (!mov || mov.deleted_at) {
@@ -1690,6 +2224,20 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
                     }
                     if (abono.cuenta_bancaria_id && Number(mov.cuenta_bancaria_id) !== Number(abono.cuenta_bancaria_id)) {
                         return { errorStatus: 403, errorBody: { message: 'El movimiento no pertenece a la misma cuenta bancaria del pago.' } };
+                    }
+                    const movMonto = round2(mov.monto || mov.cargo || mov.abono || 0);
+                    if (Math.abs(movMonto - abonoMonto) > 0.01) {
+                        return { errorStatus: 400, errorBody: { message: `El monto del movimiento ($${movMonto.toFixed(2)}) no coincide con el monto del pago ($${abonoMonto.toFixed(2)}).` } };
+                    }
+                    const [linkedAbonos] = await conn.query(
+                        'SELECT id, estado_conciliacion FROM recordatorios_pagos_abonos WHERE movimiento_bancario_id = ? FOR UPDATE',
+                        [targetId]
+                    );
+                    const conflictAbono = (linkedAbonos || []).find(
+                        (a) => a.estado_conciliacion === 'CONCILIADO' && Number(a.id) !== parsedAbonoId
+                    );
+                    if (conflictAbono) {
+                        return { errorStatus: 409, errorBody: { message: `El movimiento bancario #${targetId} ya se encuentra vinculado al pago conciliado #${conflictAbono.id}.` } };
                     }
                     const lockCheck = await isDateInClosedPeriod(conn, mov.cuenta_bancaria_id, [mov.fecha_aplicado || dbFechaAplicado]);
                     if (lockCheck.closed) {
@@ -1705,8 +2253,8 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
                 }
 
                 await conn.query(
-                    "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ? WHERE id = ?",
-                    [linkedMovId, parsedAbonoId]
+                    "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ?, cheque_id = ? WHERE id = ?",
+                    [linkedMovId, linkedChkId, parsedAbonoId]
                 );
 
                 await recordBankAudit(conn, {
@@ -1716,7 +2264,7 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
                     accion: 'VINCULAR_CONTROL_PAGO',
                     user: req.user,
                     ipAddress: req.ip,
-                    after: { origen_tipo, target_id: targetId, movimiento_bancario_id: linkedMovId, fecha_aplicado: dbFechaAplicado }
+                    after: { origen_tipo, target_id: targetId, movimiento_bancario_id: linkedMovId, cheque_id: linkedChkId, fecha_aplicado: dbFechaAplicado }
                 });
 
                 return {
@@ -1796,7 +2344,7 @@ router.post('/vincular-control-pago', authenticateToken, requirePermission(conci
             );
 
             await conn.query(
-                "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ? WHERE id = ?",
+                "UPDATE recordatorios_pagos_abonos SET estado_conciliacion = 'CONCILIADO', movimiento_bancario_id = ?, cheque_id = NULL WHERE id = ?",
                 [ins.insertId, parsedAbonoId]
             );
 
@@ -1900,6 +2448,32 @@ router.post('/periodos/cerrar', authenticateToken, requirePermission(conciliacio
 
     try {
         const txResult = await withTransaction(async (conn) => {
+            const [[ctaLock]] = await conn.query(
+                'SELECT id FROM cuentas_bancarias WHERE id = ? FOR UPDATE',
+                [cuentaId]
+            );
+            if (!ctaLock) {
+                return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
+            }
+
+            const [existingPeriodos] = await conn.query(
+                'SELECT id, fecha_corte, estado FROM conciliacion_periodos WHERE cuenta_bancaria_id = ? FOR UPDATE',
+                [cuentaId]
+            );
+            const blockingPeriodo = (existingPeriodos || []).find((p) => {
+                if (p.estado !== 'CERRADO') return false;
+                const pFecha = parseStrictDBDate(p.fecha_corte);
+                return pFecha && pFecha >= dbFechaCorte;
+            });
+            if (blockingPeriodo) {
+                return {
+                    errorStatus: 409,
+                    errorBody: {
+                        message: `Ya existe un período cerrado hasta el ${toDisplayDate(blockingPeriodo.fecha_corte)} que cubre la fecha solicitada (${toDisplayDate(dbFechaCorte)}). Debe solicitar y aprobar la reapertura primero.`
+                    }
+                };
+            }
+
             const summary = await computeAccountReconciliationSummary(conn, cuentaId, dbFechaCorte);
             if (!summary) {
                 return { errorStatus: 404, errorBody: { message: 'Cuenta bancaria no encontrada.' } };
@@ -2308,5 +2882,1115 @@ router.get('/auditoria', authenticateToken, requirePermission(conciliacionViewPe
         sendSafeError(res, error, 'Error al consultar auditoría bancaria');
     }
 });
+
+// ── 9. Reglas de Autoclasificación (R4.2) ────────────────────────────────────
+router.get('/reglas', authenticateToken, requirePermission(conciliacionReglasViewPerms), async (req, res) => {
+    const cuentaFilter = req.query.cuenta_bancaria_id || req.query.cuenta_id
+        ? parseInt(req.query.cuenta_bancaria_id || req.query.cuenta_id, 10)
+        : null;
+    const bancoFilter = req.query.banco_codigo ? String(req.query.banco_codigo).trim().toUpperCase() : null;
+    const activoParam = req.query.activo !== undefined ? String(req.query.activo).trim().toLowerCase() : null;
+
+    try {
+        const db = getDb();
+        let rawRules = [];
+        try {
+            const [rows] = await withRetry(() => db.query(
+                'SELECT * FROM conciliacion_reglas_clasificacion ORDER BY prioridad ASC, id ASC'
+            ));
+            rawRules = rows || [];
+        } catch (errRules) {
+            if (!isNoSuchTableError(errRules)) throw errRules;
+        }
+
+        let cuentas = [];
+        let bancos = [];
+        let tiposRemesas = [];
+        try {
+            const [cRows] = await withRetry(() => db.query('SELECT id, banco_id, numero, nombre FROM cuentas_bancarias'));
+            cuentas = cRows || [];
+            const [bRows] = await withRetry(() => db.query('SELECT id, codigo, descripcion FROM bancos'));
+            bancos = bRows || [];
+            const [trRows] = await withRetry(() => db.query('SELECT id, empresa_id, codigo, descripcion FROM tipos_remesas'));
+            tiposRemesas = trRows || [];
+        } catch (_) { /* catálogos opcionales */ }
+
+        const cuentaMap = new Map(cuentas.map((c) => [Number(c.id), c]));
+        const bancoByCode = new Map(bancos.map((b) => [String(b.codigo || '').toUpperCase(), b]));
+        const bancoById = new Map(bancos.map((b) => [Number(b.id), b]));
+        const remesaMap = new Map(tiposRemesas.map((tr) => [Number(tr.id), tr]));
+
+        let filtered = rawRules.slice();
+        if (Number.isInteger(cuentaFilter) && cuentaFilter > 0) {
+            filtered = filtered.filter((r) => Number(r.cuenta_bancaria_id) === cuentaFilter);
+        }
+        if (bancoFilter) {
+            filtered = filtered.filter((r) => String(r.banco_codigo || '').trim().toUpperCase() === bancoFilter);
+        }
+        if (activoParam === '1' || activoParam === 'true') {
+            filtered = filtered.filter((r) => Number(r.activo) === 1);
+        } else if (activoParam === '0' || activoParam === 'false') {
+            filtered = filtered.filter((r) => Number(r.activo) === 0);
+        }
+
+        const enriched = filtered.map((r) => {
+            const cta = r.cuenta_bancaria_id ? cuentaMap.get(Number(r.cuenta_bancaria_id)) : null;
+            const bco = (cta && bancoById.get(Number(cta.banco_id))) ||
+                (r.banco_codigo ? bancoByCode.get(String(r.banco_codigo).toUpperCase()) : null);
+            const tr = r.tipo_remesa_id ? remesaMap.get(Number(r.tipo_remesa_id)) : null;
+            return {
+                ...r,
+                id: Number(r.id),
+                cuenta_bancaria_id: r.cuenta_bancaria_id ? Number(r.cuenta_bancaria_id) : null,
+                tipo_remesa_id: r.tipo_remesa_id ? Number(r.tipo_remesa_id) : null,
+                prioridad: Number(r.prioridad ?? 100),
+                activo: Number(r.activo ?? 1),
+                cuenta_numero: cta?.numero || null,
+                cuenta_nombre: cta?.nombre || null,
+                banco_nombre: bco?.descripcion || null,
+                tipo_remesa_codigo: tr?.codigo || null,
+                tipo_remesa_descripcion: tr?.descripcion || null
+            };
+        });
+
+        res.json({ reglas: enriched, total: enriched.length });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar reglas de autoclasificación');
+    }
+});
+
+router.post('/reglas/probar', authenticateToken, requirePermission(conciliacionReglasManagePerms), async (req, res) => {
+    const body = req.body || {};
+    const cuentaId = body.cuenta_bancaria_id || body.cuenta_id ? parseInt(body.cuenta_bancaria_id || body.cuenta_id, 10) : null;
+    const bancoCodigo = body.banco_codigo ? String(body.banco_codigo).trim().toUpperCase() : null;
+
+    let rulesToEvaluate = [];
+    if (body.patron !== undefined) {
+        const check = validateClassificationRulePattern(body.patron, body.tipo_match || 'CONTAINS');
+        if (!check.valid) {
+            return res.status(400).json({ message: check.message });
+        }
+        const tipoMov = String(body.tipo_movimiento || 'AMBOS').toUpperCase();
+        const signo = String(body.signo || (tipoMov === 'AMBOS' ? 'CUALQUIERA' : tipoMov)).toUpperCase();
+        rulesToEvaluate = [{
+            id: 0,
+            nombre: String(body.nombre || 'Prueba'),
+            patron: check.patron,
+            tipo_match: check.tipo_match,
+            tipo_movimiento: tipoMov,
+            signo,
+            tipo_remesa_id: body.tipo_remesa_id ? parseInt(body.tipo_remesa_id, 10) || null : null,
+            tipo_remesa_codigo: body.tipo_remesa_codigo || null,
+            concepto_limpio: body.concepto_limpio || null,
+            cod_cta: body.cod_cta || null,
+            prioridad: 1,
+            activo: 1,
+            cuenta_bancaria_id: cuentaId,
+            banco_codigo: bancoCodigo
+        }];
+    }
+
+    try {
+        const db = getDb();
+        let resolvedBancoCodigo = bancoCodigo;
+        let empresaId = null;
+        if (cuentaId) {
+            const [[cta]] = await withRetry(() => db.query(
+                'SELECT cb.id, cb.empresa_id, b.codigo as banco_codigo FROM cuentas_bancarias cb LEFT JOIN bancos b ON cb.banco_id = b.id WHERE cb.id = ? LIMIT 1',
+                [cuentaId]
+            ));
+            if (cta) {
+                empresaId = cta.empresa_id;
+                if (!resolvedBancoCodigo && cta.banco_codigo) {
+                    resolvedBancoCodigo = String(cta.banco_codigo).toUpperCase();
+                }
+            }
+        }
+
+        if (rulesToEvaluate.length === 0) {
+            try {
+                const [rows] = await withRetry(() => db.query(
+                    'SELECT * FROM conciliacion_reglas_clasificacion WHERE activo = 1 ORDER BY prioridad ASC, id ASC'
+                ));
+                rulesToEvaluate = rows || [];
+            } catch (errRules) {
+                if (!isNoSuchTableError(errRules)) throw errRules;
+                rulesToEvaluate = [];
+            }
+        }
+
+        const [allTrRows] = await withRetry(() => db.query('SELECT id, empresa_id, codigo, descripcion FROM tipos_remesas'));
+        const allTiposRemesas = allTrRows || [];
+        const tiposRemesas = empresaId
+            ? allTiposRemesas.filter((tr) => Number(tr.empresa_id) === Number(empresaId))
+            : allTiposRemesas;
+
+        const rawSamples = Array.isArray(body.items)
+            ? body.items
+            : (Array.isArray(body.descripciones)
+                ? body.descripciones.map((d) => (typeof d === 'string' ? { descripcion: d, tipo: body.tipo || 'CARGO' } : d))
+                : [{ descripcion: body.descripcion || '', tipo: body.tipo || 'CARGO', monto: body.monto || 100 }]);
+
+        const sampleTxs = rawSamples.map((s, idx) => ({
+            fila_origen: idx + 1,
+            descripcion: String(s?.descripcion || s?.concepto || '').trim().toUpperCase(),
+            tipo: String(s?.tipo || (Number(s?.cargo || 0) > 0 ? 'CARGO' : 'ABONO')).toUpperCase(),
+            monto: Number(s?.monto || 0)
+        }));
+
+        const applied = applyClassificationRules(sampleTxs, rulesToEvaluate, tiposRemesas, {
+            cuentaId,
+            bancoCodigo: resolvedBancoCodigo,
+            allTiposRemesas
+        });
+
+        res.json({
+            resultados: applied.transacciones,
+            reglas_aplicadas_count: applied.reglas_aplicadas_count,
+            reglas_evaluadas: rulesToEvaluate.length
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al probar reglas de autoclasificación');
+    }
+});
+
+async function validateAndNormalizeReglaPayload(conn, body, existing = null) {
+    const nombre = String(body.nombre !== undefined ? body.nombre : (existing?.nombre || '')).trim().slice(0, 120);
+    if (!nombre) {
+        return { errorStatus: 400, errorBody: { message: 'El nombre de la regla es requerido.' } };
+    }
+
+    const patron = body.patron !== undefined ? body.patron : existing?.patron;
+    const tipoMatch = body.tipo_match !== undefined ? body.tipo_match : (existing?.tipo_match || 'CONTAINS');
+    const patternCheck = validateClassificationRulePattern(patron, tipoMatch);
+    if (!patternCheck.valid) {
+        return { errorStatus: 400, errorBody: { message: patternCheck.message } };
+    }
+
+    let tipoMov = body.tipo_movimiento !== undefined
+        ? String(body.tipo_movimiento || 'AMBOS').trim().toUpperCase()
+        : null;
+    let signo = body.signo !== undefined
+        ? String(body.signo || 'CUALQUIERA').trim().toUpperCase()
+        : null;
+
+    if (!tipoMov && signo) {
+        tipoMov = signo === 'CUALQUIERA' ? 'AMBOS' : signo;
+    } else if (!tipoMov) {
+        tipoMov = String(existing?.tipo_movimiento || 'AMBOS').toUpperCase();
+    }
+    if (!signo) {
+        signo = tipoMov === 'AMBOS' ? 'CUALQUIERA' : tipoMov;
+    }
+
+    if (!['CARGO', 'ABONO', 'AMBOS'].includes(tipoMov)) {
+        return { errorStatus: 400, errorBody: { message: 'tipo_movimiento inválido (CARGO, ABONO, AMBOS).' } };
+    }
+    if (!['CARGO', 'ABONO', 'CUALQUIERA'].includes(signo)) {
+        return { errorStatus: 400, errorBody: { message: 'signo inválido (CARGO, ABONO, CUALQUIERA).' } };
+    }
+
+    const rawCuentaId = body.cuenta_bancaria_id !== undefined ? body.cuenta_bancaria_id : existing?.cuenta_bancaria_id;
+    const cuentaBancariaId = rawCuentaId !== null && rawCuentaId !== undefined && rawCuentaId !== ''
+        ? parseInt(rawCuentaId, 10)
+        : null;
+    if (rawCuentaId !== null && rawCuentaId !== undefined && rawCuentaId !== '' && (!Number.isInteger(cuentaBancariaId) || cuentaBancariaId <= 0)) {
+        return { errorStatus: 400, errorBody: { message: 'cuenta_bancaria_id inválido.' } };
+    }
+
+    let cuentaEmpresaId = null;
+    if (cuentaBancariaId) {
+        const [[cta]] = await conn.query('SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ? LIMIT 1', [cuentaBancariaId]);
+        if (!cta) {
+            return { errorStatus: 404, errorBody: { message: 'La cuenta bancaria especificada no existe.' } };
+        }
+        cuentaEmpresaId = cta.empresa_id;
+    }
+
+    const rawBancoCod = body.banco_codigo !== undefined ? body.banco_codigo : existing?.banco_codigo;
+    const bancoCodigo = rawBancoCod ? String(rawBancoCod).trim().toUpperCase().slice(0, 50) : null;
+
+    let tipoRemesaId = null;
+    const rawTrId = body.tipo_remesa_id !== undefined ? body.tipo_remesa_id : existing?.tipo_remesa_id;
+    if (rawTrId !== null && rawTrId !== undefined && rawTrId !== '') {
+        const parsedTr = parseInt(rawTrId, 10);
+        if (!Number.isInteger(parsedTr) || parsedTr <= 0) {
+            return { errorStatus: 400, errorBody: { message: 'tipo_remesa_id inválido.' } };
+        }
+        try {
+            const [[trExists]] = await conn.query('SELECT id FROM tipos_remesas WHERE id = ? LIMIT 1', [parsedTr]);
+            if (!trExists) {
+                return { errorStatus: 404, errorBody: { message: 'El tipo de remesa especificado no existe.' } };
+            }
+        } catch (errTr) {
+            if (!isNoSuchTableError(errTr)) throw errTr;
+        }
+        tipoRemesaId = parsedTr;
+    } else if (body.tipo_remesa_codigo) {
+        const code = String(body.tipo_remesa_codigo).trim().toUpperCase();
+        const [trRows] = cuentaEmpresaId
+            ? await conn.query('SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo = ? LIMIT 1', [cuentaEmpresaId, code])
+            : await conn.query('SELECT id FROM tipos_remesas WHERE codigo = ? LIMIT 1', [code]);
+        if (trRows && trRows.length > 0) {
+            tipoRemesaId = Number(trRows[0].id);
+        }
+    }
+
+    const rawConcepto = body.concepto_limpio !== undefined ? body.concepto_limpio : existing?.concepto_limpio;
+    const conceptoLimpio = rawConcepto ? String(rawConcepto).trim().toUpperCase().slice(0, 255) : null;
+
+    const rawCodCta = body.cod_cta !== undefined ? body.cod_cta : existing?.cod_cta;
+    const codCta = rawCodCta ? String(rawCodCta).trim().slice(0, 50) : null;
+
+    const rawPrioridad = body.prioridad !== undefined ? body.prioridad : (existing?.prioridad ?? 100);
+    const prioridad = parseInt(rawPrioridad, 10);
+    if (!Number.isInteger(prioridad) || prioridad < 0 || prioridad > 99999) {
+        return { errorStatus: 400, errorBody: { message: 'prioridad debe ser un entero entre 0 y 99999.' } };
+    }
+
+    const rawActivo = body.activo !== undefined ? body.activo : (existing?.activo ?? 1);
+    const activo = (rawActivo === false || Number(rawActivo) === 0 || String(rawActivo) === 'false') ? 0 : 1;
+
+    return {
+        data: {
+            banco_codigo: bancoCodigo,
+            cuenta_bancaria_id: cuentaBancariaId,
+            nombre,
+            patron: patternCheck.patron,
+            tipo_match: patternCheck.tipo_match,
+            tipo_movimiento: tipoMov,
+            signo,
+            tipo_remesa_id: tipoRemesaId,
+            concepto_limpio: conceptoLimpio,
+            cod_cta: codCta,
+            prioridad,
+            activo
+        }
+    };
+}
+
+router.post('/reglas', authenticateToken, requirePermission(conciliacionReglasManagePerms), async (req, res) => {
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const validated = await validateAndNormalizeReglaPayload(conn, req.body || {});
+            if (validated.errorStatus) return validated;
+            const d = validated.data;
+
+            const [ins] = await conn.query(
+                `INSERT INTO conciliacion_reglas_clasificacion
+                    (banco_codigo, cuenta_bancaria_id, nombre, patron, tipo_match, tipo_movimiento,
+                     signo, tipo_remesa_id, concepto_limpio, cod_cta, prioridad, activo, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    d.banco_codigo,
+                    d.cuenta_bancaria_id,
+                    d.nombre,
+                    d.patron,
+                    d.tipo_match,
+                    d.tipo_movimiento,
+                    d.signo,
+                    d.tipo_remesa_id,
+                    d.concepto_limpio,
+                    d.cod_cta,
+                    d.prioridad,
+                    d.activo,
+                    req.user?.id || null
+                ]
+            );
+
+            const [[saved]] = await conn.query(
+                'SELECT * FROM conciliacion_reglas_clasificacion WHERE id = ?',
+                [ins.insertId]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: d.cuenta_bancaria_id,
+                entidad: 'conciliacion_reglas',
+                entidadId: ins.insertId,
+                accion: 'CREATE_REGLA',
+                user: req.user,
+                ipAddress: req.ip,
+                after: d
+            });
+
+            return { id: ins.insertId, regla: saved || { id: ins.insertId, ...d } };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_reglas_updated', {
+            id: txResult.id,
+            accion: 'CREATE',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.status(201).json({
+            id: txResult.id,
+            message: 'Regla de autoclasificación creada exitosamente.',
+            regla: txResult.regla
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al crear regla de autoclasificación');
+    }
+});
+
+router.put('/reglas/:id', authenticateToken, requirePermission(conciliacionReglasManagePerms), async (req, res) => {
+    const ruleId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(ruleId) || ruleId <= 0) {
+        return res.status(400).json({ message: 'ID de regla inválido.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const [[existing]] = await conn.query(
+                'SELECT * FROM conciliacion_reglas_clasificacion WHERE id = ? FOR UPDATE',
+                [ruleId]
+            );
+            if (!existing) {
+                return { errorStatus: 404, errorBody: { message: 'Regla de autoclasificación no encontrada.' } };
+            }
+
+            const validated = await validateAndNormalizeReglaPayload(conn, req.body || {}, existing);
+            if (validated.errorStatus) return validated;
+            const d = validated.data;
+
+            await conn.query(
+                `UPDATE conciliacion_reglas_clasificacion
+                 SET banco_codigo = ?, cuenta_bancaria_id = ?, nombre = ?, patron = ?, tipo_match = ?,
+                     tipo_movimiento = ?, signo = ?, tipo_remesa_id = ?, concepto_limpio = ?,
+                     cod_cta = ?, prioridad = ?, activo = ?
+                 WHERE id = ?`,
+                [
+                    d.banco_codigo,
+                    d.cuenta_bancaria_id,
+                    d.nombre,
+                    d.patron,
+                    d.tipo_match,
+                    d.tipo_movimiento,
+                    d.signo,
+                    d.tipo_remesa_id,
+                    d.concepto_limpio,
+                    d.cod_cta,
+                    d.prioridad,
+                    d.activo,
+                    ruleId
+                ]
+            );
+
+            const [[updated]] = await conn.query(
+                'SELECT * FROM conciliacion_reglas_clasificacion WHERE id = ?',
+                [ruleId]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: d.cuenta_bancaria_id,
+                entidad: 'conciliacion_reglas',
+                entidadId: ruleId,
+                accion: 'UPDATE_REGLA',
+                user: req.user,
+                ipAddress: req.ip,
+                before: existing,
+                after: d
+            });
+
+            return { id: ruleId, regla: updated || { id: ruleId, ...d } };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_reglas_updated', {
+            id: ruleId,
+            accion: 'UPDATE',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json({
+            id: ruleId,
+            message: 'Regla de autoclasificación actualizada exitosamente.',
+            regla: txResult.regla
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar regla de autoclasificación');
+    }
+});
+
+router.delete('/reglas/:id', authenticateToken, requirePermission(conciliacionReglasManagePerms), async (req, res) => {
+    const ruleId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(ruleId) || ruleId <= 0) {
+        return res.status(400).json({ message: 'ID de regla inválido.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const [[existing]] = await conn.query(
+                'SELECT * FROM conciliacion_reglas_clasificacion WHERE id = ? FOR UPDATE',
+                [ruleId]
+            );
+            if (!existing) {
+                return { errorStatus: 404, errorBody: { message: 'Regla de autoclasificación no encontrada.' } };
+            }
+
+            await conn.query('DELETE FROM conciliacion_reglas_clasificacion WHERE id = ?', [ruleId]);
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: existing.cuenta_bancaria_id || null,
+                entidad: 'conciliacion_reglas',
+                entidadId: ruleId,
+                accion: 'DELETE_REGLA',
+                user: req.user,
+                ipAddress: req.ip,
+                before: existing
+            });
+
+            return { id: ruleId };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_reglas_updated', {
+            id: ruleId,
+            accion: 'DELETE',
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json({ message: 'Regla eliminada exitosamente.', id: ruleId });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al eliminar regla de autoclasificación');
+    }
+});
+
+// ── 10. Cruces Agrupados N-a-1 / 1-a-N / N-a-M (R4.2) ────────────────────────
+router.get('/cruces', authenticateToken, requirePermission(conciliacionViewPerms), async (req, res) => {
+    const cuentaFilter = req.query.cuenta_id || req.query.cuenta_bancaria_id
+        ? parseInt(req.query.cuenta_id || req.query.cuenta_bancaria_id, 10)
+        : null;
+    const estadoFilter = req.query.estado ? String(req.query.estado).trim().toUpperCase() : null;
+
+    try {
+        const db = getDb();
+        let cruces = [];
+        let items = [];
+        try {
+            const [cRows] = await withRetry(() => db.query(
+                'SELECT * FROM conciliacion_cruces ORDER BY fecha_aplicado DESC, id DESC'
+            ));
+            cruces = cRows || [];
+            if (cruces.length > 0) {
+                const [iRows] = await withRetry(() => db.query(
+                    'SELECT * FROM conciliacion_cruce_items ORDER BY id ASC'
+                ));
+                items = iRows || [];
+            }
+        } catch (errCruces) {
+            if (!isNoSuchTableError(errCruces)) throw errCruces;
+        }
+
+        if (Number.isInteger(cuentaFilter) && cuentaFilter > 0) {
+            cruces = cruces.filter((c) => Number(c.cuenta_bancaria_id) === cuentaFilter);
+        }
+        if (estadoFilter && estadoFilter !== 'TODOS') {
+            cruces = cruces.filter((c) => String(c.estado || '').toUpperCase() === estadoFilter);
+        }
+
+        const itemsByCruce = new Map();
+        for (const it of items) {
+            const cid = Number(it.cruce_id);
+            if (!itemsByCruce.has(cid)) itemsByCruce.set(cid, []);
+            itemsByCruce.get(cid).push({
+                ...it,
+                monto: Number(it.monto || 0),
+                fecha_ymd: parseStrictDBDate(it.fecha),
+                fecha_display: toDisplayDate(it.fecha)
+            });
+        }
+
+        const enriched = cruces.map((c) => ({
+            ...c,
+            id: Number(c.id),
+            cuenta_bancaria_id: Number(c.cuenta_bancaria_id),
+            monto_total: Number(c.monto_total || 0),
+            fecha_aplicado_ymd: parseStrictDBDate(c.fecha_aplicado),
+            fecha_aplicado_display: toDisplayDate(c.fecha_aplicado),
+            items: itemsByCruce.get(Number(c.id)) || []
+        }));
+
+        res.json({ cruces: enriched, total: enriched.length });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar cruces agrupados');
+    }
+});
+
+router.post('/cruces', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const body = req.body || {};
+    const cuentaId = parseInt(body.cuenta_bancaria_id || body.cuenta_id, 10);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0) {
+        return res.status(400).json({ message: 'Debe especificar una cuenta bancaria válida.' });
+    }
+
+    const tipoCruce = String(body.tipo_cruce || 'N_A_1').trim().toUpperCase();
+    if (!['N_A_1', '1_A_N', 'N_A_M'].includes(tipoCruce)) {
+        return res.status(400).json({ message: 'tipo_cruce inválido (use N_A_1, 1_A_N o N_A_M).' });
+    }
+
+    const explicitDireccion = body.direccion ? String(body.direccion).trim().toUpperCase() : null;
+    if (explicitDireccion && explicitDireccion !== 'CARGO' && explicitDireccion !== 'ABONO') {
+        return res.status(400).json({ message: 'direccion inválida (use CARGO o ABONO).' });
+    }
+
+    const dbFechaAplicado = parseStrictDBDate(body.fecha_aplicado || getElSalvadorTodayYMD());
+    if (!dbFechaAplicado) {
+        return res.status(400).json({ message: 'La fecha de aplicación del cruce no es válida.' });
+    }
+
+    const rawLibro = Array.isArray(body.libro_items)
+        ? body.libro_items
+        : (Array.isArray(body.libros_items) ? body.libros_items : []);
+    let rawBanco = Array.isArray(body.banco_items) ? body.banco_items.slice() : [];
+
+    if (tipoCruce === 'N_A_1' && rawBanco.length === 0 && (body.monto_banco !== undefined || body.referencia_banco)) {
+        rawBanco = [{
+            origen_tipo: 'EXTRACTO',
+            documento: body.referencia_banco || null,
+            fecha: dbFechaAplicado,
+            concepto: body.concepto_banco || body.notas || 'MOVIMIENTO BANCARIO AGRUPADO',
+            monto: body.monto_banco
+        }];
+    }
+
+    if (rawLibro.length === 0 || rawBanco.length === 0) {
+        return res.status(400).json({ message: 'Debe seleccionar elementos en libros y en banco para crear el cruce.' });
+    }
+
+    if (tipoCruce === 'N_A_1' && (rawLibro.length < 2 || rawBanco.length !== 1)) {
+        return res.status(400).json({ message: 'Un cruce N_A_1 requiere al menos 2 registros en libros y exactamente 1 movimiento bancario.' });
+    }
+    if (tipoCruce === '1_A_N' && (rawLibro.length !== 1 || rawBanco.length < 2)) {
+        return res.status(400).json({ message: 'Un cruce 1_A_N requiere exactamente 1 registro en libros y al menos 2 movimientos bancarios.' });
+    }
+
+    const libroItems = [];
+    const seenEntityKeys = new Set();
+    for (const raw of rawLibro) {
+        const id = parseInt(raw?.id, 10);
+        const origenTipo = String(raw?.origen_tipo || raw?.tipo || '').trim().toUpperCase();
+        if (!Number.isInteger(id) || id <= 0 || (origenTipo !== 'MOV' && origenTipo !== 'CK')) {
+            return res.status(400).json({ message: 'Todos los elementos de libro_items deben tener id válido y origen_tipo MOV o CK.' });
+        }
+        const key = `${origenTipo}_${id}`;
+        if (seenEntityKeys.has(key)) {
+            return res.status(400).json({ message: `Elemento duplicado en libro_items (${origenTipo} #${id}).` });
+        }
+        seenEntityKeys.add(key);
+        libroItems.push({ id, origen_tipo: origenTipo });
+    }
+
+    const bancoItems = [];
+    for (const raw of rawBanco) {
+        const origenTipo = String(raw?.origen_tipo || (raw?.id ? '' : 'EXTRACTO')).trim().toUpperCase();
+        const rawId = raw?.id !== undefined && raw?.id !== null ? parseInt(raw.id, 10) : null;
+        if ((origenTipo === 'MOV' || origenTipo === 'CK') && Number.isInteger(rawId) && rawId > 0) {
+            const key = `${origenTipo}_${rawId}`;
+            if (seenEntityKeys.has(key)) {
+                return res.status(400).json({ message: `Elemento duplicado entre lados del cruce (${origenTipo} #${rawId}).` });
+            }
+            seenEntityKeys.add(key);
+            bancoItems.push({ isDbEntity: true, id: rawId, origen_tipo: origenTipo });
+        } else {
+            const montoNum = parseStrictPositiveAmount(raw?.monto);
+            if (montoNum === null) {
+                return res.status(400).json({ message: 'Todos los elementos de extracto en banco_items deben tener un monto mayor a $0.00.' });
+            }
+            const fechaItem = raw?.fecha_ymd || raw?.fecha ? parseStrictDBDate(raw.fecha_ymd || raw.fecha) : dbFechaAplicado;
+            if (!fechaItem) {
+                return res.status(400).json({ message: 'Fecha inválida en banco_items.' });
+            }
+            bancoItems.push({
+                isDbEntity: false,
+                origen_tipo: 'EXTRACTO',
+                documento: raw?.documento ? String(raw.documento).trim().slice(0, 100) : null,
+                fecha: fechaItem,
+                concepto: String(raw?.concepto || raw?.descripcion || body.concepto_banco || 'EXTRACTO BANCARIO').trim().toUpperCase().slice(0, 255),
+                monto: montoNum
+            });
+        }
+    }
+
+    const idempotencyKey = getIdempotencyKey(req);
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            if (idempotencyKey) {
+                const idem = await beginIdempotentRequest(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_cruces_create',
+                    userId: req.user?.id,
+                    payload: { cuentaId, tipoCruce, explicitDireccion, dbFechaAplicado, libroItems, bancoItems }
+                });
+                if (idem.replayed) return { replayed: true, statusCode: idem.statusCode, body: idem.responseBody };
+                if (idem.conflict) return { conflict: true };
+            }
+
+            const abortTx = async (errorStatus, errorBody) => {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'conciliacion_cruces_create');
+                return { errorStatus, errorBody };
+            };
+
+            const [[cuenta]] = await conn.query(
+                'SELECT id, activa FROM cuentas_bancarias WHERE id = ? LIMIT 1',
+                [cuentaId]
+            );
+            if (!cuenta) {
+                return abortTx(404, { message: 'Cuenta bancaria no encontrada.' });
+            }
+            if (!cuenta.activa) {
+                return abortTx(409, { message: 'La cuenta bancaria se encuentra inactiva.' });
+            }
+
+            const dbEntitiesAll = [
+                ...libroItems.map((x) => ({ ...x, lado: 'LIBRO' })),
+                ...bancoItems.filter((x) => x.isDbEntity).map((x) => ({ ...x, lado: 'BANCO' }))
+            ];
+            const movIds = dbEntitiesAll.filter((x) => x.origen_tipo === 'MOV').map((x) => x.id);
+            const chkIds = dbEntitiesAll.filter((x) => x.origen_tipo === 'CK').map((x) => x.id);
+
+            const movMap = new Map();
+            if (movIds.length > 0) {
+                const [rows] = await conn.query(
+                    `SELECT id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto, monto, cargo, abono, deleted_at
+                     FROM movimientos_bancarios WHERE id IN (${movIds.map(() => '?').join(',')}) FOR UPDATE`,
+                    movIds
+                );
+                if ((rows || []).length !== movIds.length) {
+                    return abortTx(404, { message: 'Uno o más movimientos bancarios del cruce no existen.' });
+                }
+                for (const m of rows) {
+                    if (m.deleted_at) {
+                        return abortTx(409, { message: `El movimiento #${m.id} fue eliminado.` });
+                    }
+                    if (Number(m.cuenta_bancaria_id) !== cuentaId) {
+                        return abortTx(409, { message: `El movimiento #${m.id} no pertenece a la cuenta seleccionada.` });
+                    }
+                    if (m.fecha_aplicado) {
+                        return abortTx(409, { message: `El movimiento #${m.id} ya se encuentra conciliado.` });
+                    }
+                    movMap.set(Number(m.id), m);
+                }
+            }
+
+            const chkMap = new Map();
+            if (chkIds.length > 0) {
+                const [rows] = await conn.query(
+                    `SELECT id, cuenta_bancaria_id, fecha, fecha_aplicado, cheque, concepto, valor, cheque_anulado, fue_noemitido, es_reservado, deleted_at
+                     FROM cheques WHERE id IN (${chkIds.map(() => '?').join(',')}) FOR UPDATE`,
+                    chkIds
+                );
+                if ((rows || []).length !== chkIds.length) {
+                    return abortTx(404, { message: 'Uno o más cheques del cruce no existen.' });
+                }
+                for (const ch of rows) {
+                    if (ch.deleted_at || ch.cheque_anulado || ch.fue_noemitido || ch.es_reservado) {
+                        return abortTx(409, { message: `El cheque #${ch.cheque || ch.id} está anulado, reservado, eliminado o no emitido.` });
+                    }
+                    if (Number(ch.cuenta_bancaria_id) !== cuentaId) {
+                        return abortTx(409, { message: `El cheque #${ch.cheque || ch.id} no pertenece a la cuenta seleccionada.` });
+                    }
+                    if (ch.fecha_aplicado) {
+                        return abortTx(409, { message: `El cheque #${ch.cheque || ch.id} ya se encuentra conciliado.` });
+                    }
+                    chkMap.set(Number(ch.id), ch);
+                }
+            }
+
+            // Verificar que ningún item esté ya en otro cruce ACTIVO
+            const [activeCruces] = await conn.query(
+                "SELECT id, cuenta_bancaria_id, estado FROM conciliacion_cruces WHERE cuenta_bancaria_id = ? AND estado = 'ACTIVO'",
+                [cuentaId]
+            );
+            const activeIds = (activeCruces || [])
+                .filter((c) => Number(c.cuenta_bancaria_id) === cuentaId && String(c.estado || '').toUpperCase() === 'ACTIVO')
+                .map((c) => Number(c.id));
+            if (activeIds.length > 0) {
+                const [activeItems] = await conn.query(
+                    `SELECT id, cruce_id, origen_tipo, entidad_id FROM conciliacion_cruce_items WHERE cruce_id IN (${activeIds.map(() => '?').join(',')})`,
+                    activeIds
+                );
+                const activeIdSet = new Set(activeIds);
+                for (const ci of (activeItems || [])) {
+                    if (!activeIdSet.has(Number(ci.cruce_id))) continue;
+                    const hit = dbEntitiesAll.find((e) => e.origen_tipo === ci.origen_tipo && Number(e.id) === Number(ci.entidad_id));
+                    if (hit) {
+                        return abortTx(409, {
+                            message: `El documento ${hit.origen_tipo} #${hit.id} ya pertenece al cruce activo #${ci.cruce_id}.`,
+                            cruce_id: Number(ci.cruce_id)
+                        });
+                    }
+                }
+            }
+
+            // Verificar dirección consistente y sumar totales exactos
+            const resolveEntityMeta = (item) => {
+                if (item.origen_tipo === 'CK') {
+                    const ch = chkMap.get(item.id);
+                    return {
+                        dir: 'CARGO',
+                        monto: round2(ch.valor),
+                        documento: String(ch.cheque || ''),
+                        fecha: parseStrictDBDate(ch.fecha),
+                        concepto: String(ch.concepto || '').slice(0, 255)
+                    };
+                }
+                const m = movMap.get(item.id);
+                const dir = Number(m.cargo || 0) > 0 ? 'CARGO' : 'ABONO';
+                return {
+                    dir,
+                    monto: round2(m.monto || m.cargo || m.abono || 0),
+                    documento: String(m.documento || ''),
+                    fecha: parseStrictDBDate(m.fecha),
+                    concepto: String(m.concepto || '').slice(0, 255)
+                };
+            };
+
+            const firstLibroMeta = resolveEntityMeta(libroItems[0]);
+            const resolvedDireccion = explicitDireccion || firstLibroMeta.dir;
+
+            const itemsToInsert = [];
+
+            let sumLibro = 0;
+            for (const li of libroItems) {
+                const meta = resolveEntityMeta(li);
+                if (meta.dir !== resolvedDireccion) {
+                    return abortTx(400, {
+                        message: `Dirección incompatible: se esperaba ${resolvedDireccion} pero ${li.origen_tipo} #${li.id} es ${meta.dir}.`
+                    });
+                }
+                sumLibro = round2(sumLibro + meta.monto);
+                itemsToInsert.push({
+                    lado: 'LIBRO',
+                    origen_tipo: li.origen_tipo,
+                    entidad_id: li.id,
+                    documento: meta.documento,
+                    fecha: meta.fecha,
+                    concepto: meta.concepto,
+                    monto: meta.monto
+                });
+            }
+
+            let sumBanco = 0;
+            for (const bi of bancoItems) {
+                if (bi.isDbEntity) {
+                    const meta = resolveEntityMeta(bi);
+                    if (meta.dir !== resolvedDireccion) {
+                        return abortTx(400, {
+                            message: `Dirección incompatible en banco_items: se esperaba ${resolvedDireccion} pero ${bi.origen_tipo} #${bi.id} es ${meta.dir}.`
+                        });
+                    }
+                    sumBanco = round2(sumBanco + meta.monto);
+                    itemsToInsert.push({
+                        lado: 'BANCO',
+                        origen_tipo: bi.origen_tipo,
+                        entidad_id: bi.id,
+                        documento: meta.documento,
+                        fecha: meta.fecha,
+                        concepto: meta.concepto,
+                        monto: meta.monto
+                    });
+                } else {
+                    sumBanco = round2(sumBanco + bi.monto);
+                    itemsToInsert.push({
+                        lado: 'BANCO',
+                        origen_tipo: 'EXTRACTO',
+                        entidad_id: null,
+                        documento: bi.documento,
+                        fecha: bi.fecha,
+                        concepto: bi.concepto,
+                        monto: bi.monto
+                    });
+                }
+            }
+
+            const delta = round2(sumLibro - sumBanco);
+            if (Math.abs(delta) > 0.005) {
+                return abortTx(400, {
+                    message: `Los montos del cruce agrupado no cuadran: Libros $${sumLibro.toFixed(2)} vs Banco $${sumBanco.toFixed(2)} (diferencia $${delta.toFixed(2)}).`,
+                    sum_libro: sumLibro,
+                    sum_banco: sumBanco,
+                    delta
+                });
+            }
+
+            // Verificar período cerrado únicamente contra la fecha de aplicación del cruce
+            const lockCheck = await isDateInClosedPeriod(conn, cuentaId, [dbFechaAplicado]);
+            if (lockCheck.closed) {
+                return abortTx(423, {
+                    message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para aplicar cruces en fecha ${toDisplayDate(lockCheck.offendingDate)}.`,
+                    locked_until: lockCheck.lockedDate,
+                    periodo_id: lockCheck.periodo?.id
+                });
+            }
+
+            const firstBanco = itemsToInsert.find((x) => x.lado === 'BANCO');
+            const refBanco = body.referencia_banco
+                ? String(body.referencia_banco).trim().slice(0, 120)
+                : (firstBanco?.documento ? String(firstBanco.documento).slice(0, 120) : null);
+            const concBanco = body.concepto_banco
+                ? String(body.concepto_banco).trim().slice(0, 255)
+                : (firstBanco?.concepto ? String(firstBanco.concepto).slice(0, 255) : null);
+            const notas = body.notas ? String(body.notas).trim().slice(0, 255) : null;
+            const importacionId = body.importacion_id ? parseInt(body.importacion_id, 10) || null : null;
+
+            const [cruceRes] = await conn.query(
+                `INSERT INTO conciliacion_cruces
+                    (cuenta_bancaria_id, tipo_cruce, direccion, monto_total, fecha_aplicado, estado,
+                     importacion_id, referencia_banco, concepto_banco, notas, created_by)
+                 VALUES (?, ?, ?, ?, ?, 'ACTIVO', ?, ?, ?, ?, ?)`,
+                [
+                    cuentaId,
+                    tipoCruce,
+                    resolvedDireccion,
+                    sumLibro,
+                    dbFechaAplicado,
+                    importacionId,
+                    refBanco,
+                    concBanco,
+                    notas,
+                    req.user?.id || null
+                ]
+            );
+            const cruceId = cruceRes.insertId;
+
+            for (const it of itemsToInsert) {
+                await conn.query(
+                    `INSERT INTO conciliacion_cruce_items
+                        (cruce_id, lado, origen_tipo, entidad_id, documento, fecha, concepto, monto)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        cruceId,
+                        it.lado,
+                        it.origen_tipo,
+                        it.entidad_id,
+                        it.documento,
+                        it.fecha,
+                        it.concepto,
+                        it.monto
+                    ]
+                );
+            }
+
+            if (movIds.length > 0) {
+                for (const mid of movIds) {
+                    await conn.query(
+                        'UPDATE movimientos_bancarios SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ? AND deleted_at IS NULL',
+                        [dbFechaAplicado, req.user?.id || null, mid]
+                    );
+                }
+            }
+            if (chkIds.length > 0) {
+                for (const cid of chkIds) {
+                    await conn.query(
+                        'UPDATE cheques SET fecha_aplicado = ?, conciliado_by = ?, conciliado_at = NOW(), version = version + 1 WHERE id = ? AND deleted_at IS NULL',
+                        [dbFechaAplicado, req.user?.id || null, cid]
+                    );
+                }
+            }
+
+            const [[cruceRow]] = await conn.query('SELECT * FROM conciliacion_cruces WHERE id = ?', [cruceId]);
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cuentaId,
+                entidad: 'conciliacion_cruces',
+                entidadId: cruceId,
+                accion: 'CREAR_CRUCE_AGRUPADO',
+                user: req.user,
+                ipAddress: req.ip,
+                after: {
+                    cruce_id: cruceId,
+                    tipo_cruce: tipoCruce,
+                    direccion: resolvedDireccion,
+                    monto_total: sumLibro,
+                    fecha_aplicado: dbFechaAplicado,
+                    items: itemsToInsert
+                }
+            });
+
+            const respBody = {
+                id: cruceId,
+                message: `Cruce agrupado ${tipoCruce} registrado por $${sumLibro.toFixed(2)}.`,
+                cruce: cruceRow || {
+                    id: cruceId,
+                    cuenta_bancaria_id: cuentaId,
+                    tipo_cruce: tipoCruce,
+                    direccion: resolvedDireccion,
+                    monto_total: sumLibro,
+                    fecha_aplicado: dbFechaAplicado,
+                    estado: 'ACTIVO'
+                },
+                items: itemsToInsert
+            };
+
+            if (idempotencyKey) {
+                await saveIdempotentResponse(conn, {
+                    key: idempotencyKey,
+                    scope: 'conciliacion_cruces_create',
+                    statusCode: 201,
+                    responseBody: respBody
+                });
+            }
+
+            return { statusCode: 201, body: respBody, cuentaId };
+        });
+
+        if (txResult.conflict) {
+            return res.status(409).json({ message: 'Solicitud duplicada en proceso. Espere unos segundos.' });
+        }
+        if (txResult.replayed) {
+            return res.status(txResult.statusCode).json(txResult.body);
+        }
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.cuentaId,
+            accion: 'CRUCE_AGRUPADO',
+            cruce_id: txResult.body.id,
+            actor_user_id: req.user?.id || null
+        });
+
+        res.status(201).json(txResult.body);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al registrar cruce agrupado');
+    }
+});
+
+async function handleDesconciliarCruce(req, res) {
+    const cruceId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(cruceId) || cruceId <= 0) {
+        return res.status(400).json({ message: 'ID de cruce inválido.' });
+    }
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const [[cruce]] = await conn.query(
+                'SELECT * FROM conciliacion_cruces WHERE id = ? FOR UPDATE',
+                [cruceId]
+            );
+            if (!cruce) {
+                return { errorStatus: 404, errorBody: { message: 'Cruce agrupado no encontrado.' } };
+            }
+            if (String(cruce.estado || '').toUpperCase() !== 'ACTIVO') {
+                return { errorStatus: 409, errorBody: { message: 'El cruce ya fue desconciliado previamente.' } };
+            }
+
+            const [items] = await conn.query(
+                'SELECT * FROM conciliacion_cruce_items WHERE cruce_id = ?',
+                [cruceId]
+            );
+
+            const datesToVerify = [parseStrictDBDate(cruce.fecha_aplicado)].filter(Boolean);
+
+            const lockCheck = await isDateInClosedPeriod(conn, cruce.cuenta_bancaria_id, datesToVerify);
+            if (lockCheck.closed) {
+                return {
+                    errorStatus: 423,
+                    errorBody: {
+                        message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para desconciliar este cruce.`,
+                        locked_until: lockCheck.lockedDate,
+                        periodo_id: lockCheck.periodo?.id
+                    }
+                };
+            }
+
+            await conn.query(
+                `UPDATE conciliacion_cruces
+                 SET estado = 'DESCONCILIADO', desconciliado_by = ?, desconciliado_at = NOW()
+                 WHERE id = ?`,
+                [req.user?.id || null, cruceId]
+            );
+
+            const movIds = [...new Set((items || []).filter((i) => i.origen_tipo === 'MOV' && i.entidad_id).map((i) => Number(i.entidad_id)))];
+            const chkIds = [...new Set((items || []).filter((i) => i.origen_tipo === 'CK' && i.entidad_id).map((i) => Number(i.entidad_id)))];
+
+            if (movIds.length > 0) {
+                await conn.query(
+                    `UPDATE movimientos_bancarios
+                     SET fecha_aplicado = NULL, conciliado_by = NULL, conciliado_at = NULL, version = version + 1
+                     WHERE id IN (${movIds.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+                    movIds
+                );
+                try {
+                    await conn.query(
+                        `UPDATE recordatorios_pagos_abonos
+                         SET estado_conciliacion = 'PENDIENTE', movimiento_bancario_id = NULL
+                         WHERE movimiento_bancario_id IN (${movIds.map(() => '?').join(',')}) AND estado_conciliacion = 'CONCILIADO'`,
+                        movIds
+                    );
+                } catch (_) { /* tabla opcional */ }
+            }
+
+            if (chkIds.length > 0) {
+                await conn.query(
+                    `UPDATE cheques
+                     SET fecha_aplicado = NULL, conciliado_by = NULL, conciliado_at = NULL, version = version + 1
+                     WHERE id IN (${chkIds.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+                    chkIds
+                );
+                try {
+                    await conn.query(
+                        `UPDATE recordatorios_pagos_abonos
+                         SET estado_conciliacion = 'PENDIENTE', cheque_id = NULL
+                         WHERE cheque_id IN (${chkIds.map(() => '?').join(',')}) AND estado_conciliacion = 'CONCILIADO'`,
+                        chkIds
+                    );
+                } catch (_) { /* tabla opcional */ }
+            }
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: cruce.cuenta_bancaria_id,
+                entidad: 'conciliacion_cruces',
+                entidadId: cruceId,
+                accion: 'DESCONCILIAR_CRUCE',
+                user: req.user,
+                ipAddress: req.ip,
+                before: { estado: cruce.estado, fecha_aplicado: parseStrictDBDate(cruce.fecha_aplicado), movIds, chkIds },
+                after: { estado: 'DESCONCILIADO' }
+            });
+
+            return {
+                id: cruceId,
+                cuentaId: cruce.cuenta_bancaria_id,
+                movIds,
+                chkIds
+            };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'conciliacion_updated', {
+            cuenta_bancaria_id: txResult.cuentaId,
+            accion: 'DESCONCILIAR_CRUCE',
+            cruce_id: cruceId,
+            actor_user_id: req.user?.id || null
+        });
+
+        res.json({
+            message: 'Cruce agrupado desconciliado y documentos revertidos a pendientes.',
+            id: cruceId,
+            estado: 'DESCONCILIADO'
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al desconciliar cruce agrupado');
+    }
+}
+
+router.post('/cruces/:id/desconciliar', authenticateToken, requirePermission(conciliacionManagePerms), handleDesconciliarCruce);
+router.delete('/cruces/:id', authenticateToken, requirePermission(conciliacionManagePerms), handleDesconciliarCruce);
 
 module.exports = router;

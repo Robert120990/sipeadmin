@@ -34,6 +34,13 @@ const {
 } = require('../services/consultasVentasResumenService');
 const { registerConsultasCierresRoutes } = require('./consultasCierresRoutes');
 const { registerConsultasCompetenciaRoutes } = require('./consultasCompetenciaRoutes');
+const {
+    round2,
+    parseStrictDBDate,
+    computeAccountReconciliationSummary,
+    classifyCheckAging,
+    summarizeChecksAging
+} = require('../services/bancosIntegrityService');
 
 /**
  * Motor heurístico experto para análisis forense y diagnóstico automático de descuadres de cierre de pista.
@@ -2212,18 +2219,390 @@ registerConsultasCompetenciaRoutes(router, {
     getPreciosEstacionData
 });
 
-router.get('/consultas/:type', authenticateToken, requirePermission(genericConsultasPerms), async (req, res) => {
+const saldosConsultasPerms = [
+    ...genericConsultasPerms,
+    '/dashboard/consultas/saldos-bancos',
+    '/dashboard/consultas/saldos-chequera',
+    '/dashboard/bancos/cuentas',
+    '/dashboard/bancos/conciliacion',
+    '/dashboard/bancos/cheques',
+    'manage_cuentas',
+    'manage_conciliacion_bancaria',
+    'view_conciliacion_bancaria',
+    'manage_cheques'
+];
+
+function diffCalendarDaysYmd(fromYmd, toYmd) {
+    const a = parseStrictDBDate(fromYmd);
+    const b = parseStrictDBDate(toYmd);
+    if (!a || !b) return null;
+    const [ay, am, ad] = a.split('-').map(Number);
+    const [by, bm, bd] = b.split('-').map(Number);
+    const msA = Date.UTC(ay, am - 1, ad);
+    const msB = Date.UTC(by, bm - 1, bd);
+    return Math.max(0, Math.floor((msB - msA) / 86400000));
+}
+
+router.get('/consultas/:type', authenticateToken, requirePermission(saldosConsultasPerms), async (req, res) => {
     const { type } = req.params;
+    if (!['saldos-bancos', 'saldos-chequera', 'antiguedad-cheques'].includes(type)) {
+        return res.status(404).json({ message: 'Consulta no encontrada' });
+    }
+
+    const rawFechaCorte = req.query.fecha_corte;
+    const fechaCorte = rawFechaCorte ? parseStrictDBDate(rawFechaCorte) : getElSalvadorTodayYMD();
+    if (rawFechaCorte && !fechaCorte) {
+        return res.status(400).json({ message: 'La fecha de corte no es válida. Use formato YYYY-MM-DD.' });
+    }
+
+    const empresaParam = req.query.empresa_id || req.query.id_empresa || req.query.empresa || null;
+    const bancoParam = req.query.banco_id || req.query.cod_banco || null;
+    const cuentaParam = req.query.cuenta_bancaria_id ? parseInt(req.query.cuenta_bancaria_id, 10) : null;
+    if (req.query.cuenta_bancaria_id && (!Number.isInteger(cuentaParam) || cuentaParam <= 0)) {
+        return res.status(400).json({ message: 'cuenta_bancaria_id inválido.' });
+    }
+    const incluirInactivas = req.query.incluir_inactivas === 'true' || req.query.incluir_inactivas === '1';
+    const comparativoSolicitado = req.query.comparativo === 'true' || req.query.comparativo === '1';
+
     try {
-        const externalDb = await getExternalDb();
-        const today = getElSalvadorTodayYMD();
-        let results;
-        if (type === 'saldos-bancos') [results] = await externalDb.query('CALL sp_saldo_en_bancos(?)', [today]);
-        else if (type === 'saldos-chequera') [results] = await externalDb.query('CALL sp_saldo_en_chequera(?)', [today]);
-        else return res.status(404).json({ message: 'Consulta no encontrada' });
-        res.json(results[0] || []);
-    } catch (error) { 
-        sendSafeError(res, error, 'Error al ejecutar consulta'); 
+        const db = getDb();
+        let whereSql = 'WHERE 1=1 ';
+        const params = [];
+
+        if (!incluirInactivas) {
+            whereSql += ' AND cb.activa = TRUE';
+        }
+        if (empresaParam) {
+            whereSql += ' AND (e.id = ? OR e.codigo = ?)';
+            params.push(empresaParam, empresaParam);
+        }
+        if (bancoParam) {
+            whereSql += ' AND (b.id = ? OR b.codigo = ?)';
+            params.push(bancoParam, bancoParam);
+        }
+        if (cuentaParam) {
+            whereSql += ' AND cb.id = ?';
+            params.push(cuentaParam);
+        }
+
+        const [accountRows] = await db.query(
+            `SELECT cb.id, cb.empresa_id, cb.banco_id, cb.tipo_cuenta_id, cb.numero, cb.nombre, cb.cod_cta,
+                    cb.activa, cb.orden, cb.saldo_inicial, cb.fecha_saldo_inicial,
+                    COALESCE(e.codigo, '') AS empresa_codigo,
+                    COALESCE(e.nombre, '') AS empresa_nombre,
+                    COALESCE(b.codigo, '') AS banco_codigo,
+                    COALESCE(b.descripcion, 'Banco') AS banco_nombre,
+                    COALESCE(tcb.descripcion, '') AS tipo_cuenta_nombre
+             FROM cuentas_bancarias cb
+             LEFT JOIN empresas e ON cb.empresa_id = e.id
+             LEFT JOIN bancos b ON cb.banco_id = b.id
+             LEFT JOIN tipos_cuenta_bancaria tcb ON cb.tipo_cuenta_id = tcb.id
+             ${whereSql}
+             ORDER BY b.descripcion ASC, cb.numero ASC`,
+            params
+        );
+
+        const accountsList = Array.isArray(accountRows) ? accountRows : [];
+        const cuentaIds = accountsList.map(c => Number(c.id)).filter(Boolean);
+
+        // 1. Últimas validaciones por cuenta
+        const latestValByCuenta = new Map();
+        if (cuentaIds.length > 0) {
+            try {
+                const [valRows] = await db.query(
+                    `SELECT id, cuenta_bancaria_id, fecha_validacion, fecha_corte, monto_banco,
+                            saldo_chequera, saldo_conciliado_libros, diferencia, notas
+                     FROM validaciones_saldo_banco
+                     WHERE cuenta_bancaria_id IN (?)
+                     ORDER BY fecha_validacion DESC, id DESC`,
+                    [cuentaIds]
+                );
+                for (const vr of (valRows || [])) {
+                    const cid = Number(vr.cuenta_bancaria_id);
+                    if (!latestValByCuenta.has(cid)) {
+                        latestValByCuenta.set(cid, vr);
+                    }
+                }
+            } catch (errVal) {
+                if (!errVal || (errVal.code !== 'ER_NO_SUCH_TABLE' && errVal.errno !== 1146)) {
+                    console.warn('[ConsultasSaldos] Warning validaciones_saldo_banco:', errVal.message);
+                }
+            }
+        }
+
+        // 2. Estado de períodos de conciliación por cuenta
+        const periodsByCuenta = new Map();
+        if (cuentaIds.length > 0) {
+            try {
+                const [perRows] = await db.query(
+                    `SELECT id, cuenta_bancaria_id, fecha_corte, estado, cerrado_por_nombre, cerrado_at,
+                            reabierto_por_nombre, reabierto_at
+                     FROM conciliacion_periodos
+                     WHERE cuenta_bancaria_id IN (?)
+                     ORDER BY fecha_corte DESC, id DESC`,
+                    [cuentaIds]
+                );
+                for (const pr of (perRows || [])) {
+                    const cid = Number(pr.cuenta_bancaria_id);
+                    if (!periodsByCuenta.has(cid)) periodsByCuenta.set(cid, []);
+                    periodsByCuenta.get(cid).push(pr);
+                }
+            } catch (errPer) {
+                if (!errPer || (errPer.code !== 'ER_NO_SUCH_TABLE' && errPer.errno !== 1146)) {
+                    console.warn('[ConsultasSaldos] Warning conciliacion_periodos:', errPer.message);
+                }
+            }
+        }
+
+        // 3. Cheques pendientes válidos para cálculo de antigüedad (Aging)
+        const pendingChecksByCuenta = new Map();
+        if (cuentaIds.length > 0) {
+            const [chkRows] = await db.query(
+                `SELECT ch.id, ch.cuenta_bancaria_id, ch.cheque, ch.fecha, ch.fecha_aplicado,
+                        ch.valor, ch.a_nombre, ch.concepto, ch.cheque_anulado, ch.fue_noemitido,
+                        ch.es_reservado, ch.deleted_at
+                 FROM cheques ch
+                 WHERE ch.cuenta_bancaria_id IN (?)
+                   AND ch.deleted_at IS NULL
+                   AND ch.cheque_anulado = FALSE
+                   AND ch.fue_noemitido = FALSE
+                   AND ch.es_reservado = FALSE
+                   AND ch.fecha <= ?
+                   AND (ch.fecha_aplicado IS NULL OR ch.fecha_aplicado > ?)
+                 ORDER BY ch.fecha ASC, ch.id ASC`,
+                [cuentaIds, fechaCorte, fechaCorte]
+            );
+            for (const ch of (chkRows || [])) {
+                const cid = Number(ch.cuenta_bancaria_id);
+                if (!pendingChecksByCuenta.has(cid)) pendingChecksByCuenta.set(cid, []);
+                pendingChecksByCuenta.get(cid).push(ch);
+            }
+        }
+
+        const summaries = await Promise.all(
+            accountsList.map(cb => computeAccountReconciliationSummary(db, cb.id, fechaCorte))
+        );
+
+        const allPendingChecksDetalle = [];
+        const allPendingChecksRaw = [];
+        const cuentasOutput = [];
+
+        for (let i = 0; i < accountsList.length; i++) {
+            const cb = accountsList[i];
+            const summary = summaries[i];
+            if (!summary) continue;
+
+            const cid = Number(cb.id);
+            const floorDate = cb.fecha_saldo_inicial ? parseStrictDBDate(cb.fecha_saldo_inicial) : null;
+
+            const rawChecks = pendingChecksByCuenta.get(cid) || [];
+            const accChecks = rawChecks.filter(ch => {
+                if (Boolean(ch.cheque_anulado) || Boolean(ch.fue_noemitido) || Boolean(ch.es_reservado) || Boolean(ch.deleted_at)) {
+                    return false;
+                }
+                const chFecha = parseStrictDBDate(ch.fecha);
+                if (!chFecha || chFecha > fechaCorte) return false;
+                if (floorDate && chFecha < floorDate) return false;
+                return true;
+            });
+
+            const accAging = summarizeChecksAging(accChecks, fechaCorte);
+
+            for (const ch of accChecks) {
+                allPendingChecksRaw.push(ch);
+                const agingInfo = classifyCheckAging(ch.fecha, fechaCorte);
+                allPendingChecksDetalle.push({
+                    id: Number(ch.id),
+                    cuenta_bancaria_id: cid,
+                    numero_cuenta: cb.numero || '',
+                    cuenta_nombre: cb.nombre || '',
+                    banco_nombre: cb.banco_nombre || '',
+                    empresa_codigo: cb.empresa_codigo || '',
+                    empresa_nombre: cb.empresa_nombre || '',
+                    cheque: ch.cheque ? String(ch.cheque) : '',
+                    a_nombre: ch.a_nombre || '',
+                    concepto: ch.concepto || '',
+                    fecha: parseStrictDBDate(ch.fecha),
+                    valor: round2(ch.valor || 0),
+                    ...agingInfo
+                });
+            }
+
+            const lastVal = latestValByCuenta.get(cid) || null;
+            const lastValFecha = lastVal ? parseStrictDBDate(lastVal.fecha_validacion) : null;
+            const diasSinValidar = lastValFecha ? diffCalendarDaysYmd(lastValFecha, fechaCorte) : null;
+
+            const accPeriods = periodsByCuenta.get(cid) || [];
+            const closedPeriods = accPeriods.filter(p => p.estado === 'CERRADO');
+            const latestClosed = closedPeriods[0] || null;
+            const latestClosedDate = latestClosed ? parseStrictDBDate(latestClosed.fecha_corte) : null;
+            const latestPeriod = accPeriods[0] || null;
+            let estadoPeriodo = 'ABIERTO';
+            if (latestClosedDate && latestClosedDate >= fechaCorte) {
+                estadoPeriodo = 'CERRADO';
+            } else if (latestPeriod && latestPeriod.estado === 'REABIERTO') {
+                estadoPeriodo = 'REABIERTO';
+            }
+
+            cuentasOutput.push({
+                id: cid,
+                cuenta_bancaria_id: cid,
+                empresa_id: Number(cb.empresa_id),
+                empresa_codigo: cb.empresa_codigo || '',
+                empresa_nombre: cb.empresa_nombre || '',
+                banco_id: Number(cb.banco_id),
+                banco_codigo: cb.banco_codigo || '',
+                banco_nombre: cb.banco_nombre || '',
+                tipo_cuenta_nombre: cb.tipo_cuenta_nombre || '',
+                numero: cb.numero || '',
+                num_cta: cb.numero || '',
+                nombre: cb.nombre || '',
+                activa: Boolean(cb.activa),
+                saldo_inicial: summary.saldo_inicial,
+                fecha_saldo_inicial: summary.fecha_saldo_inicial,
+                saldo_chequera: summary.saldo_chequera,
+                cheques_en_transito: summary.cheques_en_transito,
+                cargos_en_transito: summary.cargos_en_transito,
+                cargos_cheques_en_transito: summary.cargos_cheques_en_transito,
+                abonos_en_transito: summary.abonos_en_transito,
+                depositos_en_transito: summary.abonos_en_transito,
+                saldo_conciliado_libros: summary.saldo_conciliado_libros,
+                saldo: type === 'saldos-chequera' ? summary.saldo_chequera : summary.saldo_conciliado_libros,
+                cheques_reservados_count: summary.cheques_reservados_count,
+                cheques_reservados_monto: summary.cheques_reservados_monto,
+                estado_periodo: estadoPeriodo,
+                periodo_cerrado_hasta: latestClosedDate,
+                ultima_validacion: lastVal ? {
+                    id: Number(lastVal.id),
+                    fecha_validacion: lastValFecha,
+                    fecha_corte: lastVal.fecha_corte ? parseStrictDBDate(lastVal.fecha_corte) : null,
+                    monto_banco: round2(lastVal.monto_banco || 0),
+                    diferencia: round2(lastVal.diferencia || 0),
+                    notas: lastVal.notas || null
+                } : null,
+                ultima_validacion_fecha: lastValFecha,
+                dias_sin_validar: diasSinValidar,
+                aging: accAging
+            });
+        }
+
+        allPendingChecksDetalle.sort((a, b) => (b.dias_circulacion || 0) - (a.dias_circulacion || 0) || String(a.fecha || '').localeCompare(String(b.fecha || '')));
+
+        const totales = cuentasOutput.reduce((acc, row) => ({
+            cuentas_count: acc.cuentas_count + 1,
+            saldo_inicial: round2(acc.saldo_inicial + row.saldo_inicial),
+            saldo_chequera: round2(acc.saldo_chequera + row.saldo_chequera),
+            cheques_en_transito: round2(acc.cheques_en_transito + row.cheques_en_transito),
+            cargos_en_transito: round2(acc.cargos_en_transito + row.cargos_en_transito),
+            cargos_cheques_en_transito: round2(acc.cargos_cheques_en_transito + row.cargos_cheques_en_transito),
+            abonos_en_transito: round2(acc.abonos_en_transito + row.abonos_en_transito),
+            depositos_en_transito: round2(acc.depositos_en_transito + row.depositos_en_transito),
+            saldo_conciliado_libros: round2(acc.saldo_conciliado_libros + row.saldo_conciliado_libros),
+            cheques_pendientes_count: acc.cheques_pendientes_count + (row.aging?.total_cheques || 0),
+            cheques_pendientes_monto: round2(acc.cheques_pendientes_monto + (row.aging?.total_monto || 0)),
+            por_caducar_count: acc.por_caducar_count + (row.aging?.por_caducar_count || 0),
+            por_caducar_monto: round2(acc.por_caducar_monto + (row.aging?.por_caducar_monto || 0)),
+            caducos_count: acc.caducos_count + (row.aging?.caducos_count || 0),
+            caducos_monto: round2(acc.caducos_monto + (row.aging?.caducos_monto || 0))
+        }), {
+            cuentas_count: 0,
+            saldo_inicial: 0,
+            saldo_chequera: 0,
+            cheques_en_transito: 0,
+            cargos_en_transito: 0,
+            cargos_cheques_en_transito: 0,
+            abonos_en_transito: 0,
+            depositos_en_transito: 0,
+            saldo_conciliado_libros: 0,
+            cheques_pendientes_count: 0,
+            cheques_pendientes_monto: 0,
+            por_caducar_count: 0,
+            por_caducar_monto: 0,
+            caducos_count: 0,
+            caducos_monto: 0
+        });
+
+        const agingResumen = summarizeChecksAging(allPendingChecksRaw, fechaCorte);
+
+        let comparativo = {
+            solicitado: false,
+            disponible: false,
+            fuente: null,
+            error: null,
+            filas: []
+        };
+
+        if (comparativoSolicitado && type !== 'antiguedad-cheques') {
+            const spName = type === 'saldos-bancos' ? 'sp_saldo_en_bancos' : 'sp_saldo_en_chequera';
+            try {
+                const externalDb = await getExternalDb();
+                if (!externalDb || typeof externalDb.query !== 'function') {
+                    throw new Error('Base de datos externa no disponible');
+                }
+                const [spResults] = await externalDb.query(`CALL ${spName}(?)`, [fechaCorte]);
+                const spRows = Array.isArray(spResults?.[0]) ? spResults[0] : (Array.isArray(spResults) ? spResults : []);
+
+                const spByDigits = new Map();
+                const filas = spRows.map(r => {
+                    const numCta = String(r.num_cta || r.numero || r.cuenta || '').trim();
+                    const digits = numCta.replace(/\D/g, '');
+                    const saldoSp = round2(r.new_saldo ?? r.saldo_chequera ?? r.saldo ?? r.saldo_actual ?? r.monto ?? 0);
+                    const rowObj = {
+                        num_cta: numCta,
+                        nom_banco: r.nom_banco || r.banco || '',
+                        saldo: saldoSp
+                    };
+                    if (digits) spByDigits.set(digits, rowObj);
+                    return rowObj;
+                });
+
+                for (const cRow of cuentasOutput) {
+                    const cDigits = String(cRow.numero || '').replace(/\D/g, '');
+                    const matchedSp = cDigits ? spByDigits.get(cDigits) : null;
+                    if (matchedSp) {
+                        const nativeVal = type === 'saldos-chequera' ? cRow.saldo_chequera : cRow.saldo_conciliado_libros;
+                        cRow.comparativo_sp = {
+                            num_cta: matchedSp.num_cta,
+                            nom_banco: matchedSp.nom_banco,
+                            saldo_sp: matchedSp.saldo,
+                            diferencia_vs_sp: round2(nativeVal - matchedSp.saldo)
+                        };
+                    } else {
+                        cRow.comparativo_sp = null;
+                    }
+                }
+
+                comparativo = {
+                    solicitado: true,
+                    disponible: true,
+                    fuente: spName,
+                    error: null,
+                    total_sp: round2(filas.reduce((s, r) => s + Number(r.saldo || 0), 0)),
+                    filas
+                };
+            } catch (compErr) {
+                comparativo = {
+                    solicitado: true,
+                    disponible: false,
+                    fuente: null,
+                    error: compErr?.message || 'Error consultando base externa',
+                    filas: []
+                };
+            }
+        }
+
+        res.json({
+            tipo: type,
+            fecha_corte: fechaCorte,
+            fuente: 'db_sipe_admin',
+            cuentas: cuentasOutput,
+            totales,
+            aging_resumen: agingResumen,
+            cheques_pendientes_detalle: allPendingChecksDetalle,
+            comparativo
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al ejecutar consulta');
     }
 });
 

@@ -3,6 +3,7 @@ const getDb = (...args) => dbModule.getDb(...args);
 const getExternalDb = (...args) => dbModule.getExternalDb ? dbModule.getExternalDb(...args) : null;
 const getAccountingDb = (...args) => dbModule.getAccountingDb(...args);
 const withRetry = (...args) => dbModule.withRetry(...args);
+const { computeAccountReconciliationSummary, round2 } = require('./bancosIntegrityService');
 
 /**
  * Genera el flujo de caja proyectado a 30 o 60 días
@@ -19,49 +20,53 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
     const yesterdayStr = addDaysYMD(todayStr, -1);
     const start30dStr = addDaysYMD(yesterdayStr, -29);
 
-    // 1. Obtener saldo inicial en bancos (sp_saldo_en_bancos externo o movimientos_bancarios local)
+    // 1. Obtener saldo inicial en bancos (fuente local autoritativa via computeAccountReconciliationSummary, con fallback a sp_saldo_en_bancos)
     let saldoInicialBancos = 0;
+    let totalSaldoChequera = 0;
+    let totalSaldoConciliadoLibros = 0;
+    let totalChequesEnTransito = 0;
+    let totalAbonosEnTransito = 0;
+    let totalCargosEnTransito = 0;
+    let fuenteSaldos = 'local';
+
     try {
-        const extDb = await Promise.resolve(getExternalDb()).catch(() => null);
-        if (extDb && typeof extDb.query === 'function') {
-            const [spRes] = await extDb.query('CALL sp_saldo_en_bancos(?)', [todayStr]);
-            const rowsSp = Array.isArray(spRes?.[0]) ? spRes[0] : (Array.isArray(spRes) ? spRes : []);
-            const sumSp = rowsSp.reduce((s, r) => s + Number(r.saldo || r.saldo_banco || r.SALDO || 0), 0);
-            if (sumSp > 0) saldoInicialBancos = sumSp;
+        if (db) {
+            const [ctaRows] = await db.query('SELECT id FROM cuentas_bancarias WHERE activa = 1');
+            if (Array.isArray(ctaRows) && ctaRows.length > 0) {
+                const summaries = await Promise.all(
+                    ctaRows.map(c => computeAccountReconciliationSummary(db, c.id, todayStr))
+                );
+                for (const s of summaries) {
+                    if (!s) continue;
+                    totalSaldoChequera = round2(totalSaldoChequera + s.saldo_chequera);
+                    totalSaldoConciliadoLibros = round2(totalSaldoConciliadoLibros + s.saldo_conciliado_libros);
+                    totalChequesEnTransito = round2(totalChequesEnTransito + s.cheques_en_transito);
+                    totalAbonosEnTransito = round2(totalAbonosEnTransito + s.abonos_en_transito);
+                    totalCargosEnTransito = round2(totalCargosEnTransito + s.cargos_en_transito);
+                }
+                saldoInicialBancos = totalSaldoChequera;
+                fuenteSaldos = 'local_conciliacion';
+            }
         }
-    } catch (_errSp) {
-        // Fallback a movimientos_bancarios local
+    } catch (err) {
+        console.warn('Error al calcular saldo bancario local en flujo de caja:', err.message);
     }
 
-    if (saldoInicialBancos <= 0) {
+    if (fuenteSaldos !== 'local_conciliacion') {
         try {
-            const [localBalanceRows] = await db.query(`
-                SELECT COALESCE(SUM(
-                    COALESCE(c.saldo_inicial, 0) +
-                    COALESCE((
-                        SELECT SUM(m.abono - m.cargo)
-                        FROM movimientos_bancarios m
-                        WHERE m.cuenta_bancaria_id = c.id
-                          AND m.deleted_at IS NULL
-                          AND (c.fecha_saldo_inicial IS NULL OR m.fecha >= c.fecha_saldo_inicial)
-                    ), 0) -
-                    COALESCE((
-                        SELECT SUM(ch.valor)
-                        FROM cheques ch
-                        WHERE ch.cuenta_bancaria_id = c.id
-                          AND ch.deleted_at IS NULL
-                          AND ch.cheque_anulado = FALSE
-                          AND ch.fue_noemitido = FALSE
-                          AND ch.es_reservado = FALSE
-                          AND (c.fecha_saldo_inicial IS NULL OR ch.fecha >= c.fecha_saldo_inicial)
-                    ), 0)
-                ), 0) as saldo_neto
-                FROM cuentas_bancarias c
-                WHERE c.activa = 1
-            `);
-            saldoInicialBancos = Number(localBalanceRows[0]?.saldo_neto || 0);
-        } catch (err) {
-            console.warn('Error al calcular saldo en movimientos bancarios:', err.message);
+            const extDb = await Promise.resolve(getExternalDb()).catch(() => null);
+            if (extDb && typeof extDb.query === 'function') {
+                const [spRes] = await extDb.query('CALL sp_saldo_en_bancos(?)', [todayStr]);
+                const rowsSp = Array.isArray(spRes?.[0]) ? spRes[0] : (Array.isArray(spRes) ? spRes : []);
+                const sumSp = rowsSp.reduce((s, r) => s + Number(r.saldo || r.saldo_banco || r.SALDO || 0), 0);
+                if (sumSp > 0) {
+                    saldoInicialBancos = round2(sumSp);
+                    totalSaldoConciliadoLibros = saldoInicialBancos;
+                    fuenteSaldos = 'sp_saldo_en_bancos';
+                }
+            }
+        } catch (_errSp) {
+            // externalDb no disponible
         }
     }
 
@@ -457,6 +462,12 @@ const getFlujoCajaProyectado = async (diasHorizonte = 30) => {
         fecha_generacion: todayStr,
         kpi: {
             saldo_inicial_bancos: Math.round(saldoInicialBancos),
+            saldo_chequera: Math.round(totalSaldoChequera),
+            saldo_conciliado_libros: Math.round(totalSaldoConciliadoLibros),
+            cheques_en_transito: Math.round(totalChequesEnTransito),
+            abonos_en_transito: Math.round(totalAbonosEnTransito),
+            cargos_en_transito: Math.round(totalCargosEnTransito),
+            fuente_saldos: fuenteSaldos,
             saldo_minimo_proyectado: Math.round(saldoMinimoProyectado),
             fecha_saldo_minimo: fechaSaldoMinimo,
             total_ingresos_proyectados: Math.round(timeline.reduce((s, d) => s + d.ingresos.total, 0)),

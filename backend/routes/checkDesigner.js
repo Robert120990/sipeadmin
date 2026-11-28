@@ -48,7 +48,17 @@ router.get('/formats', authenticateToken, requirePermission(checkDesignerPerms),
 
         query += ' ORDER BY cf.name ASC';
         const [formats] = await db.query(query, params);
-        res.json(formats);
+        const normalized = (formats || []).map(f => {
+            if (typeof f.design_json === 'string') {
+                try {
+                    return { ...f, design_json: JSON.parse(f.design_json) };
+                } catch (_) {
+                    return f;
+                }
+            }
+            return f;
+        });
+        res.json(normalized);
     } catch (error) {
         sendSafeError(res, error, 'Error al cargar formatos de cheque');
     }

@@ -9,6 +9,8 @@ const {
     parseStrictPositiveAmount,
     parseStrictNonNegativeAmount,
     parseStrictDBDate,
+    getLiveAccountCheckbookSummary,
+    consumeTalonarioNumber,
     isDateInClosedPeriod,
     recordBankAudit,
     beginIdempotentRequest,
@@ -36,6 +38,22 @@ const contadoPerms = [
     '/dashboard/bancos/cheques-contado'
 ];
 
+const cuentaResumenPerms = [
+    ...chequeViewPerms,
+    ...contadoPerms,
+    '/dashboard/bancos/movimientos',
+    'manage_movimientos'
+];
+
+const chequePrintPerms = [
+    'manage_cheques',
+    '/dashboard/bancos/cheques',
+    '/dashboard/bancos/reportes/impresion-cheques',
+    '/dashboard/bancos/impresion-cheques',
+    '/dashboard/bancos/cheques-contado',
+    'manage_cheques_contado'
+];
+
 const toDisplayDate = (dateVal) => {
     const formatted = formatDisplayDMY(dateVal);
     return formatted || null;
@@ -47,6 +65,44 @@ const getIdempotencyKey = (req) => {
     const hdr = req.headers?.['x-idempotency-key'] || req.headers?.['idempotency-key'];
     return typeof hdr === 'string' && hdr.trim() ? hdr.trim().slice(0, 128) : null;
 };
+
+async function cleanupPendingIdempotency(conn, key, scope) {
+    const cleanKey = typeof key === 'string' ? key.trim().slice(0, 128) : '';
+    if (!cleanKey) return;
+    try {
+        await conn.query(
+            'DELETE FROM bancos_idempotency_keys WHERE idempotency_key = ? AND scope = ? AND status_code IS NULL',
+            [cleanKey, String(scope).slice(0, 80)]
+        );
+    } catch (err) {
+        if (err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146)) return;
+        throw err;
+    }
+}
+
+async function validateAccountCompanyMatch(conn, accountEmpresaId, requestedEmpresaRef) {
+    if (requestedEmpresaRef === undefined || requestedEmpresaRef === null) return { ok: true };
+    const cleanRef = String(requestedEmpresaRef).trim();
+    if (!cleanRef) return { ok: true };
+
+    let [empRows] = await conn.query('SELECT id FROM empresas WHERE codigo = ? LIMIT 1', [cleanRef]);
+    if ((!empRows || empRows.length === 0) && /^\d+$/.test(cleanRef)) {
+        [empRows] = await conn.query('SELECT id FROM empresas WHERE codigo = ? OR id = ? LIMIT 1', [cleanRef, Number(cleanRef)]);
+    }
+    if (!empRows || empRows.length === 0) {
+        return {
+            ok: false,
+            message: 'La empresa indicada no existe o no coincide con la cuenta bancaria seleccionada.'
+        };
+    }
+    if (Number(empRows[0].id) !== Number(accountEmpresaId)) {
+        return {
+            ok: false,
+            message: 'La cuenta bancaria seleccionada no pertenece a la empresa indicada.'
+        };
+    }
+    return { ok: true };
+}
 
 router.get('/catalogos', authenticateToken, requirePermission(chequeViewPerms), async (req, res) => {
     try {
@@ -100,13 +156,16 @@ router.get('/rango', authenticateToken, requirePermission(chequeViewPerms), asyn
         const query = `
             SELECT ch.id, ch.llave, e.codigo as id_empresa, cb.id as cuenta_bancaria_id, cb.numero as numero_cuenta, cb.nombre as cuenta_nombre,
                    b.id as banco_id, b.descripcion as banco_nombre, e.nombre as empresa_nombre,
-                   ch.fecha, ch.cheque_anulado, ch.cheque, ch.valor, ch.a_nombre, ch.fecha_aplicado, ch.concepto,
+                   ch.fecha, ch.cheque_anulado, ch.cheque, ch.valor, ch.valor_original, ch.a_nombre, ch.fecha_aplicado, ch.concepto,
+                   ch.beneficiario_original, ch.concepto_original, ch.chequera_id,
+                   ch.impreso_at, ch.impreso_por, COALESCE(ch.veces_impreso, 0) as veces_impreso, u_imp.nombre as impreso_por_nombre,
                    ch.es_reservado, ch.es_pago_contado, ch.fue_noemitido, ch.num_partida,
                    IF(ch.es_contabilizado, 'S', 'N') as es_contabilizado
             FROM cheques ch
             LEFT JOIN empresas e ON ch.empresa_id = e.id
             LEFT JOIN cuentas_bancarias cb ON ch.cuenta_bancaria_id = cb.id
             LEFT JOIN bancos b ON cb.banco_id = b.id
+            LEFT JOIN users u_imp ON ch.impreso_por = u_imp.id
             WHERE ch.cuenta_bancaria_id = ?
               AND ch.deleted_at IS NULL
               AND CAST(ch.cheque AS UNSIGNED) BETWEEN ? AND ?
@@ -138,13 +197,16 @@ router.get('/reporte-fecha', authenticateToken, requirePermission(chequeViewPerm
         let query = `
             SELECT ch.id, ch.llave, e.codigo as id_empresa, cb.id as cuenta_bancaria_id, cb.numero as numero_cuenta, cb.nombre as cuenta_nombre,
                    b.id as banco_id, b.descripcion as banco_nombre, e.nombre as empresa_nombre,
-                   ch.fecha, ch.cheque_anulado, ch.cheque, ch.valor, ch.a_nombre, ch.fecha_aplicado, ch.concepto,
+                   ch.fecha, ch.cheque_anulado, ch.cheque, ch.valor, ch.valor_original, ch.a_nombre, ch.fecha_aplicado, ch.concepto,
+                   ch.beneficiario_original, ch.concepto_original, ch.chequera_id,
+                   ch.impreso_at, ch.impreso_por, COALESCE(ch.veces_impreso, 0) as veces_impreso, u_imp.nombre as impreso_por_nombre,
                    ch.es_reservado, ch.es_pago_contado, ch.fue_noemitido, ch.num_partida,
                    IF(ch.es_contabilizado, 'S', 'N') as es_contabilizado
             FROM cheques ch
             LEFT JOIN empresas e ON ch.empresa_id = e.id
             LEFT JOIN cuentas_bancarias cb ON ch.cuenta_bancaria_id = cb.id
             LEFT JOIN bancos b ON cb.banco_id = b.id
+            LEFT JOIN users u_imp ON ch.impreso_por = u_imp.id
             WHERE ch.cuenta_bancaria_id = ?
               AND ch.deleted_at IS NULL
               AND ch.fecha BETWEEN ? AND ?
@@ -207,7 +269,8 @@ router.get('/', authenticateToken, requirePermission(chequeViewPerms), async (re
             'FROM cheques ch ' +
             'LEFT JOIN empresas e ON ch.empresa_id = e.id ' +
             'LEFT JOIN cuentas_bancarias cb ON ch.cuenta_bancaria_id = cb.id ' +
-            'LEFT JOIN bancos b ON cb.banco_id = b.id ';
+            'LEFT JOIN bancos b ON cb.banco_id = b.id ' +
+            'LEFT JOIN users u_imp ON ch.impreso_por = u_imp.id ';
 
         const [[countRow]] = await db.query(`SELECT COUNT(*) as total ${baseJoins} ${whereSql}`, params);
         const total = Number(countRow?.total || 0);
@@ -215,6 +278,8 @@ router.get('/', authenticateToken, requirePermission(chequeViewPerms), async (re
         const selectSql =
             'SELECT ch.id, ch.llave, ch.cuenta_bancaria_id, e.codigo as id_empresa, cb.numero as numero_cuenta, cb.nombre as cuenta_nombre, ' +
             'b.id as banco_id, ch.fecha, ch.cheque_anulado, ch.cheque, ch.valor, ch.valor_original, ch.a_nombre, ch.fecha_aplicado, ch.concepto, ' +
+            'ch.beneficiario_original, ch.concepto_original, ch.chequera_id, ' +
+            'ch.impreso_at, ch.impreso_por, COALESCE(ch.veces_impreso, 0) as veces_impreso, u_imp.nombre as impreso_por_nombre, ' +
             'ch.es_reservado, ch.es_pago_contado, ch.fue_noemitido, ch.num_partida, ch.version, ' +
             'IF(ch.es_contabilizado, "S", "N") as es_contabilizado, ' +
             'e.nombre as empresa_nombre, b.descripcion as banco_nombre ' +
@@ -236,11 +301,151 @@ router.get('/', authenticateToken, requirePermission(chequeViewPerms), async (re
     }
 });
 
+const handleCuentaResumen = async (req, res) => {
+    try {
+        const db = getDb();
+        let cuentaId = parseInt(req.params.cuentaId || req.query.cuenta_bancaria_id, 10);
+
+        if ((!Number.isInteger(cuentaId) || cuentaId <= 0) && req.query.id_empresa && req.query.numero_cuenta) {
+            const [ctaRows] = await db.query(
+                `SELECT cb.id
+                 FROM cuentas_bancarias cb
+                 INNER JOIN empresas e ON cb.empresa_id = e.id
+                 WHERE e.codigo = ? AND cb.numero = ?
+                 LIMIT 1`,
+                [String(req.query.id_empresa).trim(), String(req.query.numero_cuenta).trim()]
+            );
+            if (ctaRows && ctaRows.length > 0) {
+                cuentaId = Number(ctaRows[0].id);
+            }
+        }
+
+        if (!Number.isInteger(cuentaId) || cuentaId <= 0) {
+            return res.status(400).json({ message: 'Se requiere cuenta_bancaria_id o id_empresa + numero_cuenta válido.' });
+        }
+
+        const summary = await getLiveAccountCheckbookSummary(db, cuentaId, {
+            hasta: req.query.hasta || null
+        });
+        if (!summary) {
+            return res.status(404).json({ message: 'Cuenta bancaria no encontrada.' });
+        }
+
+        return res.json(summary);
+    } catch (error) {
+        return sendSafeError(res, error, 'Error al consultar resumen en vivo de la cuenta');
+    }
+};
+
+router.get('/cuenta-resumen', authenticateToken, requirePermission(cuentaResumenPerms), handleCuentaResumen);
+router.get('/cuenta-resumen/:cuentaId', authenticateToken, requirePermission(cuentaResumenPerms), handleCuentaResumen);
+
+router.post('/registrar-impresion-lote', authenticateToken, requirePermission(chequePrintPerms), async (req, res) => {
+    const rawIds = Array.isArray(req.body?.ids)
+        ? req.body.ids
+        : (Array.isArray(req.body?.cheque_ids) ? req.body.cheque_ids : []);
+    const ids = [...new Set(rawIds.map(v => parseInt(v, 10)).filter(v => Number.isInteger(v) && v > 0))];
+
+    if (ids.length === 0 || ids.length > 500) {
+        return res.status(400).json({ message: 'Debe enviar entre 1 y 500 IDs de cheques válidos para registrar impresión.' });
+    }
+
+    const { formato_id = null, printer_name = null } = req.body || {};
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const ph = ids.map(() => '?').join(',');
+            const [rows] = await conn.query(
+                `SELECT id, cuenta_bancaria_id, cheque, llave, cheque_anulado, deleted_at,
+                        impreso_at, impreso_por, COALESCE(veces_impreso, 0) as veces_impreso
+                 FROM cheques
+                 WHERE id IN (${ph}) AND deleted_at IS NULL
+                 FOR UPDATE`,
+                ids
+            );
+
+            if (!rows || rows.length === 0) {
+                return { errorStatus: 404, errorBody: { message: 'No se encontraron cheques válidos para registrar impresión.' } };
+            }
+
+            const nowIso = new Date().toISOString();
+            const userId = req.user?.id || null;
+            const userName = req.user?.nombre || req.user?.username || null;
+            const resultados = [];
+            const affectedAccounts = new Set();
+
+            for (const row of rows) {
+                const prevVeces = Number(row.veces_impreso || 0);
+                const esReimpresion = prevVeces > 0;
+                const newVeces = prevVeces + 1;
+
+                await conn.query(
+                    'UPDATE cheques SET impreso_at = NOW(), impreso_por = ?, veces_impreso = COALESCE(veces_impreso, 0) + 1 WHERE id = ?',
+                    [userId, row.id]
+                );
+
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: row.cuenta_bancaria_id,
+                    entidad: 'cheques',
+                    entidadId: row.id,
+                    accion: esReimpresion ? 'REPRINT_CHEQUE' : 'PRINT_CHEQUE',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    before: { veces_impreso: prevVeces, impreso_at: row.impreso_at || null },
+                    after: { veces_impreso: newVeces, impreso_at: nowIso, impreso_por: userId },
+                    metadata: { formato_id, printer_name, lote: true }
+                });
+
+                if (row.cuenta_bancaria_id) {
+                    affectedAccounts.add(Number(row.cuenta_bancaria_id));
+                }
+
+                resultados.push({
+                    id: Number(row.id),
+                    cheque: row.cheque,
+                    llave: row.llave,
+                    impreso_at: nowIso,
+                    impreso_por: userId,
+                    impreso_por_nombre: userName,
+                    veces_impreso: newVeces,
+                    es_reimpresion: esReimpresion
+                });
+            }
+
+            const reimpresos = resultados.filter(r => r.es_reimpresion);
+            return {
+                affectedAccounts: [...affectedAccounts],
+                body: {
+                    total_registrados: resultados.length,
+                    tiene_reimpresiones: reimpresos.length > 0,
+                    reimpresiones_count: reimpresos.length,
+                    advertencia_reimpresion: reimpresos.length > 0
+                        ? `${reimpresos.length} cheque(s) ya habían sido impresos anteriormente: ${reimpresos.map(r => `#${r.cheque}`).join(', ')}.`
+                        : null,
+                    resultados
+                }
+            };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        for (const ctaId of txResult.affectedAccounts) {
+            emitBankUpdate(req.io, 'cheques_updated', { cuenta_bancaria_id: ctaId });
+        }
+
+        return res.json(txResult.body);
+    } catch (error) {
+        return sendSafeError(res, error, 'Error al registrar impresión en lote');
+    }
+});
+
 router.post('/', authenticateToken, requirePermission(chequeManagePerms), async (req, res) => {
     const {
-        id_empresa, numero_cuenta, cuenta_bancaria_id, fecha, fecha_aplicado, cheque, valor,
+        id_empresa, empresa_id, numero_cuenta, cuenta_bancaria_id, fecha, fecha_aplicado, cheque, valor,
         a_nombre, concepto,
-        cheque_anulado, es_reservado, es_pago_contado, fue_noemitido, num_partida
+        cheque_anulado, es_reservado, es_pago_contado, fue_noemitido, num_partida, chequera_id
     } = req.body || {};
 
     const esAnulado = Boolean(cheque_anulado);
@@ -295,13 +500,26 @@ router.post('/', authenticateToken, requirePermission(chequeManagePerms), async 
 
             if (cuenta_bancaria_id) {
                 const [ctaRows] = await conn.query('SELECT id, empresa_id, numero FROM cuentas_bancarias WHERE id = ? AND activa = TRUE', [cuenta_bancaria_id]);
-                if (ctaRows.length === 0) return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
+                if (ctaRows.length === 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_create');
+                    return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
+                }
+                for (const reqEmpRef of [empresa_id, id_empresa]) {
+                    const companyMatch = await validateAccountCompanyMatch(conn, ctaRows[0].empresa_id, reqEmpRef);
+                    if (!companyMatch.ok) {
+                        await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_create');
+                        return { errorStatus: 400, errorBody: { message: companyMatch.message } };
+                    }
+                }
                 cuentaBancariaId = ctaRows[0].id;
                 empresaId = ctaRows[0].empresa_id;
                 numCuentaFinal = ctaRows[0].numero;
             } else {
                 const [empRows] = await conn.query('SELECT id FROM empresas WHERE codigo = ?', [id_empresa]);
-                if (empRows.length === 0) return { errorStatus: 400, errorBody: { message: 'Empresa no encontrada' } };
+                if (empRows.length === 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_create');
+                    return { errorStatus: 400, errorBody: { message: 'Empresa no encontrada' } };
+                }
                 empresaId = empRows[0].id;
 
                 const [cuentaRows] = await conn.query(
@@ -309,6 +527,7 @@ router.post('/', authenticateToken, requirePermission(chequeManagePerms), async 
                     [empresaId, numero_cuenta]
                 );
                 if (cuentaRows.length === 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_create');
                     return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
                 }
                 cuentaBancariaId = cuentaRows[0].id;
@@ -316,6 +535,7 @@ router.post('/', authenticateToken, requirePermission(chequeManagePerms), async 
 
             const lockCheck = await isDateInClosedPeriod(conn, cuentaBancariaId, [dbFecha, dbFechaAplicado]);
             if (lockCheck.closed) {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_create');
                 return {
                     errorStatus: 423,
                     errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}. Solicite reapertura para registrar cheques en esa fecha.` }
@@ -329,6 +549,7 @@ router.post('/', authenticateToken, requirePermission(chequeManagePerms), async 
                     [cuentaBancariaId, cleanCheque]
                 );
                 if (dupRows && dupRows.length > 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_create');
                     return {
                         errorStatus: 409,
                         errorBody: { message: `El cheque #${cleanCheque} ya existe activo en esta cuenta bancaria (${toDisplayDate(dupRows[0].fecha)} · $${Number(dupRows[0].valor).toFixed(2)}).` }
@@ -354,7 +575,24 @@ router.post('/', authenticateToken, requirePermission(chequeManagePerms), async 
             );
 
             const nuevaLlave = 'CHQ' + String(result.insertId).padStart(17, '0');
-            await conn.query('UPDATE cheques SET llave = ? WHERE id = ?', [nuevaLlave, result.insertId]);
+            const talonarioRes = await consumeTalonarioNumber(conn, {
+                cuentaBancariaId,
+                chequeNumero: cleanCheque,
+                chequeraId: chequera_id || null
+            });
+            try {
+                await conn.query('UPDATE cheques SET llave = ?, chequera_id = ? WHERE id = ?', [
+                    nuevaLlave,
+                    talonarioRes.chequeraId || null,
+                    result.insertId
+                ]);
+            } catch (updErr) {
+                if (updErr && (updErr.code === 'ER_BAD_FIELD_ERROR' || updErr.errno === 1054)) {
+                    await conn.query('UPDATE cheques SET llave = ? WHERE id = ?', [nuevaLlave, result.insertId]);
+                } else {
+                    throw updErr;
+                }
+            }
 
             await recordBankAudit(conn, {
                 cuentaBancariaId,
@@ -363,10 +601,24 @@ router.post('/', authenticateToken, requirePermission(chequeManagePerms), async 
                 accion: 'CREATE',
                 user: req.user,
                 ipAddress: req.ip,
-                after: { id: result.insertId, llave: nuevaLlave, cheque: cleanCheque, fecha: dbFecha, valor: valorNum, a_nombre: cleanNombre }
+                after: {
+                    id: result.insertId,
+                    llave: nuevaLlave,
+                    cheque: cleanCheque,
+                    fecha: dbFecha,
+                    valor: valorNum,
+                    a_nombre: cleanNombre,
+                    chequera_id: talonarioRes.chequeraId || null
+                }
             });
 
-            const body = { message: 'Cheque registrado exitosamente', llave: nuevaLlave, id: result.insertId };
+            const body = {
+                message: 'Cheque registrado exitosamente',
+                llave: nuevaLlave,
+                id: result.insertId,
+                chequera_id: talonarioRes.chequeraId || null,
+                talonario_alerta: talonarioRes.talonarioAlerta || null
+            };
             if (idempotencyKey) {
                 await saveIdempotentResponse(conn, { key: idempotencyKey, scope: 'cheques_create', statusCode: 201, responseBody: body });
             }
@@ -425,6 +677,81 @@ router.post('/', authenticateToken, requirePermission(chequeManagePerms), async 
     }
 });
 
+router.post('/:id/registrar-impresion', authenticateToken, requirePermission(chequePrintPerms), async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ message: 'ID de cheque inválido.' });
+    }
+    const { formato_id = null, printer_name = null } = req.body || {};
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            const [[existing]] = await conn.query(
+                `SELECT id, cuenta_bancaria_id, cheque, llave, deleted_at,
+                        impreso_at, impreso_por, COALESCE(veces_impreso, 0) as veces_impreso
+                 FROM cheques
+                 WHERE id = ?
+                 FOR UPDATE`,
+                [id]
+            );
+            if (!existing || existing.deleted_at) {
+                return { errorStatus: 404, errorBody: { message: 'Cheque no encontrado.' } };
+            }
+
+            const prevVeces = Number(existing.veces_impreso || 0);
+            const esReimpresion = prevVeces > 0;
+            const newVeces = prevVeces + 1;
+            const userId = req.user?.id || null;
+            const userName = req.user?.nombre || req.user?.username || null;
+
+            await conn.query(
+                'UPDATE cheques SET impreso_at = NOW(), impreso_por = ?, veces_impreso = COALESCE(veces_impreso, 0) + 1 WHERE id = ?',
+                [userId, id]
+            );
+
+            const [[updated]] = await conn.query('SELECT impreso_at FROM cheques WHERE id = ?', [id]);
+            const impresoAt = updated?.impreso_at || new Date().toISOString();
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: existing.cuenta_bancaria_id,
+                entidad: 'cheques',
+                entidadId: id,
+                accion: esReimpresion ? 'REPRINT_CHEQUE' : 'PRINT_CHEQUE',
+                user: req.user,
+                ipAddress: req.ip,
+                before: { veces_impreso: prevVeces, impreso_at: existing.impreso_at || null },
+                after: { veces_impreso: newVeces, impreso_at: impresoAt, impreso_por: userId },
+                metadata: { formato_id, printer_name }
+            });
+
+            return {
+                cuentaBancariaId: existing.cuenta_bancaria_id,
+                body: {
+                    id,
+                    cheque: existing.cheque,
+                    impreso_at: impresoAt,
+                    impreso_por: userId,
+                    impreso_por_nombre: userName,
+                    veces_impreso: newVeces,
+                    es_reimpresion: esReimpresion,
+                    advertencia_reimpresion: esReimpresion
+                        ? `Este cheque ya había sido impreso ${prevVeces} ${prevVeces === 1 ? 'vez' : 'veces'} anteriormente. Se registró la reimpresión #${newVeces}.`
+                        : null
+                }
+            };
+        });
+
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        emitBankUpdate(req.io, 'cheques_updated', { cuenta_bancaria_id: txResult.cuentaBancariaId, id });
+        return res.json(txResult.body);
+    } catch (error) {
+        return sendSafeError(res, error, 'Error al registrar impresión del cheque');
+    }
+});
+
 router.put('/:id', authenticateToken, requirePermission(chequeManagePerms), async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id) || id <= 0) {
@@ -432,7 +759,7 @@ router.put('/:id', authenticateToken, requirePermission(chequeManagePerms), asyn
     }
 
     const {
-        id_empresa, numero_cuenta, cuenta_bancaria_id, fecha, fecha_aplicado, cheque, valor,
+        id_empresa, empresa_id, numero_cuenta, cuenta_bancaria_id, fecha, fecha_aplicado, cheque, valor,
         a_nombre, concepto,
         cheque_anulado, es_reservado, es_pago_contado, fue_noemitido, num_partida, version
     } = req.body || {};
@@ -486,25 +813,40 @@ router.put('/:id', authenticateToken, requirePermission(chequeManagePerms), asyn
 
             let empresaId = existing.empresa_id;
             let cuentaBancariaId = existing.cuenta_bancaria_id;
+            let resolvedAccountEmpresaId = existing.empresa_id;
 
             if (cuenta_bancaria_id) {
                 const [ctaRows] = await conn.query('SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ? AND activa = TRUE', [cuenta_bancaria_id]);
                 if (ctaRows.length === 0) return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
                 cuentaBancariaId = ctaRows[0].id;
                 empresaId = ctaRows[0].empresa_id;
+                resolvedAccountEmpresaId = ctaRows[0].empresa_id;
             } else if (id_empresa && numero_cuenta) {
                 const [empRows] = await conn.query('SELECT id FROM empresas WHERE codigo = ?', [id_empresa]);
                 if (empRows.length === 0) return { errorStatus: 400, errorBody: { message: 'Empresa no encontrada' } };
                 empresaId = empRows[0].id;
 
                 const [cuentaRows] = await conn.query(
-                    'SELECT id FROM cuentas_bancarias WHERE empresa_id = ? AND numero = ? AND activa = TRUE',
+                    'SELECT id, empresa_id FROM cuentas_bancarias WHERE empresa_id = ? AND numero = ? AND activa = TRUE',
                     [empresaId, numero_cuenta]
                 );
                 if (cuentaRows.length === 0) {
                     return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
                 }
                 cuentaBancariaId = cuentaRows[0].id;
+                resolvedAccountEmpresaId = cuentaRows[0].empresa_id ?? empresaId;
+            } else if (existing.cuenta_bancaria_id) {
+                const [ctaRows] = await conn.query('SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ? LIMIT 1', [existing.cuenta_bancaria_id]);
+                if (ctaRows && ctaRows.length > 0 && ctaRows[0].empresa_id) {
+                    resolvedAccountEmpresaId = ctaRows[0].empresa_id;
+                }
+            }
+
+            for (const reqEmpRef of [empresa_id, id_empresa]) {
+                const companyMatch = await validateAccountCompanyMatch(conn, resolvedAccountEmpresaId, reqEmpRef);
+                if (!companyMatch.ok) {
+                    return { errorStatus: 400, errorBody: { message: companyMatch.message } };
+                }
             }
 
             const lockOld = await isDateInClosedPeriod(conn, existing.cuenta_bancaria_id, [existing.fecha, existing.fecha_aplicado]);
@@ -787,8 +1129,24 @@ router.get('/contado/solicitudes', authenticateToken, requirePermission(contadoP
 });
 
 router.post('/contado/generar', authenticateToken, requirePermission(contadoPerms), async (req, res) => {
-    const { llave, id_empresa, numero_cuenta, cheque_num, fecha, valor, a_nombre, concepto } = req.body || {};
-    if (!llave || !id_empresa || !numero_cuenta || !cheque_num || !String(cheque_num).trim()) {
+    const {
+        llave,
+        estacion_solicitud,
+        id_empresa,
+        cuenta_bancaria_id,
+        numero_cuenta,
+        cheque_num,
+        fecha,
+        valor,
+        a_nombre,
+        concepto,
+        chequera_id
+    } = req.body || {};
+
+    const estacionSol = String(estacion_solicitud || id_empresa || '').trim();
+    const hasCuentaRef = Boolean(cuenta_bancaria_id) || Boolean((id_empresa || estacionSol) && numero_cuenta);
+
+    if (!llave || !estacionSol || !hasCuentaRef || !cheque_num || !String(cheque_num).trim()) {
         return res.status(400).json({ message: 'Faltan campos obligatorios' });
     }
 
@@ -804,47 +1162,71 @@ router.post('/contado/generar', authenticateToken, requirePermission(contadoPerm
     const idempotencyKey = getIdempotencyKey(req);
 
     try {
-        const externalDb = await getExternalDb();
-
-        // Verificar en sistema externo si la solicitud ya tiene cheque emitido
-        const [solRows] = await externalDb.query(
-            'SELECT num_cheque FROM solicitud_chq_contado WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ? LIMIT 1',
-            [llave, llave, id_empresa]
-        );
-        if (!solRows || solRows.length === 0) {
-            return res.status(404).json({ message: 'Solicitud de contado no encontrada.' });
-        }
-        if (solRows[0].num_cheque && String(solRows[0].num_cheque).trim() !== '') {
-            return res.status(409).json({ message: `Esta solicitud ya tiene asignado el cheque #${String(solRows[0].num_cheque).trim()}.` });
-        }
-
         const txResult = await withTransaction(async (conn) => {
             if (idempotencyKey) {
                 const idem = await beginIdempotentRequest(conn, {
                     key: idempotencyKey,
                     scope: 'cheques_contado_generar',
                     userId: req.user?.id,
-                    payload: { llave, id_empresa, numero_cuenta, cleanCheque }
+                    payload: { llave, estacionSol, cuenta_bancaria_id, id_empresa, numero_cuenta, cleanCheque }
                 });
                 if (idem.replayed) return { replayed: true, statusCode: idem.statusCode, body: idem.responseBody };
                 if (idem.conflict) return { conflict: true };
             }
 
-            const [empRows] = await conn.query('SELECT id FROM empresas WHERE codigo = ?', [id_empresa]);
-            if (empRows.length === 0) return { errorStatus: 400, errorBody: { message: 'Empresa no encontrada' } };
-            const empresaId = empRows[0].id;
+            const externalDb = await getExternalDb();
 
-            const [cuentaRows] = await conn.query(
-                'SELECT id FROM cuentas_bancarias WHERE empresa_id = ? AND numero = ? AND activa = TRUE',
-                [empresaId, numero_cuenta]
+            // Verificar en sistema externo si la solicitud ya tiene cheque emitido usando estacion_solicitud
+            const [solRows] = await externalDb.query(
+                'SELECT num_cheque FROM solicitud_chq_contado WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ? LIMIT 1',
+                [llave, llave, estacionSol]
             );
-            if (cuentaRows.length === 0) {
-                return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
+            if (!solRows || solRows.length === 0) {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_generar');
+                return { errorStatus: 404, errorBody: { message: 'Solicitud de contado no encontrada.' } };
             }
-            const cuentaBancariaId = cuentaRows[0].id;
+            if (solRows[0].num_cheque && String(solRows[0].num_cheque).trim() !== '') {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_generar');
+                return { errorStatus: 409, errorBody: { message: `Esta solicitud ya tiene asignado el cheque #${String(solRows[0].num_cheque).trim()}.` } };
+            }
+
+            let empresaId = null;
+            let cuentaBancariaId = null;
+
+            if (cuenta_bancaria_id) {
+                const [ctaRows] = await conn.query(
+                    'SELECT id, empresa_id, numero FROM cuentas_bancarias WHERE id = ? AND activa = TRUE',
+                    [cuenta_bancaria_id]
+                );
+                if (ctaRows.length === 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_generar');
+                    return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
+                }
+                cuentaBancariaId = ctaRows[0].id;
+                empresaId = ctaRows[0].empresa_id;
+            } else {
+                const empCode = String(id_empresa || estacionSol).trim();
+                const [empRows] = await conn.query('SELECT id FROM empresas WHERE codigo = ?', [empCode]);
+                if (empRows.length === 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_generar');
+                    return { errorStatus: 400, errorBody: { message: 'Empresa no encontrada' } };
+                }
+                empresaId = empRows[0].id;
+
+                const [cuentaRows] = await conn.query(
+                    'SELECT id FROM cuentas_bancarias WHERE empresa_id = ? AND numero = ? AND activa = TRUE',
+                    [empresaId, numero_cuenta]
+                );
+                if (cuentaRows.length === 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_generar');
+                    return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
+                }
+                cuentaBancariaId = cuentaRows[0].id;
+            }
 
             const lockCheck = await isDateInClosedPeriod(conn, cuentaBancariaId, [dbFecha]);
             if (lockCheck.closed) {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_generar');
                 return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}.` } };
             }
 
@@ -853,8 +1235,12 @@ router.post('/contado/generar', authenticateToken, requirePermission(contadoPerm
                 [cuentaBancariaId, cleanCheque]
             );
             if (dupRows && dupRows.length > 0) {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_generar');
                 return { errorStatus: 409, errorBody: { message: `El cheque #${cleanCheque} ya existe activo en esta cuenta.` } };
             }
+
+            const nombreBeneficiario = a_nombre ? String(a_nombre).trim().slice(0, 150) : '';
+            const cleanConcepto = String(concepto || 'PAGO A PROVEEDOR (CONTADO)').trim().toUpperCase().slice(0, 255) || 'PAGO A PROVEEDOR (CONTADO)';
 
             const tempLlave = `TMP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
             const [insRes] = await conn.query(
@@ -862,15 +1248,32 @@ router.post('/contado/generar', authenticateToken, requirePermission(contadoPerm
                     (empresa_id, cuenta_bancaria_id, llave, fecha, cheque, valor, a_nombre, concepto,
                      es_pago_contado, es_contabilizado, created_by, version)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, 1)`,
-                [empresaId, cuentaBancariaId, tempLlave, dbFecha, cleanCheque, valorNum, a_nombre || '', (concepto || 'PAGO A PROVEEDOR (CONTADO)').toUpperCase().slice(0, 255), req.user?.id || null]
+                [empresaId, cuentaBancariaId, tempLlave, dbFecha, cleanCheque, valorNum, nombreBeneficiario, cleanConcepto, req.user?.id || null]
             );
             const llaveCheque = 'CHQ' + String(insRes.insertId).padStart(17, '0');
-            await conn.query('UPDATE cheques SET llave = ? WHERE id = ?', [llaveCheque, insRes.insertId]);
+            const talonarioRes = await consumeTalonarioNumber(conn, {
+                cuentaBancariaId,
+                chequeNumero: cleanCheque,
+                chequeraId: chequera_id || null
+            });
+            try {
+                await conn.query('UPDATE cheques SET llave = ?, chequera_id = ? WHERE id = ?', [
+                    llaveCheque,
+                    talonarioRes.chequeraId || null,
+                    insRes.insertId
+                ]);
+            } catch (updErr) {
+                if (updErr && (updErr.code === 'ER_BAD_FIELD_ERROR' || updErr.errno === 1054)) {
+                    await conn.query('UPDATE cheques SET llave = ? WHERE id = ?', [llaveCheque, insRes.insertId]);
+                } else {
+                    throw updErr;
+                }
+            }
 
             // Actualizar BD externa ANTES de hacer commit local; si falla, hace rollback automático del cheque local
             await externalDb.query(
                 "UPDATE solicitud_chq_contado SET num_cheque = ?, llave_cheque = ? WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ?",
-                [cleanCheque, llaveCheque, llave, llave, id_empresa]
+                [cleanCheque, llaveCheque, llave, llave, estacionSol]
             );
 
             await recordBankAudit(conn, {
@@ -880,10 +1283,24 @@ router.post('/contado/generar', authenticateToken, requirePermission(contadoPerm
                 accion: 'CREATE_CONTADO',
                 user: req.user,
                 ipAddress: req.ip,
-                after: { id: insRes.insertId, llave: llaveCheque, cheque: cleanCheque, valor: valorNum, solicitud_llave: llave }
+                after: {
+                    id: insRes.insertId,
+                    llave: llaveCheque,
+                    cheque: cleanCheque,
+                    valor: valorNum,
+                    solicitud_llave: llave,
+                    estacion_solicitud: estacionSol,
+                    chequera_id: talonarioRes.chequeraId || null
+                }
             });
 
-            const body = { message: 'Cheque generado exitosamente', llaveCheque };
+            const body = {
+                message: 'Cheque generado exitosamente',
+                llaveCheque,
+                id: insRes.insertId,
+                chequera_id: talonarioRes.chequeraId || null,
+                talonario_alerta: talonarioRes.talonarioAlerta || null
+            };
             if (idempotencyKey) {
                 await saveIdempotentResponse(conn, { key: idempotencyKey, scope: 'cheques_contado_generar', statusCode: 200, responseBody: body });
             }
@@ -907,74 +1324,164 @@ router.post('/contado/generar', authenticateToken, requirePermission(contadoPerm
 // Marcar solicitud como ya emitida directamente asignando el número de cheque
 router.post('/contado/marcar-emitido', authenticateToken, requirePermission(contadoPerms), async (req, res) => {
     try {
-        const { llave, id_empresa, cheque_num, cuenta_bancaria_id, registrar_en_bancos } = req.body || {};
-        if (!llave || !id_empresa || !cheque_num || !String(cheque_num).trim()) {
+        const {
+            llave,
+            estacion_solicitud,
+            id_empresa,
+            cheque_num,
+            cuenta_bancaria_id,
+            registrar_en_bancos,
+            a_nombre,
+            chequera_id
+        } = req.body || {};
+        const estacionSol = String(estacion_solicitud || id_empresa || '').trim();
+        if (!llave || !estacionSol || !cheque_num || !String(cheque_num).trim()) {
             return res.status(400).json({ message: 'Se requiere la llave de solicitud, estación y número de cheque' });
+        }
+        if (registrar_en_bancos && (!cuenta_bancaria_id || !String(cuenta_bancaria_id).trim())) {
+            return res.status(400).json({ message: 'Debe seleccionar una cuenta bancaria para registrar el cheque en Bancos.' });
         }
 
         const cleanCheque = String(cheque_num).trim().slice(0, 20);
-        const externalDb = await getExternalDb();
+        const idempotencyKey = getIdempotencyKey(req);
 
         const txResult = await withTransaction(async (conn) => {
+            if (idempotencyKey) {
+                const idem = await beginIdempotentRequest(conn, {
+                    key: idempotencyKey,
+                    scope: 'cheques_contado_marcar_emitido',
+                    userId: req.user?.id,
+                    payload: { llave, estacionSol, cleanCheque, cuenta_bancaria_id, registrar_en_bancos: Boolean(registrar_en_bancos) }
+                });
+                if (idem.replayed) return { replayed: true, statusCode: idem.statusCode, body: idem.responseBody };
+                if (idem.conflict) return { conflict: true };
+            }
+
+            const externalDb = await getExternalDb();
+
+            const [solRows] = await externalDb.query(
+                `SELECT a.*, COALESCE(b.nombre, '') AS proveedor_nombre
+                 FROM solicitud_chq_contado a
+                 LEFT JOIN proveedores b ON a.id_empresa = b.id_empresa AND a.cod_proveedor = b.codigo
+                 WHERE (a.llave = ? OR TRIM(a.llave) = TRIM(?)) AND a.id_empresa = ?
+                 LIMIT 1`,
+                [llave, llave, estacionSol]
+            );
+            if (!solRows || solRows.length === 0) {
+                await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_marcar_emitido');
+                return { errorStatus: 404, errorBody: { message: 'Solicitud de contado no encontrada.' } };
+            }
+            const s = solRows[0];
+
             let llaveCheque = null;
             let cuentaIdUsed = null;
+            let talonarioRes = { chequeraId: null, talonarioAlerta: null };
 
             if (registrar_en_bancos && cuenta_bancaria_id) {
-                const [solRows] = await externalDb.query(
-                    "SELECT * FROM solicitud_chq_contado WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ? LIMIT 1",
-                    [llave, llave, id_empresa]
+                const [ctaRows] = await conn.query(
+                    'SELECT id, empresa_id FROM cuentas_bancarias WHERE id = ? AND activa = TRUE',
+                    [cuenta_bancaria_id]
                 );
-                if (solRows.length > 0) {
-                    const s = solRows[0];
-                    const [empRows] = await conn.query('SELECT id FROM empresas WHERE codigo = ?', [id_empresa]);
-                    const empresaId = empRows[0]?.id;
-                    if (empresaId) {
-                        const dbFecha = parseStrictDBDate(s.fecha) || getElSalvadorTodayYMD();
-                        const lockCheck = await isDateInClosedPeriod(conn, cuenta_bancaria_id, [dbFecha]);
-                        if (lockCheck.closed) {
-                            return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}.` } };
-                        }
-                        const [dupRows] = await conn.query(
-                            'SELECT id FROM cheques WHERE cuenta_bancaria_id = ? AND cheque = ? AND deleted_at IS NULL AND cheque_anulado = FALSE LIMIT 1 FOR UPDATE',
-                            [cuenta_bancaria_id, cleanCheque]
-                        );
-                        if (dupRows && dupRows.length > 0) {
-                            return { errorStatus: 409, errorBody: { message: `El cheque #${cleanCheque} ya existe activo en esta cuenta.` } };
-                        }
+                if (!ctaRows || ctaRows.length === 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_marcar_emitido');
+                    return { errorStatus: 400, errorBody: { message: 'Cuenta bancaria no encontrada o inactiva' } };
+                }
+                const cuentaId = ctaRows[0].id;
+                const empresaId = ctaRows[0].empresa_id;
 
-                        const tempLlave = `TMP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-                        const [insRes] = await conn.query(
-                            `INSERT INTO cheques
-                                (empresa_id, cuenta_bancaria_id, llave, fecha, cheque, valor, a_nombre, concepto,
-                                 es_pago_contado, es_contabilizado, created_by, version)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, 1)`,
-                            [empresaId, cuenta_bancaria_id, tempLlave, dbFecha, cleanCheque, Number(s.monto) || 0, s.cod_proveedor || '', 'PAGO A PROVEEDOR (CONTADO)', req.user?.id || null]
-                        );
-                        llaveCheque = 'CHQ' + String(insRes.insertId).padStart(17, '0');
+                const dbFecha = parseStrictDBDate(s.fecha) || getElSalvadorTodayYMD();
+                const lockCheck = await isDateInClosedPeriod(conn, cuentaId, [dbFecha]);
+                if (lockCheck.closed) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_marcar_emitido');
+                    return { errorStatus: 423, errorBody: { message: `Período cerrado hasta ${toDisplayDate(lockCheck.lockedDate)}.` } };
+                }
+                const [dupRows] = await conn.query(
+                    'SELECT id FROM cheques WHERE cuenta_bancaria_id = ? AND cheque = ? AND deleted_at IS NULL AND cheque_anulado = FALSE LIMIT 1 FOR UPDATE',
+                    [cuentaId, cleanCheque]
+                );
+                if (dupRows && dupRows.length > 0) {
+                    await cleanupPendingIdempotency(conn, idempotencyKey, 'cheques_contado_marcar_emitido');
+                    return { errorStatus: 409, errorBody: { message: `El cheque #${cleanCheque} ya existe activo en esta cuenta.` } };
+                }
+
+                const nombreProveedor = s.proveedor_nombre ? String(s.proveedor_nombre).trim() : '';
+                const nombreManual = a_nombre ? String(a_nombre).trim() : '';
+                const codProveedor = s.cod_proveedor ? String(s.cod_proveedor).trim() : '';
+                const nombreBeneficiario = (nombreProveedor || nombreManual || codProveedor || '').slice(0, 150);
+
+                const tempLlave = `TMP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+                const [insRes] = await conn.query(
+                    `INSERT INTO cheques
+                        (empresa_id, cuenta_bancaria_id, llave, fecha, cheque, valor, a_nombre, concepto,
+                         es_pago_contado, es_contabilizado, created_by, version)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, 1)`,
+                    [empresaId, cuentaId, tempLlave, dbFecha, cleanCheque, Number(s.monto) || 0, nombreBeneficiario, 'PAGO A PROVEEDOR (CONTADO)', req.user?.id || null]
+                );
+                llaveCheque = 'CHQ' + String(insRes.insertId).padStart(17, '0');
+                talonarioRes = await consumeTalonarioNumber(conn, {
+                    cuentaBancariaId: cuentaId,
+                    chequeNumero: cleanCheque,
+                    chequeraId: chequera_id || null
+                });
+                try {
+                    await conn.query('UPDATE cheques SET llave = ?, chequera_id = ? WHERE id = ?', [
+                        llaveCheque,
+                        talonarioRes.chequeraId || null,
+                        insRes.insertId
+                    ]);
+                } catch (updErr) {
+                    if (updErr && (updErr.code === 'ER_BAD_FIELD_ERROR' || updErr.errno === 1054)) {
                         await conn.query('UPDATE cheques SET llave = ? WHERE id = ?', [llaveCheque, insRes.insertId]);
-                        cuentaIdUsed = cuenta_bancaria_id;
-
-                        await recordBankAudit(conn, {
-                            cuentaBancariaId: cuenta_bancaria_id,
-                            entidad: 'cheques',
-                            entidadId: insRes.insertId,
-                            accion: 'MARCAR_EMITIDO_CONTADO',
-                            user: req.user,
-                            ipAddress: req.ip,
-                            after: { id: insRes.insertId, llave: llaveCheque, cheque: cleanCheque, solicitud_llave: llave }
-                        });
+                    } else {
+                        throw updErr;
                     }
                 }
+                cuentaIdUsed = cuentaId;
+
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: cuentaId,
+                    entidad: 'cheques',
+                    entidadId: insRes.insertId,
+                    accion: 'MARCAR_EMITIDO_CONTADO',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    after: {
+                        id: insRes.insertId,
+                        llave: llaveCheque,
+                        cheque: cleanCheque,
+                        a_nombre: nombreBeneficiario,
+                        solicitud_llave: llave,
+                        estacion_solicitud: estacionSol,
+                        chequera_id: talonarioRes.chequeraId || null
+                    }
+                });
             }
 
             await externalDb.query(
                 "UPDATE solicitud_chq_contado SET num_cheque = ?, llave_cheque = COALESCE(?, llave_cheque) WHERE (llave = ? OR TRIM(llave) = TRIM(?)) AND id_empresa = ?",
-                [cleanCheque, llaveCheque, llave, llave, id_empresa]
+                [cleanCheque, llaveCheque, llave, llave, estacionSol]
             );
 
-            return { cuentaIdUsed };
+            const body = {
+                success: true,
+                message: `Solicitud marcada exitosamente con el cheque #${cleanCheque}`,
+                llaveCheque,
+                chequera_id: talonarioRes.chequeraId || null,
+                talonario_alerta: talonarioRes.talonarioAlerta || null
+            };
+            if (idempotencyKey) {
+                await saveIdempotentResponse(conn, { key: idempotencyKey, scope: 'cheques_contado_marcar_emitido', statusCode: 200, responseBody: body });
+            }
+
+            return { statusCode: 200, cuentaIdUsed, body };
         });
 
+        if (txResult.conflict) {
+            return res.status(409).json({ message: 'Solicitud duplicada en proceso.' });
+        }
+        if (txResult.replayed) {
+            return res.status(txResult.statusCode).json(txResult.body);
+        }
         if (txResult.errorStatus) {
             return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
@@ -984,7 +1491,7 @@ router.post('/contado/marcar-emitido', authenticateToken, requirePermission(cont
             emitBankUpdate(req.io, 'conciliacion_updated', { cuenta_bancaria_id: txResult.cuentaIdUsed });
         }
 
-        res.json({ success: true, message: `Solicitud marcada exitosamente con el cheque #${cleanCheque}` });
+        res.json(txResult.body);
     } catch (error) {
         sendSafeError(res, error, 'Error al marcar cheque como emitido');
     }
