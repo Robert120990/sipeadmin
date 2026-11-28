@@ -1067,6 +1067,83 @@ async function notifyReaperturaEvent(db, io, { targetUserIds = [], type, title, 
 }
 
 /**
+ * Formatea un número correlativo de transferencia interna: TFB000000000001
+ */
+function formatTransferCode(num) {
+    const safeNum = Number.isFinite(Number(num)) && Number(num) > 0 ? Math.floor(Number(num)) : 1;
+    return `TFB${String(safeNum).padStart(12, '0')}`;
+}
+
+/**
+ * Genera el siguiente correlativo único TFB para transferencias internas entre cuentas.
+ */
+async function generateNextTransferCode(dbOrConn) {
+    let maxSeq = 0;
+    try {
+        const [rows] = await dbOrConn.query(
+            `SELECT transfer_group_id
+             FROM movimientos_bancarios
+             WHERE transfer_group_id LIKE 'TFB%'
+             ORDER BY LENGTH(transfer_group_id) DESC, transfer_group_id DESC
+             LIMIT 25`
+        );
+        for (const r of (rows || [])) {
+            const m = String(r.transfer_group_id || '').trim().match(/^TFB(\d+)$/i);
+            if (m) {
+                const n = parseInt(m[1], 10);
+                if (Number.isFinite(n) && n > maxSeq) maxSeq = n;
+            }
+        }
+    } catch (_) {
+        // Fallback seguro si no existe tabla/columna
+    }
+
+    const baseSeq = maxSeq + 1;
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = formatTransferCode(baseSeq + attempt);
+        try {
+            const [dup] = await dbOrConn.query(
+                'SELECT id FROM movimientos_bancarios WHERE transfer_group_id = ? LIMIT 1',
+                [candidate]
+            );
+            if (!dup || dup.length === 0) {
+                return candidate;
+            }
+        } catch (_) {
+            return candidate;
+        }
+    }
+    return `TFB${Date.now()}${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+}
+
+/**
+ * Valida un correlativo manual de transferencia interna y verifica unicidad.
+ */
+async function validateManualTransferCode(conn, rawCode) {
+    const clean = String(rawCode || '').trim().toUpperCase();
+    if (!clean) return { ok: true, code: null };
+    if (!/^[A-Z0-9_-]{3,40}$/.test(clean)) {
+        return {
+            ok: false,
+            status: 400,
+            message: 'El correlativo de transferencia debe tener entre 3 y 40 caracteres alfanuméricos (- o _).'
+        };
+    }
+    const [existing] = await conn.query(
+        'SELECT id FROM movimientos_bancarios WHERE transfer_group_id = ? AND deleted_at IS NULL LIMIT 1',
+        [clean]
+    );
+    if (existing && existing.length > 0) {
+        return {
+            ok: false,
+            status: 409,
+            message: `El correlativo de transferencia ${clean} ya se encuentra registrado.`
+        };
+    }
+    return { ok: true, code: clean };
+}
+
+/**
  * Emite actualización en tiempo real únicamente a las salas autorizadas de Bancos y Admin.
  */
 function emitBankUpdate(io, eventName, payload = {}) {
@@ -1106,5 +1183,8 @@ module.exports = {
     canEditMontoConciliacion,
     getReaperturaApproverIds,
     notifyReaperturaEvent,
+    formatTransferCode,
+    generateNextTransferCode,
+    validateManualTransferCode,
     emitBankUpdate
 };

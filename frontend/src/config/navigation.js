@@ -73,6 +73,7 @@ export const operacionesMenu = [
 export const bancosMenu = [
     { name: 'Cuentas Bancarias', path: '/dashboard/bancos/cuentas', icon: createColorIcon('fluent-emoji-flat:bank') },
     { name: 'Movimientos Bancarios', path: '/dashboard/bancos/movimientos', icon: createColorIcon('flat-color-icons:view-details') },
+    { name: 'Transferencias Internas', path: '/dashboard/bancos/transferencias', icon: createColorIcon('flat-color-icons:money-transfer') },
     { name: 'Conciliación Bancaria', path: '/dashboard/bancos/conciliacion', icon: createColorIcon('fluent-emoji-flat:balance-scale') },
     { name: 'Cheques', path: '/dashboard/bancos/cheques', icon: createColorIcon('flat-color-icons:currency-exchange') },
     { name: 'Cheques Contado', path: '/dashboard/bancos/cheques-contado', icon: createColorIcon('fluent-emoji-flat:credit-card') },

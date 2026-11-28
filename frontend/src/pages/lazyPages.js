@@ -20,6 +20,7 @@ export const ConfiguracionEmail = lazy(() => import('./ConfiguracionEmail'));
 export const ConfiguracionContabilidad = lazy(() => import('./ConfiguracionContabilidad'));
 export const ConsultasCumpleanos = lazy(() => import('./ConsultasCumpleanos'));
 export const MovimientosBancarios = lazy(() => import('./MovimientosBancarios'));
+export const TransferenciasBancarias = lazy(() => import('./TransferenciasBancarias'));
 export const ConciliacionBancaria = lazy(() => import('./ConciliacionBancaria'));
 export const Cheques = lazy(() => import('./Cheques'));
 export const ChequesContado = lazy(() => import('./ChequesContado'));

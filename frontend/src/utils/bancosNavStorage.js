@@ -16,6 +16,7 @@ const PENDING_TTL_MS = 30000;
 export const BANCOS_NAV_TARGETS = {
     conciliacion: '/dashboard/bancos/conciliacion',
     movimientos: '/dashboard/bancos/movimientos',
+    transferencias: '/dashboard/bancos/transferencias',
     kardex: '/dashboard/bancos/reportes/movimientos-fecha',
     cheques: '/dashboard/bancos/cheques',
     'saldos-bancos': '/dashboard/bancos/reportes/saldos-bancos',

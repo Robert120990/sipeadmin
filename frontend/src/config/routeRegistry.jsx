@@ -21,6 +21,7 @@ import {
     ConfiguracionTema,
     ConsultasCumpleanos,
     MovimientosBancarios,
+    TransferenciasBancarias,
     ConciliacionBancaria,
     Cheques,
     ChequesContado,
@@ -111,6 +112,9 @@ export function hasRoutePermission(user, path) {
     if (path === '/dashboard/bancos/movimientos' && perms.includes('manage_movimientos')) {
         return true;
     }
+    if (path === '/dashboard/bancos/transferencias' && (perms.includes('manage_movimientos') || perms.includes('/dashboard/bancos/movimientos'))) {
+        return true;
+    }
     if (path === '/dashboard/bancos/conciliacion' && (
         perms.includes('manage_conciliacion_bancaria') ||
         perms.includes('view_conciliacion_bancaria')
@@ -175,6 +179,7 @@ export const DASHBOARD_ROUTES = [
     defineRoute('consultas/otras/backup-db-check', () => <BackupDBCheck />),
     defineRoute('bancos/cuentas', () => <CuentasBancarias />),
     defineRoute('bancos/movimientos', () => <MovimientosBancarios />),
+    defineRoute('bancos/transferencias', () => <TransferenciasBancarias />),
     defineRoute('bancos/conciliacion', () => <ConciliacionBancaria />),
     defineRoute('bancos/cheques', () => <Cheques />),
     defineRoute('bancos/cheques-contado', () => <ChequesContado />),

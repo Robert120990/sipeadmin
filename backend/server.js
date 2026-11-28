@@ -83,6 +83,7 @@ const largePayloadPrefixes = [
     '/api/bancos/conciliacion/importar-pdf',
     '/api/bancos/conciliacion/parse-extracto-pdf',
     '/api/bancos/movimientos',
+    '/api/bancos/transferencias',
     '/api/bancos/cheques',
     '/api/cheques',
     '/api/conciliacion/parse-extracto',

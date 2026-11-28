@@ -498,7 +498,8 @@ const initDB = async () => {
                 ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
                 ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
                 ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
-                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques'],
+                ['/dashboard/bancos/transferencias', 'Transferencias Internas entre Cuentas']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -703,7 +704,8 @@ const initDB = async () => {
                     ['/dashboard/operaciones/pedidos', 'Acceso a Pedidos de Combustible'],
                     ['manage_pedidos', 'Permite gestionar pedidos de combustible y sincronización'],
                     ['/dashboard/operaciones/recordatorios', 'Acceso a Control de Recordatorios y Pagos'],
-                    ['manage_recordatorios', 'Permite crear, editar, pagar y anular recordatorios']
+                    ['manage_recordatorios', 'Permite crear, editar, pagar y anular recordatorios'],
+                    ['/dashboard/bancos/transferencias', 'Transferencias Internas entre Cuentas']
                 ];
                 for (const [pName, pDesc] of newPerms) {
                     await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [pName, pDesc]);
@@ -987,7 +989,8 @@ const initDB = async () => {
                 ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
                 ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
                 ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
-                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques'],
+                ['/dashboard/bancos/transferencias', 'Transferencias Internas entre Cuentas']
             ];
             for (const [name, desc] of telegramPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1409,7 +1412,8 @@ const initDB = async () => {
                 ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
                 ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
                 ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
-                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques'],
+                ['/dashboard/bancos/transferencias', 'Transferencias Internas entre Cuentas']
             ];
             for (const [name, desc] of ticketPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1510,7 +1514,8 @@ const initDB = async () => {
                 ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
                 ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
                 ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
-                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques'],
+                ['/dashboard/bancos/transferencias', 'Transferencias Internas entre Cuentas']
             ];
             for (const [name, desc] of crecimientoPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1689,6 +1694,7 @@ const initDB = async () => {
                 ['/dashboard/operaciones/energia-solar', 'Energía Solar & Andelsa'],
                 ['/dashboard/bancos/cuentas', 'Cuentas Bancarias'],
                 ['/dashboard/bancos/movimientos', 'Movimientos Bancarios'],
+                ['/dashboard/bancos/transferencias', 'Transferencias Internas entre Cuentas'],
                 ['/dashboard/bancos/conciliacion', 'Conciliación Bancaria'],
                 ['/dashboard/bancos/cheques', 'Gestión de Cheques'],
                 ['/dashboard/bancos/cheques-contado', 'Cheques al Contado'],
@@ -2030,7 +2036,8 @@ const initDB = async () => {
                 ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
                 ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
                 ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
-                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques'],
+                ['/dashboard/bancos/transferencias', 'Transferencias Internas entre Cuentas']
             ];
             for (const [bPermName, bPermDesc] of bancosPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [bPermName, bPermDesc]);
