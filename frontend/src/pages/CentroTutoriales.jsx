@@ -23,7 +23,9 @@ import {
     Award,
     ArrowLeft,
     X,
-    FileText
+    FileText,
+    Image as ImageIcon,
+    ZoomIn
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -33,6 +35,7 @@ import {
     DIFFICULTY_STYLES,
     getCategoryMeta
 } from '../data/tutorials';
+import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../components/Toast';
@@ -66,6 +69,66 @@ function loadSavedProgress() {
     }
 }
 
+function getTutorialGallery(tutorial) {
+    if (!tutorial) return [];
+    const items = [];
+    const seen = new Set();
+
+    (tutorial.steps || []).forEach((step, idx) => {
+        if (step.screenshot?.src && !seen.has(step.screenshot.src)) {
+            seen.add(step.screenshot.src);
+            items.push({
+                src: step.screenshot.src,
+                caption: step.screenshot.caption || step.summary,
+                label: `Paso ${idx + 1}: ${step.title}`,
+                location: step.location
+            });
+        }
+    });
+
+    if (tutorial.coverImage && !seen.has(tutorial.coverImage)) {
+        items.unshift({
+            src: tutorial.coverImage,
+            caption: tutorial.subtitle || tutorial.objective,
+            label: tutorial.title,
+            location: tutorial.routeLabel || 'Vista general'
+        });
+    }
+
+    return items;
+}
+
+function loadImageAsJpegDataUrl(src) {
+    return new Promise((resolve) => {
+        if (!src || typeof window === 'undefined') {
+            resolve(null);
+            return;
+        }
+        const img = new window.Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            try {
+                const maxW = 1100;
+                const scale = img.naturalWidth > maxW ? maxW / img.naturalWidth : 1;
+                const w = Math.max(1, Math.round(img.naturalWidth * scale));
+                const h = Math.max(1, Math.round(img.naturalHeight * scale));
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#0f172a';
+                ctx.fillRect(0, 0, w, h);
+                ctx.drawImage(img, 0, 0, w, h);
+                resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.84), width: w, height: h });
+            } catch {
+                resolve(null);
+            }
+        };
+        img.onerror = () => resolve(null);
+        img.src = src;
+    });
+}
+
 export default function CentroTutoriales() {
     const navigate = useNavigate();
     const { confirm } = useConfirm();
@@ -94,6 +157,38 @@ export default function CentroTutoriales() {
     const [pdfSubtitle, setPdfSubtitle] = useState('');
     const [pdfBadge, setPdfBadge] = useState('MANUAL SOP');
     const [pdfFileName, setPdfFileName] = useState('Manual_SIPE.pdf');
+
+    // Lightbox Gallery Modal state
+    const [lightbox, setLightbox] = useState({ open: false, title: '', items: [], index: 0 });
+
+    const openGalleryLightbox = useCallback((tutorial, targetSrc = null) => {
+        const items = getTutorialGallery(tutorial);
+        if (items.length === 0) return;
+        const foundIdx = targetSrc ? items.findIndex((it) => it.src === targetSrc) : 0;
+        setLightbox({
+            open: true,
+            title: tutorial.title,
+            items,
+            index: foundIdx >= 0 ? foundIdx : 0
+        });
+    }, []);
+
+    const closeLightbox = useCallback(() => {
+        setLightbox((prev) => ({ ...prev, open: false }));
+    }, []);
+
+    useEffect(() => {
+        if (!lightbox.open || lightbox.items.length <= 1) return undefined;
+        const handleKey = (e) => {
+            if (e.key === 'ArrowRight') {
+                setLightbox((prev) => ({ ...prev, index: (prev.index + 1) % prev.items.length }));
+            } else if (e.key === 'ArrowLeft') {
+                setLightbox((prev) => ({ ...prev, index: (prev.index - 1 + prev.items.length) % prev.items.length }));
+            }
+        };
+        window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+    }, [lightbox.open, lightbox.items.length]);
 
     useEffect(() => {
         try {
@@ -252,7 +347,7 @@ export default function CentroTutoriales() {
     };
 
     // ────────────────── Generación de PDF Carta (ReportPreviewModal) ──────────────────
-    const renderTutorialIntoPdf = (doc, tutorial, isFirstPage = true) => {
+    const renderTutorialIntoPdf = (doc, tutorial, isFirstPage = true, coverImgData = null) => {
         if (!isFirstPage) doc.addPage();
 
         const pageWidth = doc.internal.pageSize.getWidth();
@@ -307,6 +402,28 @@ export default function CentroTutoriales() {
             doc.setTextColor(37, 99, 235);
             doc.text(flowLines, margin + 3, y + 4.5);
             y += boxH + 4;
+        }
+
+        // Captura de referencia de pantalla (cuando está disponible)
+        if (coverImgData?.dataUrl) {
+            const maxImgW = maxWidth;
+            const maxImgH = 68;
+            const ratio = Math.min(maxImgW / coverImgData.width, maxImgH / coverImgData.height);
+            const drawW = coverImgData.width * ratio;
+            const drawH = coverImgData.height * ratio;
+            const imgX = margin + (maxWidth - drawW) / 2;
+
+            doc.setDrawColor(203, 213, 225);
+            doc.setLineWidth(0.3);
+            doc.addImage(coverImgData.dataUrl, 'JPEG', imgX, y, drawW, drawH);
+            doc.rect(imgX, y, drawW, drawH);
+            y += drawH + 3.5;
+
+            doc.setFont('helvetica', 'italic');
+            doc.setFontSize(7.5);
+            doc.setTextColor(100, 116, 139);
+            doc.text(`Vista de referencia: ${tutorial.routeLabel || tutorial.title}`, pageWidth / 2, y, { align: 'center' });
+            y += 4.5;
         }
 
         // Tabla de pasos detallados
@@ -401,10 +518,11 @@ export default function CentroTutoriales() {
         setShowPdfPreview(true);
     };
 
-    const handlePreviewSingleTutorialPdf = (tutorial) => {
+    const handlePreviewSingleTutorialPdf = async (tutorial) => {
         try {
             const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
-            renderTutorialIntoPdf(doc, tutorial, true);
+            const coverImgData = tutorial.coverImage ? await loadImageAsJpegDataUrl(tutorial.coverImage) : null;
+            renderTutorialIntoPdf(doc, tutorial, true, coverImgData);
             const cleanName = tutorial.id.replace(/[^a-zA-Z0-9_-]/g, '_');
             finalizeAndPreviewPdf(
                 doc,
@@ -436,6 +554,53 @@ export default function CentroTutoriales() {
         }
     };
 
+    // ────────────────── Helper de Captura de Pantalla por Paso ──────────────────
+    const renderStepScreenshot = (tutorial, step, stepIdx) => {
+        if (!step?.screenshot?.src) return null;
+        return (
+            <figure className="tutorial-step-figure">
+                <div className="tutorial-step-figure-bar">
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', minWidth: 0 }}>
+                        <span style={{ display: 'inline-flex', gap: '4px', flexShrink: 0 }}>
+                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', opacity: 0.75 }} />
+                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b', opacity: 0.75 }} />
+                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', opacity: 0.75 }} />
+                        </span>
+                        <ImageIcon size={13} color="var(--primary)" style={{ flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            Captura de referencia · Paso {stepIdx + 1}
+                        </span>
+                    </div>
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => openGalleryLightbox(tutorial, step.screenshot.src)}
+                        style={{ height: '26px', padding: '0 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                    >
+                        <ZoomIn size={12} />
+                        <span>Ampliar captura</span>
+                    </button>
+                </div>
+                <div
+                    className="tutorial-step-figure-img-wrap"
+                    onClick={() => openGalleryLightbox(tutorial, step.screenshot.src)}
+                    title="Clic para ampliar en pantalla completa"
+                >
+                    <img
+                        src={step.screenshot.src}
+                        alt={step.screenshot.caption || step.title}
+                        loading="lazy"
+                    />
+                </div>
+                {step.screenshot.caption && (
+                    <figcaption className="tutorial-step-figure-caption">
+                        {step.screenshot.caption}
+                    </figcaption>
+                )}
+            </figure>
+        );
+    };
+
     // ────────────────── Render Vista Detalle / Modo Guiado ──────────────────
     const renderTutorialDetail = (tutorial) => {
         const catMeta = getCategoryMeta(tutorial.category);
@@ -443,6 +608,7 @@ export default function CentroTutoriales() {
         const stats = getTutorialStats(tutorial);
         const currentGuidedStep = tutorial.steps[guidedStepIndex] || tutorial.steps[0];
         const isCurrentStepDone = stats.checkedSteps.includes(guidedStepIndex);
+        const galleryItems = getTutorialGallery(tutorial);
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -498,6 +664,18 @@ export default function CentroTutoriales() {
                             >
                                 <ExternalLink size={14} />
                                 <span>Ir a {tutorial.routeLabel}</span>
+                            </button>
+                        )}
+                        {galleryItems.length > 0 && (
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => openGalleryLightbox(tutorial)}
+                                style={{ height: '36px', padding: '0 0.85rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                                title="Ver galería de capturas de pantalla de esta guía"
+                            >
+                                <ImageIcon size={14} color="var(--primary)" />
+                                <span>Capturas ({galleryItems.length})</span>
                             </button>
                         )}
                         <button
@@ -720,6 +898,8 @@ export default function CentroTutoriales() {
                             ))}
                         </ol>
 
+                        {renderStepScreenshot(tutorial, currentGuidedStep, guidedStepIndex)}
+
                         {/* Caja de verificación */}
                         <div style={{ padding: '0.65rem 0.85rem', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.35)', fontSize: '0.8rem' }}>
                             <strong style={{ color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
@@ -865,6 +1045,8 @@ export default function CentroTutoriales() {
                                             <li key={i}>{ins}</li>
                                         ))}
                                     </ol>
+
+                                    {renderStepScreenshot(tutorial, step, idx)}
 
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', paddingLeft: '0.25rem' }}>
                                         <div style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(16, 185, 129, 0.09)', border: '1px solid rgba(16, 185, 129, 0.28)', fontSize: '0.78rem' }}>
@@ -1200,6 +1382,7 @@ export default function CentroTutoriales() {
                                 const catMeta = getCategoryMeta(tut.category);
                                 const diffStyle = DIFFICULTY_STYLES[tut.difficulty] || DIFFICULTY_STYLES.Esencial;
                                 const st = getTutorialStats(tut);
+                                const cardGallery = getTutorialGallery(tut);
 
                                 return (
                                     <div
@@ -1245,6 +1428,60 @@ export default function CentroTutoriales() {
                                                 <Clock size={12} /> {tut.duration} · {tut.steps.length} pasos
                                             </span>
                                         </div>
+
+                                        {/* Vista previa de captura de pantalla */}
+                                        {tut.coverImage && (
+                                            <div
+                                                className="tutorial-card-thumb"
+                                                onClick={() => openTutorial(tut.id, 'full')}
+                                                title="Abrir guía completa"
+                                            >
+                                                <img src={tut.coverImage} alt={tut.title} loading="lazy" />
+                                                <div className="tutorial-card-thumb-overlay">
+                                                    <span
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.3rem',
+                                                            fontSize: '0.7rem',
+                                                            fontWeight: 600,
+                                                            color: '#e2e8f0',
+                                                            background: 'rgba(15, 23, 42, 0.78)',
+                                                            border: '1px solid rgba(255, 255, 255, 0.16)',
+                                                            borderRadius: '999px',
+                                                            padding: '0.12rem 0.5rem'
+                                                        }}
+                                                    >
+                                                        <ImageIcon size={11} color="#60a5fa" />
+                                                        {cardGallery.length} {cardGallery.length === 1 ? 'captura' : 'capturas'}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            openGalleryLightbox(tut);
+                                                        }}
+                                                        title="Ver capturas ampliadas"
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem',
+                                                            fontSize: '0.69rem',
+                                                            fontWeight: 600,
+                                                            color: '#fff',
+                                                            background: 'rgba(37, 99, 235, 0.85)',
+                                                            border: 'none',
+                                                            borderRadius: '6px',
+                                                            padding: '0.18rem 0.45rem',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        <ZoomIn size={11} />
+                                                        <span>Ampliar</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
 
                                         {/* Title & Subtitle */}
                                         <div>
@@ -1334,6 +1571,79 @@ export default function CentroTutoriales() {
                     )}
                 </>
             )}
+
+            {/* Modal compartido Lightbox de Galería de Capturas */}
+            <Modal
+                isOpen={lightbox.open}
+                onClose={closeLightbox}
+                title={lightbox.items[lightbox.index]?.label || lightbox.title || 'Captura de Pantalla'}
+                size="xl"
+            >
+                {lightbox.items[lightbox.index] && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                            <span>{lightbox.items[lightbox.index].location}</span>
+                            <span style={{ fontWeight: 700, color: 'var(--primary)' }}>
+                                Captura {lightbox.index + 1} de {lightbox.items.length}
+                            </span>
+                        </div>
+
+                        <img
+                            src={lightbox.items[lightbox.index].src}
+                            alt={lightbox.items[lightbox.index].caption || lightbox.items[lightbox.index].label}
+                            className="tutorial-lightbox-img"
+                        />
+
+                        {lightbox.items[lightbox.index].caption && (
+                            <div style={{ padding: '0.6rem 0.85rem', borderRadius: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                                {lightbox.items[lightbox.index].caption}
+                            </div>
+                        )}
+
+                        {lightbox.items.length > 1 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                                <div className="tutorial-lightbox-thumbs">
+                                    {lightbox.items.map((item, idx) => (
+                                        <button
+                                            key={item.src}
+                                            type="button"
+                                            className={`tutorial-lightbox-thumb-btn ${idx === lightbox.index ? 'active' : ''}`}
+                                            onClick={() => setLightbox((prev) => ({ ...prev, index: idx }))}
+                                            title={item.label}
+                                        >
+                                            <img src={item.src} alt={item.label} />
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => setLightbox((prev) => ({ ...prev, index: (prev.index - 1 + prev.items.length) % prev.items.length }))}
+                                        style={{ height: '34px', padding: '0 0.85rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                    >
+                                        <ChevronLeft size={15} />
+                                        <span>Anterior</span>
+                                    </button>
+                                    <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                        Usa las flechas ← → del teclado para navegar
+                                    </span>
+                                    <button
+                                        type="button"
+                                        className="btn-primary"
+                                        onClick={() => setLightbox((prev) => ({ ...prev, index: (prev.index + 1) % prev.items.length }))}
+                                        style={{ height: '34px', padding: '0 0.85rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                    >
+                                        <span>Siguiente</span>
+                                        <ChevronRight size={15} />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </Modal>
 
             {/* Modal compartido de Vista Previa e Impresión PDF (Tamaño Carta) */}
             <ReportPreviewModal

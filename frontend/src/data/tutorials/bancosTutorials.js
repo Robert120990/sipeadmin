@@ -6,6 +6,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Registra bancos, crea cuentas por empresa, define Saldo Inicial y Fecha de corte inicial, enlaza la cuenta contable (cod_cta) y controla el estado activo.',
         route: '/dashboard/bancos/cuentas',
         routeLabel: 'Cuentas Bancarias',
+        coverImage: '/tutorials/ban-cuentas-bancarias.webp',
         difficulty: 'Esencial',
         duration: '7 min',
         role: 'Tesorería / Contabilidad / Administrador',
@@ -45,7 +46,11 @@ export const BANCOS_TUTORIALS = [
                     'Completa el campo "Cta. Contable (cod_cta)" para evitar la advertencia amarilla "Sin Cta. Contable", y define opcionalmente el campo "Orden".'
                 ],
                 verify: 'La cuenta aparece en la tabla con su código contable en azul y estado "Activa", y en todos los selectores del sistema con el formato estándar [BANCO] Nombre - (Número).',
-                warning: 'Al editar una cuenta existente, el campo Empresa queda bloqueado por seguridad: el sistema no permite cambiar de empresa una cuenta que ya tiene movimientos o cheques registrados.'
+                warning: 'Al editar una cuenta existente, el campo Empresa queda bloqueado por seguridad: el sistema no permite cambiar de empresa una cuenta que ya tiene movimientos o cheques registrados.',
+                screenshot: {
+                    src: '/tutorials/ban-cuentas-bancarias.webp',
+                    caption: 'Catálogo de Cuentas Bancarias con empresa, entidad bancaria, código contable (cod_cta), orden y estado Activa/Inactiva.'
+                }
             },
             {
                 title: 'Configurar Saldo Inicial y Fecha Saldo Inicial (Nuevo)',
@@ -57,7 +62,11 @@ export const BANCOS_TUTORIALS = [
                     'Guarda los cambios. El sistema registra automáticamente en auditoría el estado anterior y posterior del saldo inicial.'
                 ],
                 verify: 'Al abrir esta cuenta en Bancos → Conciliación Bancaria, la barra inferior mostrará el Saldo Inicial configurado y lo incluirá automáticamente en la ecuación oficial de conciliación.',
-                tip: 'Usar nombres consistentes con la estación o empresa facilita además la detección automática del OCR IA y el autocompletado en Control de Pagos.'
+                tip: 'Usar nombres consistentes con la estación o empresa facilita además la detección automática del OCR IA y el autocompletado en Control de Pagos.',
+                screenshot: {
+                    src: '/tutorials/ban-cuentas-modal.webp',
+                    caption: 'Modal Nueva / Editar Cuenta Bancaria mostrando Banco (+ Gestionar), Tipo de Cuenta (+ Nuevo Tipo), Cta. Contable y Saldo Inicial.'
+                }
             },
             {
                 title: 'Activar o Desactivar cuentas cerradas sin perder historial',
@@ -97,6 +106,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Registra remesas, notas de cargo/abono y transferencias atómicas entre cuentas (TR), respetando la protección de movimientos conciliados y períodos cerrados.',
         route: '/dashboard/bancos/movimientos',
         routeLabel: 'Movimientos Bancarios',
+        coverImage: '/tutorials/ban-movimientos-bancarios.webp',
         difficulty: 'Intermedio',
         duration: '9 min',
         role: 'Tesorería / Contabilidad / Auxiliar Bancario',
@@ -123,7 +133,11 @@ export const BANCOS_TUTORIALS = [
                     'Usa la caja de búsqueda para filtrar en vivo por Número de Documento, Concepto o Llave.',
                     'Si aparece la franja amarilla indicando que se muestran los primeros registros de un total mayor, estrecha el rango de fechas o selecciona una cuenta específica para ver el listado completo.'
                 ],
-                verify: 'Confirmas que el número de documento/boleta que vas a ingresar aún no existe en la cuenta.'
+                verify: 'Confirmas que el número de documento/boleta que vas a ingresar aún no existe en la cuenta.',
+                screenshot: {
+                    src: '/tutorials/ban-movimientos-bancarios.webp',
+                    caption: 'Pantalla principal de Movimientos Bancarios con filtros por empresa/cuenta/fechas, columnas Cargo/Abono, candado Conciliado y Excel.'
+                }
             },
             {
                 title: 'Registrar un Abono (Entrada) o un Cargo (Salida) con validación estricta',
@@ -151,7 +165,11 @@ export const BANCOS_TUTORIALS = [
                     'El sistema valida automáticamente que NINGUNA de las dos cuentas tenga período cerrado en esa fecha y crea ambos asientos atómicamente con un mismo transfer_group_id.'
                 ],
                 verify: 'Recibes la confirmación "Transferencia entre cuentas registrada con éxito" y ambos lados quedan reflejados con trazabilidad en auditoría.',
-                tip: 'Al editar posteriormente uno de los movimientos de una transferencia, el modal se abre en modo movimiento individual para no alterar accidentalmente la contrapartida.'
+                tip: 'Al editar posteriormente uno de los movimientos de una transferencia, el modal se abre en modo movimiento individual para no alterar accidentalmente la contrapartida.',
+                screenshot: {
+                    src: '/tutorials/ban-movimientos-transferencia.webp',
+                    caption: 'Modal de Transferencia Atómica entre cuentas (TR) con Cuenta a Debitar, Cuenta a Acreditar y carga de comprobante con OCR IA.'
+                }
             },
             {
                 title: 'Comprender el Candado de Seguridad ("🔒 Conciliado" y "Contabilizado") y Exportar Excel',
@@ -192,6 +210,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Domina el nuevo motor de conciliación: 8 bancos + Excel/CSV, detección de duplicados y cadena de saldos, ecuación de partidas en tránsito y cierre de período.',
         route: '/dashboard/bancos/conciliacion',
         routeLabel: 'Conciliación Bancaria',
+        coverImage: '/tutorials/ban-conciliacion-principal.webp',
         difficulty: 'Avanzado',
         duration: '15 min',
         role: 'Contabilidad / Tesorería / Auditoría Bancaria',
@@ -220,7 +239,11 @@ export const BANCOS_TUTORIALS = [
                     'Observa el Banner Superior de Validación: aparece en VERDE con escudo si la última validación está al día y la diferencia es $0.00, o en ROJO si hay diferencia o sin validación previa, mostrando fecha/hora El Salvador y monto de BANCO VALIDADO.',
                     'Si aparece el banner de "Período Cerrado hasta YYYY-MM-DD", recuerda que las fechas iguales o anteriores están bloqueadas con candado 🔒; los movimientos posteriores sí están abiertos para trabajar.'
                 ],
-                verify: 'Se cargan las 3 pestañas de trabajo: MOVIMIENTOS (conciliados), PENDIENTES (en tránsito) y CONTROL PAGOS (sugerencias).'
+                verify: 'Se cargan las 3 pestañas de trabajo: MOVIMIENTOS (conciliados), PENDIENTES (en tránsito) y CONTROL PAGOS (sugerencias).',
+                screenshot: {
+                    src: '/tutorials/ban-conciliacion-principal.webp',
+                    caption: 'Conciliación Bancaria con banner verde de validación, período cerrado, ecuación en 3 tarjetas, Reglas IA, Cruces y pestañas de trabajo.'
+                }
             },
             {
                 title: 'Importar y Analizar el Extracto Bancario Multibanco (Excel/CSV o Pegado)',
@@ -235,7 +258,11 @@ export const BANCOS_TUTORIALS = [
                     '• Alerta de Archivo Repetido: te avisa con fecha/hora exacta si ese mismo archivo (hash) ya fue importado antes.',
                     '• Filas Omitidas: si el parser descartó encabezados o filas sin monto, pulsa "Ver N fila(s) omitida(s)" para auditar por qué se excluyeron.'
                 ],
-                verify: 'El diagnóstico muestra totales coherentes, la cadena de saldos está verificada y puedes ver el estado de cruce de cada fila.'
+                verify: 'El diagnóstico muestra totales coherentes, la cadena de saldos está verificada y puedes ver el estado de cruce de cada fila.',
+                screenshot: {
+                    src: '/tutorials/ban-conciliacion-extracto.webp',
+                    caption: 'Importador Multibanco (Excel/CSV/PDF/Imágenes IA) mostrando cadena de saldos verificada, cruces automáticos, duplicados omitidos y Cruce Agrupado Manual.'
+                }
             },
             {
                 title: 'Revisar Cruces, Alertas de Monto y Procesar el Extracto Atómicamente',
@@ -287,7 +314,11 @@ export const BANCOS_TUTORIALS = [
                     'Pulsa "Confirmar Validación" (o "Validar y Cerrar Período").',
                     'Por último, genera los respaldos con "Excel" o "Vista Previa / PDF" (tamaño Carta horizontal con totales de Cargos, Abonos y Neto) desde la pestaña activa (MOVIMIENTOS, PENDIENTES o CONTROL PAGOS).'
                 ],
-                verify: 'El banner superior cambia a VERDE con la fecha/hora exacta de validación, el monto validado y el período cerrado registrado.'
+                verify: 'El banner superior cambia a VERDE con la fecha/hora exacta de validación, el monto validado y el período cerrado registrado.',
+                screenshot: {
+                    src: '/tutorials/ban-conciliacion-validar.webp',
+                    caption: 'Modal de Validación de Saldo y Cierre de Período con resumen de ecuación oficial, notas de validación y opción de sellar corte.'
+                }
             }
         ],
         successChecklist: [
@@ -327,6 +358,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Protege tus conciliaciones cerradas contra cambios retroactivos, gestiona solicitudes formales de reapertura con aprobación y audita cada acción bancaria.',
         route: '/dashboard/bancos/conciliacion',
         routeLabel: 'Conciliación Bancaria',
+        coverImage: '/tutorials/ban-conciliacion-periodos.webp',
         difficulty: 'Intermedio',
         duration: '7 min',
         role: 'Contabilidad / Auditoría / Administrador',
@@ -378,7 +410,11 @@ export const BANCOS_TUTORIALS = [
                     'Al aprobarse la reapertura, el estado del período pasa a REABIERTO y se desbloquean las modificaciones para corregir el documento; al terminar el ajuste, vuelve a validar y cerrar el período.'
                 ],
                 verify: 'El período cambia de CERRADO a REABIERTO, registrando quién cerró y quién autorizó la reapertura.',
-                warning: 'No dejes un período reabierto indefinidamente; apenas termines el ajuste puntual, vuelve a ejecutar "PROCESAR Y GUARDAR" marcando "Cerrar período".'
+                warning: 'No dejes un período reabierto indefinidamente; apenas termines el ajuste puntual, vuelve a ejecutar "PROCESAR Y GUARDAR" marcando "Cerrar período".',
+                screenshot: {
+                    src: '/tutorials/ban-conciliacion-periodos.webp',
+                    caption: 'Modal de Períodos y Auditoría Bancaria con solicitudes de reapertura pendientes, motivo detallado y botones Aprobar / Rechazar.'
+                }
             },
             {
                 title: 'Consultar la Bitácora de Auditoría Bancaria de la Cuenta',
@@ -412,6 +448,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Emite cheques con validación de montos e idempotencia, anula resguardando los datos originales en auditoría, respeta el candado Conciliado e imprime.',
         route: '/dashboard/bancos/cheques',
         routeLabel: 'Cheques',
+        coverImage: '/tutorials/ban-cheques.webp',
         difficulty: 'Esencial',
         duration: '8 min',
         role: 'Tesorería / Contabilidad / Administración',
@@ -438,7 +475,11 @@ export const BANCOS_TUTORIALS = [
                     'Si aparece el aviso amarillo "Mostrando los primeros X de Y cheques", acota el rango de fechas o la cuenta para ver todos los registros.',
                     'Usa la caja "Buscar..." para localizar cheques por beneficiario, número, concepto o llave.'
                 ],
-                verify: 'Conoces el número correlativo exacto del cheque físico que vas a emitir.'
+                verify: 'Conoces el número correlativo exacto del cheque físico que vas a emitir.',
+                screenshot: {
+                    src: '/tutorials/ban-cheques.webp',
+                    caption: 'Módulo de Cheques con correlativos, badges Emitido / Contado / Anulado y el candado verde Conciliado en cheques ya aplicados.'
+                }
             },
             {
                 title: 'Registrar un Nuevo Cheque con validación estricta e idempotencia',
@@ -451,7 +492,11 @@ export const BANCOS_TUTORIALS = [
                     'Pulsa "Guardar Cheque". El botón muestra "Guardando..." con protección X-Idempotency-Key para evitar duplicados.'
                 ],
                 verify: 'El cheque aparece en la tabla con estado "Emitido" y sin fecha aplicado.',
-                warning: 'No podrás registrar ni modificar cheques con fecha dentro de un Período Cerrado de esa cuenta.'
+                warning: 'No podrás registrar ni modificar cheques con fecha dentro de un Período Cerrado de esa cuenta.',
+                screenshot: {
+                    src: '/tutorials/ban-cheques-modal.webp',
+                    caption: 'Modal de emisión de cheques con empresa, cuenta bancaria, correlativo, beneficiario, concepto e interruptores de estado.'
+                }
             },
             {
                 title: 'Anular o marcar "No Emitido" con resguardo automático en auditoría',
@@ -503,6 +548,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Atiende solicitudes de pago de contado de estaciones, sincroniza cheques existentes, genera o asigna con blindaje anti-duplicados y desvincula si hay error.',
         route: '/dashboard/bancos/cheques-contado',
         routeLabel: 'Cheques Contado',
+        coverImage: '/tutorials/ban-cheques-contado.webp',
         difficulty: 'Intermedio',
         duration: '7 min',
         role: 'Tesorería / Bancos / Oficina Central',
@@ -528,7 +574,11 @@ export const BANCOS_TUTORIALS = [
                     'Mantén encendido el interruptor "Solo pendientes" para ver únicamente las solicitudes sin cheque asignado.',
                     'Presiona "Consultar". En el extremo derecho verás el total de solicitudes y la suma en dólares.'
                 ],
-                verify: 'La tabla muestra Fecha, Proveedor, Nombre, Tipo Destino (D), Monto, Fecha Entrega, No. CCF y estado PENDIENTE.'
+                verify: 'La tabla muestra Fecha, Proveedor, Nombre, Tipo Destino (D), Monto, Fecha Entrega, No. CCF y estado PENDIENTE.',
+                screenshot: {
+                    src: '/tutorials/ban-cheques-contado.webp',
+                    caption: 'Emisión de Cheques de Contado con filtro de estación, interruptor Solo pendientes, Sincronizar Emitidos y acciones por solicitud.'
+                }
             },
             {
                 title: 'Ejecutar primero "Sincronizar Emitidos" para detectar cheques existentes',
@@ -585,6 +635,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Configura las coordenadas milimétricas de cada campo del cheque (fecha, beneficiario, monto en números y letras) para cada banco.',
         route: '/dashboard/bancos/check-designer',
         routeLabel: 'Diseñador de Cheques',
+        coverImage: '/tutorials/ban-disenador-cheques.webp',
         difficulty: 'Avanzado',
         duration: '10 min',
         role: 'Administrador / Tesorería / Sistemas',
@@ -611,7 +662,11 @@ export const BANCOS_TUTORIALS = [
                     'Haz clic en "Nuevo Formato" (o edita uno existente si solo necesitas recalibrar).',
                     'Asigna un Nombre claro (ej. "BAC Credomatic - Voucher Carta"), selecciona el Banco correspondiente y marca el formato como Activo.'
                 ],
-                verify: 'El formato se crea y al abrirlo navegas al editor visual (DesignerView).'
+                verify: 'El formato se crea y al abrirlo navegas al editor visual (DesignerView).',
+                screenshot: {
+                    src: '/tutorials/ban-disenador-cheques.webp',
+                    caption: 'Administrador de Formatos del Diseñador de Cheques mostrando plantillas activas por banco calibradas en tamaño Carta.'
+                }
             },
             {
                 title: 'Colocar y configurar los campos dinámicos en el lienzo',
@@ -659,6 +714,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Busca un rango numérico de cheques, excluye anulados/reservados/no emitidos, revisa la vista previa oficial tamaño Carta e imprime en lote sin errores.',
         route: '/dashboard/bancos/reportes/impresion-cheques',
         routeLabel: 'Impresión de Cheques',
+        coverImage: '/tutorials/ban-impresion-cheques.webp',
         difficulty: 'Esencial',
         duration: '6 min',
         role: 'Tesorería / Bancos / Emisión de Pagos',
@@ -696,7 +752,11 @@ export const BANCOS_TUTORIALS = [
                     'Mantén marcadas las casillas "Excluir Anulados" y "Excluir Reservados" (esta última también omite los marcados como No Emitido) para no desperdiciar folios.',
                     'Haz clic en "Buscar".'
                 ],
-                verify: 'Se despliega la tabla con los cheques válidos preseleccionados.'
+                verify: 'Se despliega la tabla con los cheques válidos preseleccionados.',
+                screenshot: {
+                    src: '/tutorials/ban-impresion-cheques.webp',
+                    caption: 'Impresión de Cheques en Lote con autoselección de formato, rango Desde/Hasta, exclusión de anulados/reservados y tabla seleccionable.'
+                }
             },
             {
                 title: 'Validar la selección, cantidad de cheques y monto total',
@@ -742,6 +802,7 @@ export const BANCOS_TUTORIALS = [
         subtitle: 'Distingue Saldos en Bancos vs Saldos en Chequera y genera reportes exactos de Cheques (excluyendo anulados/reservados/no emitidos) y Movimientos por Fecha.',
         route: '/dashboard/bancos/reportes/saldos-bancos',
         routeLabel: 'Saldos en Bancos',
+        coverImage: '/tutorials/ban-reportes-movimientos-fecha.webp',
         difficulty: 'Esencial',
         duration: '7 min',
         role: 'Gerencia / Contabilidad / Tesorería',
@@ -767,31 +828,43 @@ export const BANCOS_TUTORIALS = [
                     'En ambos reportes puedes exportar a Excel o abrir "Vista Previa / PDF" en tamaño Carta horizontal mediante ReportPreviewModal.'
                 ],
                 verify: 'Comprendes que la diferencia entre Saldo en Bancos y Saldo en Chequera corresponde a las partidas en tránsito que detalla Conciliación Bancaria.',
-                tip: 'Antes de aprobar una transferencia grande o un pedido de pipa, consulta siempre "Saldos en Chequera" para evitar sobregiros por cheques en circulación.'
+                tip: 'Antes de aprobar una transferencia grande o un pedido de pipa, consulta siempre "Saldos en Chequera" para evitar sobregiros por cheques en circulación.',
+                screenshot: {
+                    src: '/tutorials/ban-reportes-saldos.webp',
+                    caption: 'Reporte de Saldos en Bancos / Chequera mostrando liquidez por cuenta bancaria, totales y botones Excel / PDF Carta.'
+                }
             },
             {
-                title: 'Generar Reporte de Cheques por Fecha (Total Emitido Depurado)',
+                title: 'Generar Reporte de Cheques por Fecha y Antigüedad en Circulación (Aging)',
                 location: 'Bancos → Reportes → Cheques por Fecha',
-                summary: 'Audita cheques emitidos, anulados, reservados y no emitidos con totales exactos en pantalla, Excel y PDF Carta.',
+                summary: 'Audita cheques emitidos, anulados, reservados y no emitidos, y controla su antigüedad (0-30d, 31-90d, 91-180d, >180d caducos) con totales depurados.',
                 instructions: [
                     'Abre "Cheques por Fecha", selecciona la Cuenta Bancaria y el rango Desde / Hasta (por defecto del 1° del mes hasta hoy).',
-                    'Usa los checkboxes "Excluir Anulados" y "Excluir Reservados" según el propósito del informe y pulsa Buscar.',
+                    'Usa los checkboxes "Excluir Anulados" y "Excluir Reservados" y los filtros rápidos de Antigüedad en Circulación (Pendientes, 0-30d, 31-90d, 91-180d, Por caducar 150-180d, >180d Caducos).',
                     'Observa los badges diferenciados por estado: EMITIDO (verde), ANULADO (rojo), RESERVADO (ámbar) y NO EMITIDO (gris).',
                     'Verifica el "Total Monto Emitido": el sistema excluye automáticamente cheques Anulados, Reservados y No Emitidos para reflejar únicamente el desembolso real emitido.',
                     'Descarga en Excel o genera el PDF Carta vertical en ReportPreviewModal.'
                 ],
-                verify: 'El reporte totaliza únicamente la emisión real vigente sin inflar totales con anulados, reservados o no emitidos.'
+                verify: 'El reporte totaliza únicamente la emisión real vigente y alerta sobre cheques pendientes por caducar (>150 días).',
+                screenshot: {
+                    src: '/tutorials/ban-reportes-cheques-fecha.webp',
+                    caption: 'Reporte de Cheques por Fecha con resumen de Antigüedad en Circulación (Aging) y Total Emitido depurado.'
+                }
             },
             {
-                title: 'Generar Estado de Movimientos Bancarios por Fecha (Flujo Neto)',
-                location: 'Bancos → Reportes → Movimientos por Fecha',
-                summary: 'Analiza entradas (Abonos), salidas (Cargos) y el Flujo Neto de una cuenta en cualquier rango.',
+                title: 'Generar el Libro Auxiliar de Bancos (Kardex) con Saldo Corrido',
+                location: 'Bancos → Reportes → Movimientos por Fecha (Libro Auxiliar / Kardex)',
+                summary: 'Analiza Saldo Inicial, Total Abonos, Total Cargos, Saldo Final y Saldo Corrido línea a línea combinando movimientos y cheques.',
                 instructions: [
-                    'Abre "Movimientos por Fecha", elige la Cuenta Bancaria, el rango Desde / Hasta y el filtro de Tipo: "TODOS", "CARGOS" o "ABONOS".',
-                    'Presiona Buscar para ver las tarjetas de resumen: Total Cargos / Débitos, Total Abonos / Créditos y Flujo Neto del Período (Abonos − Cargos).',
-                    'Exporta a Excel o abre la vista previa PDF Carta para archivo contable.'
+                    'Abre "Movimientos por Fecha", elige la Cuenta Bancaria, el rango Desde / Hasta y el filtro de Estado: "Todos", "Solo Conciliados" o "Solo En Tránsito".',
+                    'Presiona "Consultar Kardex" para ver las 5 tarjetas de resumen: Saldo Inicial del Período, Total Abonos (+), Total Cargos (-), Neto del Período y Saldo Final.',
+                    'Revisa la columna "Saldo Corrido" en cada línea y los badges "Conciliado" / "En tránsito", y exporta a Excel o abre la vista previa PDF Carta para archivo contable.'
                 ],
-                verify: 'El Flujo Neto cuadra con la variación entre el saldo inicial y final del periodo consultado.'
+                verify: 'El Saldo Corrido final cuadra exactamente con Saldo Inicial + Total Abonos − Total Cargos del período consultado.',
+                screenshot: {
+                    src: '/tutorials/ban-reportes-movimientos-fecha.webp',
+                    caption: 'Libro Auxiliar de Bancos (Kardex) con Saldo Inicial, Abonos, Cargos, Saldo Corrido línea a línea y estado de conciliación.'
+                }
             }
         ],
         successChecklist: [

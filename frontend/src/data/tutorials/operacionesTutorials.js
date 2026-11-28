@@ -6,6 +6,7 @@ export const OPERACIONES_TUTORIALS = [
         subtitle: 'Domina las 4 pestañas operativas: Portal Energy-Latam, cálculo de autonomía, viajes compartidos, precios y conciliación de pagos.',
         route: '/dashboard/operaciones/pedidos',
         routeLabel: 'Pedidos Combustible',
+        coverImage: '/tutorials/op-pedidos-portal.webp',
         difficulty: 'Avanzado',
         duration: '12 min',
         role: 'Jefe de Operaciones / Despacho / Gerencia',
@@ -36,7 +37,11 @@ export const OPERACIONES_TUTORIALS = [
                 ],
                 verify: 'Confirmas que el saldo de crédito disponible cubre el costo estimado del nuevo pedido y que no existe ya una orden duplicada en camino para la misma estación.',
                 tip: 'Puedes ordenar las columnas de la tabla (Fecha, Monto, Estación) haciendo clic directamente en los encabezados, y cambiar el método de pago o cuenta bancaria en línea sin abrir modales.',
-                warning: 'Nunca dupliques un pedido sin revisar antes las órdenes ya registradas en el portal ni el saldo de crédito disponible.'
+                warning: 'Nunca dupliques un pedido sin revisar antes las órdenes ya registradas en el portal ni el saldo de crédito disponible.',
+                screenshot: {
+                    src: '/tutorials/op-pedidos-portal.webp',
+                    caption: 'Pestaña Portal Puma con Fondos Disponibles, Límite de Crédito, última sincronización automática y filtros rápidos de órdenes.'
+                }
             },
             {
                 title: 'Analizar la Matriz de Autonomía en la pestaña "Pedidos Programados"',
@@ -50,7 +55,11 @@ export const OPERACIONES_TUTORIALS = [
                 ],
                 verify: 'Identificas exactamente cuántos galones caben por producto (Capacidad - Inventario Actual - Programados previos) y qué combustible tiene menor autonomía en días.',
                 tip: 'Haz clic sobre el promedio de venta para abrir el modal de detalle y revisar cómo se calculó el consumo diario de esa estación.',
-                warning: 'Ignorar la alerta de "> 100% Sobrellenado" puede provocar derrames en pista o rechazos de cisterna al llegar a la estación.'
+                warning: 'Ignorar la alerta de "> 100% Sobrellenado" puede provocar derrames en pista o rechazos de cisterna al llegar a la estación.',
+                screenshot: {
+                    src: '/tutorials/op-pedidos-programados-tab.webp',
+                    caption: 'Pestaña Pedidos Programados & Despacho con formulario de transporte/pipa, Sugerir Pedido (IA) y matriz de autonomía por producto.'
+                }
             },
             {
                 title: 'Seleccionar Transportista, Pipa y usar la Sugerencia Automática',
@@ -87,7 +96,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Deja marcada la opción "Aplicar a pedidos pendientes" si deseas recalcular automáticamente las órdenes del portal aún sin liquidar.',
                     'Si una orden específica tuvo un costo distinto en factura, usa la acción "Ajustar Costos" en su fila dentro de la pestaña Portal Puma.'
                 ],
-                verify: 'La tabla de precios muestra el periodo vigente activo y los montos totales de los pedidos pendientes coinciden con la tarifa real.'
+                verify: 'La tabla de precios muestra el periodo vigente activo y los montos totales de los pedidos pendientes coinciden con la tarifa real.',
+                screenshot: {
+                    src: '/tutorials/op-pedidos-precios.webp',
+                    caption: 'Pestaña Precios Quincenales con historial de precios DGEHM / Energy-Latam y variaciones por combustible.'
+                }
             },
             {
                 title: 'Vincular Pago y dejar listo para Conciliación Bancaria',
@@ -135,6 +148,7 @@ export const OPERACIONES_TUTORIALS = [
         subtitle: 'Supervisa de un solo vistazo la autonomía de todas las estaciones, detecta alertas menores a 2 días y genera el reporte PDF Carta.',
         route: '/dashboard/operaciones/pedidos-programados',
         routeLabel: 'Pedidos Programados',
+        coverImage: '/tutorials/op-pedidos-programados-consolidado.webp',
         difficulty: 'Esencial',
         duration: '5 min',
         role: 'Operaciones / Gerencia / Supervisores de Estación',
@@ -182,7 +196,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Haz clic sobre cualquier fila de Estación para abrir el modal de detalle completo con sus entregas pendientes y saltar directo a programar un pedido.'
                 ],
                 verify: 'Identificas las estaciones prioritarias y confirmas si ya cuentan o no con un pedido programado en tránsito.',
-                tip: 'Usa esta pantalla como tu punto de partida diario a las 7:00 AM antes de entrar a Pedidos Combustible.'
+                tip: 'Usa esta pantalla como tu punto de partida diario a las 7:00 AM antes de entrar a Pedidos Combustible.',
+                screenshot: {
+                    src: '/tutorials/op-pedidos-programados-consolidado.webp',
+                    caption: 'Tablero consolidado de Pedidos Programados con KPIs de alertas (<2 días), galones programados y semáforo de duración por estación.'
+                }
             },
             {
                 title: 'Exportar a Excel o imprimir reporte oficial en PDF Carta',
@@ -215,6 +233,7 @@ export const OPERACIONES_TUTORIALS = [
         subtitle: 'Confirma el arribo de cisternas, registra galones descargados, costos, flete, NCR/cupones y emite el pago por Cheque o Transferencia.',
         route: '/dashboard/operaciones/consulta-pedidos',
         routeLabel: 'Consulta de Pedidos',
+        coverImage: '/tutorials/op-consulta-pedidos.webp',
         difficulty: 'Intermedio',
         duration: '10 min',
         role: 'Operaciones / Contabilidad / Recepción de Combustible',
@@ -242,7 +261,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Si buscas una estación específica, selecciónala en el desplegable de Estaciones o escribe el número de pedido, documento o referencia en el buscador.',
                     'Revisa las 5 tarjetas KPI superiores para confirmar el volumen total en galones por combustible (Diésel, Regular, Súper, Ion).'
                 ],
-                verify: 'El pedido objetivo aparece listado con su número, estación, fecha y galones solicitados.'
+                verify: 'El pedido objetivo aparece listado con su número, estación, fecha y galones solicitados.',
+                screenshot: {
+                    src: '/tutorials/op-consulta-pedidos.webp',
+                    caption: 'Consulta de Pedidos en RRS con pestañas Pendientes/Vistos, KPIs por combustible y botones del flujo Visto → Recibir.'
+                }
             },
             {
                 title: 'Paso obligatorio: Marcar el pedido como "VISTO"',
@@ -319,6 +342,7 @@ export const OPERACIONES_TUTORIALS = [
         subtitle: 'Administra vencimientos CXP/CXC/Gastos, sube comprobantes con lectura automática OCR IA, programa alertas Telegram y alimenta Conciliación Bancaria.',
         route: '/dashboard/operaciones/recordatorios',
         routeLabel: 'Control de Pagos',
+        coverImage: '/tutorials/op-control-pagos.webp',
         difficulty: 'Intermedio',
         duration: '12 min',
         role: 'Tesorería / Administración / Contabilidad / Gerencia',
@@ -347,7 +371,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Aprovecha los filtros individuales por columna (ID, Ubicación, Descripción, Vence, Observación, Monto, Forma de Pago, Estado) y haz clic en cualquier encabezado para ordenar ascendente o descendentemente.',
                     'Si buscas un recordatorio recurrente completo (todas sus cuotas históricas y futuras), abre la "Matriz / Buscar Padre" para ver todas las cuotas vinculadas.'
                 ],
-                verify: 'La tabla muestra únicamente los vencimientos que necesitas trabajar y el total acumulado en pantalla refleja exactamente las filas filtradas.'
+                verify: 'La tabla muestra únicamente los vencimientos que necesitas trabajar y el total acumulado en pantalla refleja exactamente las filas filtradas.',
+                screenshot: {
+                    src: '/tutorials/op-control-pagos.webp',
+                    caption: 'Control de Pagos con búsqueda rápida multi-palabra, filtros individuales por columna, totales y acceso a Asistente IA / MiBot.'
+                }
             },
             {
                 title: 'Crear un nuevo Recordatorio o Compromiso Recurrente',
@@ -375,7 +403,11 @@ export const OPERACIONES_TUTORIALS = [
                 ],
                 verify: 'El comprobante queda adjunto con visor lightbox, el abono aparece en el historial del vencimiento y el estado cambia a PARCIAL o CANCELADO.',
                 tip: 'También puedes editar rápidamente la Forma de Pago o la Observación directamente en la tabla principal haciendo clic sobre la celda (edición en línea).',
-                warning: 'Verifica siempre la Cuenta Bancaria seleccionada cuando pagues por Transferencia o Cheque; esa cuenta determina en qué conciliación bancaria aparecerá la sugerencia automática.'
+                warning: 'Verifica siempre la Cuenta Bancaria seleccionada cuando pagues por Transferencia o Cheque; esa cuenta determina en qué conciliación bancaria aparecerá la sugerencia automática.',
+                screenshot: {
+                    src: '/tutorials/op-control-pagos-modal.webp',
+                    caption: 'Modal completo de Pagos y Abonos con lectura OCR IA de comprobantes, clasificación CXP/CXC/GASTO y control de saldo pendiente.'
+                }
             },
             {
                 title: 'Usar el Asistente IA integrado y programar recordatorios en MiBot Telegram',
@@ -424,6 +456,7 @@ export const OPERACIONES_TUTORIALS = [
         subtitle: 'Asigna actividades operativas con subtareas, fechas límite, colaboración en tiempo real y recordatorios automáticos por Telegram.',
         route: '/dashboard/operaciones/tareas',
         routeLabel: 'Gestión de Tareas',
+        coverImage: '/tutorials/op-tareas-kanban.webp',
         difficulty: 'Esencial',
         duration: '7 min',
         role: 'Todos los colaboradores / Supervisores / Gerencia',
@@ -449,7 +482,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Alterna entre las 3 vistas: "Kanban" (arrastrar y soltar), "Tabla" (vista compacta de lista y exportación a Excel) y "MiBot" (panel de avisos programados por Telegram).',
                     'Usa la casilla "Solo mías" o filtra por Prioridad (Urgente, Alta, Media, Baja), Categoría (Operaciones, Mantenimiento, Administrativo, Finanzas, Sistemas) y Responsable.'
                 ],
-                verify: 'Visualizas claramente tus tareas prioritarias del día y las alertas de vencimiento.'
+                verify: 'Visualizas claramente tus tareas prioritarias del día y las alertas de vencimiento.',
+                screenshot: {
+                    src: '/tutorials/op-tareas-kanban.webp',
+                    caption: 'Tablero Kanban de Gestión de Tareas con 4 columnas interactivas, KPIs superiores y vistas Kanban / Tabla / MiBot.'
+                }
             },
             {
                 title: 'Crear una tarea bien estructurada con subtareas (Checklist) y aviso MiBot',
@@ -497,6 +534,7 @@ export const OPERACIONES_TUTORIALS = [
         subtitle: 'Supervisa generación kWh, ahorro en dólares, estado de baterías BESS y las 5 vistas comerciales de Andelsa.',
         route: '/dashboard/operaciones/energia-solar',
         routeLabel: 'Energía Solar & Andelsa',
+        coverImage: '/tutorials/op-energia-solar.webp',
         difficulty: 'Esencial',
         duration: '6 min',
         role: 'Operaciones / Gerencia / Administración Andelsa',
@@ -521,7 +559,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Revisa el porcentaje de carga de batería (SoC %), estado ("EN_LINEA") y horas de autonomía estimadas para Andelsa.',
                     'Compara Generación Día vs Mes y el Ahorro en USD acumulado.'
                 ],
-                verify: 'Confirmas que ambas instalaciones reportan generación activa y que el banco de baterías de Andelsa opera en línea.'
+                verify: 'Confirmas que ambas instalaciones reportan generación activa y que el banco de baterías de Andelsa opera en línea.',
+                screenshot: {
+                    src: '/tutorials/op-energia-solar.webp',
+                    caption: 'Monitor de Energía Solar & Andelsa mostrando generación kWh, ahorro USD, estado de baterías BESS y pestañas comerciales.'
+                }
             },
             {
                 title: 'Analizar las 5 subvistas comerciales de Andelsa',
@@ -564,6 +606,7 @@ export const OPERACIONES_TUTORIALS = [
         subtitle: 'Configura correctamente la flota y las capacidades por compartimiento para que Pedidos Combustible calcule cargas exactas.',
         route: '/dashboard/tankers',
         routeLabel: 'Catálogo de Pipas',
+        coverImage: '/tutorials/op-catalogos-pipas.webp',
         difficulty: 'Esencial',
         duration: '5 min',
         role: 'Operaciones / Logística',
@@ -588,7 +631,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Ingresa un Código corto único (ej. TR-001) y la Descripción / Nombre oficial de la empresa.',
                     'Haz clic en Guardar. La lista se sincroniza en tiempo real.'
                 ],
-                verify: 'El transportista aparece en la tabla y queda disponible en los selectores de Pipas y Pedidos Combustible.'
+                verify: 'El transportista aparece en la tabla y queda disponible en los selectores de Pipas y Pedidos Combustible.',
+                screenshot: {
+                    src: '/tutorials/op-catalogos-transportistas.webp',
+                    caption: 'Catálogo de Transportistas con código único y nombre oficial de cada empresa transportista.'
+                }
             },
             {
                 title: 'Registrar la Pipa con sus Compartimientos y Separaciones',
@@ -602,7 +649,11 @@ export const OPERACIONES_TUTORIALS = [
                     'Guarda. Ningún compartimiento puede quedar con capacidad 0.'
                 ],
                 verify: 'La tabla de Pipas muestra la unidad con su capacidad total correcta y el desglose de compartimientos listo para Auto-sugerir en Pedidos Combustible.',
-                warning: 'Si un compartimiento tiene una capacidad mal digitada, el algoritmo de sugerencia automática generará pedidos imposibles de cargar en terminal.'
+                warning: 'Si un compartimiento tiene una capacidad mal digitada, el algoritmo de sugerencia automática generará pedidos imposibles de cargar en terminal.',
+                screenshot: {
+                    src: '/tutorials/op-catalogos-pipas.webp',
+                    caption: 'Catálogo de Pipas con capacidad total automática y desglose exacto de compartimientos por unidad.'
+                }
             }
         ],
         successChecklist: [

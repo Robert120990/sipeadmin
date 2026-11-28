@@ -6,6 +6,7 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
         subtitle: 'Receta paso a paso de principio a fin: detecta autonomía crítica, programa la pipa, sincroniza Portal Puma, recibe en RRS y concilia en Bancos.',
         route: '/dashboard/operaciones/pedidos-programados',
         routeLabel: 'Iniciar en Pedidos Programados',
+        coverImage: '/tutorials/op-pedidos-programados-consolidado.webp',
         difficulty: 'Intermedio',
         duration: '15 min',
         role: 'Operaciones + Tesorería + Contabilidad',
@@ -34,7 +35,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Haz clic en las estaciones en rojo o ámbar para confirmar si ya tienen entregas programadas en camino.',
                     'Anota las estaciones prioritarias del día.'
                 ],
-                verify: 'Tienes la lista exacta de estaciones que necesitan cisterna hoy o mañana.'
+                verify: 'Tienes la lista exacta de estaciones que necesitan cisterna hoy o mañana.',
+                screenshot: {
+                    src: '/tutorials/op-pedidos-programados-consolidado.webp',
+                    caption: 'Paso 1: Consolidado de Pedidos Programados detectando estaciones con menos de 2 días de autonomía.'
+                }
             },
             {
                 title: 'Paso 2 · Verificar Liquidez en "Saldos en Chequera"',
@@ -46,7 +51,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Consulta el saldo real disponible en la cuenta bancaria que financiará la pipa.',
                     'Verifica además el crédito disponible en la pestaña Portal Puma de Pedidos Combustible.'
                 ],
-                verify: 'Hay liquidez y crédito suficientes para cubrir la cisterna sin sobregiro.'
+                verify: 'Hay liquidez y crédito suficientes para cubrir la cisterna sin sobregiro.',
+                screenshot: {
+                    src: '/tutorials/ban-reportes-saldos.webp',
+                    caption: 'Paso 2: Verificación de fondos reales disponibles en Saldos en Bancos / Chequera antes de comprometer la orden.'
+                }
             },
             {
                 title: 'Paso 3 · Programar la Pipa (Simple o Multiparada) en "Pedidos Combustible"',
@@ -60,7 +69,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Si sobra capacidad en la cisterna, activa "Viaje Compartido" y asigna la Estación 2.',
                     'Confirma el pedido con costos vigentes.'
                 ],
-                verify: 'La programación queda guardada y la autonomía proyectada sube a verde (> 4 días).'
+                verify: 'La programación queda guardada y la autonomía proyectada sube a verde (> 4 días).',
+                screenshot: {
+                    src: '/tutorials/op-pedidos-programados-tab.webp',
+                    caption: 'Paso 3: Programación de pipa con sugerencia automática y validación de capacidad de tanques.'
+                }
             },
             {
                 title: 'Paso 4 · Sincronizar Portal Puma y Vincular el Pago',
@@ -72,7 +85,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Confirma que la orden aparezca sincronizada en la pestaña Portal Puma y que los precios quincenales vigentes estén aplicados.',
                     'Usa "Vincular Pago" para registrar Cuenta Bancaria, Tipo de Pago (Transferencia/Cheque), Referencia, Fecha y Monto, dejando marcada "Alistar para Conciliación".'
                 ],
-                verify: 'La orden pasa a estado PAGADO y queda visible en la pestaña Conciliación.'
+                verify: 'La orden pasa a estado PAGADO y queda visible en la pestaña Conciliación.',
+                screenshot: {
+                    src: '/tutorials/op-pedidos-portal.webp',
+                    caption: 'Paso 4: Seguimiento en Portal Puma y vinculación de pago listo para conciliación.'
+                }
             },
             {
                 title: 'Paso 5 · Confirmar y Recibir la Descarga en "Consulta de Pedidos (RRS)"',
@@ -85,7 +102,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Selecciona Cheque o Transferencia, captura Fecha de Descarga, No. CCF, galones descargados, costos, flete, NCR/cupones y la referencia/cheque de pago.',
                     'Confirma la recepción para cerrar el pedido en estado RECIBIDO.'
                 ],
-                verify: 'El inventario de la estación recibe la carga y el pedido figura bajo la pestaña Recibidos.'
+                verify: 'El inventario de la estación recibe la carga y el pedido figura bajo la pestaña Recibidos.',
+                screenshot: {
+                    src: '/tutorials/op-consulta-pedidos.webp',
+                    caption: 'Paso 5: Confirmación Visto → Recibir en Consulta de Pedidos RRS con registro de CCF y pago.'
+                }
             },
             {
                 title: 'Paso 6 · Conciliar el Pago en "Conciliación Bancaria" y Cerrar Corte',
@@ -98,7 +119,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Cruza mediante "Importar Extracto" (Excel/CSV o pegado; concilia usando la fecha real de cada transacción del banco) o aplica manualmente en PENDIENTES.',
                     'Verifica la ecuación oficial de partidas en tránsito hasta lograr DIF REAL = $0.00 y guarda la validación en "PROCESAR Y GUARDAR" (marcando "Cerrar período" cuando sea el cierre oficial del corte).'
                 ],
-                verify: 'El ciclo completo queda 100% cerrado y blindado: tanque abastecido, inventario RRS actualizado, factura ingresada y banco cuadrado.'
+                verify: 'El ciclo completo queda 100% cerrado y blindado: tanque abastecido, inventario RRS actualizado, factura ingresada y banco cuadrado.',
+                screenshot: {
+                    src: '/tutorials/ban-conciliacion-principal.webp',
+                    caption: 'Paso 6: Cierre financiero en Conciliación Bancaria con diferencia real en $0.00.'
+                }
             }
         ],
         successChecklist: [
@@ -121,6 +146,7 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
         subtitle: 'Conecta Operaciones con Bancos usando OCR IA de comprobantes y el puente automático de sugerencias en Conciliación Bancaria.',
         route: '/dashboard/operaciones/recordatorios',
         routeLabel: 'Iniciar en Control de Pagos',
+        coverImage: '/tutorials/op-control-pagos-modal.webp',
         difficulty: 'Intermedio',
         duration: '10 min',
         role: 'Tesorería + Contabilidad',
@@ -148,7 +174,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Filtra el periodo y usa la búsqueda rápida para encontrar el vencimiento.',
                     'Abre el Modal de Pagos y confirma el tipo de operación (CXP, CXC o GASTO).'
                 ],
-                verify: 'Visualizas el monto total del vencimiento y el saldo pendiente actual.'
+                verify: 'Visualizas el monto total del vencimiento y el saldo pendiente actual.',
+                screenshot: {
+                    src: '/tutorials/op-control-pagos.webp',
+                    caption: 'Paso 1: Ubicación rápida del vencimiento en Control de Pagos.'
+                }
             },
             {
                 title: 'Paso 2 · Pegar o subir el comprobante para auto-llenado con OCR IA',
@@ -159,7 +189,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Espera a que la IA complete Método de Pago, Cuenta Bancaria, Monto, Fecha y Referencia.',
                     'Confirma especialmente que la Cuenta Bancaria seleccionada sea la cuenta exacta donde saldrá el cargo en el banco.'
                 ],
-                verify: 'Todos los campos del abono están completos y la miniatura del comprobante aparece lista.'
+                verify: 'Todos los campos del abono están completos y la miniatura del comprobante aparece lista.',
+                screenshot: {
+                    src: '/tutorials/op-control-pagos-modal.webp',
+                    caption: 'Paso 2: Lectura automática OCR IA del comprobante y asignación exacta de la cuenta bancaria.'
+                }
             },
             {
                 title: 'Paso 3 · Guardar el abono y saltar a Conciliación Bancaria',
@@ -184,7 +218,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Ingresa "*SALDO EN BANCO", verifica la ecuación de partidas en tránsito (Chequera − Abonos en Tránsito + Cheques/Cargos en Tránsito = Saldo Conciliado) hasta confirmar DIF REAL = $0.00.',
                     'Pulsa "PROCESAR Y GUARDAR" para registrar la validación y, si es cierre oficial, marca "Cerrar período de conciliación" para blindar las fechas contra cambios retroactivos.'
                 ],
-                verify: 'El pago está cancelado con comprobante en Operaciones, aplicado y protegido con candado en Bancos, y reflejado en Flujo de Caja.'
+                verify: 'El pago está cancelado con comprobante en Operaciones, aplicado y protegido con candado en Bancos, y reflejado en Flujo de Caja.',
+                screenshot: {
+                    src: '/tutorials/ban-conciliacion-principal.webp',
+                    caption: 'Paso 4: Puente CONTROL PAGOS dentro de Conciliación Bancaria para vincular o crear y cerrar con DIF REAL = $0.00.'
+                }
             }
         ],
         successChecklist: [
@@ -207,6 +245,7 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
         subtitle: 'El recorrido completo para emitir cheques sin errores: cuenta bancaria, diseño calibrado, emisión normal o contado, impresión Carta y conciliación.',
         route: '/dashboard/bancos/cuentas',
         routeLabel: 'Iniciar en Cuentas Bancarias',
+        coverImage: '/tutorials/ban-impresion-cheques.webp',
         difficulty: 'Esencial',
         duration: '12 min',
         role: 'Tesorería + Bancos',
@@ -233,7 +272,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Verifica en Cuentas Bancarias que la cuenta esté Activa, tenga su cod_cta asignado y, si es nueva sin historial previo, su Saldo Inicial y Fecha Saldo Inicial.',
                     'Verifica en Diseñador de Cheques que exista un formato Activo para ese banco y que haya pasado la prueba a contraluz en hoja Carta.'
                 ],
-                verify: 'El banco cuenta con plantilla activa lista para autoselección y saldos iniciales exactos.'
+                verify: 'El banco cuenta con plantilla activa lista para autoselección y saldos iniciales exactos.',
+                screenshot: {
+                    src: '/tutorials/ban-disenador-cheques.webp',
+                    caption: 'Paso 1: Formatos calibrados por banco en el Diseñador de Cheques.'
+                }
             },
             {
                 title: 'Paso 2 · Emitir cheques (Normales o de Contado)',
@@ -245,7 +288,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Para pagos generales/proveedores de crédito: créalos en Bancos → Cheques dejando Fecha Aplicado vacía.',
                     'Para compras de contado de estaciones: entra a Bancos → Cheques Contado, corre primero "Sincronizar Emitidos" y luego usa "Generar" para los pendientes.'
                 ],
-                verify: 'Todos los cheques del día están registrados con su correlativo exacto y sin saltos.'
+                verify: 'Todos los cheques del día están registrados con su correlativo exacto y sin saltos.',
+                screenshot: {
+                    src: '/tutorials/ban-cheques.webp',
+                    caption: 'Paso 2: Control de correlativos, estados Emitido/Contado/Anulado y protección Conciliado en Bancos → Cheques.'
+                }
             },
             {
                 title: 'Paso 3 · Imprimir en lote revisando Vista Previa Carta',
@@ -257,7 +304,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Elige la Cuenta Bancaria (el formato se selecciona solo), digita el rango Desde # y Hasta #, y mantén marcados Excluir Anulados y Excluir Reservados.',
                     'Pulsa "Imprimir Seleccionados", revisa todas las páginas en ReportPreviewModal e imprime a Escala 100% en papel Carta.'
                 ],
-                verify: 'Los cheques físicos salen nítidos, centrados y con monto en letras protegido con asteriscos.'
+                verify: 'Los cheques físicos salen nítidos, centrados y con monto en letras protegido con asteriscos.',
+                screenshot: {
+                    src: '/tutorials/ban-impresion-cheques.webp',
+                    caption: 'Paso 3: Búsqueda por rango numérico e impresión en lote tamaño Carta.'
+                }
             },
             {
                 title: 'Paso 4 · Controlar cheques en circulación y aplicarlos al cobro',
@@ -269,7 +320,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Mientras no se cobren, los cheques se descuentan de "Saldos en Chequera" y permanecen en Conciliación → PENDIENTES.',
                     'Cuando aparezcan cobrados en el estado de cuenta bancario, aplícalos en Conciliación Bancaria con su fecha real de cobro.'
                 ],
-                verify: 'El ciclo del cheque concluye: emitido, impreso, entregado, cobrado y conciliado.'
+                verify: 'El ciclo del cheque concluye: emitido, impreso, entregado, cobrado y conciliado.',
+                screenshot: {
+                    src: '/tutorials/ban-reportes-cheques-fecha.webp',
+                    caption: 'Paso 4: Seguimiento de cheques en circulación por antigüedad (Aging) antes de su cobro en Conciliación.'
+                }
             }
         ],
         successChecklist: [
@@ -292,6 +347,7 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
         subtitle: 'Saca el máximo provecho al entorno multi-pestaña para seguir estos tutoriales en vivo mientras trabajas, calcular montos al vuelo y pedir soporte.',
         route: '/dashboard',
         routeLabel: 'Ir al Dashboard',
+        coverImage: '/tutorials/gen-command-palette.webp',
         difficulty: 'Esencial',
         duration: '4 min',
         role: 'Todos los usuarios',
@@ -325,7 +381,11 @@ export const FLUJOS_MAESTROS_TUTORIALS = [
                     'Escribe el nombre de un módulo (ej. "conciliación", "cheques", "pedidos") y pulsa Enter para abrirlo.',
                     'Escribe cualquier fórmula matemática (ej. 1250*1.13 o (4500+320)/2) y pulsa Enter para copiar el resultado exacto al portapapeles.'
                 ],
-                verify: 'Puedes navegar a cualquier pantalla y hacer cálculos de IVA/fletes en menos de 2 segundos.'
+                verify: 'Puedes navegar a cualquier pantalla y hacer cálculos de IVA/fletes en menos de 2 segundos.',
+                screenshot: {
+                    src: '/tutorials/gen-command-palette.webp',
+                    caption: 'Paleta de Comandos (Ctrl+K) calculando 1250*1.13 al vuelo con desglose automático de IVA y acceso inmediato a módulos.'
+                }
             },
             {
                 title: 'Reportar un incidente con Captura Automática (Ctrl + Shift + K)',
