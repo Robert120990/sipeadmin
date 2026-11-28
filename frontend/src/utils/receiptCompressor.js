@@ -18,6 +18,26 @@ const estimateBase64Bytes = (dataUrl = '') => {
     return Math.round((base64.length * 3) / 4);
 };
 
+const GENERIC_CAPTURE_RE = /^(?:image(?:\.(?:png|jpe?g|webp|gif|bmp|tiff?|heic|heif|svg|pdf))?|clipboard(?:\..*)?|blob(?:[_:\-.\s].*)?)$/i;
+
+const formatCaptureTimestamp = (date = new Date()) => {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}_${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;
+};
+
+export const normalizeReceiptFileName = (rawName, targetExt = 'webp', date = new Date()) => {
+    const ext = String(targetExt || 'webp').replace(/^\./, '').toLowerCase() || 'webp';
+    const trimmed = String(rawName || '').trim();
+    if (!trimmed || GENERIC_CAPTURE_RE.test(trimmed)) {
+        return `captura_${formatCaptureTimestamp(date)}.${ext}`;
+    }
+    const base = trimmed.replace(/\.[^.]+$/, '').trim();
+    if (!base || GENERIC_CAPTURE_RE.test(base)) {
+        return `captura_${formatCaptureTimestamp(date)}.${ext}`;
+    }
+    return `${base}.${ext}`;
+};
+
 export const compressReceiptFile = (file, options = {}) => {
     const {
         maxWidth = 1600,
@@ -33,26 +53,33 @@ export const compressReceiptFile = (file, options = {}) => {
             return reject(new Error('No se seleccionó ningún archivo'));
         }
 
-        const originalName = file.name || `comprobante_${Date.now()}.webp`;
+        const rawFileName = file.name || '';
         const originalSize = file.size || 0;
-        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(originalName);
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(rawFileName);
 
         if (isPdf) {
+            const pdfName = normalizeReceiptFileName(rawFileName, 'pdf');
             if (originalSize > maxPdfBytes) {
-                return reject(new Error(`El PDF "${originalName}" supera el límite de 8 MB`));
+                return reject(new Error(`El PDF "${pdfName}" supera el límite de 8 MB`));
             }
             const reader = new FileReader();
             reader.onload = (ev) => {
-                const dataUrl = ev.target?.result;
-                if (!dataUrl || !String(dataUrl).startsWith('data:application/pdf')) {
+                let dataUrl = String(ev.target?.result || '');
+                if (dataUrl.startsWith('data:application/octet-stream;base64,')) {
+                    dataUrl = dataUrl.replace(/^data:application\/octet-stream;base64,/, 'data:application/pdf;base64,');
+                } else if (dataUrl.startsWith('data:;base64,')) {
+                    dataUrl = dataUrl.replace(/^data:;base64,/, 'data:application/pdf;base64,');
+                }
+                if (!dataUrl || !dataUrl.startsWith('data:application/pdf')) {
                     return reject(new Error('No se pudo leer el archivo PDF'));
                 }
                 resolve({
                     data_url: dataUrl,
                     mime_type: 'application/pdf',
-                    nombre_original: originalName,
+                    nombre_original: pdfName,
                     original_size: originalSize,
                     compressed_size: originalSize,
+                    tamano_bytes: originalSize,
                     ancho: null,
                     alto: null
                 });
@@ -71,7 +98,7 @@ export const compressReceiptFile = (file, options = {}) => {
         reader.onload = (ev) => {
             const rawDataUrl = ev.target?.result;
             const img = new Image();
-            img.onerror = () => reject(new Error(`No se pudo procesar la imagen "${originalName}"`));
+            img.onerror = () => reject(new Error(`No se pudo procesar la imagen "${rawFileName || 'captura'}"`));
             img.onload = () => {
                 try {
                     const widthRatio = img.width > maxWidth ? maxWidth / img.width : 1;
@@ -108,15 +135,16 @@ export const compressReceiptFile = (file, options = {}) => {
                         outBytes = estimateBase64Bytes(outUrl);
                     }
 
-                    const baseName = originalName.replace(/\.[^.]+$/, '');
                     const finalExt = mime === 'image/webp' ? 'webp' : 'jpg';
+                    const normalizedName = normalizeReceiptFileName(rawFileName, finalExt);
 
                     resolve({
                         data_url: outUrl,
                         mime_type: mime,
-                        nombre_original: `${baseName}.${finalExt}`,
+                        nombre_original: normalizedName,
                         original_size: originalSize || estimateBase64Bytes(rawDataUrl),
                         compressed_size: outBytes,
+                        tamano_bytes: outBytes,
                         ancho: targetW,
                         alto: targetH
                     });

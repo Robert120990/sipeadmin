@@ -52,6 +52,15 @@ const pedidosManagePerms = [
     '/dashboard/operaciones/pedidos'
 ];
 
+async function runInOperacionesTransaction(db, callback) {
+    if (db && typeof db.getConnection === 'function') {
+        return withTransaction(callback);
+    }
+    return callback(db);
+}
+
+const roundOperacionesMoney = (val) => Math.round((Number(val) || 0) * 100) / 100;
+
 /**
  * Parsea y sanitiza los parámetros de paginación para consultas de pedidos.
  * Por defecto limita a 10 transacciones para no sobrecargar el sistema.
@@ -1466,25 +1475,73 @@ function calculateRecurringDate(iniciarStr, n, repetirDesc) {
 
 router.post('/operaciones/recordatorios', authenticateToken, requirePermission(['manage_recordatorios', '/dashboard/operaciones/recordatorios']), async (req, res) => {
     try {
-        const { id, descripcion, id_ubicacion, iniciar, activo, monto, repetir, repetir_desc, forma_pago, pagado, fecPago, formaPago2 } = req.body;
+        const {
+            id, descripcion, id_ubicacion, iniciar, activo, monto, repetir, repetir_desc,
+            forma_pago, pagado, fecPago, formaPago2, comprobantes = [], pago_detalle = null
+        } = req.body || {};
+
+        // Validación temprana de monto e iniciar antes de abrir transacciones
+        const rawMontoStr = monto === undefined || monto === null ? '' : String(monto).trim();
+        const parsedMonto = rawMontoStr === '' ? NaN : Number(rawMontoStr);
+        if (!Number.isFinite(parsedMonto) || parsedMonto < 0) {
+            return res.status(400).json({ message: 'El monto debe ser un número válido mayor o igual a $0.00' });
+        }
+        const cleanMonto = Math.round(parsedMonto * 100) / 100;
+
+        const cleanIniciar = formatDateYMD(iniciar);
+        if (!cleanIniciar) {
+            return res.status(400).json({ message: 'La fecha de inicio es requerida y debe tener formato válido (YYYY-MM-DD)' });
+        }
+        const [iy, im, idd] = cleanIniciar.split('-').map(Number);
+        const dtIniciarCheck = new Date(Date.UTC(iy, im - 1, idd));
+        if (dtIniciarCheck.getUTCFullYear() !== iy || (dtIniciarCheck.getUTCMonth() + 1) !== im || dtIniciarCheck.getUTCDate() !== idd) {
+            return res.status(400).json({ message: 'La fecha de inicio no es válida (use YYYY-MM-DD)' });
+        }
+
         const safeFormaPago = String(forma_pago || '').trim().slice(0, 50);
         const safeFormaPago2 = String(formaPago2 || '').trim().slice(0, 50);
+        const pdObj = (pago_detalle && typeof pago_detalle === 'object') ? pago_detalle : null;
+        const effectiveFormaPago2 = (safeFormaPago2 || String(pdObj?.cuenta_label || pdObj?.metodo_pago || safeFormaPago || '').trim()).slice(0, 50);
+        const safeRepetir = Math.max(1, parseInt(repetir, 10) || 1);
+        const hasFecPago = fecPago !== undefined && fecPago !== null && String(fecPago).trim() !== '';
+        const safeFecPago = hasFecPago ? parseStrictDBDate(fecPago) : getElSalvadorTodayYMD();
+        if (!safeFecPago) {
+            return res.status(400).json({ message: 'La fecha de pago no es válida (use YYYY-MM-DD)' });
+        }
+        const isPaidCreation = !id && (String(repetir_desc || '').toUpperCase().trim() === 'VEZ') && Boolean(pagado);
+
+        // Validar comprobantes antes de iniciar transacción para evitar registros huérfanos
+        const incomingComprobantes = Array.isArray(comprobantes) ? comprobantes.slice(0, 10) : [];
+        for (const comp of incomingComprobantes) {
+            if (!comp || !comp.data_url) {
+                return res.status(400).json({ message: 'Cada comprobante adjunto debe incluir un archivo válido' });
+            }
+            try {
+                recordatoriosPagosService.parseReceiptDataUrl(comp.data_url);
+            } catch (parseErr) {
+                return res.status(400).json({ message: parseErr.message || 'Comprobante inválido' });
+            }
+        }
+
         const externalDb = await getExternalDb();
         const db = getDb();
         const connection = await externalDb.getConnection();
+        let recordatorioId = id;
+        let preservePaidSchedule = false;
+        let firstVencimientoId = null;
+        let existingIds = [];
+
         try {
             await connection.beginTransaction();
-            let recordatorioId = id;
-            let preservePaidSchedule = false;
             if (id) {
                 await connection.query(`UPDATE web_rc_recordatorios SET descripcion=?, id_ubicacion=?, iniciar=?, monto=?, repetir=?, repetir_desc=?, activo=?, forma_pago=? WHERE id=?`, 
-                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, safeFormaPago, id]);
+                    [descripcion, id_ubicacion, cleanIniciar, cleanMonto, safeRepetir, repetir_desc, activo ? 1 : 0, safeFormaPago, id]);
 
                 const [existingVens] = await connection.query(
                     "SELECT id, estado FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?",
                     [id]
                 );
-                const existingIds = (existingVens || []).map(v => v.id);
+                existingIds = (existingVens || []).map(v => v.id);
                 const hasPaidLegacy = (existingVens || []).some(v => String(v.estado || '').toUpperCase() === 'C');
                 let hasLinkedAbonos = false;
                 if (existingIds.length > 0 && db) {
@@ -1498,22 +1555,22 @@ router.post('/operaciones/recordatorios', authenticateToken, requirePermission([
                         // Tabla opcional en entornos mínimos
                     }
                 }
-                // Nunca destruir vencimientos ya pagados o con abonos/comprobantes vinculados al editar un recordatorio
+                // Nunca destruir vencimientos ya pagados o con abonos vinculados al editar un recordatorio
                 preservePaidSchedule = hasPaidLegacy || hasLinkedAbonos;
             } else {
                 const [result] = await connection.query(`INSERT INTO web_rc_recordatorios (descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo, forma_pago) VALUES (?,?,?,?,?,?,?,?)`, 
-                    [descripcion, id_ubicacion, iniciar, monto, repetir, repetir_desc, activo ? 1 : 0, safeFormaPago]);
+                    [descripcion, id_ubicacion, cleanIniciar, cleanMonto, safeRepetir, repetir_desc, activo ? 1 : 0, safeFormaPago]);
                 recordatorioId = result.insertId;
             }
-            let firstVencimientoId = null;
+
             if (!preservePaidSchedule) {
                 await connection.query("DELETE FROM web_rc_recordatorios_vencimientos WHERE id_recordatorio = ?", [recordatorioId]);
-                for (let n = 1; n <= repetir; n++) {
-                    const formattedDate = calculateRecurringDate(iniciar, n, repetir_desc);
+                for (let n = 1; n <= safeRepetir; n++) {
+                    const formattedDate = calculateRecurringDate(cleanIniciar, n, repetir_desc);
                     let isPagado = false;
-                    if (repetir_desc === 'VEZ') { if (pagado) isPagado = true; }
+                    if (String(repetir_desc || '').toUpperCase().trim() === 'VEZ') { if (pagado) isPagado = true; }
                     if (isPagado) {
-                        const [vRes] = await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, fecPago, safeFormaPago2]);
+                        const [vRes] = await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'C', ?, ?)", [recordatorioId, formattedDate, safeFecPago, effectiveFormaPago2]);
                         if (!firstVencimientoId && vRes?.insertId) firstVencimientoId = vRes.insertId;
                     } else {
                         const [vRes] = await connection.query("INSERT INTO web_rc_recordatorios_vencimientos (id_recordatorio, vencimiento, estado, fecha_cancelacion, forma_pago) VALUES (?, ?, 'P', NULL, '')", [recordatorioId, formattedDate]);
@@ -1528,20 +1585,190 @@ router.post('/operaciones/recordatorios', authenticateToken, requirePermission([
                 firstVencimientoId = firstRow?.[0]?.id || null;
             }
             await connection.commit();
-            res.json({
-                success: true,
-                recordatorio_id: Number(recordatorioId),
-                first_vencimiento_id: firstVencimientoId ? Number(firstVencimientoId) : null,
-                message: preservePaidSchedule
-                    ? 'Recordatorio actualizado (se conservaron las cuotas existentes con pagos o abonos registrados).'
-                    : 'Recordatorio Guardado!'
-            });
         } catch (errTx) {
             await connection.rollback().catch(() => {});
             throw errTx;
         } finally {
             connection.release();
         }
+
+        // Si se editó un recordatorio pendiente que ya tenía comprobantes o meta preasignados,
+        // reasignarlos al nuevo primer vencimiento SOLO después de confirmar el commit en externalDb.
+        if (id && !preservePaidSchedule && firstVencimientoId && existingIds.length > 0 && db) {
+            try {
+                const placeholders = existingIds.map(() => '?').join(',');
+                await db.query(
+                    `UPDATE recordatorios_pagos_comprobantes SET vencimiento_id = ? WHERE vencimiento_id IN (${placeholders})`,
+                    [firstVencimientoId, ...existingIds]
+                );
+                const [metaRows] = await db.query(
+                    `SELECT vencimiento_id FROM recordatorios_vencimientos_meta WHERE vencimiento_id IN (${placeholders}) ORDER BY updated_at DESC LIMIT 1`,
+                    existingIds
+                );
+                if (metaRows && metaRows.length > 0) {
+                    const keepOldId = metaRows[0].vencimiento_id;
+                    const otherOldIds = existingIds.filter(eid => Number(eid) !== Number(keepOldId));
+                    if (otherOldIds.length > 0) {
+                        await db.query(
+                            `DELETE FROM recordatorios_vencimientos_meta WHERE vencimiento_id IN (${otherOldIds.map(() => '?').join(',')})`,
+                            otherOldIds
+                        );
+                    }
+                    if (Number(keepOldId) !== Number(firstVencimientoId)) {
+                        await db.query(
+                            `UPDATE recordatorios_vencimientos_meta SET vencimiento_id = ? WHERE vencimiento_id = ?`,
+                            [firstVencimientoId, keepOldId]
+                        );
+                    }
+                }
+            } catch (_) {
+                // Tabla opcional en entornos mínimos
+            }
+        }
+
+        let createdAbonoId = null;
+        let createdMetaVenId = null;
+        const savedComprobantes = [];
+        const savedFiles = [];
+        const insertedComprobanteIds = [];
+        const hasPagoDetalle = pdObj
+            && Object.values(pdObj).some(v => v !== null && v !== undefined && String(v).trim() !== '');
+
+        if (!id && firstVencimientoId && db && (incomingComprobantes.length > 0 || (isPaidCreation && (hasPagoDetalle || safeFormaPago2)) || hasPagoDetalle)) {
+            try {
+                await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+                const actor = req.user?.username || req.user?.email || 'sistema';
+                const pd = pdObj || {};
+                const normOp = recordatoriosPagosService.normalizeTipoOperacion(pd.tipo_operacion || 'CXP');
+                const rawMetodo = pd.metodo_pago || (isPaidCreation ? effectiveFormaPago2 : safeFormaPago) || '';
+                const normMetodo = rawMetodo ? recordatoriosPagosService.normalizeMetodoPago(rawMetodo) : null;
+                const parsedCuentaId = pd.cuenta_bancaria_id ? parseInt(pd.cuenta_bancaria_id, 10) || null : null;
+                const safeCuentaLabel = pd.cuenta_label ? String(pd.cuenta_label).trim().slice(0, 150) : null;
+                const safeTarjeta = pd.tarjeta_ref ? String(pd.tarjeta_ref).trim().slice(0, 100) : null;
+                const safeBeneficiario = pd.beneficiario ? String(pd.beneficiario).trim().slice(0, 150) : null;
+                const safeRef = pd.referencia_doc ? String(pd.referencia_doc).trim().slice(0, 120) : null;
+                const safeNotas = pd.notas ? String(pd.notas).trim().slice(0, 1000) : null;
+
+                if (pd.tipo_operacion || normMetodo || parsedCuentaId || safeCuentaLabel || safeTarjeta || safeNotas) {
+                    await db.query(
+                        `INSERT INTO recordatorios_vencimientos_meta
+                            (vencimiento_id, recordatorio_id, tipo_operacion, metodo_pago_preferido, cuenta_bancaria_id, cuenta_label, tarjeta_ref, notas_control, updated_by)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE
+                            tipo_operacion = VALUES(tipo_operacion),
+                            metodo_pago_preferido = COALESCE(VALUES(metodo_pago_preferido), metodo_pago_preferido),
+                            cuenta_bancaria_id = COALESCE(VALUES(cuenta_bancaria_id), cuenta_bancaria_id),
+                            cuenta_label = COALESCE(VALUES(cuenta_label), cuenta_label),
+                            tarjeta_ref = COALESCE(VALUES(tarjeta_ref), tarjeta_ref),
+                            notas_control = COALESCE(VALUES(notas_control), notas_control),
+                            updated_by = VALUES(updated_by)`,
+                        [firstVencimientoId, recordatorioId, normOp, normMetodo, parsedCuentaId, safeCuentaLabel, safeTarjeta, safeNotas, actor]
+                    );
+                    createdMetaVenId = firstVencimientoId;
+                }
+
+                if (isPaidCreation && cleanMonto > 0 && (incomingComprobantes.length > 0 || hasPagoDetalle)) {
+                    let ubicacionNombre = '';
+                    try {
+                        const [ubRows] = await externalDb.query('SELECT descripcion FROM web_rc_ubicaciones WHERE id = ? LIMIT 1', [id_ubicacion]);
+                        ubicacionNombre = ubRows?.[0]?.descripcion || '';
+                    } catch (_) {
+                        // Opcional
+                    }
+                    const abonoMetodo = normMetodo || 'TRANSFERENCIA';
+                    const abonoCuentaLabel = safeCuentaLabel || effectiveFormaPago2 || safeFormaPago || null;
+                    const estadoConc = (parsedCuentaId && recordatoriosPagosService.BANK_RECONCILIABLE_METHODS.has(abonoMetodo))
+                        ? 'PENDIENTE'
+                        : 'NO_APLICA';
+                    const [abIns] = await db.query(
+                        `INSERT INTO recordatorios_pagos_abonos
+                            (vencimiento_id, recordatorio_id, ubicacion, descripcion_ref, tipo_operacion, metodo_pago,
+                             cuenta_bancaria_id, cuenta_label, tarjeta_ref, beneficiario, referencia_doc, fecha_pago, monto, notas,
+                             estado_conciliacion, created_by)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                            firstVencimientoId,
+                            recordatorioId,
+                            String(ubicacionNombre || '').slice(0, 120),
+                            String(descripcion || '').slice(0, 150),
+                            normOp,
+                            abonoMetodo,
+                            parsedCuentaId,
+                            abonoCuentaLabel ? String(abonoCuentaLabel).slice(0, 150) : null,
+                            safeTarjeta,
+                            safeBeneficiario,
+                            safeRef,
+                            safeFecPago,
+                            cleanMonto,
+                            safeNotas,
+                            estadoConc,
+                            actor
+                        ]
+                    );
+                    createdAbonoId = abIns?.insertId || null;
+                }
+
+                for (const comp of incomingComprobantes) {
+                    const saved = recordatoriosPagosService.saveReceiptBase64({
+                        dataUrl: comp.data_url,
+                        nombreOriginal: comp.nombre_original || 'comprobante.webp',
+                        vencimientoId: firstVencimientoId
+                    });
+                    savedFiles.push(saved.archivo_url);
+                    const notaVal = comp.nota ? String(comp.nota).trim().slice(0, 255) : null;
+                    const [cIns] = await db.query(
+                        `INSERT INTO recordatorios_pagos_comprobantes
+                            (vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                            firstVencimientoId,
+                            createdAbonoId,
+                            saved.nombre_original,
+                            saved.archivo_url,
+                            saved.mime_type,
+                            saved.tamano_bytes,
+                            comp.ancho ? parseInt(comp.ancho, 10) || null : null,
+                            comp.alto ? parseInt(comp.alto, 10) || null : null,
+                            notaVal,
+                            actor
+                        ]
+                    );
+                    if (cIns?.insertId) insertedComprobanteIds.push(cIns.insertId);
+                    savedComprobantes.push({
+                        id: cIns?.insertId || null,
+                        ...saved,
+                        nota: notaVal,
+                        abono_id: createdAbonoId,
+                        signed_url: signUploadUrl(saved.archivo_url)
+                    });
+                }
+            } catch (postCommitErr) {
+                for (const fileUrl of savedFiles) {
+                    try { recordatoriosPagosService.deleteReceiptFile(fileUrl); } catch (_) { /* noop */ }
+                }
+                for (const cid of insertedComprobanteIds) {
+                    try { await db.query('DELETE FROM recordatorios_pagos_comprobantes WHERE id = ?', [cid]); } catch (_) { /* noop */ }
+                }
+                if (createdAbonoId) {
+                    try { await db.query('DELETE FROM recordatorios_pagos_abonos WHERE id = ?', [createdAbonoId]); } catch (_) { /* noop */ }
+                }
+                if (createdMetaVenId) {
+                    try { await db.query('DELETE FROM recordatorios_vencimientos_meta WHERE vencimiento_id = ?', [createdMetaVenId]); } catch (_) { /* noop */ }
+                }
+                throw postCommitErr;
+            }
+        }
+
+        res.json({
+            success: true,
+            recordatorio_id: Number(recordatorioId),
+            first_vencimiento_id: firstVencimientoId ? Number(firstVencimientoId) : null,
+            abono_id: createdAbonoId ? Number(createdAbonoId) : null,
+            comprobantes: savedComprobantes,
+            message: preservePaidSchedule
+                ? 'Recordatorio actualizado (se conservaron las cuotas existentes con pagos o abonos registrados).'
+                : 'Recordatorio Guardado!'
+        });
     } catch (error) { sendSafeError(res, error, 'Error al guardar recordatorio'); }
 });
 
@@ -1612,12 +1839,18 @@ router.delete('/operaciones/recordatorios/vencimiento/:id', authenticateToken, r
         try {
             await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
             const [comps] = await db.query('SELECT archivo_url FROM recordatorios_pagos_comprobantes WHERE vencimiento_id = ?', [venId]);
-            for (const c of comps) {
-                recordatoriosPagosService.deleteReceiptFile(c.archivo_url);
-            }
             await db.query('DELETE FROM recordatorios_pagos_comprobantes WHERE vencimiento_id = ?', [venId]);
             await db.query('DELETE FROM recordatorios_pagos_abonos WHERE vencimiento_id = ?', [venId]);
             await db.query('DELETE FROM recordatorios_vencimientos_meta WHERE vencimiento_id = ?', [venId]);
+            for (const c of comps) {
+                const [refRows] = await db.query(
+                    'SELECT COUNT(*) AS cnt FROM recordatorios_pagos_comprobantes WHERE archivo_url = ?',
+                    [c.archivo_url]
+                );
+                if (Number(refRows?.[0]?.cnt || 0) === 0) {
+                    recordatoriosPagosService.deleteReceiptFile(c.archivo_url);
+                }
+            }
         } catch (cleanupErr) {
             console.warn('[Recordatorios] Aviso limpiando abonos/comprobantes al eliminar vencimiento:', cleanupErr.message);
         }
@@ -1735,9 +1968,23 @@ router.post('/operaciones/recordatorios/vencimiento/:id/abonos', authenticateTok
             return res.status(400).json({ message: 'El monto del abono debe ser mayor a $0.00' });
         }
 
-        const cleanFecha = formatDateYMD(fecha_pago) || getElSalvadorTodayYMD();
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanFecha)) {
+        const hasFechaPago = fecha_pago !== undefined && fecha_pago !== null && String(fecha_pago).trim() !== '';
+        const cleanFecha = hasFechaPago ? parseStrictDBDate(fecha_pago) : getElSalvadorTodayYMD();
+        if (!cleanFecha) {
             return res.status(400).json({ message: 'La fecha de pago no es válida (use YYYY-MM-DD)' });
+        }
+
+        // Pre-validar todos los comprobantes antes de insertar abono para evitar registros huérfanos
+        const incomingComprobantes = Array.isArray(comprobantes) ? comprobantes.slice(0, 10) : [];
+        for (const comp of incomingComprobantes) {
+            if (!comp || !comp.data_url) {
+                return res.status(400).json({ message: 'Cada comprobante adjunto debe incluir un archivo válido' });
+            }
+            try {
+                recordatoriosPagosService.parseReceiptDataUrl(comp.data_url);
+            } catch (parseErr) {
+                return res.status(400).json({ message: parseErr.message || 'Comprobante inválido' });
+            }
         }
 
         const db = getDb();
@@ -1773,76 +2020,118 @@ router.post('/operaciones/recordatorios/vencimiento/:id/abonos', authenticateTok
             ? 'PENDIENTE'
             : 'NO_APLICA';
 
-        const [ins] = await db.query(
-            `INSERT INTO recordatorios_pagos_abonos
-                (vencimiento_id, recordatorio_id, ubicacion, descripcion_ref, tipo_operacion, metodo_pago,
-                 cuenta_bancaria_id, cuenta_label, tarjeta_ref, beneficiario, referencia_doc, fecha_pago, monto, notas,
-                 estado_conciliacion, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                venId,
-                ven.id_recordatorio,
-                String(ven.ubicacion || '').slice(0, 120),
-                String(ven.descripcion || '').slice(0, 150),
-                normOp,
-                normMetodo,
-                parsedCuentaId,
-                safeCuentaLabel,
-                safeTarjeta,
-                safeBeneficiario,
-                safeRef,
-                cleanFecha,
-                numericMonto,
-                safeNotas,
-                estadoConciliacion,
-                actor
-            ]
-        );
-        const abonoId = ins.insertId;
-
-        // Actualizar meta con el tipo_operacion y método más reciente
-        await db.query(
-            `INSERT INTO recordatorios_vencimientos_meta
-                (vencimiento_id, recordatorio_id, tipo_operacion, metodo_pago_preferido, cuenta_bancaria_id, cuenta_label, tarjeta_ref, updated_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-                tipo_operacion = VALUES(tipo_operacion),
-                metodo_pago_preferido = VALUES(metodo_pago_preferido),
-                cuenta_bancaria_id = COALESCE(VALUES(cuenta_bancaria_id), cuenta_bancaria_id),
-                cuenta_label = COALESCE(VALUES(cuenta_label), cuenta_label),
-                tarjeta_ref = COALESCE(VALUES(tarjeta_ref), tarjeta_ref),
-                updated_by = VALUES(updated_by)`,
-            [venId, ven.id_recordatorio, normOp, normMetodo, parsedCuentaId, safeCuentaLabel, safeTarjeta, actor]
-        );
-
-        // Guardar comprobantes adjuntos (si se enviaron múltiples archivos junto al abono)
-        if (Array.isArray(comprobantes) && comprobantes.length > 0) {
-            for (const comp of comprobantes.slice(0, 10)) {
-                if (!comp || !comp.data_url) continue;
-                const saved = recordatoriosPagosService.saveReceiptBase64({
-                    dataUrl: comp.data_url,
-                    nombreOriginal: comp.nombre_original || 'comprobante.webp',
-                    vencimientoId: venId
-                });
-                await db.query(
-                    `INSERT INTO recordatorios_pagos_comprobantes
-                        (vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [
-                        venId,
-                        abonoId,
-                        saved.nombre_original,
-                        saved.archivo_url,
-                        saved.mime_type,
-                        saved.tamano_bytes,
-                        comp.ancho ? parseInt(comp.ancho, 10) || null : null,
-                        comp.alto ? parseInt(comp.alto, 10) || null : null,
-                        comp.nota ? String(comp.nota).trim().slice(0, 255) : null,
-                        actor
-                    ]
-                );
+        const txResult = await runInOperacionesTransaction(db, async (conn) => {
+            await conn.query('SELECT * FROM recordatorios_vencimientos_meta WHERE vencimiento_id = ? FOR UPDATE', [venId]);
+            const [existingAbonos] = await conn.query(
+                'SELECT * FROM recordatorios_pagos_abonos WHERE vencimiento_id = ? FOR UPDATE',
+                [venId]
+            );
+            const existingSum = roundOperacionesMoney(
+                (existingAbonos || []).reduce((acc, a) => acc + Math.max(0, Number(a.monto || 0)), 0)
+            );
+            const vencimientoMonto = roundOperacionesMoney(ven.monto);
+            if (roundOperacionesMoney(existingSum + numericMonto) > vencimientoMonto + 0.005) {
+                const restante = Math.max(0, roundOperacionesMoney(vencimientoMonto - existingSum));
+                return {
+                    errorStatus: 409,
+                    errorBody: {
+                        message: `El monto del abono ($${numericMonto.toFixed(2)}) excede el saldo pendiente ($${restante.toFixed(2)}) del vencimiento ($${vencimientoMonto.toFixed(2)}).`
+                    }
+                };
             }
+
+            const [ins] = await conn.query(
+                `INSERT INTO recordatorios_pagos_abonos
+                    (vencimiento_id, recordatorio_id, ubicacion, descripcion_ref, tipo_operacion, metodo_pago,
+                     cuenta_bancaria_id, cuenta_label, tarjeta_ref, beneficiario, referencia_doc, fecha_pago, monto, notas,
+                     estado_conciliacion, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    venId,
+                    ven.id_recordatorio,
+                    String(ven.ubicacion || '').slice(0, 120),
+                    String(ven.descripcion || '').slice(0, 150),
+                    normOp,
+                    normMetodo,
+                    parsedCuentaId,
+                    safeCuentaLabel,
+                    safeTarjeta,
+                    safeBeneficiario,
+                    safeRef,
+                    cleanFecha,
+                    numericMonto,
+                    safeNotas,
+                    estadoConciliacion,
+                    actor
+                ]
+            );
+            const createdAbonoId = ins.insertId;
+
+            const savedPaths = [];
+            const insertedComprobanteIds = [];
+            try {
+                // Actualizar meta con el tipo_operacion y método más reciente
+                await conn.query(
+                    `INSERT INTO recordatorios_vencimientos_meta
+                        (vencimiento_id, recordatorio_id, tipo_operacion, metodo_pago_preferido, cuenta_bancaria_id, cuenta_label, tarjeta_ref, updated_by)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE
+                        tipo_operacion = VALUES(tipo_operacion),
+                        metodo_pago_preferido = VALUES(metodo_pago_preferido),
+                        cuenta_bancaria_id = COALESCE(VALUES(cuenta_bancaria_id), cuenta_bancaria_id),
+                        cuenta_label = COALESCE(VALUES(cuenta_label), cuenta_label),
+                        tarjeta_ref = COALESCE(VALUES(tarjeta_ref), tarjeta_ref),
+                        updated_by = VALUES(updated_by)`,
+                    [venId, ven.id_recordatorio, normOp, normMetodo, parsedCuentaId, safeCuentaLabel, safeTarjeta, actor]
+                );
+
+                // Guardar comprobantes adjuntos (si se enviaron múltiples archivos junto al abono)
+                if (incomingComprobantes.length > 0) {
+                    for (const comp of incomingComprobantes) {
+                        const saved = recordatoriosPagosService.saveReceiptBase64({
+                            dataUrl: comp.data_url,
+                            nombreOriginal: comp.nombre_original || 'comprobante.webp',
+                            vencimientoId: venId
+                        });
+                        savedPaths.push(saved.archivo_url);
+                        const [cIns] = await conn.query(
+                            `INSERT INTO recordatorios_pagos_comprobantes
+                                (vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            [
+                                venId,
+                                createdAbonoId,
+                                saved.nombre_original,
+                                saved.archivo_url,
+                                saved.mime_type,
+                                saved.tamano_bytes,
+                                comp.ancho ? parseInt(comp.ancho, 10) || null : null,
+                                comp.alto ? parseInt(comp.alto, 10) || null : null,
+                                comp.nota ? String(comp.nota).trim().slice(0, 255) : null,
+                                actor
+                            ]
+                        );
+                        if (cIns?.insertId) insertedComprobanteIds.push(cIns.insertId);
+                    }
+                }
+            } catch (writeErr) {
+                for (const pUrl of savedPaths) {
+                    try { recordatoriosPagosService.deleteReceiptFile(pUrl); } catch (_) { /* noop */ }
+                }
+                for (const cid of insertedComprobanteIds) {
+                    try { await conn.query('DELETE FROM recordatorios_pagos_comprobantes WHERE id = ?', [cid]); } catch (_) { /* noop */ }
+                }
+                try { await conn.query('DELETE FROM recordatorios_pagos_abonos WHERE id = ?', [createdAbonoId]); } catch (_) { /* noop */ }
+                throw writeErr;
+            }
+
+            return { abonoId: createdAbonoId };
+        });
+
+        if (txResult?.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
+        const abonoId = txResult.abonoId;
 
         const synced = await recordatoriosPagosService.syncVencimientoWithAbonos({ db, externalDb, vencimientoId: venId });
         const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: venId });
@@ -1866,61 +2155,110 @@ router.put('/operaciones/recordatorios/abonos/:abonoId', authenticateToken, requ
         const externalDb = await getExternalDb();
         await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
 
-        const [existingRows] = await db.query('SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1', [abonoId]);
-        if (!existingRows || existingRows.length === 0) {
-            return res.status(404).json({ message: 'Abono no encontrado' });
+        const txResult = await runInOperacionesTransaction(db, async (conn) => {
+            const [existingRows] = await conn.query(
+                'SELECT * FROM recordatorios_pagos_abonos WHERE id = ? LIMIT 1 FOR UPDATE',
+                [abonoId]
+            );
+            if (!existingRows || existingRows.length === 0) {
+                return { errorStatus: 404, errorBody: { message: 'Abono no encontrado' } };
+            }
+            const existing = existingRows[0];
+
+            const {
+                tipo_operacion = existing.tipo_operacion,
+                metodo_pago = existing.metodo_pago,
+                cuenta_bancaria_id = existing.cuenta_bancaria_id,
+                cuenta_label = existing.cuenta_label,
+                tarjeta_ref = existing.tarjeta_ref,
+                beneficiario = existing.beneficiario,
+                referencia_doc = existing.referencia_doc,
+                fecha_pago = existing.fecha_pago,
+                monto = existing.monto,
+                notas = existing.notas
+            } = req.body || {};
+
+            const numericMonto = Math.round((Number(monto) || 0) * 100) / 100;
+            if (!Number.isFinite(numericMonto) || numericMonto <= 0) {
+                return { errorStatus: 400, errorBody: { message: 'El monto del abono debe ser mayor a $0.00' } };
+            }
+            const hasBodyFechaPago = req.body?.fecha_pago !== undefined && req.body?.fecha_pago !== null && String(req.body.fecha_pago).trim() !== '';
+            const cleanFecha = hasBodyFechaPago
+                ? parseStrictDBDate(fecha_pago)
+                : (formatDateYMD(existing.fecha_pago) || getElSalvadorTodayYMD());
+            if (hasBodyFechaPago && !cleanFecha) {
+                return { errorStatus: 400, errorBody: { message: 'La fecha de pago no es válida (use YYYY-MM-DD)' } };
+            }
+
+            await conn.query('SELECT * FROM recordatorios_vencimientos_meta WHERE vencimiento_id = ? FOR UPDATE', [existing.vencimiento_id]);
+            const [venAbonos] = await conn.query(
+                'SELECT * FROM recordatorios_pagos_abonos WHERE vencimiento_id = ? FOR UPDATE',
+                [existing.vencimiento_id]
+            );
+            const [venRows] = await externalDb.query(
+                `SELECT a.id, a.id_recordatorio, b.descripcion, b.monto, c.descripcion AS ubicacion
+                 FROM web_rc_recordatorios_vencimientos a
+                 INNER JOIN web_rc_recordatorios b ON a.id_recordatorio = b.id
+                 LEFT JOIN web_rc_ubicaciones c ON b.id_ubicacion = c.id
+                 WHERE a.id = ? LIMIT 1`,
+                [existing.vencimiento_id]
+            );
+            if (venRows && venRows.length > 0) {
+                const existingOtherSum = roundOperacionesMoney(
+                    (venAbonos || [])
+                        .filter((a) => Number(a.id) !== Number(abonoId))
+                        .reduce((acc, a) => acc + Math.max(0, Number(a.monto || 0)), 0)
+                );
+                const vencimientoMonto = roundOperacionesMoney(venRows[0].monto);
+                if (roundOperacionesMoney(existingOtherSum + numericMonto) > vencimientoMonto + 0.005) {
+                    const maxPermitido = Math.max(0, roundOperacionesMoney(vencimientoMonto - existingOtherSum));
+                    return {
+                        errorStatus: 409,
+                        errorBody: {
+                            message: `El monto actualizado ($${numericMonto.toFixed(2)}) excede el saldo permitido ($${maxPermitido.toFixed(2)}) del vencimiento ($${vencimientoMonto.toFixed(2)}).`
+                        }
+                    };
+                }
+            }
+
+            const normOp = recordatoriosPagosService.normalizeTipoOperacion(tipo_operacion);
+            const normMetodo = recordatoriosPagosService.normalizeMetodoPago(metodo_pago);
+            const parsedCuentaId = cuenta_bancaria_id ? parseInt(cuenta_bancaria_id, 10) || null : null;
+            const estadoConc = existing.estado_conciliacion === 'CONCILIADO'
+                ? 'CONCILIADO'
+                : ((parsedCuentaId && recordatoriosPagosService.BANK_RECONCILIABLE_METHODS.has(normMetodo)) ? 'PENDIENTE' : 'NO_APLICA');
+
+            await conn.query(
+                `UPDATE recordatorios_pagos_abonos
+                 SET tipo_operacion = ?, metodo_pago = ?, cuenta_bancaria_id = ?, cuenta_label = ?,
+                     tarjeta_ref = ?, beneficiario = ?, referencia_doc = ?, fecha_pago = ?, monto = ?, notas = ?,
+                     estado_conciliacion = ?
+                 WHERE id = ?`,
+                [
+                    normOp,
+                    normMetodo,
+                    parsedCuentaId,
+                    cuenta_label ? String(cuenta_label).trim().slice(0, 150) : null,
+                    tarjeta_ref ? String(tarjeta_ref).trim().slice(0, 100) : null,
+                    beneficiario ? String(beneficiario).trim().slice(0, 150) : null,
+                    referencia_doc ? String(referencia_doc).trim().slice(0, 120) : null,
+                    cleanFecha,
+                    numericMonto,
+                    notas ? String(notas).trim().slice(0, 1000) : null,
+                    estadoConc,
+                    abonoId
+                ]
+            );
+
+            return { vencimientoId: existing.vencimiento_id };
+        });
+
+        if (txResult?.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
         }
-        const existing = existingRows[0];
 
-        const {
-            tipo_operacion = existing.tipo_operacion,
-            metodo_pago = existing.metodo_pago,
-            cuenta_bancaria_id = existing.cuenta_bancaria_id,
-            cuenta_label = existing.cuenta_label,
-            tarjeta_ref = existing.tarjeta_ref,
-            beneficiario = existing.beneficiario,
-            referencia_doc = existing.referencia_doc,
-            fecha_pago = existing.fecha_pago,
-            monto = existing.monto,
-            notas = existing.notas
-        } = req.body || {};
-
-        const numericMonto = Math.round((Number(monto) || 0) * 100) / 100;
-        if (!Number.isFinite(numericMonto) || numericMonto <= 0) {
-            return res.status(400).json({ message: 'El monto del abono debe ser mayor a $0.00' });
-        }
-        const cleanFecha = formatDateYMD(fecha_pago) || formatDateYMD(existing.fecha_pago) || getElSalvadorTodayYMD();
-        const normOp = recordatoriosPagosService.normalizeTipoOperacion(tipo_operacion);
-        const normMetodo = recordatoriosPagosService.normalizeMetodoPago(metodo_pago);
-        const parsedCuentaId = cuenta_bancaria_id ? parseInt(cuenta_bancaria_id, 10) || null : null;
-        const estadoConc = existing.estado_conciliacion === 'CONCILIADO'
-            ? 'CONCILIADO'
-            : ((parsedCuentaId && recordatoriosPagosService.BANK_RECONCILIABLE_METHODS.has(normMetodo)) ? 'PENDIENTE' : 'NO_APLICA');
-
-        await db.query(
-            `UPDATE recordatorios_pagos_abonos
-             SET tipo_operacion = ?, metodo_pago = ?, cuenta_bancaria_id = ?, cuenta_label = ?,
-                 tarjeta_ref = ?, beneficiario = ?, referencia_doc = ?, fecha_pago = ?, monto = ?, notas = ?,
-                 estado_conciliacion = ?
-             WHERE id = ?`,
-            [
-                normOp,
-                normMetodo,
-                parsedCuentaId,
-                cuenta_label ? String(cuenta_label).trim().slice(0, 150) : null,
-                tarjeta_ref ? String(tarjeta_ref).trim().slice(0, 100) : null,
-                beneficiario ? String(beneficiario).trim().slice(0, 150) : null,
-                referencia_doc ? String(referencia_doc).trim().slice(0, 120) : null,
-                cleanFecha,
-                numericMonto,
-                notas ? String(notas).trim().slice(0, 1000) : null,
-                estadoConc,
-                abonoId
-            ]
-        );
-
-        await recordatoriosPagosService.syncVencimientoWithAbonos({ db, externalDb, vencimientoId: existing.vencimiento_id });
-        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: existing.vencimiento_id });
+        await recordatoriosPagosService.syncVencimientoWithAbonos({ db, externalDb, vencimientoId: txResult.vencimientoId });
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: txResult.vencimientoId });
         res.json({ success: true, message: 'Abono actualizado correctamente', detail });
     } catch (error) {
         sendSafeError(res, error, 'Error al actualizar abono');
@@ -2000,43 +2338,78 @@ router.post('/operaciones/recordatorios/vencimiento/:id/comprobantes', authentic
             return res.status(400).json({ message: 'Debe adjuntar al menos un comprobante' });
         }
 
+        const slice = comprobantes.slice(0, 10);
+        for (const comp of slice) {
+            if (!comp || !comp.data_url) {
+                return res.status(400).json({ message: 'Cada comprobante debe incluir un archivo válido' });
+            }
+            try {
+                recordatoriosPagosService.parseReceiptDataUrl(comp.data_url);
+            } catch (parseErr) {
+                return res.status(400).json({ message: parseErr.message || 'Comprobante inválido' });
+            }
+        }
+
         const db = getDb();
         const externalDb = await getExternalDb();
         await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
 
+        const [venRows] = await externalDb.query(
+            'SELECT id FROM web_rc_recordatorios_vencimientos WHERE id = ? LIMIT 1',
+            [venId]
+        );
+        if (!venRows || venRows.length === 0) {
+            return res.status(404).json({ message: 'Vencimiento no encontrado' });
+        }
+
         const actor = req.user?.username || req.user?.email || 'sistema';
         const parsedAbonoId = abono_id ? parseInt(abono_id, 10) || null : null;
         const inserted = [];
+        const savedPaths = [];
+        const insertedIds = [];
 
-        for (const comp of comprobantes.slice(0, 10)) {
-            if (!comp || !comp.data_url) continue;
-            const saved = recordatoriosPagosService.saveReceiptBase64({
-                dataUrl: comp.data_url,
-                nombreOriginal: comp.nombre_original || 'comprobante.webp',
-                vencimientoId: venId
-            });
-            const [ins] = await db.query(
-                `INSERT INTO recordatorios_pagos_comprobantes
-                    (vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    venId,
-                    parsedAbonoId,
-                    saved.nombre_original,
-                    saved.archivo_url,
-                    saved.mime_type,
-                    saved.tamano_bytes,
-                    comp.ancho ? parseInt(comp.ancho, 10) || null : null,
-                    comp.alto ? parseInt(comp.alto, 10) || null : null,
-                    comp.nota ? String(comp.nota).trim().slice(0, 255) : null,
-                    actor
-                ]
-            );
-            inserted.push({
-                id: ins.insertId,
-                ...saved,
-                signed_url: signUploadUrl(saved.archivo_url)
-            });
+        try {
+            for (const comp of slice) {
+                const saved = recordatoriosPagosService.saveReceiptBase64({
+                    dataUrl: comp.data_url,
+                    nombreOriginal: comp.nombre_original || 'comprobante.webp',
+                    vencimientoId: venId
+                });
+                savedPaths.push(saved.archivo_url);
+                const notaVal = comp.nota ? String(comp.nota).trim().slice(0, 255) : null;
+                const [ins] = await db.query(
+                    `INSERT INTO recordatorios_pagos_comprobantes
+                        (vencimiento_id, abono_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        venId,
+                        parsedAbonoId,
+                        saved.nombre_original,
+                        saved.archivo_url,
+                        saved.mime_type,
+                        saved.tamano_bytes,
+                        comp.ancho ? parseInt(comp.ancho, 10) || null : null,
+                        comp.alto ? parseInt(comp.alto, 10) || null : null,
+                        notaVal,
+                        actor
+                    ]
+                );
+                if (ins?.insertId) insertedIds.push(ins.insertId);
+                inserted.push({
+                    id: ins.insertId,
+                    ...saved,
+                    nota: notaVal,
+                    signed_url: signUploadUrl(saved.archivo_url)
+                });
+            }
+        } catch (uploadErr) {
+            for (const pUrl of savedPaths) {
+                try { recordatoriosPagosService.deleteReceiptFile(pUrl); } catch (_) { /* noop */ }
+            }
+            for (const cid of insertedIds) {
+                try { await db.query('DELETE FROM recordatorios_pagos_comprobantes WHERE id = ?', [cid]); } catch (_) { /* noop */ }
+            }
+            throw uploadErr;
         }
 
         const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: venId });
@@ -2051,7 +2424,7 @@ router.post('/operaciones/recordatorios/vencimiento/:id/comprobantes', authentic
     }
 });
 
-router.delete('/operaciones/recordatorios/comprobantes/:comprobanteId', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
+router.patch('/operaciones/recordatorios/comprobantes/:comprobanteId', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
     try {
         const compId = parseInt(req.params.comprobanteId, 10);
         if (!compId) return res.status(400).json({ message: 'ID de comprobante inválido' });
@@ -2065,10 +2438,53 @@ router.delete('/operaciones/recordatorios/comprobantes/:comprobanteId', authenti
             return res.status(404).json({ message: 'Comprobante no encontrado' });
         }
         const comp = rows[0];
-        recordatoriosPagosService.deleteReceiptFile(comp.archivo_url);
-        await db.query('DELETE FROM recordatorios_pagos_comprobantes WHERE id = ?', [compId]);
+        const rawNota = req.body?.nota;
+        const cleanNota = rawNota !== undefined && rawNota !== null
+            ? (String(rawNota).trim().slice(0, 255) || null)
+            : null;
 
+        await db.query('UPDATE recordatorios_pagos_comprobantes SET nota = ? WHERE id = ?', [cleanNota, compId]);
         const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: comp.vencimiento_id });
+        res.json({ success: true, message: 'Nota del comprobante actualizada', detail });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar nota del comprobante');
+    }
+});
+
+router.delete('/operaciones/recordatorios/comprobantes/:comprobanteId', authenticateToken, requirePermission(recordatoriosManagePerms), async (req, res) => {
+    try {
+        const compId = parseInt(req.params.comprobanteId, 10);
+        if (!compId) return res.status(400).json({ message: 'ID de comprobante inválido' });
+
+        const db = getDb();
+        const externalDb = await getExternalDb();
+        await recordatoriosPagosService.ensureRecordatoriosPagosTables(db);
+
+        const txResult = await runInOperacionesTransaction(db, async (conn) => {
+            const [rows] = await conn.query('SELECT * FROM recordatorios_pagos_comprobantes WHERE id = ? LIMIT 1 FOR UPDATE', [compId]);
+            if (!rows || rows.length === 0) {
+                return { errorStatus: 404, errorBody: { message: 'Comprobante no encontrado' } };
+            }
+            const comp = rows[0];
+            await conn.query('DELETE FROM recordatorios_pagos_comprobantes WHERE id = ?', [compId]);
+            const [refRows] = await conn.query(
+                'SELECT COUNT(*) AS cnt FROM recordatorios_pagos_comprobantes WHERE archivo_url = ?',
+                [comp.archivo_url]
+            );
+            return {
+                comp,
+                shouldUnlink: Number(refRows?.[0]?.cnt || 0) === 0
+            };
+        });
+
+        if (txResult?.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+        if (txResult.shouldUnlink) {
+            recordatoriosPagosService.deleteReceiptFile(txResult.comp.archivo_url);
+        }
+
+        const detail = await recordatoriosPagosService.getVencimientoDetail({ db, externalDb, vencimientoId: txResult.comp.vencimiento_id });
         res.json({ success: true, message: 'Comprobante eliminado', detail });
     } catch (error) {
         sendSafeError(res, error, 'Error al eliminar comprobante');

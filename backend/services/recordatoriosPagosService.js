@@ -88,6 +88,7 @@ async function ensureRecordatoriosPagosTables(db) {
                     monto DECIMAL(14,2) NOT NULL DEFAULT 0.00,
                     notas TEXT NULL,
                     movimiento_bancario_id INT NULL,
+                    cheque_id INT NULL,
                     estado_conciliacion ENUM('PENDIENTE', 'CONCILIADO', 'NO_APLICA') NOT NULL DEFAULT 'PENDIENTE',
                     created_by VARCHAR(100) NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -96,7 +97,8 @@ async function ensureRecordatoriosPagosTables(db) {
                     INDEX idx_rpa_recordatorio (recordatorio_id),
                     INDEX idx_rpa_cuenta_conc (cuenta_bancaria_id, estado_conciliacion, fecha_pago),
                     INDEX idx_rpa_operacion (tipo_operacion),
-                    INDEX idx_rpa_fecha (fecha_pago)
+                    INDEX idx_rpa_fecha (fecha_pago),
+                    INDEX idx_rpa_cheque (cheque_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
 
@@ -119,17 +121,21 @@ async function ensureRecordatoriosPagosTables(db) {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
 
-            // Migración idempotente para columna beneficiario en tablas ya creadas
+            // Migración idempotente para columnas beneficiario y cheque_id en tablas ya creadas
             try {
                 const [cols] = await db.query(
                     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recordatorios_pagos_abonos' AND COLUMN_NAME = 'beneficiario'`
+                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recordatorios_pagos_abonos' AND COLUMN_NAME IN ('beneficiario', 'cheque_id')`
                 );
-                if (!cols || cols.length === 0) {
+                const existingCols = new Set((cols || []).map((c) => c.COLUMN_NAME));
+                if (!existingCols.has('beneficiario')) {
                     await db.query(`ALTER TABLE recordatorios_pagos_abonos ADD COLUMN beneficiario VARCHAR(150) NULL AFTER tarjeta_ref`);
                 }
+                if (!existingCols.has('cheque_id')) {
+                    await db.query(`ALTER TABLE recordatorios_pagos_abonos ADD COLUMN cheque_id INT NULL AFTER movimiento_bancario_id, ADD INDEX idx_rpa_cheque (cheque_id)`);
+                }
             } catch (migErr) {
-                console.warn('[RecordatoriosPagos] Aviso verificando columna beneficiario:', migErr.message);
+                console.warn('[RecordatoriosPagos] Aviso verificando columnas en recordatorios_pagos_abonos:', migErr.message);
             }
 
             tablesInitialized = true;
@@ -156,13 +162,23 @@ function normalizeMetodoPago(val = '') {
     if (PAYMENT_METHOD_IDS.has(raw)) return raw;
     if (raw.includes('TRANSF')) return 'TRANSFERENCIA';
     if (raw.includes('CHEQUE') || raw === 'CHQ' || raw === 'CK') return 'CHEQUE';
-    if (raw.includes('TARJETA_DE_DEBITO') || raw.includes('DEBITO_TARJ') || raw === 'TD') return 'TARJETA_DEBITO';
-    if (raw.includes('TARJETA') || raw.startsWith('TC') || raw.includes('VISA') || raw.includes('MASTERCARD') || raw.includes('AMEX')) return 'TARJETA_CREDITO';
-    if (raw.includes('EFECT') || raw.includes('CAJA') || raw.includes('CASH')) return 'EFECTIVO';
     if (raw.includes('NOTA_DE_CREDITO') || raw.includes('NOTA_CREDITO') || raw === 'NC') return 'NOTA_CREDITO';
+    if (raw.includes('TARJETA_DE_DEBITO') || raw.includes('DEBITO_TARJ') || raw === 'TD') return 'TARJETA_DEBITO';
+    if (
+        raw.includes('TARJETA') ||
+        raw.startsWith('TC') ||
+        raw.includes('VISA') ||
+        raw.includes('MASTERCARD') ||
+        raw.includes('AMEX') ||
+        /(^|_)POS(_|$)/.test(raw) ||
+        (raw.includes('VOUCHER') && !raw.includes('NOTA'))
+    ) {
+        return raw.includes('DEBITO') ? 'TARJETA_DEBITO' : 'TARJETA_CREDITO';
+    }
     if (raw.includes('REMISION')) return 'REMISION';
     if (raw.includes('DEBITO_AUT') || raw.includes('CARGO_AUT')) return 'DEBITO_AUTOMATICO';
-    if (raw.includes('DEPOSITO')) return 'DEPOSITO';
+    if (raw.includes('DEPOSITO') || raw.includes('REMESA')) return 'DEPOSITO';
+    if (raw.includes('EFECT') || raw.includes('CAJA') || raw.includes('CASH')) return 'EFECTIVO';
     if (raw.includes('COMPENS') || raw.includes('CANJE')) return 'COMPENSACION';
     return 'TRANSFERENCIA';
 }
@@ -210,9 +226,12 @@ function computePaymentBalance(montoTotal, abonos = [], legacyEstado = 'P') {
     const sumAbonos = roundMoney(list.reduce((acc, a) => acc + Math.max(0, Number(a.monto || 0)), 0));
     const saldo = roundMoney(Math.max(0, total - sumAbonos));
     const isComplete = total > 0 ? sumAbonos >= (total - 0.005) : sumAbonos > 0;
-    const porcentaje = total > 0
+    const rawPorcentaje = total > 0
         ? Math.min(100, Math.round((sumAbonos / total) * 1000) / 10)
         : (sumAbonos > 0 ? 100 : 0);
+    const porcentaje = (!isComplete && saldo > 0)
+        ? Math.min(99.99, rawPorcentaje)
+        : rawPorcentaje;
 
     let ultimaFecha = null;
     for (const a of list) {
@@ -1054,7 +1073,7 @@ function matchExtractedReceiptToCatalog(rawAnalysis = {}, adminCuentas = [], con
     // Determinar método de pago dentro del catálogo permitido
     let metodoPago = normalizeMetodoPago(metodoRaw);
     const combinedTypeHints = normalizeStr(`${metodoRaw} ${tipoDoc} ${tarjetaDetectada}`);
-    if (/\bTC\b|CREDITO|VISA|MASTERCARD|AMEX|POS|VOUCHER/i.test(combinedTypeHints) && !combinedTypeHints.includes('NOTA')) {
+    if (/\bTC\b|CREDITO|VISA|MASTERCARD|AMEX|\bPOS\b|VOUCHER/i.test(combinedTypeHints) && !combinedTypeHints.includes('NOTA')) {
         metodoPago = combinedTypeHints.includes('DEBITO') ? 'TARJETA_DEBITO' : 'TARJETA_CREDITO';
     } else if (/NOTA\s+DE\s+CREDITO|\bNC\b/i.test(combinedTypeHints)) {
         metodoPago = 'NOTA_CREDITO';
@@ -1062,10 +1081,10 @@ function matchExtractedReceiptToCatalog(rawAnalysis = {}, adminCuentas = [], con
         metodoPago = 'REMISION';
     } else if (/CHEQUE/i.test(combinedTypeHints)) {
         metodoPago = 'CHEQUE';
-    } else if (/EFECTIVO|CAJA/i.test(combinedTypeHints)) {
-        metodoPago = 'EFECTIVO';
     } else if (/DEPOSITO|REMESA/i.test(combinedTypeHints)) {
         metodoPago = 'DEPOSITO';
+    } else if (/EFECTIVO|CAJA|CASH/i.test(combinedTypeHints)) {
+        metodoPago = 'EFECTIVO';
     } else if (/DEBITO\s+AUT/i.test(combinedTypeHints)) {
         metodoPago = 'DEBITO_AUTOMATICO';
     }

@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
     Search, Plus, CheckCircle, Edit, Trash2, X, Save, Download,
     Printer, Sparkles, Send, ArrowUp, ArrowDown, ArrowUpDown,
-    Filter, CreditCard, RotateCcw, CalendarClock, Paperclip, Bell, Bot
+    Filter, CreditCard, RotateCcw, CalendarClock, Paperclip, Bell, Bot,
+    Upload, Camera, Eye, FileText, Loader2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -17,6 +18,8 @@ import ReceiptViewerModal from '../components/ReceiptViewerModal';
 import MibotProgramarModal from '../components/MibotProgramarModal';
 import { parseDateOnly, todayStr } from '../utils/date';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
+import { sanitizeSpreadsheetRows } from '../utils/exportSanitizer';
+import { compressReceiptFile, formatBytes } from '../utils/receiptCompressor';
 
 const BANK_KEYWORD_MAP = [
     { tokens: ['bac', 'america central'], bankMatch: 'AMERICA CENTRAL', shortCode: 'BAC' },
@@ -192,7 +195,6 @@ export default function ControlRecordatorios() {
     // UI State
     const [loading, setLoading] = useState(false);
     const [isFormModalOpen, setIsFormModalOpen] = useState(false);
-    const [isPagoModalOpen, setIsPagoModalOpen] = useState(false);
     const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
     const [parentsList, setParentsList] = useState([]);
 
@@ -200,6 +202,7 @@ export default function ControlRecordatorios() {
     const [pagosPopupRow, setPagosPopupRow] = useState(null);
     const [quickViewerOpen, setQuickViewerOpen] = useState(false);
     const [quickViewerItems, setQuickViewerItems] = useState([]);
+    const [quickViewerIdx, setQuickViewerIdx] = useState(0);
     const [quickViewerTitle, setQuickViewerTitle] = useState('Comprobantes');
 
     // Popup MiBot Telegram (programar avisos de pago pendiente, tareas, validaciones o reuniones)
@@ -228,18 +231,24 @@ export default function ControlRecordatorios() {
     });
     const [openMibotAfterCreate, setOpenMibotAfterCreate] = useState(false);
 
-    // Payment / Edit Forma de Pago Modal State
-    const [pagoData, setPagoData] = useState({
-        id_vencimiento: '',
-        fecPago: todayStr(),
-        formaPago: '',
-        ubicacion: '',
-        descripcion: '',
-        monto: 0,
-        estadoActual: 'PENDIENTE',
-        mode: 'pay' // 'pay' | 'edit_forma'
-    });
-    const [selectedCuentaId, setSelectedCuentaId] = useState('');
+    // Capturas y OCR IA al crear una "Nueva Operación de Pago" (R6.2)
+    const [pendingFormReceipts, setPendingFormReceipts] = useState([]);
+    const [formCompressing, setFormCompressing] = useState(false);
+    const [formDragging, setFormDragging] = useState(false);
+    const [formAutoOcr, setFormAutoOcr] = useState(true);
+    const [formAnalyzingOcr, setFormAnalyzingOcr] = useState(false);
+    const [formLastOcr, setFormLastOcr] = useState(null);
+    const [formOcrMeta, setFormOcrMeta] = useState(null);
+    const [formSaving, setFormSaving] = useState(false);
+    const formDirtyRef = useRef(new Set());
+    const formOcrAppliedRef = useRef(new Set());
+    const formCompressingCountRef = useRef(0);
+    const formDataRef = useRef(formData);
+    formDataRef.current = formData;
+    const pendingFormReceiptsRef = useRef([]);
+    pendingFormReceiptsRef.current = pendingFormReceipts;
+    const formFileInputRef = useRef(null);
+    const formCameraInputRef = useRef(null);
 
     // AI Chat State
     const [isChatOpen, setIsChatOpen] = useState(false);
@@ -488,6 +497,7 @@ export default function ControlRecordatorios() {
                 setPagosPopupRow(rec);
                 return;
             }
+            setQuickViewerIdx(0);
             setQuickViewerItems(comps);
             setQuickViewerTitle(`Comprobantes — ${rec.descripcion || ''}`);
             setQuickViewerOpen(true);
@@ -495,15 +505,6 @@ export default function ControlRecordatorios() {
             addToast('Error al cargar comprobantes del registro', 'error');
         }
     };
-
-    // Contextual presets for Pago / Forma de Pago Modal
-    const ubicacionSuggestedAccounts = useMemo(() => {
-        return getAccountsForUbicacion(cuentasBancarias, pagoData.ubicacion);
-    }, [cuentasBancarias, pagoData.ubicacion]);
-
-    const smartTypedMatchesPago = useMemo(() => {
-        return findSmartPresetMatches(pagoData.formaPago, cuentasBancarias, pagoData.ubicacion);
-    }, [pagoData.formaPago, cuentasBancarias, pagoData.ubicacion]);
 
     // Contextual presets for Nuevo/Editar Recordatorio Modal
     const selectedFormUbicacionName = useMemo(() => {
@@ -523,28 +524,263 @@ export default function ControlRecordatorios() {
         return findSmartPresetMatches(formData.formaPago2, cuentasBancarias, selectedFormUbicacionName);
     }, [formData.formaPago2, cuentasBancarias, selectedFormUbicacionName]);
 
-    const openPagoOrEditModal = (rec, mode = 'pay') => {
-        const defaultSuggested = getAccountsForUbicacion(cuentasBancarias, rec.ubicacion);
-        const existingForma = String(rec.forma_pago || '').trim();
-        const fallbackObs = String(rec.observacion || '').trim();
-        const prefilledForma = existingForma
-            || (findSmartPresetMatches(fallbackObs, cuentasBancarias, rec.ubicacion)[0]
-                ? buildPresetValueFromAccount(findSmartPresetMatches(fallbackObs, cuentasBancarias, rec.ubicacion)[0])
-                : (defaultSuggested.length === 1 ? buildPresetValueFromAccount(defaultSuggested[0]) : ''));
+    const resetFormModalReceipts = useCallback(() => {
+        formCompressingCountRef.current = 0;
+        setPendingFormReceipts([]);
+        setFormCompressing(false);
+        setFormDragging(false);
+        setFormAnalyzingOcr(false);
+        setFormLastOcr(null);
+        setFormOcrMeta(null);
+        formDirtyRef.current.clear();
+        formOcrAppliedRef.current.clear();
+    }, []);
 
-        setSelectedCuentaId('');
-        setPagoData({
-            id_vencimiento: rec.id,
-            fecPago: rec.fecha_cancelacion ? String(rec.fecha_cancelacion).slice(0, 10) : todayStr(),
-            formaPago: prefilledForma,
-            ubicacion: rec.ubicacion || '',
-            descripcion: rec.descripcion || '',
-            monto: Number(rec.monto || 0),
-            estadoActual: rec.estado || 'PENDIENTE',
-            mode: rec.estado === 'CANCELADO' ? 'edit_forma' : mode
+    useEffect(() => {
+        if (!isFormModalOpen) {
+            resetFormModalReceipts();
+        }
+    }, [isFormModalOpen, resetFormModalReceipts]);
+
+    const markFormDirty = useCallback((...fields) => {
+        fields.forEach(f => formDirtyRef.current.add(f));
+    }, []);
+
+    const applyFormOcrAnalysis = useCallback((an, { force = false } = {}) => {
+        if (!an) return { filledFields: [], skippedFields: [] };
+        const cur = formDataRef.current || {};
+        const filledFields = [];
+        const skippedFields = [];
+        const patch = {};
+
+        const canFill = (field, isEmpty, allowDefaultOverwrite = false) => {
+            if (force) return true;
+            if (formDirtyRef.current.has(field)) return false;
+            if (formOcrAppliedRef.current.has(field)) return false;
+            if (isEmpty) return true;
+            return allowDefaultOverwrite;
+        };
+
+        const markOcrOwned = (field) => {
+            formOcrAppliedRef.current.add(field);
+            if (force) formDirtyRef.current.delete(field);
+        };
+
+        const candidateDesc = String(an.beneficiario || an.concepto || '').trim().slice(0, 30);
+        if (candidateDesc) {
+            if (canFill('descripcion', !String(cur.descripcion || '').trim(), false)) {
+                patch.descripcion = candidateDesc;
+                markOcrOwned('descripcion');
+                filledFields.push('descripción');
+            } else {
+                skippedFields.push('descripción');
+            }
+        }
+
+        if (an.monto && Number(an.monto) > 0) {
+            if (canFill('monto', !Number(cur.monto) || Number(cur.monto) <= 0, true)) {
+                patch.monto = Number(an.monto).toFixed(2);
+                markOcrOwned('monto');
+                filledFields.push('monto');
+            } else {
+                skippedFields.push('monto');
+            }
+        }
+
+        if (an.fecha_pago) {
+            if (canFill('iniciar', !cur.iniciar, true)) {
+                patch.iniciar = an.fecha_pago;
+                markOcrOwned('iniciar');
+                filledFields.push('fecha inicio');
+            } else {
+                skippedFields.push('fecha inicio');
+            }
+        }
+
+        const matchedCuenta = an.cuenta_bancaria_id
+            ? cuentasBancarias.find(c => Number(c.raw_id || c.id) === Number(an.cuenta_bancaria_id))
+            : null;
+        const presetVal = matchedCuenta ? buildPresetValueFromAccount(matchedCuenta) : '';
+        const candidateForma = (presetVal || an.tarjeta_ref || an.referencia_doc || an.metodo_pago || '').trim().slice(0, 50);
+
+        if (candidateForma) {
+            if (canFill('forma_pago', !String(cur.forma_pago || '').trim(), false)) {
+                patch.forma_pago = candidateForma;
+                markOcrOwned('forma_pago');
+                filledFields.push('observación/cuenta');
+            } else {
+                skippedFields.push('observación/cuenta');
+            }
+        }
+
+        if (cur.pagado && cur.repetir_desc === 'VEZ') {
+            if (an.fecha_pago) {
+                if (canFill('fecPago', !cur.fecPago, true)) {
+                    patch.fecPago = an.fecha_pago;
+                    markOcrOwned('fecPago');
+                    filledFields.push('fecha pago');
+                } else {
+                    skippedFields.push('fecha pago');
+                }
+            }
+            if (candidateForma) {
+                if (canFill('formaPago2', !String(cur.formaPago2 || '').trim(), false)) {
+                    patch.formaPago2 = candidateForma;
+                    markOcrOwned('formaPago2');
+                    filledFields.push('forma de pago');
+                } else {
+                    skippedFields.push('forma de pago');
+                }
+            }
+        }
+
+        const resolvedCuentaLabel = an.cuenta_label || (matchedCuenta ? formatCuentaLabel(matchedCuenta) : null);
+        const resolvedNotas = an.notas_sugeridas || an.concepto || null;
+        const filledDesc = Boolean(patch.descripcion);
+        const filledForma = Boolean(patch.forma_pago || patch.formaPago2);
+        const filledAny = filledFields.length > 0;
+
+        setFormOcrMeta(prev => {
+            const curMeta = prev || {};
+            const pickMeta = (key, nextVal, fieldWasFilled) => {
+                if (force) return nextVal;
+                const hasPrior = curMeta[key] !== null && curMeta[key] !== undefined && String(curMeta[key]).trim() !== '';
+                if (fieldWasFilled || !hasPrior) return nextVal;
+                return curMeta[key];
+            };
+            return {
+                tipo_operacion: curMeta.tipo_operacion && !force ? curMeta.tipo_operacion : 'CXP',
+                metodo_pago: pickMeta('metodo_pago', an.metodo_pago || null, filledForma),
+                cuenta_bancaria_id: pickMeta('cuenta_bancaria_id', an.cuenta_bancaria_id || null, filledForma),
+                cuenta_label: pickMeta('cuenta_label', resolvedCuentaLabel, filledForma),
+                tarjeta_ref: pickMeta('tarjeta_ref', an.tarjeta_ref || null, filledForma),
+                beneficiario: pickMeta('beneficiario', an.beneficiario || null, filledDesc),
+                referencia_doc: pickMeta('referencia_doc', an.referencia_doc || null, filledForma || filledDesc),
+                notas: pickMeta('notas', resolvedNotas, filledDesc || filledAny)
+            };
         });
-        setIsPagoModalOpen(true);
+
+        if (Object.keys(patch).length > 0) {
+            setFormData(prev => ({ ...prev, ...patch }));
+        }
+        return { filledFields, skippedFields };
+    }, [cuentasBancarias]);
+
+    const runFormReceiptOcr = useCallback(async ({ dataUrl, nombreOriginal = '' }) => {
+        if (!dataUrl) return;
+        setFormAnalyzingOcr(true);
+        try {
+            const cur = formDataRef.current || {};
+            const res = await api.post('/operaciones/recordatorios/analizar-comprobante', {
+                data_url: dataUrl,
+                nombre_original: nombreOriginal,
+                contexto: {
+                    descripcion: cur.descripcion || '',
+                    ubicacion: selectedFormUbicacionName || '',
+                    monto_total: Number(cur.monto || 0)
+                }
+            });
+            const an = res.data?.analisis;
+            if (an) {
+                setFormLastOcr(an);
+                const { filledFields, skippedFields } = applyFormOcrAnalysis(an);
+                if (filledFields.length > 0) {
+                    addToast(`IA completó: ${filledFields.join(', ')}`, 'success');
+                } else if (skippedFields.length > 0) {
+                    addToast('Comprobante leído; se conservaron tus valores actuales. Usa "Re-aplicar datos IA" si deseas reemplazarlos.', 'info');
+                } else {
+                    addToast('Comprobante leído correctamente', 'success');
+                }
+            }
+        } catch (err) {
+            addToast(err.response?.data?.message || 'No se pudo analizar el comprobante con IA', 'warning');
+        } finally {
+            setFormAnalyzingOcr(false);
+        }
+    }, [addToast, applyFormOcrAnalysis, selectedFormUbicacionName]);
+
+    const deduplicateFormReceiptBatch = (existingList, batch) => {
+        const existingNames = new Set((existingList || []).map(r => r?.nombre_original).filter(Boolean));
+        return batch.map(item => {
+            let finalName = item.nombre_original;
+            if (finalName && finalName.startsWith('captura_') && existingNames.has(finalName)) {
+                const dotIdx = finalName.lastIndexOf('.');
+                const stem = dotIdx > 0 ? finalName.slice(0, dotIdx) : finalName;
+                const ext = dotIdx > 0 ? finalName.slice(dotIdx) : '';
+                let seq = 2;
+                while (existingNames.has(`${stem}_${seq}${ext}`)) {
+                    seq += 1;
+                }
+                finalName = `${stem}_${seq}${ext}`;
+            }
+            if (finalName) existingNames.add(finalName);
+            return finalName === item.nombre_original ? item : { ...item, nombre_original: finalName };
+        });
     };
+
+    const handleFormProcessFiles = useCallback(async (fileList) => {
+        const files = Array.from(fileList || []).filter(Boolean);
+        if (files.length === 0) return;
+
+        formCompressingCountRef.current += 1;
+        setFormCompressing(true);
+        const rawBatch = [];
+        try {
+            for (const file of files.slice(0, 8)) {
+                try {
+                    const comp = await compressReceiptFile(file);
+                    rawBatch.push({
+                        ...comp,
+                        tempId: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                        nota: ''
+                    });
+                } catch (fileErr) {
+                    addToast(fileErr.message || `Error comprimiendo ${file.name}`, 'warning');
+                }
+            }
+
+            if (rawBatch.length === 0) return;
+            setPendingFormReceipts(prev => [...prev, ...deduplicateFormReceiptBatch(prev, rawBatch)]);
+            const savedBytes = rawBatch.reduce((acc, c) => acc + Math.max(0, (c.original_size || 0) - (c.compressed_size || 0)), 0);
+            addToast(
+                `${rawBatch.length} comprobante(s) adjuntado(s)${savedBytes > 20000 ? ` (ahorro ${formatBytes(savedBytes)})` : ''}`,
+                'success'
+            );
+            if (formAutoOcr && rawBatch[0]?.data_url) {
+                runFormReceiptOcr({
+                    dataUrl: rawBatch[0].data_url,
+                    nombreOriginal: rawBatch[0].nombre_original
+                });
+            }
+        } finally {
+            formCompressingCountRef.current = Math.max(0, formCompressingCountRef.current - 1);
+            setFormCompressing(formCompressingCountRef.current > 0);
+        }
+    }, [addToast, formAutoOcr, runFormReceiptOcr]);
+
+    // Ctrl+V exclusivamente cuando el modal de creación está abierto y sin otros modales encima
+    useEffect(() => {
+        if (!isFormModalOpen || formData.id || pagosPopupRow || mibotModalOpen || quickViewerOpen || previewModalOpen || isSearchModalOpen) {
+            return undefined;
+        }
+        const onPaste = (e) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            const pastedFiles = [];
+            for (const item of items) {
+                if (item.kind === 'file') {
+                    const f = item.getAsFile();
+                    if (f) pastedFiles.push(f);
+                }
+            }
+            if (pastedFiles.length > 0) {
+                e.preventDefault();
+                handleFormProcessFiles(pastedFiles);
+            }
+        };
+        window.addEventListener('paste', onPaste);
+        return () => window.removeEventListener('paste', onPaste);
+    }, [isFormModalOpen, formData.id, pagosPopupRow, mibotModalOpen, quickViewerOpen, previewModalOpen, isSearchModalOpen, handleFormProcessFiles]);
 
     const resolveFinalFormaPago = (rawValue, ubicacionCtx) => {
         const trimmed = String(rawValue || '').trim();
@@ -594,9 +830,13 @@ export default function ControlRecordatorios() {
                 if (term || p.estado !== 'ALL') addToast('Orden de IA aplicada: Filtrando vista.', 'success');
             } else if (iaResponse.action === 'PAY') {
                 const id = iaResponse.action_params?.id_recordatorio;
-                const rec = displayRecordatorios.find(r => String(r.id) === String(id) || String(r.id_recordatorio) === String(id));
-                if (rec) {
-                    openPagoOrEditModal({ ...rec, forma_pago: rec.forma_pago || 'Aprobado vía IA Asistente' }, 'pay');
+                const hasValidId = id !== null && id !== undefined && String(id).trim() !== '';
+                const matches = hasValidId
+                    ? displayRecordatorios.filter(r => r.id_recordatorio !== null && r.id_recordatorio !== undefined && String(r.id_recordatorio) === String(id).trim())
+                    : [];
+                const rec = matches.find(r => r.estado !== 'CANCELADO') || matches[0];
+                if (rec && rec.id) {
+                    setPagosPopupRow(rec);
                 } else {
                     setChatHistory(prev => [...prev, { role: 'ai', text: 'No logré localizar ese ID en la tabla mostrada.' }]);
                 }
@@ -610,19 +850,69 @@ export default function ControlRecordatorios() {
 
     const handleFormSubmit = async (e) => {
         e.preventDefault();
+        setFormSaving(true);
         try {
+            const resolvedFormaPago = resolveFinalFormaPago(formData.forma_pago, selectedFormUbicacionName);
+            const resolvedFormaPago2 = resolveFinalFormaPago(formData.formaPago2, selectedFormUbicacionName);
+            const isPaidOneTime = !formData.id && formData.repetir_desc === 'VEZ' && Boolean(formData.pagado);
+
+            let pagoDetallePayload = formOcrMeta ? { ...formOcrMeta } : {};
+            if (isPaidOneTime || resolvedFormaPago2) {
+                const formaPago2Manual = formDirtyRef.current.has('formaPago2');
+                const refText = isPaidOneTime
+                    ? (formaPago2Manual ? resolvedFormaPago2 : (resolvedFormaPago2 || resolvedFormaPago))
+                    : (resolvedFormaPago2 || resolvedFormaPago);
+                const matchedAcc = refText
+                    ? cuentasBancarias.find(c => buildPresetValueFromAccount(c) === refText || formatCuentaLabel(c) === refText)
+                    : null;
+                if (matchedAcc) {
+                    const numericId = Number(matchedAcc.raw_id || matchedAcc.id);
+                    if (Number.isInteger(numericId) && numericId > 0) {
+                        pagoDetallePayload.cuenta_bancaria_id = numericId;
+                    }
+                    pagoDetallePayload.cuenta_label = buildPresetValueFromAccount(matchedAcc);
+                    if (!pagoDetallePayload.metodo_pago) pagoDetallePayload.metodo_pago = 'TRANSFERENCIA';
+                } else if (isPaidOneTime && formaPago2Manual) {
+                    pagoDetallePayload.cuenta_bancaria_id = null;
+                    pagoDetallePayload.cuenta_label = resolvedFormaPago2 || null;
+                } else if (refText && !pagoDetallePayload.cuenta_label && !pagoDetallePayload.tarjeta_ref) {
+                    pagoDetallePayload.cuenta_label = refText;
+                }
+            }
+            const hasPagoDetalle = Object.values(pagoDetallePayload).some(
+                v => v !== null && v !== undefined && String(v).trim() !== ''
+            );
+
             const payload = {
                 ...formData,
-                forma_pago: resolveFinalFormaPago(formData.forma_pago, selectedFormUbicacionName),
-                formaPago2: resolveFinalFormaPago(formData.formaPago2, selectedFormUbicacionName)
+                forma_pago: resolvedFormaPago,
+                formaPago2: resolvedFormaPago2,
+                ...(!formData.id ? {
+                    comprobantes: pendingFormReceipts.map(c => ({
+                        data_url: c.data_url,
+                        nombre_original: c.nombre_original,
+                        ancho: c.ancho,
+                        alto: c.alto,
+                        nota: c.nota || null
+                    })),
+                    pago_detalle: hasPagoDetalle ? pagoDetallePayload : null
+                } : {})
             };
+
             const res = await api.post('/operaciones/recordatorios', payload);
-            addToast('Recordatorio guardado correctamente', 'success');
+            const savedCount = Array.isArray(res.data?.comprobantes) ? res.data.comprobantes.length : 0;
+            addToast(
+                savedCount > 0
+                    ? `Recordatorio guardado con ${savedCount} comprobante(s)`
+                    : 'Recordatorio guardado correctamente',
+                'success'
+            );
             const shouldOpenMibot = !formData.id && openMibotAfterCreate;
             const createdVenId = res.data?.first_vencimiento_id || null;
             const createdRecId = res.data?.recordatorio_id || null;
             setIsFormModalOpen(false);
             setOpenMibotAfterCreate(false);
+            resetFormModalReceipts();
             fetchData();
 
             if (shouldOpenMibot && createdVenId) {
@@ -641,13 +931,15 @@ export default function ControlRecordatorios() {
                 setMibotModalOpen(true);
             }
         } catch (error) {
-            addToast('Error al guardar recordatorio', 'error');
+            addToast(error.response?.data?.message || 'Error al guardar recordatorio', 'error');
+        } finally {
+            setFormSaving(false);
         }
     };
 
     const loadForEdit = async (vencimientoRec) => {
         if (vencimientoRec.estado === 'CANCELADO') {
-            openPagoOrEditModal(vencimientoRec, 'edit_forma');
+            setPagosPopupRow(vencimientoRec);
             return;
         }
         try {
@@ -657,6 +949,7 @@ export default function ControlRecordatorios() {
             }
 
             const p = res.data.recordatorio;
+            resetFormModalReceipts();
             setFormData({
                 id: p.id,
                 descripcion: p.descripcion,
@@ -801,48 +1094,6 @@ export default function ControlRecordatorios() {
         }
     };
 
-    const handlePagoSubmit = async (e) => {
-        e.preventDefault();
-        const finalFormaPago = resolveFinalFormaPago(pagoData.formaPago, pagoData.ubicacion);
-        try {
-            if (pagoData.mode === 'edit_forma') {
-                await api.patch(`/operaciones/recordatorios/vencimiento/${pagoData.id_vencimiento}`, {
-                    forma_pago: finalFormaPago,
-                    fecha_cancelacion: pagoData.estadoActual === 'CANCELADO' ? pagoData.fecPago : undefined
-                });
-                addToast('Forma de pago actualizada', 'success');
-            } else {
-                if (!finalFormaPago) {
-                    addToast('Indique o seleccione la forma de pago', 'warning');
-                    return;
-                }
-                await api.put(`/operaciones/recordatorios/pagar/${pagoData.id_vencimiento}`, {
-                    fecha_cancelacion: pagoData.fecPago,
-                    forma_pago: finalFormaPago
-                });
-                addToast('Pago registrado correctamente', 'success');
-            }
-            setIsPagoModalOpen(false);
-            fetchData();
-        } catch (error) {
-            addToast('Error al procesar la operación de pago', 'error');
-        }
-    };
-
-    const handleSaveOnlyFormaPago = async () => {
-        const finalFormaPago = resolveFinalFormaPago(pagoData.formaPago, pagoData.ubicacion);
-        try {
-            await api.patch(`/operaciones/recordatorios/vencimiento/${pagoData.id_vencimiento}`, {
-                forma_pago: finalFormaPago
-            });
-            addToast('Forma de pago preasignada correctamente', 'success');
-            setIsPagoModalOpen(false);
-            fetchData();
-        } catch (error) {
-            addToast('Error al guardar forma de pago', 'error');
-        }
-    };
-
     const exportToExcel = () => {
         if (displayRecordatorios.length === 0) {
             addToast('No hay datos en pantalla para exportar', 'warning');
@@ -863,7 +1114,7 @@ export default function ControlRecordatorios() {
             'Comprobantes': Number(r.comprobantes_count || 0),
             'Fec Pago': formatDate(r.fecha_cancelacion)
         }));
-        const ws = XLSX.utils.json_to_sheet(wsData);
+        const ws = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRows(wsData));
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Recordatorios');
         XLSX.writeFile(wb, `Control_de_Pagos_${todayStr()}.xlsx`);
@@ -1015,6 +1266,7 @@ export default function ControlRecordatorios() {
                         className="btn-success"
                         style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', height: '36px', padding: '0 1rem', fontSize: '0.8rem' }}
                         onClick={() => {
+                            resetFormModalReceipts();
                             setFormData({ id: '', descripcion: '', id_ubicacion: '', iniciar: todayStr(), activo: true, monto: 0.0, repetir: 1, repetir_desc: 'VEZ', forma_pago: '', pagado: false, fecPago: todayStr(), formaPago2: '' });
                             setOpenMibotAfterCreate(false);
                             setIsFormModalOpen(true);
@@ -1080,12 +1332,19 @@ export default function ControlRecordatorios() {
                     <div style={{
                         display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
                         backgroundColor: 'rgba(99, 102, 241, 0.12)', border: '1px solid var(--primary)',
-                        padding: '0 0.75rem', borderRadius: '8px', height: '36px'
+                        padding: '0 0.75rem', borderRadius: '8px', height: '36px',
+                        maxWidth: '100%', overflow: 'hidden', minWidth: 0
                     }}>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold' }}>
+                        <span
+                            title={`${selectedParent.descripcion} (#${selectedParent.id})`}
+                            style={{
+                                fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold',
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0
+                            }}
+                        >
                             MATRIZ: <span style={{ color: 'var(--text)' }}>{selectedParent.descripcion} (#{selectedParent.id})</span>
                         </span>
-                        <button type="button" onClick={clearParentFilter} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', padding: 0 }}>
+                        <button type="button" onClick={clearParentFilter} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', padding: 0, flexShrink: 0 }}>
                             <X size={15} />
                         </button>
                     </div>
@@ -1658,7 +1917,8 @@ export default function ControlRecordatorios() {
                                     <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem' }}>
                                         {formatDate(r.fecha_cancelacion) || '—'}
                                     </td>
-                                    <td style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center', padding: '0.45rem 0.5rem' }}>
+                                    <td style={{ padding: '0.45rem 0.5rem' }}>
+                                        <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
                                         <button
                                             type="button"
                                             className="btn-primary"
@@ -1733,6 +1993,7 @@ export default function ControlRecordatorios() {
                                         >
                                             <Trash2 size={14} />
                                         </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
@@ -1842,7 +2103,260 @@ export default function ControlRecordatorios() {
 
             {/* MODAL 1: NUEVO/EDITAR RECORDATORIO */}
             <Modal open={isFormModalOpen} onClose={() => setIsFormModalOpen(false)} title={formData.id ? 'Editar Recordatorio' : 'Nueva Operación de Pago'} size="md">
-                <form onSubmit={handleFormSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <form onSubmit={handleFormSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem', minWidth: 0 }}>
+                    {/* Zona de capturas / PDF + OCR IA opcional al crear nueva operación (R6.2) */}
+                    {!formData.id && (
+                        <div
+                            onDragOver={e => { e.preventDefault(); setFormDragging(true); }}
+                            onDragLeave={() => setFormDragging(false)}
+                            onDrop={e => {
+                                e.preventDefault();
+                                setFormDragging(false);
+                                handleFormProcessFiles(e.dataTransfer?.files);
+                            }}
+                            style={{
+                                padding: '0.65rem 0.75rem',
+                                borderRadius: '9px',
+                                backgroundColor: 'rgba(56, 189, 248, 0.06)',
+                                border: formDragging ? '2px dashed #38bdf8' : '1px dashed rgba(56, 189, 248, 0.45)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.45rem',
+                                minWidth: 0
+                            }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#7dd3fc', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                    <Sparkles size={13} />
+                                    Adjuntar comprobante / factura (Ctrl + V, arrastrar o foto)
+                                </span>
+                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={formAutoOcr}
+                                        onChange={e => setFormAutoOcr(e.target.checked)}
+                                        style={{ width: '16px', height: '16px' }}
+                                    />
+                                    Auto-leer IA
+                                </label>
+                            </div>
+
+                            <input
+                                ref={formFileInputRef}
+                                type="file"
+                                multiple
+                                accept="image/*,.pdf"
+                                style={{ display: 'none' }}
+                                onChange={e => {
+                                    handleFormProcessFiles(e.target.files);
+                                    e.target.value = '';
+                                }}
+                            />
+                            <input
+                                ref={formCameraInputRef}
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                style={{ display: 'none' }}
+                                onChange={e => {
+                                    handleFormProcessFiles(e.target.files);
+                                    e.target.value = '';
+                                }}
+                            />
+
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    disabled={formCompressing || formAnalyzingOcr || formSaving}
+                                    onClick={() => formFileInputRef.current?.click()}
+                                    style={{ flex: '1 1 135px', height: '34px', fontSize: '0.75rem', padding: '0 0.65rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                                >
+                                    <Upload size={13} /> Subir Foto / PDF
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    disabled={formCompressing || formAnalyzingOcr || formSaving}
+                                    onClick={() => formCameraInputRef.current?.click()}
+                                    style={{ flex: '1 1 120px', height: '34px', fontSize: '0.75rem', padding: '0 0.65rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                                >
+                                    <Camera size={13} /> Tomar Foto
+                                </button>
+                            </div>
+
+                            <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                                Puedes pegar capturas con <strong>Ctrl + V</strong>. Se guardarán en la primera cuota (o abono si marcas pagado).
+                            </div>
+
+                            {formAnalyzingOcr && (
+                                <div style={{
+                                    padding: '0.4rem 0.6rem',
+                                    borderRadius: '7px',
+                                    backgroundColor: 'rgba(99, 102, 241, 0.16)',
+                                    border: '1px solid rgba(99, 102, 241, 0.4)',
+                                    color: '#c7d2fe',
+                                    fontSize: '0.72rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem'
+                                }}>
+                                    <Loader2 size={13} className="animate-spin" style={{ flexShrink: 0 }} />
+                                    <span>Analizando comprobante con IA...</span>
+                                </div>
+                            )}
+
+                            {formLastOcr && !formAnalyzingOcr && (
+                                <div style={{
+                                    padding: '0.45rem 0.6rem',
+                                    borderRadius: '7px',
+                                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                    border: '1px solid rgba(16, 185, 129, 0.35)',
+                                    fontSize: '0.7rem',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.22rem'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                        <span style={{ fontWeight: 800, color: '#34d399', display: 'inline-flex', alignItems: 'center', gap: '0.28rem' }}>
+                                            <Sparkles size={11} /> Leído por IA ({formLastOcr.confianza || 'alta'})
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const { filledFields } = applyFormOcrAnalysis(formLastOcr, { force: true });
+                                                addToast(
+                                                    filledFields.length > 0
+                                                        ? `Datos IA aplicados: ${filledFields.join(', ')}`
+                                                        : 'No había campos detectados para aplicar',
+                                                    filledFields.length > 0 ? 'success' : 'info'
+                                                );
+                                            }}
+                                            style={{
+                                                padding: '0.14rem 0.45rem',
+                                                borderRadius: '6px',
+                                                fontSize: '0.67rem',
+                                                fontWeight: 700,
+                                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                                backgroundColor: 'rgba(16, 185, 129, 0.16)',
+                                                color: '#a7f3d0',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            ✨ Re-aplicar datos IA
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', color: 'var(--text)' }}>
+                                        {formLastOcr.monto && <span>Monto: <strong style={{ color: '#34d399' }}>{mc(formLastOcr.monto)}</strong></span>}
+                                        {formLastOcr.beneficiario && <span>A favor de: <strong>{formLastOcr.beneficiario}</strong></span>}
+                                        {formLastOcr.referencia_doc && <span>Ref: <strong>{formLastOcr.referencia_doc}</strong></span>}
+                                    </div>
+                                </div>
+                            )}
+
+                            {pendingFormReceipts.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: 0 }}>
+                                    {pendingFormReceipts.map((r, idx) => (
+                                        <div
+                                            key={r.tempId}
+                                            style={{
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                gap: '0.28rem',
+                                                padding: '0.32rem 0.48rem',
+                                                borderRadius: '7px',
+                                                backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                                border: '1px solid rgba(56, 189, 248, 0.35)',
+                                                fontSize: '0.69rem',
+                                                width: '100%',
+                                                maxWidth: '100%',
+                                                minWidth: 0
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', minWidth: 0 }}>
+                                                {r.mime_type === 'application/pdf' ? (
+                                                    <FileText
+                                                        size={16}
+                                                        color="#f87171"
+                                                        style={{ flexShrink: 0, cursor: 'pointer' }}
+                                                        onClick={() => {
+                                                            setQuickViewerIdx(idx);
+                                                            setQuickViewerItems(pendingFormReceipts);
+                                                            setQuickViewerTitle('Comprobantes por guardar');
+                                                            setQuickViewerOpen(true);
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <img
+                                                        src={r.data_url}
+                                                        alt=""
+                                                        onClick={() => {
+                                                            setQuickViewerIdx(idx);
+                                                            setQuickViewerItems(pendingFormReceipts);
+                                                            setQuickViewerTitle('Comprobantes por guardar');
+                                                            setQuickViewerOpen(true);
+                                                        }}
+                                                        style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }}
+                                                    />
+                                                )}
+                                                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 110px' }}>
+                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }} title={r.nombre_original}>
+                                                        {r.nombre_original}
+                                                    </span>
+                                                    <span style={{ fontSize: '0.62rem', color: '#6ee7b7' }}>
+                                                        {formatBytes(r.compressed_size)}
+                                                    </span>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setQuickViewerIdx(idx);
+                                                        setQuickViewerItems(pendingFormReceipts);
+                                                        setQuickViewerTitle('Comprobantes por guardar');
+                                                        setQuickViewerOpen(true);
+                                                    }}
+                                                    style={{ background: 'rgba(56, 189, 248, 0.14)', border: '1px solid rgba(56, 189, 248, 0.35)', color: '#bae6fd', borderRadius: '5px', cursor: 'pointer', padding: '0.15rem 0.32rem', fontSize: '0.63rem', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
+                                                    title="Ampliar vista previa"
+                                                >
+                                                    <Eye size={10} /> Ver
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    disabled={formAnalyzingOcr}
+                                                    onClick={() => runFormReceiptOcr({ dataUrl: r.data_url, nombreOriginal: r.nombre_original })}
+                                                    style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.45)', color: '#c7d2fe', borderRadius: '5px', cursor: 'pointer', padding: '0.15rem 0.32rem', fontSize: '0.63rem', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
+                                                    title="Leer este comprobante con IA"
+                                                >
+                                                    <Sparkles size={10} /> IA
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setPendingFormReceipts(prev => prev.filter(x => x.tempId !== r.tempId))}
+                                                    style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.1rem', flexShrink: 0 }}
+                                                    title="Quitar"
+                                                >
+                                                    <X size={13} />
+                                                </button>
+                                            </div>
+                                            <input
+                                                type="text"
+                                                maxLength={255}
+                                                className="form-control"
+                                                style={{ height: '28px', fontSize: '0.7rem', padding: '0.15rem 0.45rem', width: '100%' }}
+                                                placeholder="Nota breve (ej. Factura #123, Transferencia...)"
+                                                value={r.nota || ''}
+                                                onChange={e => {
+                                                    const val = e.target.value;
+                                                    setPendingFormReceipts(prev => prev.map(x => (x.tempId === r.tempId ? { ...x, nota: val } : x)));
+                                                }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <div>
                         <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>DESCRIPCIÓN DEL PAGO</label>
                         <input
@@ -1850,7 +2364,10 @@ export default function ControlRecordatorios() {
                             maxLength={30}
                             className="form-control"
                             value={formData.descripcion}
-                            onChange={e => setFormData({ ...formData, descripcion: e.target.value })}
+                            onChange={e => {
+                                markFormDirty('descripcion');
+                                setFormData({ ...formData, descripcion: e.target.value });
+                            }}
                             required
                             placeholder="Ej. Pago de Alquiler, Seguro..."
                         />
@@ -1872,14 +2389,34 @@ export default function ControlRecordatorios() {
 
                         <div>
                             <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>FECHA DE INICIO</label>
-                            <input type="date" className="form-control" value={formData.iniciar} onChange={e => setFormData({ ...formData, iniciar: e.target.value })} required />
+                            <input
+                                type="date"
+                                className="form-control"
+                                value={formData.iniciar}
+                                onChange={e => {
+                                    markFormDirty('iniciar');
+                                    setFormData({ ...formData, iniciar: e.target.value });
+                                }}
+                                required
+                            />
                         </div>
                     </div>
 
                     <div className="form-grid form-grid-3">
                         <div>
                             <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>MONTO ($)</label>
-                            <input type="number" step="0.01" className="form-control" value={formData.monto} onChange={e => setFormData({ ...formData, monto: e.target.value })} required style={{ fontWeight: 'bold', color: 'var(--primary)' }} />
+                            <input
+                                type="number"
+                                step="0.01"
+                                className="form-control"
+                                value={formData.monto}
+                                onChange={e => {
+                                    markFormDirty('monto');
+                                    setFormData({ ...formData, monto: e.target.value });
+                                }}
+                                required
+                                style={{ fontWeight: 'bold', color: 'var(--primary)' }}
+                            />
                         </div>
 
                         <div>
@@ -1915,7 +2452,10 @@ export default function ControlRecordatorios() {
                             maxLength={50}
                             className="form-control"
                             value={formData.forma_pago}
-                            onChange={e => setFormData({ ...formData, forma_pago: e.target.value })}
+                            onChange={e => {
+                                markFormDirty('forma_pago');
+                                setFormData({ ...formData, forma_pago: e.target.value });
+                            }}
                             placeholder="Ej. Factura #123, o escriba 'bac andelsa'..."
                         />
                         {smartTypedMatchesFormObs.length > 0 && (
@@ -1926,7 +2466,10 @@ export default function ControlRecordatorios() {
                                         <button
                                             key={c.id}
                                             type="button"
-                                            onClick={() => setFormData({ ...formData, forma_pago: preset })}
+                                            onClick={() => {
+                                                markFormDirty('forma_pago');
+                                                setFormData({ ...formData, forma_pago: preset });
+                                            }}
                                             style={{
                                                 padding: '0.2rem 0.55rem', fontSize: '0.72rem', borderRadius: '12px',
                                                 border: '1px solid rgba(99, 102, 241, 0.45)', background: 'rgba(99, 102, 241, 0.15)',
@@ -1947,7 +2490,10 @@ export default function ControlRecordatorios() {
                                         <button
                                             key={c.id}
                                             type="button"
-                                            onClick={() => setFormData({ ...formData, forma_pago: preset, formaPago2: formData.pagado && !formData.formaPago2 ? preset : formData.formaPago2 })}
+                                            onClick={() => {
+                                                markFormDirty('forma_pago');
+                                                setFormData({ ...formData, forma_pago: preset, formaPago2: formData.pagado && !formData.formaPago2 ? preset : formData.formaPago2 });
+                                            }}
                                             style={{
                                                 padding: '0.18rem 0.5rem', fontSize: '0.7rem', borderRadius: '10px',
                                                 border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)',
@@ -2002,7 +2548,16 @@ export default function ControlRecordatorios() {
                             <div className="form-grid form-grid-2" style={{ opacity: formData.pagado ? 1 : 0.4, pointerEvents: formData.pagado ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
                                 <div>
                                     <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.74rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>FECHA DE PAGO</label>
-                                    <input type="date" className="form-control" disabled={!formData.pagado} value={formData.fecPago} onChange={e => setFormData({ ...formData, fecPago: e.target.value })} />
+                                    <input
+                                        type="date"
+                                        className="form-control"
+                                        disabled={!formData.pagado}
+                                        value={formData.fecPago}
+                                        onChange={e => {
+                                            markFormDirty('fecPago');
+                                            setFormData({ ...formData, fecPago: e.target.value });
+                                        }}
+                                    />
                                 </div>
                                 <div>
                                     <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.74rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>FORMA DE PAGO</label>
@@ -2013,7 +2568,10 @@ export default function ControlRecordatorios() {
                                         placeholder="Ej. 'bac andelsa', Cheque..."
                                         disabled={!formData.pagado}
                                         value={formData.formaPago2}
-                                        onChange={e => setFormData({ ...formData, formaPago2: e.target.value })}
+                                        onChange={e => {
+                                            markFormDirty('formaPago2');
+                                            setFormData({ ...formData, formaPago2: e.target.value });
+                                        }}
                                     />
                                 </div>
                             </div>
@@ -2025,7 +2583,10 @@ export default function ControlRecordatorios() {
                                             <button
                                                 key={c.id}
                                                 type="button"
-                                                onClick={() => setFormData({ ...formData, formaPago2: preset })}
+                                                onClick={() => {
+                                                    markFormDirty('formaPago2');
+                                                    setFormData({ ...formData, formaPago2: preset });
+                                                }}
                                                 style={{
                                                     padding: '0.2rem 0.55rem', fontSize: '0.72rem', borderRadius: '12px',
                                                     border: '1px solid rgba(16, 185, 129, 0.45)', background: 'rgba(16, 185, 129, 0.15)',
@@ -2043,240 +2604,13 @@ export default function ControlRecordatorios() {
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem', flexWrap: 'wrap' }}>
                         <button type="button" className="btn-secondary" onClick={() => setIsFormModalOpen(false)}>Cancelar</button>
-                        <button type="submit" className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
-                            <Save size={17} /> Guardar Cambios
-                        </button>
-                    </div>
-                </form>
-            </Modal>
-
-            {/* MODAL 2: PAGAR RECORDATORIO / EDITAR FORMA DE PAGO CON PRESETS AUTOMÁTICOS */}
-            <Modal
-                open={isPagoModalOpen}
-                onClose={() => setIsPagoModalOpen(false)}
-                title={pagoData.mode === 'edit_forma' ? 'Editar Forma de Pago' : 'Realizar Pago'}
-                size="md"
-            >
-                <form onSubmit={handlePagoSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.95rem' }}>
-                    {/* Resumen compacto del registro */}
-                    <div style={{
-                        padding: '0.65rem 0.9rem',
-                        borderRadius: '8px',
-                        backgroundColor: 'rgba(99, 102, 241, 0.08)',
-                        border: '1px solid rgba(99, 102, 241, 0.25)',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        gap: '0.5rem',
-                        fontSize: '0.8rem'
-                    }}>
-                        <div>
-                            <div style={{ fontWeight: 700, color: 'var(--text)' }}>{pagoData.descripcion || 'Pago'}</div>
-                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Ubicación: <strong>{pagoData.ubicacion || 'General'}</strong> · Estado: <strong>{pagoData.estadoActual}</strong></div>
-                        </div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--primary)' }}>
-                            {mc(pagoData.monto)}
-                        </div>
-                    </div>
-
-                    {(pagoData.mode === 'pay' || pagoData.estadoActual === 'CANCELADO') && (
-                        <div>
-                            <label style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                                FECHA DEL PAGO
-                            </label>
-                            <input
-                                type="date"
-                                className="form-control"
-                                value={pagoData.fecPago}
-                                onChange={e => setPagoData({ ...pagoData, fecPago: e.target.value })}
-                                required
-                            />
-                        </div>
-                    )}
-
-                    {/* Selector oficial de Cuenta Bancaria (formatCuentaLabel + sortCuentas) */}
-                    <div>
-                        <label style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                            SELECCIONAR CUENTA BANCARIA (PRESET OFICIAL)
-                        </label>
-                        <select
-                            className="form-control"
-                            value={selectedCuentaId}
-                            onChange={e => {
-                                const cid = e.target.value;
-                                setSelectedCuentaId(cid);
-                                const found = cuentasBancarias.find(c => String(c.id) === String(cid));
-                                if (found) {
-                                    setPagoData(prev => ({ ...prev, formaPago: buildPresetValueFromAccount(found) }));
-                                }
-                            }}
+                        <button
+                            type="submit"
+                            className="btn-primary"
+                            disabled={formSaving || formCompressing || formAnalyzingOcr}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}
                         >
-                            <option value="">-- Seleccionar cuenta bancaria o usar presets rápidos --</option>
-                            {cuentasBancarias.map(c => (
-                                <option key={c.id} value={c.id}>
-                                    {formatCuentaLabel(c)}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {/* Presets automáticos contextuales según Ubicación / Empresa (ej. ANDELSA) */}
-                    {ubicacionSuggestedAccounts.length > 0 && (
-                        <div>
-                            <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--primary)', marginBottom: '0.35rem' }}>
-                                Presets automáticos sugeridos para {pagoData.ubicacion}:
-                            </div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                                {ubicacionSuggestedAccounts.map(c => {
-                                    const presetVal = buildPresetValueFromAccount(c);
-                                    const isActive = pagoData.formaPago === presetVal;
-                                    return (
-                                        <button
-                                            key={c.id}
-                                            type="button"
-                                            onClick={() => {
-                                                setSelectedCuentaId(String(c.id));
-                                                setPagoData(prev => ({ ...prev, formaPago: presetVal }));
-                                            }}
-                                            style={{
-                                                padding: '0.28rem 0.65rem',
-                                                borderRadius: '14px',
-                                                fontSize: '0.73rem',
-                                                fontWeight: 600,
-                                                cursor: 'pointer',
-                                                border: isActive ? '1px solid var(--primary)' : '1px solid rgba(255,255,255,0.14)',
-                                                backgroundColor: isActive ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255,255,255,0.05)',
-                                                color: isActive ? '#fff' : 'var(--text)'
-                                            }}
-                                        >
-                                            {presetVal}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Campo editable de Forma de Pago con autocompletado inteligente al escribir */}
-                    <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', flexWrap: 'wrap', gap: '0.25rem' }}>
-                            <label style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)' }}>
-                                FORMA DE PAGO (EDITABLE · MÁX. 50 CARACTERES)
-                            </label>
-                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                {(pagoData.formaPago || '').length}/50
-                            </span>
-                        </div>
-                        <input
-                            type="text"
-                            maxLength={50}
-                            className="form-control"
-                            placeholder="Ej. escriba 'bac de andelsa', 'davi andelsa', Cheque #..."
-                            value={pagoData.formaPago}
-                            onChange={e => setPagoData({ ...pagoData, formaPago: e.target.value })}
-                            onKeyDown={e => {
-                                if (e.key === 'Tab' && smartTypedMatchesPago.length === 1) {
-                                    e.preventDefault();
-                                    setPagoData(prev => ({ ...prev, formaPago: buildPresetValueFromAccount(smartTypedMatchesPago[0]) }));
-                                }
-                            }}
-                            required={pagoData.mode === 'pay'}
-                        />
-
-                        {/* Sugerencias dinámicas al escribir ej. "bac de andelsa" */}
-                        {smartTypedMatchesPago.length > 0 && (
-                            <div style={{
-                                marginTop: '0.45rem',
-                                padding: '0.5rem 0.65rem',
-                                borderRadius: '8px',
-                                backgroundColor: 'rgba(16, 185, 129, 0.08)',
-                                border: '1px solid rgba(16, 185, 129, 0.3)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '0.35rem'
-                            }}>
-                                <span style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 700 }}>
-                                    Cuenta detectada automáticamente (clic o Tab para autocompletar):
-                                </span>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-                                    {smartTypedMatchesPago.map(c => {
-                                        const presetVal = buildPresetValueFromAccount(c);
-                                        return (
-                                            <button
-                                                key={c.id}
-                                                type="button"
-                                                onClick={() => {
-                                                    setSelectedCuentaId(String(c.id));
-                                                    setPagoData(prev => ({ ...prev, formaPago: presetVal }));
-                                                }}
-                                                style={{
-                                                    padding: '0.24rem 0.6rem',
-                                                    borderRadius: '12px',
-                                                    fontSize: '0.73rem',
-                                                    fontWeight: 700,
-                                                    border: '1px solid rgba(16, 185, 129, 0.45)',
-                                                    backgroundColor: 'rgba(16, 185, 129, 0.18)',
-                                                    color: '#d1fae5',
-                                                    cursor: 'pointer'
-                                                }}
-                                            >
-                                                ⚡ {presetVal}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Métodos rápidos genéricos */}
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.5rem' }}>
-                            {metodosBase.map(metodo => (
-                                <button
-                                    key={metodo}
-                                    type="button"
-                                    onClick={() => setPagoData(prev => ({
-                                        ...prev,
-                                        formaPago: prev.formaPago && !metodosBase.includes(prev.formaPago)
-                                            ? `${metodo.slice(0, 8)} ${prev.formaPago}`.slice(0, 50)
-                                            : metodo
-                                    }))}
-                                    style={{
-                                        padding: '0.18rem 0.5rem',
-                                        borderRadius: '10px',
-                                        fontSize: '0.7rem',
-                                        border: '1px solid rgba(255,255,255,0.1)',
-                                        background: 'rgba(255,255,255,0.04)',
-                                        color: 'var(--text-muted)',
-                                        cursor: 'pointer'
-                                    }}
-                                >
-                                    + {metodo}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                        <button type="button" className="btn-secondary" onClick={() => setIsPagoModalOpen(false)}>
-                            Cancelar
-                        </button>
-                        {pagoData.mode === 'pay' && pagoData.estadoActual === 'PENDIENTE' && (
-                            <button
-                                type="button"
-                                className="btn-secondary"
-                                onClick={handleSaveOnlyFormaPago}
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-                                title="Guardar la forma de pago sin marcar aún como cancelado"
-                            >
-                                <Save size={15} /> Solo Preasignar Forma
-                            </button>
-                        )}
-                        <button type="submit" className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
-                            <CheckCircle size={16} />
-                            {pagoData.mode === 'edit_forma'
-                                ? 'Guardar Forma de Pago'
-                                : 'Procesar Pago'}
+                            <Save size={17} /> {formSaving ? 'Guardando...' : (formData.id ? 'Guardar Cambios' : 'Guardar Operación')}
                         </button>
                     </div>
                 </form>
@@ -2399,6 +2733,7 @@ export default function ControlRecordatorios() {
                 open={quickViewerOpen}
                 onClose={() => setQuickViewerOpen(false)}
                 comprobantes={quickViewerItems}
+                initialIndex={quickViewerIdx}
                 title={quickViewerTitle}
             />
 

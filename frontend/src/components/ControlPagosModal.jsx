@@ -78,6 +78,9 @@ export default function ControlPagosModal({
     const [autoOcrEnabled, setAutoOcrEnabled] = useState(true);
     const [analyzingOcr, setAnalyzingOcr] = useState(false);
     const [lastOcrResult, setLastOcrResult] = useState(null);
+    const [editingCompId, setEditingCompId] = useState(null);
+    const [editingCompNota, setEditingCompNota] = useState('');
+    const [savingCompNota, setSavingCompNota] = useState(false);
     const fileInputRef = useRef(null);
     const cameraInputRef = useRef(null);
     const extraFileInputRef = useRef(null);
@@ -89,6 +92,50 @@ export default function ControlPagosModal({
 
     // Programar aviso personal MiBot por Telegram
     const [mibotOpen, setMibotOpen] = useState(false);
+
+    // Refs para evitar sobrescribir ediciones manuales o valores ya completados por OCR y para proteger paste en modales hijos
+    const dirtyFieldsRef = useRef(new Set());
+    const ocrAppliedFieldsRef = useRef(new Set());
+    const formValuesRef = useRef({});
+    const pendingReceiptsRef = useRef([]);
+    const detailRef = useRef(null);
+    const confirmOpenRef = useRef(false);
+    const compressingCountRef = useRef(0);
+    const inFlightUploadNamesRef = useRef(new Set());
+
+    formValuesRef.current = {
+        metodoPago,
+        cuentaBancariaId,
+        cuentaLabel,
+        tarjetaRef,
+        montoAbono,
+        fechaPago,
+        beneficiario,
+        referenciaDoc,
+        notas,
+        editingAbonoId
+    };
+    pendingReceiptsRef.current = pendingReceipts;
+    detailRef.current = detail;
+
+    const markDirty = useCallback((...fields) => {
+        fields.forEach(f => dirtyFieldsRef.current.add(f));
+    }, []);
+
+    const resetFieldTracking = useCallback(() => {
+        dirtyFieldsRef.current.clear();
+        ocrAppliedFieldsRef.current.clear();
+    }, []);
+
+    const resumen = useMemo(() => (detail?.resumen || {
+        monto_total: Number(vencimientoRow?.monto || 0),
+        monto_pagado: Number(vencimientoRow?.monto_pagado || 0),
+        saldo_pendiente: Number(vencimientoRow?.saldo_pendiente ?? vencimientoRow?.monto ?? 0),
+        porcentaje_pagado: Number(vencimientoRow?.porcentaje_pagado || 0),
+        estado_pago: vencimientoRow?.estado_pago || vencimientoRow?.estado || 'PENDIENTE'
+    }), [detail?.resumen, vencimientoRow]);
+
+    const isFullyPaid = resumen.estado_pago === 'CANCELADO' || Number(resumen.saldo_pendiente || 0) <= 0;
 
     // Cuentas bancarias ordenadas con sortCuentas (incluye oficiales y contables SaaS)
     const sortedBankAccounts = useMemo(() => {
@@ -141,70 +188,146 @@ export default function ControlPagosModal({
             setPendingReceipts([]);
             setLastOcrResult(null);
             setEditingAbonoId(null);
+            setEditingCompId(null);
+            setEditingCompNota('');
+            resetFieldTracking();
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al cargar detalle de pagos', 'error');
         } finally {
             setLoading(false);
         }
-    }, [addToast]);
+    }, [addToast, resetFieldTracking]);
 
     useEffect(() => {
         if (open && vencimientoRow?.id) {
             loadDetail(vencimientoRow.id);
         } else if (!open) {
+            compressingCountRef.current = 0;
+            inFlightUploadNamesRef.current.clear();
+            setCompressingFiles(false);
             setDetail(null);
             setPendingReceipts([]);
             setLastOcrResult(null);
             setEditingAbonoId(null);
+            setEditingCompId(null);
+            setEditingCompNota('');
+            resetFieldTracking();
         }
-    }, [open, vencimientoRow?.id, loadDetail]);
+    }, [open, vencimientoRow?.id, loadDetail, resetFieldTracking]);
 
-    // Aplica los campos extraídos por IA al formulario de abono
-    const applyOcrAnalysisToForm = useCallback((an) => {
-        if (!an) return;
+    // Aplica los campos extraídos por IA al formulario de abono sin sobrescribir ediciones manuales ni campos ya llenos por OCR previo
+    const applyOcrAnalysisToForm = useCallback((an, { force = false } = {}) => {
+        if (!an) return { filledFields: [], skippedFields: [] };
+        const cur = formValuesRef.current || {};
         const filledFields = [];
+        const skippedFields = [];
+
+        const canApply = (field, isEmpty, allowDefaultOverwrite = false) => {
+            if (force) return true;
+            if (dirtyFieldsRef.current.has(field)) return false;
+            if (ocrAppliedFieldsRef.current.has(field)) return false;
+            if (isEmpty) return true;
+            return allowDefaultOverwrite && !cur.editingAbonoId;
+        };
+
+        const markOcrOwned = (field) => {
+            ocrAppliedFieldsRef.current.add(field);
+            if (force) dirtyFieldsRef.current.delete(field);
+        };
 
         if (an.metodo_pago) {
-            setMetodoPago(an.metodo_pago);
-            filledFields.push('método');
-        }
-        if (an.cuenta_bancaria_id) {
-            setCuentaBancariaId(String(an.cuenta_bancaria_id));
-            const found = sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(an.cuenta_bancaria_id));
-            setCuentaLabel(found ? formatCuentaLabel(found) : (an.cuenta_label || ''));
-            filledFields.push('cuenta bancaria');
-        } else if (an.cuenta_label && an.metodo_pago === 'EFECTIVO') {
-            setCuentaBancariaId('');
-            setCuentaLabel(an.cuenta_label);
-            filledFields.push('caja efectivo');
-        }
-        if (an.tarjeta_ref) {
-            setTarjetaRef(an.tarjeta_ref);
-            filledFields.push('tarjeta');
-        }
-        if (an.monto && Number(an.monto) > 0) {
-            setMontoAbono(Number(an.monto).toFixed(2));
-            filledFields.push('monto');
-        }
-        if (an.fecha_pago) {
-            setFechaPago(an.fecha_pago);
-            filledFields.push('fecha');
-        }
-        if (an.beneficiario) {
-            setBeneficiario(an.beneficiario);
-            filledFields.push('beneficiario');
-        }
-        if (an.referencia_doc) {
-            setReferenciaDoc(an.referencia_doc);
-            filledFields.push('referencia');
-        }
-        if (an.notas_sugeridas) {
-            setNotas(an.notas_sugeridas);
-        } else if (an.concepto) {
-            setNotas(an.concepto);
+            if (canApply('metodoPago', !cur.metodoPago, true)) {
+                setMetodoPago(an.metodo_pago);
+                markOcrOwned('metodoPago');
+                filledFields.push('método');
+            } else {
+                skippedFields.push('método');
+            }
         }
 
-        return filledFields;
+        if (an.cuenta_bancaria_id) {
+            if (canApply('cuentaBancariaId', !cur.cuentaBancariaId, true)) {
+                setCuentaBancariaId(String(an.cuenta_bancaria_id));
+                const found = sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(an.cuenta_bancaria_id));
+                setCuentaLabel(found ? formatCuentaLabel(found) : (an.cuenta_label || ''));
+                markOcrOwned('cuentaBancariaId');
+                markOcrOwned('cuentaLabel');
+                filledFields.push('cuenta bancaria');
+            } else {
+                skippedFields.push('cuenta bancaria');
+            }
+        } else if (an.cuenta_label && an.metodo_pago === 'EFECTIVO') {
+            if (canApply('cuentaLabel', !String(cur.cuentaLabel || '').trim(), true)) {
+                setCuentaBancariaId('');
+                setCuentaLabel(an.cuenta_label);
+                markOcrOwned('cuentaLabel');
+                filledFields.push('caja efectivo');
+            } else {
+                skippedFields.push('caja efectivo');
+            }
+        }
+
+        if (an.tarjeta_ref) {
+            if (canApply('tarjetaRef', !String(cur.tarjetaRef || '').trim(), true)) {
+                setTarjetaRef(an.tarjeta_ref);
+                markOcrOwned('tarjetaRef');
+                filledFields.push('tarjeta');
+            } else {
+                skippedFields.push('tarjeta');
+            }
+        }
+
+        if (an.monto && Number(an.monto) > 0) {
+            if (canApply('montoAbono', !String(cur.montoAbono || '').trim(), true)) {
+                setMontoAbono(Number(an.monto).toFixed(2));
+                markOcrOwned('montoAbono');
+                filledFields.push('monto');
+            } else {
+                skippedFields.push('monto');
+            }
+        }
+
+        if (an.fecha_pago) {
+            if (canApply('fechaPago', !cur.fechaPago, true)) {
+                setFechaPago(an.fecha_pago);
+                markOcrOwned('fechaPago');
+                filledFields.push('fecha');
+            } else {
+                skippedFields.push('fecha');
+            }
+        }
+
+        if (an.beneficiario) {
+            if (canApply('beneficiario', !String(cur.beneficiario || '').trim(), false)) {
+                setBeneficiario(an.beneficiario);
+                markOcrOwned('beneficiario');
+                filledFields.push('beneficiario');
+            } else {
+                skippedFields.push('beneficiario');
+            }
+        }
+
+        if (an.referencia_doc) {
+            if (canApply('referenciaDoc', !String(cur.referenciaDoc || '').trim(), false)) {
+                setReferenciaDoc(an.referencia_doc);
+                markOcrOwned('referenciaDoc');
+                filledFields.push('referencia');
+            } else {
+                skippedFields.push('referencia');
+            }
+        }
+
+        const ocrNota = an.notas_sugeridas || an.concepto || '';
+        if (ocrNota) {
+            if (canApply('notas', !String(cur.notas || '').trim(), false)) {
+                setNotas(ocrNota);
+                markOcrOwned('notas');
+            } else {
+                skippedFields.push('nota');
+            }
+        }
+
+        return { filledFields, skippedFields };
     }, [sortedBankAccounts]);
 
     // Llama al endpoint seguro de lectura IA (soporta WebP/JPG/PNG y PDF)
@@ -228,13 +351,14 @@ export default function ControlPagosModal({
             const an = res.data?.analisis;
             if (an) {
                 setLastOcrResult(an);
-                const filled = applyOcrAnalysisToForm(an) || [];
-                addToast(
-                    filled.length > 0
-                        ? `IA completó automáticamente: ${filled.join(', ')}`
-                        : 'Comprobante leído; revisa los campos detectados',
-                    'success'
-                );
+                const { filledFields, skippedFields } = applyOcrAnalysisToForm(an);
+                if (filledFields.length > 0) {
+                    addToast(`IA completó automáticamente: ${filledFields.join(', ')}`, 'success');
+                } else if (skippedFields.length > 0) {
+                    addToast('Comprobante leído; se conservaron tus valores actuales. Usa "Aplicar datos OCR" si deseas reemplazarlos.', 'info');
+                } else {
+                    addToast('Comprobante leído; revisa los campos detectados', 'success');
+                }
             }
         } catch (err) {
             addToast(err.response?.data?.message || 'No se pudo leer automáticamente el comprobante', 'warning');
@@ -243,18 +367,38 @@ export default function ControlPagosModal({
         }
     }, [addToast, applyOcrAnalysisToForm, detail, tipoOperacion, vencimientoRow]);
 
+    const deduplicateReceiptBatch = (existingList, batch) => {
+        const existingNames = new Set((existingList || []).map(r => r?.nombre_original).filter(Boolean));
+        return batch.map(item => {
+            let finalName = item.nombre_original;
+            if (finalName && finalName.startsWith('captura_') && existingNames.has(finalName)) {
+                const dotIdx = finalName.lastIndexOf('.');
+                const stem = dotIdx > 0 ? finalName.slice(0, dotIdx) : finalName;
+                const ext = dotIdx > 0 ? finalName.slice(dotIdx) : '';
+                let seq = 2;
+                while (existingNames.has(`${stem}_${seq}${ext}`)) {
+                    seq += 1;
+                }
+                finalName = `${stem}_${seq}${ext}`;
+            }
+            if (finalName) existingNames.add(finalName);
+            return finalName === item.nombre_original ? item : { ...item, nombre_original: finalName };
+        });
+    };
+
     // Procesar múltiples archivos (drag&drop, file input, cámara móvil o Ctrl+V)
     const handleProcessFiles = useCallback(async (fileList, { immediateUpload = false, targetAbonoId = null } = {}) => {
         const files = Array.from(fileList || []).filter(Boolean);
         if (files.length === 0) return;
 
+        compressingCountRef.current += 1;
         setCompressingFiles(true);
-        const compressedBatch = [];
+        const rawBatch = [];
         try {
             for (const file of files.slice(0, 8)) {
                 try {
                     const comp = await compressReceiptFile(file);
-                    compressedBatch.push({
+                    rawBatch.push({
                         ...comp,
                         tempId: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
                         nota: ''
@@ -264,14 +408,24 @@ export default function ControlPagosModal({
                 }
             }
 
-            if (compressedBatch.length === 0) return;
+            if (rawBatch.length === 0) return;
 
-            if (immediateUpload && vencimientoRow?.id) {
+            const shouldUploadImmediately = immediateUpload || (isFullyPaid && !editingAbonoId);
+            if (shouldUploadImmediately && vencimientoRow?.id) {
+                const reservedCatalog = [
+                    ...(detailRef.current?.comprobantes || []),
+                    ...(pendingReceiptsRef.current || []),
+                    ...Array.from(inFlightUploadNamesRef.current).map(nombre_original => ({ nombre_original }))
+                ];
+                const uploadBatch = deduplicateReceiptBatch(reservedCatalog, rawBatch);
+                const newlyReserved = uploadBatch.map(c => c.nombre_original).filter(Boolean);
+                newlyReserved.forEach(n => inFlightUploadNamesRef.current.add(n));
+
                 setUploadingOnly(true);
                 try {
                     const res = await api.post(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/comprobantes`, {
                         abono_id: targetAbonoId,
-                        comprobantes: compressedBatch.map(c => ({
+                        comprobantes: uploadBatch.map(c => ({
                             data_url: c.data_url,
                             nombre_original: c.nombre_original,
                             ancho: c.ancho,
@@ -280,37 +434,52 @@ export default function ControlPagosModal({
                         }))
                     });
                     if (res.data?.detail) setDetail(res.data.detail);
-                    addToast(res.data?.message || 'Comprobante(s) subido(s) y comprimido(s)', 'success');
+                    addToast(
+                        immediateUpload
+                            ? (res.data?.message || 'Comprobante(s) subido(s) y comprimido(s)')
+                            : 'Registro ya cancelado: comprobante(s) guardado(s) directamente en la galería',
+                        'success'
+                    );
                     if (onSaved) onSaved();
                 } catch (err) {
-                    addToast(err.response?.data?.message || 'Error al guardar comprobantes', 'error');
+                    // Nunca descartar capturas si falla la subida directa
+                    setPendingReceipts(prev => [...prev, ...deduplicateReceiptBatch(prev, uploadBatch)]);
+                    addToast(
+                        err.response?.data?.message
+                            ? `${err.response.data.message} — quedó en cola para reintentar`
+                            : 'Error al subir directamente; quedó en cola para reintentar',
+                        'warning'
+                    );
                 } finally {
+                    newlyReserved.forEach(n => inFlightUploadNamesRef.current.delete(n));
                     setUploadingOnly(false);
                 }
             } else {
-                setPendingReceipts(prev => [...prev, ...compressedBatch]);
-                const savedBytes = compressedBatch.reduce((acc, c) => acc + Math.max(0, (c.original_size || 0) - (c.compressed_size || 0)), 0);
+                setPendingReceipts(prev => [...prev, ...deduplicateReceiptBatch(prev, rawBatch)]);
+                const savedBytes = rawBatch.reduce((acc, c) => acc + Math.max(0, (c.original_size || 0) - (c.compressed_size || 0)), 0);
                 addToast(
-                    `${compressedBatch.length} comprobante(s) listo(s)${savedBytes > 20000 ? ` (ahorro ${formatBytes(savedBytes)})` : ''}`,
+                    `${rawBatch.length} comprobante(s) listo(s)${savedBytes > 20000 ? ` (ahorro ${formatBytes(savedBytes)})` : ''}`,
                     'success'
                 );
                 // Auto-lectura IA sobre el primer archivo nuevo cuando está habilitada
-                if (autoOcrEnabled && compressedBatch[0]?.data_url) {
+                if (autoOcrEnabled && rawBatch[0]?.data_url) {
                     runReceiptOcr({
-                        dataUrl: compressedBatch[0].data_url,
-                        nombreOriginal: compressedBatch[0].nombre_original
+                        dataUrl: rawBatch[0].data_url,
+                        nombreOriginal: rawBatch[0].nombre_original
                     });
                 }
             }
         } finally {
-            setCompressingFiles(false);
+            compressingCountRef.current = Math.max(0, compressingCountRef.current - 1);
+            setCompressingFiles(compressingCountRef.current > 0);
         }
-    }, [addToast, autoOcrEnabled, onSaved, runReceiptOcr, vencimientoRow?.id]);
+    }, [addToast, autoOcrEnabled, editingAbonoId, isFullyPaid, onSaved, runReceiptOcr, vencimientoRow?.id]);
 
-    // Permitir pegar capturas directamente con Ctrl+V mientras el popup está abierto
+    // Permitir pegar capturas directamente con Ctrl+V mientras el popup está abierto (sin interceptar modales hijos)
     useEffect(() => {
-        if (!open) return;
+        if (!open || viewerOpen || mibotOpen) return undefined;
         const onPaste = (e) => {
+            if (confirmOpenRef.current) return;
             const items = e.clipboardData?.items;
             if (!items) return;
             const pastedFiles = [];
@@ -327,11 +496,61 @@ export default function ControlPagosModal({
         };
         window.addEventListener('paste', onPaste);
         return () => window.removeEventListener('paste', onPaste);
-    }, [open, handleProcessFiles]);
+    }, [open, viewerOpen, mibotOpen, handleProcessFiles]);
+
+    const updatePendingReceiptNota = (tempId, val) => {
+        setPendingReceipts(prev => prev.map(r => (r.tempId === tempId ? { ...r, nota: val } : r)));
+    };
+
+    const uploadPendingReceiptsNow = async () => {
+        if (!vencimientoRow?.id || pendingReceipts.length === 0) return;
+        setUploadingOnly(true);
+        try {
+            const res = await api.post(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/comprobantes`, {
+                abono_id: editingAbonoId || null,
+                comprobantes: pendingReceipts.map(c => ({
+                    data_url: c.data_url,
+                    nombre_original: c.nombre_original,
+                    ancho: c.ancho,
+                    alto: c.alto,
+                    nota: c.nota || null
+                }))
+            });
+            if (res.data?.detail) setDetail(res.data.detail);
+            const count = pendingReceipts.length;
+            setPendingReceipts([]);
+            addToast(res.data?.message || `${count} comprobante(s) subido(s) a la galería`, 'success');
+            if (onSaved) onSaved();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al subir comprobantes a la galería', 'error');
+        } finally {
+            setUploadingOnly(false);
+        }
+    };
+
+    const handleSaveCompNota = async (compId) => {
+        if (!compId) return;
+        setSavingCompNota(true);
+        try {
+            const res = await api.patch(`/operaciones/recordatorios/comprobantes/${compId}`, {
+                nota: editingCompNota
+            });
+            if (res.data?.detail) setDetail(res.data.detail);
+            setEditingCompId(null);
+            setEditingCompNota('');
+            addToast('Nota del comprobante actualizada', 'success');
+            if (onSaved) onSaved();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al actualizar nota', 'error');
+        } finally {
+            setSavingCompNota(false);
+        }
+    };
 
     const applySuggestion = (sug) => {
         if (!sug) return;
         setMetodoPago(sug.metodo_pago || 'TRANSFERENCIA');
+        markDirty('metodoPago', 'cuentaBancariaId', 'cuentaLabel', 'tarjetaRef');
         const labelToMatch = String(sug.cuenta_label || sug.label || '').toUpperCase().trim();
         let matchedAccount = sug.cuenta_bancaria_id
             ? sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(sug.cuenta_bancaria_id))
@@ -391,6 +610,7 @@ export default function ControlPagosModal({
     };
 
     const handleSelectBankAccount = (val) => {
+        markDirty('cuentaBancariaId', 'cuentaLabel');
         setCuentaBancariaId(val);
         if (!val) {
             setCuentaLabel('');
@@ -405,6 +625,7 @@ export default function ControlPagosModal({
     const applyQuickPercentage = (pct) => {
         const total = Number(detail?.resumen?.monto_total ?? vencimientoRow?.monto ?? 0);
         const saldo = Number(detail?.resumen?.saldo_pendiente ?? total);
+        markDirty('montoAbono');
         if (pct === 100) {
             setMontoAbono(saldo > 0 ? saldo.toFixed(2) : total.toFixed(2));
             return;
@@ -414,10 +635,12 @@ export default function ControlPagosModal({
         setMontoAbono(capped.toFixed(2));
         if (!notas) {
             setNotas(`Anticipo / pago parcial ${pct}%`);
+            markDirty('notas');
         }
     };
 
     const startEditAbono = (ab) => {
+        resetFieldTracking();
         setEditingAbonoId(ab.id);
         setTipoOperacion(ab.tipo_operacion || 'CXP');
         setMetodoPago(ab.metodo_pago || 'TRANSFERENCIA');
@@ -431,11 +654,23 @@ export default function ControlPagosModal({
         setNotas(ab.notas || '');
         setPendingReceipts([]);
         setLastOcrResult(null);
+        // Proteger valores existentes del abono contra sobreescritura automática por OCR
+        if (ab.metodo_pago) dirtyFieldsRef.current.add('metodoPago');
+        if (ab.cuenta_bancaria_id) dirtyFieldsRef.current.add('cuentaBancariaId');
+        if (ab.cuenta_label) dirtyFieldsRef.current.add('cuentaLabel');
+        if (ab.tarjeta_ref) dirtyFieldsRef.current.add('tarjetaRef');
+        if (ab.beneficiario) dirtyFieldsRef.current.add('beneficiario');
+        if (ab.referencia_doc) dirtyFieldsRef.current.add('referenciaDoc');
+        if (ab.fecha_pago) dirtyFieldsRef.current.add('fechaPago');
+        if (Number(ab.monto || 0) > 0) dirtyFieldsRef.current.add('montoAbono');
+        if (ab.notas) dirtyFieldsRef.current.add('notas');
     };
 
-    const cancelEditAbono = () => {
+    const cancelEditAbono = (overrideDetail = null) => {
+        resetFieldTracking();
         setEditingAbonoId(null);
-        const saldo = Number(detail?.resumen?.saldo_pendiente ?? 0);
+        const targetDetail = overrideDetail && typeof overrideDetail === 'object' && overrideDetail.resumen ? overrideDetail : detail;
+        const saldo = Number(targetDetail?.resumen?.saldo_pendiente ?? 0);
         setMontoAbono(saldo > 0 ? saldo.toFixed(2) : '');
         setBeneficiario('');
         setReferenciaDoc('');
@@ -459,7 +694,37 @@ export default function ControlPagosModal({
                 forma_pago_legacy: legacyText
             });
             if (res.data?.detail) setDetail(res.data.detail);
-            addToast('Clasificación y método preasignados correctamente', 'success');
+
+            if (pendingReceipts.length > 0) {
+                setUploadingOnly(true);
+                try {
+                    const count = pendingReceipts.length;
+                    const upRes = await api.post(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/comprobantes`, {
+                        abono_id: null,
+                        comprobantes: pendingReceipts.map(c => ({
+                            data_url: c.data_url,
+                            nombre_original: c.nombre_original,
+                            ancho: c.ancho,
+                            alto: c.alto,
+                            nota: c.nota || null
+                        }))
+                    });
+                    if (upRes.data?.detail) setDetail(upRes.data.detail);
+                    setPendingReceipts([]);
+                    addToast(`Clasificación preasignada y ${count} comprobante(s) guardado(s)`, 'success');
+                } catch (upErr) {
+                    if (onSaved) onSaved();
+                    addToast(
+                        `Preasignación guardada, pero falló la subida de comprobantes: ${upErr.response?.data?.message || upErr.message}`,
+                        'warning'
+                    );
+                    return;
+                } finally {
+                    setUploadingOnly(false);
+                }
+            } else {
+                addToast('Clasificación y método preasignados correctamente', 'success');
+            }
             if (onSaved) onSaved();
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al guardar preasignación', 'error');
@@ -537,6 +802,7 @@ export default function ControlPagosModal({
             setNotas('');
             setPendingReceipts([]);
             setLastOcrResult(null);
+            resetFieldTracking();
             if (onSaved) onSaved();
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al registrar el pago', 'error');
@@ -546,10 +812,16 @@ export default function ControlPagosModal({
     };
 
     const handleDeleteAbono = async (ab) => {
-        const ok = await confirm(
-            `¿Eliminar el abono de ${mc(ab.monto)} (${getMethodLabel(ab.metodo_pago)}) del ${formatDateShort(ab.fecha_pago)}? El saldo pendiente se recalculará automáticamente.`,
-            { variant: 'danger' }
-        );
+        let ok = false;
+        try {
+            confirmOpenRef.current = true;
+            ok = await confirm(
+                `¿Eliminar el abono de ${mc(ab.monto)} (${getMethodLabel(ab.metodo_pago)}) del ${formatDateShort(ab.fecha_pago)}? El saldo pendiente se recalculará automáticamente.`,
+                { variant: 'danger' }
+            );
+        } finally {
+            confirmOpenRef.current = false;
+        }
         if (!ok) return;
         try {
             const res = await api.delete(`/operaciones/recordatorios/abonos/${ab.id}`);
@@ -558,7 +830,9 @@ export default function ControlPagosModal({
                 const nextSaldo = Number(res.data.detail?.resumen?.saldo_pendiente || 0);
                 setMontoAbono(nextSaldo > 0 ? nextSaldo.toFixed(2) : '');
             }
-            if (editingAbonoId === ab.id) setEditingAbonoId(null);
+            if (editingAbonoId === ab.id) {
+                cancelEditAbono(res.data?.detail || null);
+            }
             addToast(res.data?.message || 'Abono eliminado', 'success');
             if (onSaved) onSaved();
         } catch (err) {
@@ -567,7 +841,13 @@ export default function ControlPagosModal({
     };
 
     const handleDeleteReceipt = async (comp) => {
-        const ok = await confirm(`¿Eliminar el comprobante "${comp.nombre_original}"?`, { variant: 'danger' });
+        let ok = false;
+        try {
+            confirmOpenRef.current = true;
+            ok = await confirm(`¿Eliminar el comprobante "${comp.nombre_original}"?`, { variant: 'danger' });
+        } finally {
+            confirmOpenRef.current = false;
+        }
         if (!ok) return;
         try {
             const res = await api.delete(`/operaciones/recordatorios/comprobantes/${comp.id}`);
@@ -587,14 +867,6 @@ export default function ControlPagosModal({
         setViewerItems(items || []);
         setViewerIdx(idx);
         setViewerOpen(true);
-    };
-
-    const resumen = detail?.resumen || {
-        monto_total: Number(vencimientoRow?.monto || 0),
-        monto_pagado: Number(vencimientoRow?.monto_pagado || 0),
-        saldo_pendiente: Number(vencimientoRow?.saldo_pendiente ?? vencimientoRow?.monto ?? 0),
-        porcentaje_pagado: Number(vencimientoRow?.porcentaje_pagado || 0),
-        estado_pago: vencimientoRow?.estado_pago || vencimientoRow?.estado || 'PENDIENTE'
     };
 
     const abonos = detail?.abonos || [];
@@ -890,7 +1162,7 @@ export default function ControlPagosModal({
                                         <button
                                             type="button"
                                             className="btn-secondary"
-                                            disabled={compressingFiles || analyzingOcr}
+                                            disabled={compressingFiles || analyzingOcr || saving || uploadingOnly}
                                             onClick={() => fileInputRef.current?.click()}
                                             style={{ flex: '1 1 140px', fontSize: '0.76rem', padding: '0.45rem 0.7rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
                                         >
@@ -899,7 +1171,7 @@ export default function ControlPagosModal({
                                         <button
                                             type="button"
                                             className="btn-secondary"
-                                            disabled={compressingFiles || analyzingOcr}
+                                            disabled={compressingFiles || analyzingOcr || saving || uploadingOnly}
                                             onClick={() => cameraInputRef.current?.click()}
                                             style={{ flex: '1 1 120px', fontSize: '0.76rem', padding: '0.45rem 0.7rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
                                             title="Usar cámara del teléfono para escanear comprobante"
@@ -910,6 +1182,19 @@ export default function ControlPagosModal({
                                     <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textAlign: 'center' }}>
                                         También puedes arrastrar aquí o pegar capturas con <strong>Ctrl + V</strong> · Comprime a WebP legible (~120 KB) y lee cuenta, monto y beneficiario.
                                     </div>
+                                    {isFullyPaid && !editingAbonoId && (
+                                        <div style={{
+                                            padding: '0.35rem 0.55rem',
+                                            borderRadius: '6px',
+                                            backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                                            border: '1px solid rgba(16, 185, 129, 0.35)',
+                                            color: '#6ee7b7',
+                                            fontSize: '0.69rem',
+                                            textAlign: 'center'
+                                        }}>
+                                            Registro ya cancelado ($0.00 pendiente): las capturas que pegues o arrastres se guardarán directamente en la galería del vencimiento.
+                                        </div>
+                                    )}
 
                                     {/* Estado de lectura IA en curso */}
                                     {analyzingOcr && (
@@ -947,7 +1232,15 @@ export default function ControlPagosModal({
                                                 </span>
                                                 <button
                                                     type="button"
-                                                    onClick={() => applyOcrAnalysisToForm(lastOcrResult)}
+                                                    onClick={() => {
+                                                        const { filledFields } = applyOcrAnalysisToForm(lastOcrResult, { force: true });
+                                                        addToast(
+                                                            filledFields.length > 0
+                                                                ? `Datos OCR aplicados: ${filledFields.join(', ')}`
+                                                                : 'No había campos detectados para aplicar',
+                                                            filledFields.length > 0 ? 'success' : 'info'
+                                                        );
+                                                    }}
                                                     style={{
                                                         padding: '0.14rem 0.45rem',
                                                         borderRadius: '6px',
@@ -958,8 +1251,9 @@ export default function ControlPagosModal({
                                                         color: '#a7f3d0',
                                                         cursor: 'pointer'
                                                     }}
+                                                    title="Sobrescribe los campos del formulario con los datos detectados por IA"
                                                 >
-                                                    Re-aplicar datos
+                                                    Aplicar datos OCR
                                                 </button>
                                             </div>
                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', color: 'var(--text)' }}>
@@ -981,60 +1275,88 @@ export default function ControlPagosModal({
 
                                     {/* Miniaturas de comprobantes pendientes de guardar */}
                                     {pendingReceipts.length > 0 && (
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-                                            {pendingReceipts.map((r, idx) => (
-                                                <div
-                                                    key={r.tempId}
-                                                    style={{
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '0.35rem',
-                                                        padding: '0.25rem 0.42rem',
-                                                        borderRadius: '7px',
-                                                        backgroundColor: 'rgba(15, 23, 42, 0.65)',
-                                                        border: '1px solid rgba(56, 189, 248, 0.35)',
-                                                        fontSize: '0.69rem',
-                                                        maxWidth: '100%'
-                                                    }}
-                                                >
-                                                    {r.mime_type === 'application/pdf' ? (
-                                                        <FileText size={16} color="#f87171" style={{ flexShrink: 0, cursor: 'pointer' }} onClick={() => openLightbox(pendingReceipts, idx)} />
-                                                    ) : (
-                                                        <img
-                                                            src={r.data_url}
-                                                            alt=""
-                                                            onClick={() => openLightbox(pendingReceipts, idx)}
-                                                            style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', minWidth: 0 }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: 0 }}>
+                                                {pendingReceipts.map((r, idx) => (
+                                                    <div
+                                                        key={r.tempId}
+                                                        style={{
+                                                            display: 'flex',
+                                                            flexDirection: 'column',
+                                                            gap: '0.3rem',
+                                                            padding: '0.35rem 0.5rem',
+                                                            borderRadius: '7px',
+                                                            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                                            border: '1px solid rgba(56, 189, 248, 0.35)',
+                                                            fontSize: '0.69rem',
+                                                            width: '100%',
+                                                            maxWidth: '100%',
+                                                            minWidth: 0
+                                                        }}
+                                                    >
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', minWidth: 0 }}>
+                                                            {r.mime_type === 'application/pdf' ? (
+                                                                <FileText size={16} color="#f87171" style={{ flexShrink: 0, cursor: 'pointer' }} onClick={() => openLightbox(pendingReceipts, idx)} />
+                                                            ) : (
+                                                                <img
+                                                                    src={r.data_url}
+                                                                    alt=""
+                                                                    onClick={() => openLightbox(pendingReceipts, idx)}
+                                                                    style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }}
+                                                                />
+                                                            )}
+                                                            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 110px' }}>
+                                                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }} title={r.nombre_original}>
+                                                                    {r.nombre_original}
+                                                                </span>
+                                                                <span style={{ fontSize: '0.63rem', color: '#6ee7b7' }}>
+                                                                    {formatBytes(r.compressed_size)}
+                                                                    {r.original_size > r.compressed_size ? ` (de ${formatBytes(r.original_size)})` : ''}
+                                                                </span>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                disabled={analyzingOcr}
+                                                                onClick={() => runReceiptOcr({ dataUrl: r.data_url, nombreOriginal: r.nombre_original })}
+                                                                style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.45)', color: '#c7d2fe', borderRadius: '5px', cursor: 'pointer', padding: '0.15rem 0.35rem', fontSize: '0.64rem', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
+                                                                title="Leer este comprobante con IA"
+                                                            >
+                                                                <Sparkles size={10} /> IA
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setPendingReceipts(prev => prev.filter(x => x.tempId !== r.tempId))}
+                                                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.1rem', flexShrink: 0 }}
+                                                                title="Quitar"
+                                                            >
+                                                                <X size={13} />
+                                                            </button>
+                                                        </div>
+                                                        <input
+                                                            type="text"
+                                                            maxLength={255}
+                                                            className="form-control"
+                                                            style={{ height: '28px', fontSize: '0.7rem', padding: '0.15rem 0.45rem', width: '100%' }}
+                                                            placeholder="Nota breve (ej. Transferencia 1, DTE...)"
+                                                            value={r.nota || ''}
+                                                            onChange={e => updatePendingReceiptNota(r.tempId, e.target.value)}
                                                         />
-                                                    )}
-                                                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                                                        <span style={{ maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                                                            {r.nombre_original}
-                                                        </span>
-                                                        <span style={{ fontSize: '0.63rem', color: '#6ee7b7' }}>
-                                                            {formatBytes(r.compressed_size)}
-                                                            {r.original_size > r.compressed_size ? ` (de ${formatBytes(r.original_size)})` : ''}
-                                                        </span>
                                                     </div>
+                                                ))}
+                                            </div>
+                                            {vencimientoRow?.id && (
+                                                <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.35rem' }}>
                                                     <button
                                                         type="button"
-                                                        disabled={analyzingOcr}
-                                                        onClick={() => runReceiptOcr({ dataUrl: r.data_url, nombreOriginal: r.nombre_original })}
-                                                        style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.45)', color: '#c7d2fe', borderRadius: '5px', cursor: 'pointer', padding: '0.15rem 0.3rem', fontSize: '0.64rem', display: 'inline-flex', alignItems: 'center', gap: '2px' }}
-                                                        title="Leer este comprobante con IA"
+                                                        className="btn-secondary"
+                                                        disabled={uploadingOnly || compressingFiles || saving}
+                                                        onClick={uploadPendingReceiptsNow}
+                                                        style={{ fontSize: '0.72rem', padding: '0.28rem 0.65rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', borderColor: 'rgba(56, 189, 248, 0.45)', color: '#7dd3fc' }}
                                                     >
-                                                        <Sparkles size={10} /> IA
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setPendingReceipts(prev => prev.filter(x => x.tempId !== r.tempId))}
-                                                        style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.1rem' }}
-                                                        title="Quitar"
-                                                    >
-                                                        <X size={13} />
+                                                        <Upload size={12} /> {uploadingOnly ? 'Subiendo...' : `Subir a galería (${pendingReceipts.length})`}
                                                     </button>
                                                 </div>
-                                            ))}
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -1108,7 +1430,10 @@ export default function ControlPagosModal({
                                                 <button
                                                     key={opt.id}
                                                     type="button"
-                                                    onClick={() => setMetodoPago(opt.id)}
+                                                    onClick={() => {
+                                                        setMetodoPago(opt.id);
+                                                        markDirty('metodoPago');
+                                                    }}
                                                     style={{
                                                         display: 'inline-flex',
                                                         alignItems: 'center',
@@ -1205,7 +1530,10 @@ export default function ControlPagosModal({
                                             style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
                                             placeholder="Ej. TC DAVI #0038, VISA BAC *4521..."
                                             value={tarjetaRef}
-                                            onChange={e => setTarjetaRef(e.target.value)}
+                                            onChange={e => {
+                                                setTarjetaRef(e.target.value);
+                                                markDirty('tarjetaRef');
+                                            }}
                                         />
                                         {sugerencias.tarjetas_frecuentes?.length > 0 && (
                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem', marginTop: '0.32rem' }}>
@@ -1213,7 +1541,10 @@ export default function ControlPagosModal({
                                                     <button
                                                         key={t}
                                                         type="button"
-                                                        onClick={() => setTarjetaRef(t)}
+                                                        onClick={() => {
+                                                            setTarjetaRef(t);
+                                                            markDirty('tarjetaRef');
+                                                        }}
                                                         style={{
                                                             padding: '0.18rem 0.48rem',
                                                             borderRadius: '10px',
@@ -1243,14 +1574,20 @@ export default function ControlPagosModal({
                                             style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
                                             placeholder="Ej. Efectivo Caja Chica Oficina, Efectivo Pista..."
                                             value={cuentaLabel}
-                                            onChange={e => setCuentaLabel(e.target.value)}
+                                            onChange={e => {
+                                                setCuentaLabel(e.target.value);
+                                                markDirty('cuentaLabel');
+                                            }}
                                         />
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.28rem', marginTop: '0.32rem' }}>
                                             {(sugerencias.efectivo_cajas || []).map(caja => (
                                                 <button
                                                     key={caja}
                                                     type="button"
-                                                    onClick={() => setCuentaLabel(caja)}
+                                                    onClick={() => {
+                                                        setCuentaLabel(caja);
+                                                        markDirty('cuentaLabel');
+                                                    }}
                                                     style={{
                                                         padding: '0.18rem 0.48rem',
                                                         borderRadius: '10px',
@@ -1283,7 +1620,10 @@ export default function ControlPagosModal({
                                             style={{ height: '38px', fontSize: '0.88rem', fontWeight: 800, color: '#34d399', width: '100%' }}
                                             placeholder="0.00"
                                             value={montoAbono}
-                                            onChange={e => setMontoAbono(e.target.value)}
+                                            onChange={e => {
+                                                setMontoAbono(e.target.value);
+                                                markDirty('montoAbono');
+                                            }}
                                         />
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.3rem' }}>
                                             {[25, 50, 75, 100].map(pct => (
@@ -1316,7 +1656,10 @@ export default function ControlPagosModal({
                                             className="form-control"
                                             style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
                                             value={fechaPago}
-                                            onChange={e => setFechaPago(e.target.value)}
+                                            onChange={e => {
+                                                setFechaPago(e.target.value);
+                                                markDirty('fechaPago');
+                                            }}
                                             required
                                         />
                                     </div>
@@ -1359,7 +1702,10 @@ export default function ControlPagosModal({
                                             style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
                                             placeholder="Proveedor, persona o comercio..."
                                             value={beneficiario}
-                                            onChange={e => setBeneficiario(e.target.value)}
+                                            onChange={e => {
+                                                setBeneficiario(e.target.value);
+                                                markDirty('beneficiario');
+                                            }}
                                         />
                                     </div>
                                     <div>
@@ -1373,7 +1719,10 @@ export default function ControlPagosModal({
                                             style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
                                             placeholder="TRF-99812, CHQ #4401, NC-0021..."
                                             value={referenciaDoc}
-                                            onChange={e => setReferenciaDoc(e.target.value)}
+                                            onChange={e => {
+                                                setReferenciaDoc(e.target.value);
+                                                markDirty('referenciaDoc');
+                                            }}
                                         />
                                     </div>
                                 </div>
@@ -1389,7 +1738,10 @@ export default function ControlPagosModal({
                                         style={{ height: '38px', fontSize: '0.8rem', width: '100%' }}
                                         placeholder="Ej. Anticipo 50% por trabajo, saldo final..."
                                         value={notas}
-                                        onChange={e => setNotas(e.target.value)}
+                                        onChange={e => {
+                                            setNotas(e.target.value);
+                                            markDirty('notas');
+                                        }}
                                     />
                                 </div>
 
@@ -1407,10 +1759,10 @@ export default function ControlPagosModal({
                                         <button
                                             type="button"
                                             className="btn-secondary"
-                                            disabled={saving}
+                                            disabled={saving || compressingFiles || uploadingOnly || analyzingOcr}
                                             onClick={handleSaveMetaOnly}
                                             style={{ flex: '1 1 135px', fontSize: '0.78rem', padding: '0.45rem 0.75rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
-                                            title="Guarda clasificación CXP/CXC y método preferido sin aplicar dinero todavía"
+                                            title="Guarda clasificación CXP/CXC, método preferido y comprobantes pendientes sin aplicar dinero todavía"
                                         >
                                             <Save size={14} /> Solo Preasignar
                                         </button>
@@ -1418,7 +1770,7 @@ export default function ControlPagosModal({
                                     <button
                                         type="submit"
                                         className="btn-primary"
-                                        disabled={saving || compressingFiles || analyzingOcr}
+                                        disabled={saving || compressingFiles || uploadingOnly || analyzingOcr}
                                         style={{ flex: '1 1 175px', fontSize: '0.8rem', padding: '0.45rem 0.9rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
                                     >
                                         <CheckCircle size={15} />
@@ -1573,6 +1925,7 @@ export default function ControlPagosModal({
                                                                             key={c.id}
                                                                             type="button"
                                                                             onClick={() => openLightbox(comprobantes, Math.max(0, globalIdx))}
+                                                                            title={c.nota ? `${c.nombre_original} — ${c.nota}` : c.nombre_original}
                                                                             style={{
                                                                                 display: 'inline-flex',
                                                                                 alignItems: 'center',
@@ -1633,7 +1986,7 @@ export default function ControlPagosModal({
                                             <button
                                                 type="button"
                                                 className="btn-secondary"
-                                                disabled={uploadingOnly || compressingFiles}
+                                                disabled={uploadingOnly || compressingFiles || saving}
                                                 onClick={() => extraFileInputRef.current?.click()}
                                                 style={{ padding: '0.3rem 0.65rem', fontSize: '0.73rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                                             >
@@ -1650,12 +2003,14 @@ export default function ControlPagosModal({
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                                             {comprobantes.map((c, idx) => {
                                                 const isPdf = c.mime_type === 'application/pdf' || /\.pdf$/i.test(c.archivo_url || c.nombre_original || '');
+                                                const isEditingThisNota = editingCompId === c.id;
                                                 return (
                                                     <div
                                                         key={c.id}
                                                         style={{
-                                                            flex: '1 1 125px',
-                                                            maxWidth: '185px',
+                                                            flex: '1 1 135px',
+                                                            maxWidth: '100%',
+                                                            minWidth: 0,
                                                             borderRadius: '8px',
                                                             border: '1px solid rgba(255,255,255,0.1)',
                                                             backgroundColor: 'rgba(15, 23, 42, 0.65)',
@@ -1705,32 +2060,99 @@ export default function ControlPagosModal({
                                                                 <Eye size={10} /> Ver
                                                             </span>
                                                         </div>
-                                                        <div style={{ padding: '0.32rem 0.42rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.2rem' }}>
-                                                            <div style={{ minWidth: 0, flex: 1 }}>
-                                                                <div style={{ fontSize: '0.67rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                                    {c.nombre_original}
+                                                        <div style={{ padding: '0.32rem 0.42rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.2rem' }}>
+                                                                <div style={{ minWidth: 0, flex: 1 }}>
+                                                                    <div style={{ fontSize: '0.67rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nombre_original}>
+                                                                        {c.nombre_original}
+                                                                    </div>
+                                                                    <div style={{ fontSize: '0.61rem', color: 'var(--text-muted)' }}>
+                                                                        {formatBytes(c.tamano_bytes)}
+                                                                    </div>
                                                                 </div>
-                                                                <div style={{ fontSize: '0.61rem', color: 'var(--text-muted)' }}>
-                                                                    {formatBytes(c.tamano_bytes)}
-                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setEditingCompId(c.id);
+                                                                        setEditingCompNota(c.nota || '');
+                                                                    }}
+                                                                    style={{ background: 'none', border: 'none', color: '#93c5fd', cursor: 'pointer', padding: '0.15rem', flexShrink: 0, display: 'inline-flex' }}
+                                                                    title="Editar nota del comprobante"
+                                                                >
+                                                                    <Edit size={11} />
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    disabled={analyzingOcr}
+                                                                    onClick={() => runReceiptOcr({ archivoUrl: c.archivo_url, nombreOriginal: c.nombre_original })}
+                                                                    style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.4)', color: '#c7d2fe', borderRadius: '4px', cursor: 'pointer', padding: '0.15rem 0.28rem', flexShrink: 0, display: 'inline-flex' }}
+                                                                    title="Leer con IA para autocompletar formulario"
+                                                                >
+                                                                    <Sparkles size={11} />
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteReceipt(c)}
+                                                                    style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.15rem', flexShrink: 0, display: 'inline-flex' }}
+                                                                    title="Eliminar comprobante"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                </button>
                                                             </div>
-                                                            <button
-                                                                type="button"
-                                                                disabled={analyzingOcr}
-                                                                onClick={() => runReceiptOcr({ archivoUrl: c.archivo_url, nombreOriginal: c.nombre_original })}
-                                                                style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.4)', color: '#c7d2fe', borderRadius: '4px', cursor: 'pointer', padding: '0.15rem 0.28rem', flexShrink: 0, display: 'inline-flex' }}
-                                                                title="Leer con IA para autocompletar formulario"
-                                                            >
-                                                                <Sparkles size={11} />
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleDeleteReceipt(c)}
-                                                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.15rem', flexShrink: 0, display: 'inline-flex' }}
-                                                                title="Eliminar comprobante"
-                                                            >
-                                                                <Trash2 size={12} />
-                                                            </button>
+                                                            {isEditingThisNota ? (
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', minWidth: 0 }}>
+                                                                    <input
+                                                                        type="text"
+                                                                        maxLength={255}
+                                                                        autoFocus
+                                                                        className="form-control"
+                                                                        style={{ height: '24px', fontSize: '0.66rem', padding: '0.1rem 0.3rem', flex: 1, minWidth: 0 }}
+                                                                        placeholder="Nota breve..."
+                                                                        value={editingCompNota}
+                                                                        onChange={e => setEditingCompNota(e.target.value)}
+                                                                        onKeyDown={e => {
+                                                                            if (e.key === 'Enter') {
+                                                                                e.preventDefault();
+                                                                                handleSaveCompNota(c.id);
+                                                                            } else if (e.key === 'Escape') {
+                                                                                setEditingCompId(null);
+                                                                                setEditingCompNota('');
+                                                                            }
+                                                                        }}
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={savingCompNota}
+                                                                        onClick={() => handleSaveCompNota(c.id)}
+                                                                        style={{ background: 'rgba(16, 185, 129, 0.25)', border: '1px solid rgba(16, 185, 129, 0.45)', color: '#6ee7b7', borderRadius: '4px', cursor: 'pointer', padding: '0.12rem 0.28rem', flexShrink: 0, display: 'inline-flex' }}
+                                                                        title="Guardar nota"
+                                                                    >
+                                                                        <Save size={10} />
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            setEditingCompId(null);
+                                                                            setEditingCompNota('');
+                                                                        }}
+                                                                        style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '0.1rem', flexShrink: 0, display: 'inline-flex' }}
+                                                                        title="Cancelar"
+                                                                    >
+                                                                        <X size={10} />
+                                                                    </button>
+                                                                </div>
+                                                            ) : c.nota ? (
+                                                                <div
+                                                                    onClick={() => {
+                                                                        setEditingCompId(c.id);
+                                                                        setEditingCompNota(c.nota || '');
+                                                                    }}
+                                                                    style={{ fontSize: '0.63rem', color: '#93c5fd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                                                                    title={`${c.nota} (clic para editar)`}
+                                                                >
+                                                                    {c.nota}
+                                                                </div>
+                                                            ) : null}
                                                         </div>
                                                     </div>
                                                 );
