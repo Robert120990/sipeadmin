@@ -1118,4 +1118,124 @@ describe('Control de Pagos — Capturas, Creación con Comprobantes, CANCELADO y
         const createdVen = mockExternalDb.getState().vencimientos.find(v => v.id === fallbackRes.data.first_vencimiento_id);
         assert.equal(createdVen.forma_pago, '[BAC] ANDELSA - (201002367)');
     });
+
+    it('ADM-0019: POST /abonos/lote aplica múltiples NC y transferencias atómicamente, protege conciliación y rechaza sobrepago con rollback limpio', async () => {
+        // Crear vencimiento pendiente de $693.88 (caso real del ticket ADM-0019)
+        const recRes = await requestJson('POST', '/api/operaciones/recordatorios', {
+            body: {
+                descripcion: 'Factura Combustible #13820',
+                id_ubicacion: 1,
+                iniciar: '2026-11-28',
+                activo: true,
+                monto: 693.88,
+                repetir: 1,
+                repetir_desc: 'VEZ'
+            }
+        });
+        assert.equal(recRes.status, 200);
+        const venId = recRes.data.first_vencimiento_id;
+
+        const uploadsDir = path.join(__dirname, '..', 'uploads', 'pagos');
+        const beforeFiles = fs.existsSync(uploadsDir) ? new Set(fs.readdirSync(uploadsDir)) : new Set();
+
+        // 1. Lote que excede el saldo ($700.00 > $693.88) -> 409 sin insertar nada ni filtrar archivos
+        const overRes = await requestJson('POST', `/api/operaciones/recordatorios/vencimiento/${venId}/abonos/lote`, {
+            body: {
+                tipo_operacion: 'CXP',
+                items: [
+                    { metodo_pago: 'NOTA_CREDITO', monto: 500, fecha_pago: '2026-11-28', referencia_doc: 'SAL-1', comprobantes: [{ data_url: VALID_PDF_DATA_URL, nombre_original: 'nc1.pdf' }] },
+                    { metodo_pago: 'TRANSFERENCIA', monto: 200, fecha_pago: '2026-11-28', cuenta_bancaria_id: 14, comprobantes: [{ data_url: VALID_PDF_DATA_URL, nombre_original: 'trf.pdf' }] }
+                ]
+            }
+        });
+        assert.equal(overRes.status, 409);
+        assert.equal(mockDb.getState().abonos.length, 0);
+        assert.equal(mockDb.getState().comprobantes.length, 0);
+        const afterOverFiles = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+        assert.equal(afterOverFiles.filter(f => !beforeFiles.has(f)).length, 0);
+
+        // 2. Fallo en el 2do comprobante durante el lote -> rollback total (0 abonos, 0 comprobantes, 0 archivos filtrados)
+        mockDb.setFailOnNextComprobanteInsert(2);
+        const failMidRes = await requestJson('POST', `/api/operaciones/recordatorios/vencimiento/${venId}/abonos/lote`, {
+            body: {
+                tipo_operacion: 'CXP',
+                items: [
+                    { metodo_pago: 'NOTA_CREDITO', monto: 8.81, fecha_pago: '2026-11-28', referencia_doc: 'SAL-755343', comprobantes: [{ data_url: VALID_PDF_DATA_URL, nombre_original: 'nc1.pdf' }] },
+                    { metodo_pago: 'NOTA_CREDITO', monto: 8.81, fecha_pago: '2026-11-28', referencia_doc: 'SAL-756158', comprobantes: [{ data_url: VALID_PDF_DATA_URL, nombre_original: 'nc2.pdf' }] }
+                ]
+            }
+        });
+        assert.equal(failMidRes.status, 500);
+        assert.equal(mockDb.getState().abonos.length, 0);
+        assert.equal(mockDb.getState().comprobantes.length, 0);
+        const afterFailFiles = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+        assert.equal(afterFailFiles.filter(f => !beforeFiles.has(f)).length, 0);
+
+        // 3. Lote válido: 3 Notas de Crédito ($8.81 x 3 = $26.43) + 1 Transferencia bancaria ($667.45) = $693.88 (100% CANCELADO)
+        const okRes = await requestJson('POST', `/api/operaciones/recordatorios/vencimiento/${venId}/abonos/lote`, {
+            body: {
+                tipo_operacion: 'CXP',
+                items: [
+                    {
+                        metodo_pago: 'NOTA_CREDITO',
+                        monto: 8.81,
+                        fecha_pago: '2026-11-28',
+                        referencia_doc: 'SAL-755343',
+                        comprobantes: [{ data_url: VALID_PDF_DATA_URL, nombre_original: 'creditMemo_SAL-755343.pdf' }]
+                    },
+                    {
+                        metodo_pago: 'NOTA_CREDITO',
+                        monto: 8.81,
+                        fecha_pago: '2026-11-28',
+                        referencia_doc: 'SAL-756158',
+                        comprobantes: [{ data_url: VALID_PDF_DATA_URL, nombre_original: 'creditMemo_SAL-756158.pdf' }]
+                    },
+                    {
+                        metodo_pago: 'NOTA_CREDITO',
+                        monto: 8.81,
+                        fecha_pago: '2026-11-28',
+                        referencia_doc: 'SAL-756658',
+                        comprobantes: [{ data_url: VALID_PDF_DATA_URL, nombre_original: 'creditMemo_SAL-756658.pdf' }]
+                    },
+                    {
+                        metodo_pago: 'TRANSFERENCIA',
+                        monto: 667.45,
+                        fecha_pago: '2026-11-28',
+                        cuenta_bancaria_id: 14,
+                        cuenta_label: '[PROMERICA] PISTA #1897 CHALCHUAPA',
+                        referencia_doc: 'TRF-9001',
+                        comprobantes: [{ data_url: VALID_WEBP_DATA_URL, nombre_original: 'transferencia.webp' }]
+                    }
+                ]
+            }
+        });
+
+        assert.equal(okRes.status, 201);
+        assert.equal(okRes.data.success, true);
+        assert.equal(okRes.data.count, 4);
+        assert.equal(okRes.data.nc_total, 26.43);
+        assert.equal(okRes.data.otros_total, 667.45);
+        assert.equal(okRes.data.batch_total, 693.88);
+        assert.equal(okRes.data.detail.resumen.estado_pago, 'CANCELADO');
+        assert.equal(okRes.data.detail.resumen.saldo_pendiente, 0);
+
+        const savedAbonos = mockDb.getState().abonos;
+        const savedComps = mockDb.getState().comprobantes;
+        assert.equal(savedAbonos.length, 4);
+        assert.equal(savedComps.length, 4);
+
+        // Las 3 NC deben quedar NO_APLICA para Conciliación Bancaria; la Transferencia queda PENDIENTE con su monto exacto
+        const ncRows = savedAbonos.filter(a => a.metodo_pago === 'NOTA_CREDITO');
+        const trfRow = savedAbonos.find(a => a.metodo_pago === 'TRANSFERENCIA');
+        assert.equal(ncRows.length, 3);
+        assert.ok(ncRows.every(a => a.estado_conciliacion === 'NO_APLICA'));
+        assert.equal(trfRow.estado_conciliacion, 'PENDIENTE');
+        assert.equal(Number(trfRow.monto), 667.45);
+
+        // Cada comprobante queda vinculado individualmente a su propio abono_id
+        for (const ab of savedAbonos) {
+            const linked = savedComps.filter(c => Number(c.abono_id) === Number(ab.id));
+            assert.equal(linked.length, 1, `El abono #${ab.id} debe tener su comprobante vinculado`);
+        }
+    });
 });

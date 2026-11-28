@@ -71,8 +71,11 @@ export default function ControlPagosModal({
     const [montoAbono, setMontoAbono] = useState('');
     const [notas, setNotas] = useState('');
 
-    // Comprobantes en cola + OCR inteligente (PDF o captura/foto)
+    // Comprobantes en cola + OCR inteligente (PDF o captura/foto) + Lote multi-NC/abonos (ADM-0019)
     const [pendingReceipts, setPendingReceipts] = useState([]);
+    const [manualBatchItems, setManualBatchItems] = useState([]);
+    const [batchApplyMode, setBatchApplyMode] = useState('batch'); // 'batch' | 'single'
+    const [ocrQueueProgress, setOcrQueueProgress] = useState({ current: 0, total: 0 });
     const [compressingFiles, setCompressingFiles] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
     const [autoOcrEnabled, setAutoOcrEnabled] = useState(true);
@@ -186,6 +189,9 @@ export default function ControlPagosModal({
             setReferenciaDoc('');
             setNotas('');
             setPendingReceipts([]);
+            setManualBatchItems([]);
+            setBatchApplyMode('batch');
+            setOcrQueueProgress({ current: 0, total: 0 });
             setLastOcrResult(null);
             setEditingAbonoId(null);
             setEditingCompId(null);
@@ -207,6 +213,9 @@ export default function ControlPagosModal({
             setCompressingFiles(false);
             setDetail(null);
             setPendingReceipts([]);
+            setManualBatchItems([]);
+            setBatchApplyMode('batch');
+            setOcrQueueProgress({ current: 0, total: 0 });
             setLastOcrResult(null);
             setEditingAbonoId(null);
             setEditingCompId(null);
@@ -330,9 +339,19 @@ export default function ControlPagosModal({
         return { filledFields, skippedFields };
     }, [sortedBankAccounts]);
 
-    // Llama al endpoint seguro de lectura IA (soporta WebP/JPG/PNG y PDF)
-    const runReceiptOcr = useCallback(async ({ dataUrl = null, archivoUrl = null, nombreOriginal = '' }) => {
-        if (!dataUrl && !archivoUrl) return;
+    // Llama al endpoint seguro de lectura IA (soporta WebP/JPG/PNG y PDF) y actualiza también la tarjeta del lote
+    const runReceiptOcr = useCallback(async ({
+        dataUrl = null,
+        archivoUrl = null,
+        nombreOriginal = '',
+        targetTempId = null,
+        silent = false,
+        applyToMainForm = true
+    }) => {
+        if (!dataUrl && !archivoUrl) return null;
+        if (targetTempId) {
+            setPendingReceipts(prev => prev.map(r => (r.tempId === targetTempId ? { ...r, ocrStatus: 'loading' } : r)));
+        }
         setAnalyzingOcr(true);
         try {
             const res = await api.post('/operaciones/recordatorios/analizar-comprobante', {
@@ -340,32 +359,123 @@ export default function ControlPagosModal({
                 archivo_url: archivoUrl,
                 nombre_original: nombreOriginal,
                 contexto: {
-                    descripcion: detail?.vencimiento?.descripcion || vencimientoRow?.descripcion || '',
-                    ubicacion: detail?.vencimiento?.ubicacion || vencimientoRow?.ubicacion || '',
+                    descripcion: detailRef.current?.vencimiento?.descripcion || vencimientoRow?.descripcion || '',
+                    ubicacion: detailRef.current?.vencimiento?.ubicacion || vencimientoRow?.ubicacion || '',
                     tipo_operacion: tipoOperacion,
-                    monto_total: Number(detail?.resumen?.monto_total ?? vencimientoRow?.monto ?? 0),
-                    saldo_pendiente: Number(detail?.resumen?.saldo_pendiente ?? vencimientoRow?.monto ?? 0)
+                    monto_total: Number(detailRef.current?.resumen?.monto_total ?? vencimientoRow?.monto ?? 0),
+                    saldo_pendiente: Number(detailRef.current?.resumen?.saldo_pendiente ?? vencimientoRow?.monto ?? 0)
                 }
             });
 
             const an = res.data?.analisis;
             if (an) {
-                setLastOcrResult(an);
-                const { filledFields, skippedFields } = applyOcrAnalysisToForm(an);
-                if (filledFields.length > 0) {
-                    addToast(`IA completó automáticamente: ${filledFields.join(', ')}`, 'success');
-                } else if (skippedFields.length > 0) {
-                    addToast('Comprobante leído; se conservaron tus valores actuales. Usa "Aplicar datos OCR" si deseas reemplazarlos.', 'info');
-                } else {
-                    addToast('Comprobante leído; revisa los campos detectados', 'success');
+                if (targetTempId) {
+                    const matchedCuenta = an.cuenta_bancaria_id
+                        ? sortedBankAccounts.find(c => Number(c.raw_id || c.id) === Number(an.cuenta_bancaria_id))
+                        : null;
+                    setPendingReceipts(prev => prev.map(r => {
+                        if (r.tempId !== targetTempId) return r;
+                        const nextCuentaId = an.cuenta_bancaria_id ? String(an.cuenta_bancaria_id) : r.cuenta_bancaria_id;
+                        const nextCuentaLabel = matchedCuenta
+                            ? formatCuentaLabel(matchedCuenta)
+                            : (an.cuenta_label || r.cuenta_label || '');
+                        return {
+                            ...r,
+                            ocrStatus: 'done',
+                            ocrConfianza: an.confianza || 'alta',
+                            metodo_pago: an.metodo_pago || r.metodo_pago,
+                            monto: an.monto && Number(an.monto) > 0 ? Number(an.monto).toFixed(2) : r.monto,
+                            fecha_pago: an.fecha_pago || r.fecha_pago,
+                            referencia_doc: an.referencia_doc || r.referencia_doc,
+                            beneficiario: an.beneficiario || r.beneficiario,
+                            cuenta_bancaria_id: nextCuentaId || '',
+                            cuenta_label: nextCuentaLabel,
+                            tarjeta_ref: an.tarjeta_ref || r.tarjeta_ref || '',
+                            nota: r.nota || an.notas_sugeridas || an.concepto || ''
+                        };
+                    }));
                 }
+
+                if (applyToMainForm) {
+                    setLastOcrResult(an);
+                    const { filledFields, skippedFields } = applyOcrAnalysisToForm(an);
+                    if (!silent) {
+                        if (filledFields.length > 0) {
+                            addToast(`IA completó automáticamente: ${filledFields.join(', ')}`, 'success');
+                        } else if (skippedFields.length > 0) {
+                            addToast('Comprobante leído; se conservaron tus valores actuales. Usa "Aplicar datos OCR" si deseas reemplazarlos.', 'info');
+                        } else {
+                            addToast('Comprobante leído; revisa los campos detectados', 'success');
+                        }
+                    }
+                }
+                return an;
             }
+            if (targetTempId) {
+                setPendingReceipts(prev => prev.map(r => (r.tempId === targetTempId ? { ...r, ocrStatus: 'done' } : r)));
+            }
+            return null;
         } catch (err) {
-            addToast(err.response?.data?.message || 'No se pudo leer automáticamente el comprobante', 'warning');
+            if (targetTempId) {
+                setPendingReceipts(prev => prev.map(r => (r.tempId === targetTempId ? { ...r, ocrStatus: 'error' } : r)));
+            }
+            if (!silent) {
+                addToast(err.response?.data?.message || 'No se pudo leer automáticamente el comprobante', 'warning');
+            }
+            return null;
         } finally {
             setAnalyzingOcr(false);
         }
-    }, [addToast, applyOcrAnalysisToForm, detail, tipoOperacion, vencimientoRow]);
+    }, [addToast, applyOcrAnalysisToForm, sortedBankAccounts, tipoOperacion, vencimientoRow]);
+
+    // Lectura IA controlada en cola para múltiples comprobantes (evita ráfagas 429 y suma todos los montos detectados)
+    const runBatchReceiptOcr = useCallback(async (batchItems, previousPendingCount = 0) => {
+        const list = (batchItems || []).filter(item => item?.data_url);
+        if (list.length === 0) return;
+
+        const isSingleFirst = list.length === 1 && previousPendingCount === 0;
+        if (isSingleFirst) {
+            await runReceiptOcr({
+                dataUrl: list[0].data_url,
+                nombreOriginal: list[0].nombre_original,
+                targetTempId: list[0].tempId,
+                silent: false,
+                applyToMainForm: true
+            });
+            return;
+        }
+
+        let detectedCount = 0;
+        let detectedSum = 0;
+        setOcrQueueProgress({ current: 0, total: list.length });
+        try {
+            for (let i = 0; i < list.length; i++) {
+                const item = list[i];
+                setOcrQueueProgress({ current: i + 1, total: list.length });
+                const an = await runReceiptOcr({
+                    dataUrl: item.data_url,
+                    nombreOriginal: item.nombre_original,
+                    targetTempId: item.tempId,
+                    silent: true,
+                    applyToMainForm: false
+                });
+                if (an && Number(an.monto) > 0) {
+                    detectedCount += 1;
+                    detectedSum += Number(an.monto);
+                }
+            }
+            if (detectedCount > 0) {
+                addToast(
+                    `IA leyó ${detectedCount} de ${list.length} comprobante(s) · Total detectado: ${mc(detectedSum)}`,
+                    'success'
+                );
+            } else {
+                addToast(`Se procesaron ${list.length} comprobante(s); verifica los montos en el lote.`, 'info');
+            }
+        } finally {
+            setOcrQueueProgress({ current: 0, total: 0 });
+        }
+    }, [addToast, runReceiptOcr]);
 
     const deduplicateReceiptBatch = (existingList, batch) => {
         const existingNames = new Set((existingList || []).map(r => r?.nombre_original).filter(Boolean));
@@ -398,10 +508,21 @@ export default function ControlPagosModal({
             for (const file of files.slice(0, 8)) {
                 try {
                     const comp = await compressReceiptFile(file);
+                    const curVals = formValuesRef.current || {};
                     rawBatch.push({
                         ...comp,
                         tempId: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                        nota: ''
+                        nota: '',
+                        ocrStatus: 'idle',
+                        ocrConfianza: null,
+                        metodo_pago: curVals.metodoPago || 'TRANSFERENCIA',
+                        monto: '',
+                        fecha_pago: curVals.fechaPago || todayStr(),
+                        referencia_doc: '',
+                        beneficiario: '',
+                        cuenta_bancaria_id: curVals.cuentaBancariaId || '',
+                        cuenta_label: curVals.cuentaLabel || '',
+                        tarjeta_ref: curVals.tarjetaRef || ''
                     });
                 } catch (fileErr) {
                     addToast(fileErr.message || `Error comprimiendo ${file.name}`, 'warning');
@@ -455,25 +576,27 @@ export default function ControlPagosModal({
                     setUploadingOnly(false);
                 }
             } else {
+                const prevCount = pendingReceiptsRef.current.length;
+                const dedupedBatch = deduplicateReceiptBatch(pendingReceiptsRef.current, rawBatch);
                 setPendingReceipts(prev => [...prev, ...deduplicateReceiptBatch(prev, rawBatch)]);
+                if (prevCount + dedupedBatch.length >= 2 && !editingAbonoId) {
+                    setBatchApplyMode('batch');
+                }
                 const savedBytes = rawBatch.reduce((acc, c) => acc + Math.max(0, (c.original_size || 0) - (c.compressed_size || 0)), 0);
                 addToast(
                     `${rawBatch.length} comprobante(s) listo(s)${savedBytes > 20000 ? ` (ahorro ${formatBytes(savedBytes)})` : ''}`,
                     'success'
                 );
-                // Auto-lectura IA sobre el primer archivo nuevo cuando está habilitada
-                if (autoOcrEnabled && rawBatch[0]?.data_url) {
-                    runReceiptOcr({
-                        dataUrl: rawBatch[0].data_url,
-                        nombreOriginal: rawBatch[0].nombre_original
-                    });
+                // Auto-lectura IA en cola controlada sobre todos los archivos nuevos cuando está habilitada
+                if (autoOcrEnabled && dedupedBatch.length > 0) {
+                    runBatchReceiptOcr(dedupedBatch, prevCount);
                 }
             }
         } finally {
             compressingCountRef.current = Math.max(0, compressingCountRef.current - 1);
             setCompressingFiles(compressingCountRef.current > 0);
         }
-    }, [addToast, autoOcrEnabled, editingAbonoId, isFullyPaid, onSaved, runReceiptOcr, vencimientoRow?.id]);
+    }, [addToast, autoOcrEnabled, editingAbonoId, isFullyPaid, onSaved, runBatchReceiptOcr, vencimientoRow?.id]);
 
     // Permitir pegar capturas directamente con Ctrl+V mientras el popup está abierto (sin interceptar modales hijos)
     useEffect(() => {
@@ -498,8 +621,39 @@ export default function ControlPagosModal({
         return () => window.removeEventListener('paste', onPaste);
     }, [open, viewerOpen, mibotOpen, handleProcessFiles]);
 
+    const updatePendingReceiptField = (tempId, patch) => {
+        setPendingReceipts(prev => prev.map(r => (r.tempId === tempId ? { ...r, ...patch } : r)));
+    };
+
     const updatePendingReceiptNota = (tempId, val) => {
-        setPendingReceipts(prev => prev.map(r => (r.tempId === tempId ? { ...r, nota: val } : r)));
+        updatePendingReceiptField(tempId, { nota: val });
+    };
+
+    const handleAddManualBatchItem = (defaultMethod = 'NOTA_CREDITO') => {
+        setBatchApplyMode('batch');
+        setManualBatchItems(prev => [
+            ...prev,
+            {
+                tempId: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                metodo_pago: defaultMethod,
+                monto: '',
+                fecha_pago: fechaPago || todayStr(),
+                referencia_doc: '',
+                beneficiario: beneficiario || '',
+                cuenta_bancaria_id: defaultMethod === 'NOTA_CREDITO' ? '' : (cuentaBancariaId || ''),
+                cuenta_label: defaultMethod === 'NOTA_CREDITO' ? '' : (cuentaLabel || ''),
+                tarjeta_ref: '',
+                nota: ''
+            }
+        ]);
+    };
+
+    const updateManualBatchField = (tempId, patch) => {
+        setManualBatchItems(prev => prev.map(item => (item.tempId === tempId ? { ...item, ...patch } : item)));
+    };
+
+    const removeManualBatchItem = (tempId) => {
+        setManualBatchItems(prev => prev.filter(item => item.tempId !== tempId));
     };
 
     const uploadPendingReceiptsNow = async () => {
@@ -653,6 +807,8 @@ export default function ControlPagosModal({
         setMontoAbono(Number(ab.monto || 0).toFixed(2));
         setNotas(ab.notas || '');
         setPendingReceipts([]);
+        setManualBatchItems([]);
+        setBatchApplyMode('single');
         setLastOcrResult(null);
         // Proteger valores existentes del abono contra sobreescritura automática por OCR
         if (ab.metodo_pago) dirtyFieldsRef.current.add('metodoPago');
@@ -733,9 +889,165 @@ export default function ControlPagosModal({
         }
     };
 
+    const abonos = useMemo(() => (detail?.abonos || []), [detail?.abonos]);
+    const comprobantes = useMemo(() => (detail?.comprobantes || []), [detail?.comprobantes]);
+    const sugerencias = detail?.sugerencias || { mas_usadas_similares: [], tarjetas_frecuentes: [], efectivo_cajas: [] };
+    const methodCategory = getMethodCategory(metodoPago);
+
+    // Lote multi-NC / multi-abonos activo cuando hay 2+ comprobantes o líneas manuales (ADM-0019)
+    const isBatchModeActive = !editingAbonoId && !isFullyPaid && batchApplyMode === 'batch' && (pendingReceipts.length >= 2 || manualBatchItems.length > 0);
+
+    const allBatchEntries = useMemo(() => ([
+        ...pendingReceipts.map(r => ({ ...r, _source: 'receipt' })),
+        ...manualBatchItems.map(m => ({ ...m, _source: 'manual' }))
+    ]), [pendingReceipts, manualBatchItems]);
+
+    const batchSummary = useMemo(() => {
+        let ncCount = 0;
+        let ncTotal = 0;
+        let otrosCount = 0;
+        let otrosTotal = 0;
+        let missingAmountCount = 0;
+
+        for (const item of allBatchEntries) {
+            const val = Math.round((Number(item.monto) || 0) * 100) / 100;
+            if (!Number.isFinite(val) || val <= 0) {
+                missingAmountCount += 1;
+            }
+            const safeVal = Number.isFinite(val) && val > 0 ? val : 0;
+            if (item.metodo_pago === 'NOTA_CREDITO') {
+                ncCount += 1;
+                ncTotal += safeVal;
+            } else {
+                otrosCount += 1;
+                otrosTotal += safeVal;
+            }
+        }
+
+        ncTotal = Math.round(ncTotal * 100) / 100;
+        otrosTotal = Math.round(otrosTotal * 100) / 100;
+        const total = Math.round((ncTotal + otrosTotal) * 100) / 100;
+        const saldoActual = Math.round((Number(resumen.saldo_pendiente || 0)) * 100) / 100;
+        const saldoRestante = Math.round(Math.max(0, saldoActual - total) * 100) / 100;
+        const exceedsBy = total > (saldoActual + 0.005) ? Math.round((total - saldoActual) * 100) / 100 : 0;
+        const willBeComplete = saldoActual > 0 ? (total >= (saldoActual - 0.005) && exceedsBy === 0) : total > 0;
+
+        return {
+            count: allBatchEntries.length,
+            ncCount,
+            ncTotal,
+            otrosCount,
+            otrosTotal,
+            total,
+            missingAmountCount,
+            saldoActual,
+            saldoRestante,
+            exceedsBy,
+            willBeComplete
+        };
+    }, [allBatchEntries, resumen.saldo_pendiente]);
+
+    // Totales acumulados de pagos y notas de crédito ya aplicados (para el pie de la tarjeta derecha)
+    const appliedTotals = useMemo(() => {
+        let ncCount = 0;
+        let ncTotal = 0;
+        let otrosCount = 0;
+        let otrosTotal = 0;
+        for (const ab of abonos) {
+            const val = Math.max(0, Number(ab.monto || 0));
+            if (ab.metodo_pago === 'NOTA_CREDITO') {
+                ncCount += 1;
+                ncTotal += val;
+            } else {
+                otrosCount += 1;
+                otrosTotal += val;
+            }
+        }
+        return {
+            ncCount,
+            ncTotal: Math.round(ncTotal * 100) / 100,
+            otrosCount,
+            otrosTotal: Math.round(otrosTotal * 100) / 100,
+            totalApplied: Math.round(Number(resumen.monto_pagado || 0) * 100) / 100,
+            saldoPendiente: Math.round(Number(resumen.saldo_pendiente || 0) * 100) / 100
+        };
+    }, [abonos, resumen.monto_pagado, resumen.saldo_pendiente]);
+
     const handleSubmitAbono = async (e) => {
         e.preventDefault();
         if (!vencimientoRow?.id) return;
+
+        // Modo Lote (ADM-0019): aplica múltiples NC y abonos de forma atómica en una sola transacción
+        if (isBatchModeActive) {
+            if (allBatchEntries.length === 0) {
+                addToast('Agrega al menos un comprobante o línea en el lote.', 'warning');
+                return;
+            }
+            if (allBatchEntries.length > 10) {
+                addToast('El lote admite un máximo de 10 ítems por envío.', 'warning');
+                return;
+            }
+            if (batchSummary.missingAmountCount > 0) {
+                addToast(`Falta ingresar un monto mayor a $0.00 en ${batchSummary.missingAmountCount} ítem(s) del lote.`, 'warning');
+                return;
+            }
+            if (batchSummary.exceedsBy > 0) {
+                addToast(
+                    `El total del lote (${mc(batchSummary.total)}) excede el saldo pendiente (${mc(batchSummary.saldoActual)}) por ${mc(batchSummary.exceedsBy)}.`,
+                    'warning'
+                );
+                return;
+            }
+
+            setSaving(true);
+            try {
+                const res = await api.post(`/operaciones/recordatorios/vencimiento/${vencimientoRow.id}/abonos/lote`, {
+                    tipo_operacion: tipoOperacion,
+                    items: allBatchEntries.map(item => ({
+                        tipo_operacion: tipoOperacion,
+                        metodo_pago: item.metodo_pago || 'TRANSFERENCIA',
+                        cuenta_bancaria_id: resolveNumericCuentaId(item.cuenta_bancaria_id),
+                        cuenta_label: item.cuenta_label || null,
+                        tarjeta_ref: item.tarjeta_ref || null,
+                        beneficiario: item.beneficiario ? String(item.beneficiario).trim() : null,
+                        referencia_doc: item.referencia_doc ? String(item.referencia_doc).trim() : null,
+                        fecha_pago: item.fecha_pago || todayStr(),
+                        monto: Math.round((Number(item.monto) || 0) * 100) / 100,
+                        notas: item.nota ? String(item.nota).trim() : null,
+                        comprobantes: item._source === 'receipt' && item.data_url ? [{
+                            data_url: item.data_url,
+                            nombre_original: item.nombre_original,
+                            ancho: item.ancho,
+                            alto: item.alto,
+                            nota: item.nota || null
+                        }] : []
+                    }))
+                });
+
+                const updatedDetail = res.data?.detail;
+                if (updatedDetail) {
+                    setDetail(updatedDetail);
+                    const nextSaldo = Number(updatedDetail?.resumen?.saldo_pendiente || 0);
+                    setMontoAbono(nextSaldo > 0 ? nextSaldo.toFixed(2) : '');
+                }
+                addToast(res.data?.message || `Lote de ${allBatchEntries.length} NC/abonos aplicado correctamente`, 'success');
+                setBeneficiario('');
+                setReferenciaDoc('');
+                setNotas('');
+                setPendingReceipts([]);
+                setManualBatchItems([]);
+                setBatchApplyMode('batch');
+                setOcrQueueProgress({ current: 0, total: 0 });
+                setLastOcrResult(null);
+                resetFieldTracking();
+                if (onSaved) onSaved();
+            } catch (err) {
+                addToast(err.response?.data?.message || 'Error al aplicar el lote de NC/abonos', 'error');
+            } finally {
+                setSaving(false);
+            }
+            return;
+        }
 
         const numMonto = Math.round((Number(montoAbono) || 0) * 100) / 100;
         if (!Number.isFinite(numMonto) || numMonto <= 0) {
@@ -801,6 +1113,9 @@ export default function ControlPagosModal({
             setReferenciaDoc('');
             setNotas('');
             setPendingReceipts([]);
+            setManualBatchItems([]);
+            setBatchApplyMode('batch');
+            setOcrQueueProgress({ current: 0, total: 0 });
             setLastOcrResult(null);
             resetFieldTracking();
             if (onSaved) onSaved();
@@ -868,11 +1183,6 @@ export default function ControlPagosModal({
         setViewerIdx(idx);
         setViewerOpen(true);
     };
-
-    const abonos = detail?.abonos || [];
-    const comprobantes = detail?.comprobantes || [];
-    const sugerencias = detail?.sugerencias || { mas_usadas_similares: [], tarjetas_frecuentes: [], efectivo_cajas: [] };
-    const methodCategory = getMethodCategory(metodoPago);
 
     const projectedBalance = useMemo(() => {
         const entered = Number(montoAbono) || 0;
@@ -1092,13 +1402,29 @@ export default function ControlPagosModal({
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
                                     <div style={{ fontSize: '0.84rem', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text)' }}>
                                         {editingAbonoId ? <Edit size={15} color="#818cf8" /> : <Plus size={15} color="#34d399" />}
-                                        <span>{editingAbonoId ? 'Editando Abono' : 'Registrar Pago / Abono Parcial'}</span>
+                                        <span>
+                                            {editingAbonoId
+                                                ? 'Editando Abono'
+                                                : isBatchModeActive
+                                                    ? `Lote de NC / Abonos (${batchSummary.count})`
+                                                    : 'Registrar Pago / Abono Parcial'}
+                                        </span>
                                     </div>
-                                    {editingAbonoId && (
+                                    {editingAbonoId ? (
                                         <button type="button" className="btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.72rem' }} onClick={cancelEditAbono}>
                                             Cancelar edición
                                         </button>
-                                    )}
+                                    ) : !isFullyPaid && !isBatchModeActive ? (
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => handleAddManualBatchItem('NOTA_CREDITO')}
+                                            style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem', borderColor: 'rgba(192, 132, 252, 0.45)', color: '#d8b4fe', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                            title="Activa el modo lote para aplicar múltiples Notas de Crédito y abonos en un solo paso"
+                                        >
+                                            <Layers size={12} /> Varios NC / Abonos
+                                        </button>
+                                    ) : null}
                                 </div>
 
                                 {/* BLOQUE 1: SUBIR PDF / CAPTURA / TOMAR FOTO -> AUTO-COMPLETA TODO CON IA */}
@@ -1197,7 +1523,7 @@ export default function ControlPagosModal({
                                     )}
 
                                     {/* Estado de lectura IA en curso */}
-                                    {analyzingOcr && (
+                                    {(analyzingOcr || ocrQueueProgress.total > 0) && (
                                         <div style={{
                                             padding: '0.45rem 0.65rem',
                                             borderRadius: '7px',
@@ -1210,12 +1536,71 @@ export default function ControlPagosModal({
                                             gap: '0.45rem'
                                         }}>
                                             <Loader2 size={14} className="animate-spin" style={{ flexShrink: 0 }} />
-                                            <span>Analizando comprobante con IA (cuenta, monto, beneficiario, referencia)...</span>
+                                            <span>
+                                                {ocrQueueProgress.total > 1
+                                                    ? `Leyendo comprobante ${ocrQueueProgress.current} de ${ocrQueueProgress.total} con IA (NC, monto, referencia)...`
+                                                    : 'Analizando comprobante con IA (cuenta, monto, beneficiario, referencia)...'}
+                                            </span>
                                         </div>
                                     )}
 
-                                    {/* Resultado de la lectura IA */}
-                                    {lastOcrResult && !analyzingOcr && (
+                                    {/* Selector de modo cuando hay 2+ archivos (Lote NC/Abonos vs 1 solo pago con múltiples adjuntos) */}
+                                    {!editingAbonoId && !isFullyPaid && (pendingReceipts.length >= 2 || manualBatchItems.length > 0) && (
+                                        <div style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: '0.35rem',
+                                            padding: '0.4rem 0.55rem',
+                                            borderRadius: '7px',
+                                            backgroundColor: 'rgba(192, 132, 252, 0.1)',
+                                            border: '1px solid rgba(192, 132, 252, 0.35)'
+                                        }}>
+                                            <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#e9d5ff' }}>
+                                                Modo de aplicación:
+                                            </span>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setBatchApplyMode('batch')}
+                                                    style={{
+                                                        padding: '0.2rem 0.55rem',
+                                                        borderRadius: '6px',
+                                                        fontSize: '0.69rem',
+                                                        fontWeight: 700,
+                                                        cursor: 'pointer',
+                                                        border: batchApplyMode === 'batch' ? '1px solid #c084fc' : '1px solid rgba(255,255,255,0.14)',
+                                                        backgroundColor: batchApplyMode === 'batch' ? 'rgba(192, 132, 252, 0.25)' : 'transparent',
+                                                        color: batchApplyMode === 'batch' ? '#fff' : 'var(--text-muted)'
+                                                    }}
+                                                >
+                                                    Lote individual ({allBatchEntries.length} NC/abonos)
+                                                </button>
+                                                {manualBatchItems.length === 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setBatchApplyMode('single')}
+                                                        style={{
+                                                            padding: '0.2rem 0.55rem',
+                                                            borderRadius: '6px',
+                                                            fontSize: '0.69rem',
+                                                            fontWeight: 700,
+                                                            cursor: 'pointer',
+                                                            border: batchApplyMode === 'single' ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.14)',
+                                                            backgroundColor: batchApplyMode === 'single' ? 'rgba(56, 189, 248, 0.2)' : 'transparent',
+                                                            color: batchApplyMode === 'single' ? '#fff' : 'var(--text-muted)'
+                                                        }}
+                                                    >
+                                                        1 pago ({pendingReceipts.length} adjuntos)
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Resultado de la lectura IA (en modo individual) */}
+                                    {!isBatchModeActive && lastOcrResult && !analyzingOcr && (
                                         <div style={{
                                             padding: '0.5rem 0.65rem',
                                             borderRadius: '8px',
@@ -1273,94 +1658,352 @@ export default function ControlPagosModal({
                                         </div>
                                     )}
 
-                                    {/* Miniaturas de comprobantes pendientes de guardar */}
-                                    {pendingReceipts.length > 0 && (
+                                    {/* Miniaturas de comprobantes pendientes (en modo lote incluyen campos editables por cada NC/abono) */}
+                                    {(pendingReceipts.length > 0 || manualBatchItems.length > 0) && (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', minWidth: 0 }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: 0 }}>
-                                                {pendingReceipts.map((r, idx) => (
-                                                    <div
-                                                        key={r.tempId}
-                                                        style={{
-                                                            display: 'flex',
-                                                            flexDirection: 'column',
-                                                            gap: '0.3rem',
-                                                            padding: '0.35rem 0.5rem',
-                                                            borderRadius: '7px',
-                                                            backgroundColor: 'rgba(15, 23, 42, 0.65)',
-                                                            border: '1px solid rgba(56, 189, 248, 0.35)',
-                                                            fontSize: '0.69rem',
-                                                            width: '100%',
-                                                            maxWidth: '100%',
-                                                            minWidth: 0
-                                                        }}
-                                                    >
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', minWidth: 0 }}>
-                                                            {r.mime_type === 'application/pdf' ? (
-                                                                <FileText size={16} color="#f87171" style={{ flexShrink: 0, cursor: 'pointer' }} onClick={() => openLightbox(pendingReceipts, idx)} />
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.38rem', minWidth: 0 }}>
+                                                {pendingReceipts.map((r, idx) => {
+                                                    const rCat = getMethodCategory(r.metodo_pago);
+                                                    const isNc = r.metodo_pago === 'NOTA_CREDITO';
+                                                    return (
+                                                        <div
+                                                            key={r.tempId}
+                                                            style={{
+                                                                display: 'flex',
+                                                                flexDirection: 'column',
+                                                                gap: '0.32rem',
+                                                                padding: '0.42rem 0.55rem',
+                                                                borderRadius: '8px',
+                                                                backgroundColor: 'rgba(15, 23, 42, 0.68)',
+                                                                border: isBatchModeActive && isNc
+                                                                    ? '1px solid rgba(192, 132, 252, 0.48)'
+                                                                    : '1px solid rgba(56, 189, 248, 0.35)',
+                                                                fontSize: '0.69rem',
+                                                                width: '100%',
+                                                                maxWidth: '100%',
+                                                                minWidth: 0
+                                                            }}
+                                                        >
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', minWidth: 0 }}>
+                                                                {r.mime_type === 'application/pdf' ? (
+                                                                    <FileText size={16} color="#f87171" style={{ flexShrink: 0, cursor: 'pointer' }} onClick={() => openLightbox(pendingReceipts, idx)} />
+                                                                ) : (
+                                                                    <img
+                                                                        src={r.data_url}
+                                                                        alt=""
+                                                                        onClick={() => openLightbox(pendingReceipts, idx)}
+                                                                        style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }}
+                                                                    />
+                                                                )}
+                                                                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 110px' }}>
+                                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }} title={r.nombre_original}>
+                                                                        {r.nombre_original}
+                                                                    </span>
+                                                                    <span style={{ fontSize: '0.63rem', color: '#6ee7b7', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                                                        <span>
+                                                                            {formatBytes(r.compressed_size)}
+                                                                            {r.original_size > r.compressed_size ? ` (de ${formatBytes(r.original_size)})` : ''}
+                                                                        </span>
+                                                                        {r.ocrStatus === 'loading' && <span style={{ color: '#c7d2fe' }}>· Leyendo IA...</span>}
+                                                                        {r.ocrStatus === 'done' && Number(r.monto) > 0 && (
+                                                                            <span style={{ color: isNc ? '#d8b4fe' : '#34d399', fontWeight: 700 }}>
+                                                                                · IA: {mc(r.monto)}
+                                                                            </span>
+                                                                        )}
+                                                                    </span>
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    disabled={analyzingOcr}
+                                                                    onClick={() => runReceiptOcr({
+                                                                        dataUrl: r.data_url,
+                                                                        nombreOriginal: r.nombre_original,
+                                                                        targetTempId: r.tempId,
+                                                                        applyToMainForm: !isBatchModeActive
+                                                                    })}
+                                                                    style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.45)', color: '#c7d2fe', borderRadius: '5px', cursor: 'pointer', padding: '0.15rem 0.35rem', fontSize: '0.64rem', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
+                                                                    title="Leer este comprobante con IA"
+                                                                >
+                                                                    <Sparkles size={10} /> IA
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setPendingReceipts(prev => prev.filter(x => x.tempId !== r.tempId))}
+                                                                    style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.1rem', flexShrink: 0 }}
+                                                                    title="Quitar"
+                                                                >
+                                                                    <X size={13} />
+                                                                </button>
+                                                            </div>
+
+                                                            {isBatchModeActive ? (
+                                                                <>
+                                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.32rem', alignItems: 'center' }}>
+                                                                        <select
+                                                                            className="form-control"
+                                                                            style={{ height: '31px', fontSize: '0.73rem', padding: '0.15rem 0.35rem', flex: '1 1 130px', minWidth: '120px' }}
+                                                                            value={r.metodo_pago || 'TRANSFERENCIA'}
+                                                                            onChange={e => updatePendingReceiptField(r.tempId, { metodo_pago: e.target.value })}
+                                                                        >
+                                                                            {PAYMENT_METHOD_OPTIONS.map(opt => (
+                                                                                <option key={opt.id} value={opt.id}>{opt.label}</option>
+                                                                            ))}
+                                                                        </select>
+                                                                        <input
+                                                                            type="number"
+                                                                            step="0.01"
+                                                                            min="0.01"
+                                                                            inputMode="decimal"
+                                                                            className="form-control"
+                                                                            style={{
+                                                                                height: '31px',
+                                                                                fontSize: '0.78rem',
+                                                                                fontWeight: 800,
+                                                                                color: isNc ? '#d8b4fe' : '#34d399',
+                                                                                width: '112px',
+                                                                                padding: '0.15rem 0.45rem'
+                                                                            }}
+                                                                            placeholder="Monto $"
+                                                                            value={r.monto ?? ''}
+                                                                            onChange={e => updatePendingReceiptField(r.tempId, { monto: e.target.value })}
+                                                                        />
+                                                                        <input
+                                                                            type="text"
+                                                                            maxLength={120}
+                                                                            className="form-control"
+                                                                            style={{ height: '31px', fontSize: '0.73rem', padding: '0.15rem 0.4rem', flex: '1 1 115px', minWidth: '105px' }}
+                                                                            placeholder="# Ref / NC..."
+                                                                            value={r.referencia_doc || ''}
+                                                                            onChange={e => updatePendingReceiptField(r.tempId, { referencia_doc: e.target.value })}
+                                                                        />
+                                                                        <input
+                                                                            type="date"
+                                                                            className="form-control"
+                                                                            style={{ height: '31px', fontSize: '0.72rem', padding: '0.15rem 0.35rem', width: '130px' }}
+                                                                            value={r.fecha_pago || todayStr()}
+                                                                            onChange={e => updatePendingReceiptField(r.tempId, { fecha_pago: e.target.value })}
+                                                                        />
+                                                                    </div>
+                                                                    {(rCat === 'BANCO' || r.metodo_pago === 'TARJETA_DEBITO') && (
+                                                                        <select
+                                                                            className="form-control"
+                                                                            style={{ height: '30px', fontSize: '0.71rem', padding: '0.1rem 0.35rem', width: '100%' }}
+                                                                            value={r.cuenta_bancaria_id || ''}
+                                                                            onChange={e => {
+                                                                                const cid = e.target.value;
+                                                                                const found = sortedBankAccounts.find(c => String(c.raw_id || c.id) === String(cid));
+                                                                                updatePendingReceiptField(r.tempId, {
+                                                                                    cuenta_bancaria_id: cid,
+                                                                                    cuenta_label: found ? formatCuentaLabel(found) : ''
+                                                                                });
+                                                                            }}
+                                                                        >
+                                                                            <option value="">-- Cuenta bancaria (opcional para conciliación) --</option>
+                                                                            {sortedBankAccounts.map(c => (
+                                                                                <option key={`batch-c-${r.tempId}-${c.raw_id || c.id}`} value={String(c.raw_id || c.id)}>
+                                                                                    {formatCuentaLabel(c)}
+                                                                                </option>
+                                                                            ))}
+                                                                        </select>
+                                                                    )}
+                                                                    <input
+                                                                        type="text"
+                                                                        maxLength={255}
+                                                                        className="form-control"
+                                                                        style={{ height: '27px', fontSize: '0.69rem', padding: '0.12rem 0.45rem', width: '100%' }}
+                                                                        placeholder="Nota breve (ej. NC devolución, transferencia parcial...)"
+                                                                        value={r.nota || ''}
+                                                                        onChange={e => updatePendingReceiptNota(r.tempId, e.target.value)}
+                                                                    />
+                                                                </>
                                                             ) : (
-                                                                <img
-                                                                    src={r.data_url}
-                                                                    alt=""
-                                                                    onClick={() => openLightbox(pendingReceipts, idx)}
-                                                                    style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }}
+                                                                <input
+                                                                    type="text"
+                                                                    maxLength={255}
+                                                                    className="form-control"
+                                                                    style={{ height: '28px', fontSize: '0.7rem', padding: '0.15rem 0.45rem', width: '100%' }}
+                                                                    placeholder="Nota breve (ej. Transferencia 1, DTE...)"
+                                                                    value={r.nota || ''}
+                                                                    onChange={e => updatePendingReceiptNota(r.tempId, e.target.value)}
                                                                 />
                                                             )}
-                                                            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 110px' }}>
-                                                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }} title={r.nombre_original}>
-                                                                    {r.nombre_original}
-                                                                </span>
-                                                                <span style={{ fontSize: '0.63rem', color: '#6ee7b7' }}>
-                                                                    {formatBytes(r.compressed_size)}
-                                                                    {r.original_size > r.compressed_size ? ` (de ${formatBytes(r.original_size)})` : ''}
-                                                                </span>
-                                                            </div>
-                                                            <button
-                                                                type="button"
-                                                                disabled={analyzingOcr}
-                                                                onClick={() => runReceiptOcr({ dataUrl: r.data_url, nombreOriginal: r.nombre_original })}
-                                                                style={{ background: 'rgba(99, 102, 241, 0.2)', border: '1px solid rgba(99, 102, 241, 0.45)', color: '#c7d2fe', borderRadius: '5px', cursor: 'pointer', padding: '0.15rem 0.35rem', fontSize: '0.64rem', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
-                                                                title="Leer este comprobante con IA"
-                                                            >
-                                                                <Sparkles size={10} /> IA
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setPendingReceipts(prev => prev.filter(x => x.tempId !== r.tempId))}
-                                                                style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.1rem', flexShrink: 0 }}
-                                                                title="Quitar"
-                                                            >
-                                                                <X size={13} />
-                                                            </button>
                                                         </div>
-                                                        <input
-                                                            type="text"
-                                                            maxLength={255}
-                                                            className="form-control"
-                                                            style={{ height: '28px', fontSize: '0.7rem', padding: '0.15rem 0.45rem', width: '100%' }}
-                                                            placeholder="Nota breve (ej. Transferencia 1, DTE...)"
-                                                            value={r.nota || ''}
-                                                            onChange={e => updatePendingReceiptNota(r.tempId, e.target.value)}
-                                                        />
-                                                    </div>
-                                                ))}
+                                                    );
+                                                })}
+
+                                                {/* Líneas manuales adicionales del lote (sin archivo adjunto) */}
+                                                {manualBatchItems.map((m, idx) => {
+                                                    const mCat = getMethodCategory(m.metodo_pago);
+                                                    const isNc = m.metodo_pago === 'NOTA_CREDITO';
+                                                    return (
+                                                        <div
+                                                            key={m.tempId}
+                                                            style={{
+                                                                display: 'flex',
+                                                                flexDirection: 'column',
+                                                                gap: '0.32rem',
+                                                                padding: '0.42rem 0.55rem',
+                                                                borderRadius: '8px',
+                                                                backgroundColor: 'rgba(15, 23, 42, 0.55)',
+                                                                border: isNc ? '1px dashed rgba(192, 132, 252, 0.5)' : '1px dashed rgba(52, 211, 153, 0.45)',
+                                                                fontSize: '0.69rem'
+                                                            }}
+                                                        >
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.3rem' }}>
+                                                                <span style={{ fontWeight: 700, color: isNc ? '#d8b4fe' : '#6ee7b7' }}>
+                                                                    Línea manual #{idx + 1} (sin archivo adjunto)
+                                                                </span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeManualBatchItem(m.tempId)}
+                                                                    style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.1rem' }}
+                                                                    title="Quitar línea"
+                                                                >
+                                                                    <X size={13} />
+                                                                </button>
+                                                            </div>
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.32rem', alignItems: 'center' }}>
+                                                                <select
+                                                                    className="form-control"
+                                                                    style={{ height: '31px', fontSize: '0.73rem', padding: '0.15rem 0.35rem', flex: '1 1 130px', minWidth: '120px' }}
+                                                                    value={m.metodo_pago || 'NOTA_CREDITO'}
+                                                                    onChange={e => updateManualBatchField(m.tempId, { metodo_pago: e.target.value })}
+                                                                >
+                                                                    {PAYMENT_METHOD_OPTIONS.map(opt => (
+                                                                        <option key={opt.id} value={opt.id}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <input
+                                                                    type="number"
+                                                                    step="0.01"
+                                                                    min="0.01"
+                                                                    inputMode="decimal"
+                                                                    className="form-control"
+                                                                    style={{
+                                                                        height: '31px',
+                                                                        fontSize: '0.78rem',
+                                                                        fontWeight: 800,
+                                                                        color: isNc ? '#d8b4fe' : '#34d399',
+                                                                        width: '112px',
+                                                                        padding: '0.15rem 0.45rem'
+                                                                    }}
+                                                                    placeholder="Monto $"
+                                                                    value={m.monto ?? ''}
+                                                                    onChange={e => updateManualBatchField(m.tempId, { monto: e.target.value })}
+                                                                />
+                                                                <input
+                                                                    type="text"
+                                                                    maxLength={120}
+                                                                    className="form-control"
+                                                                    style={{ height: '31px', fontSize: '0.73rem', padding: '0.15rem 0.4rem', flex: '1 1 115px', minWidth: '105px' }}
+                                                                    placeholder="# Ref / NC..."
+                                                                    value={m.referencia_doc || ''}
+                                                                    onChange={e => updateManualBatchField(m.tempId, { referencia_doc: e.target.value })}
+                                                                />
+                                                                <input
+                                                                    type="date"
+                                                                    className="form-control"
+                                                                    style={{ height: '31px', fontSize: '0.72rem', padding: '0.15rem 0.35rem', width: '130px' }}
+                                                                    value={m.fecha_pago || todayStr()}
+                                                                    onChange={e => updateManualBatchField(m.tempId, { fecha_pago: e.target.value })}
+                                                                />
+                                                            </div>
+                                                            {(mCat === 'BANCO' || m.metodo_pago === 'TARJETA_DEBITO') && (
+                                                                <select
+                                                                    className="form-control"
+                                                                    style={{ height: '30px', fontSize: '0.71rem', padding: '0.1rem 0.35rem', width: '100%' }}
+                                                                    value={m.cuenta_bancaria_id || ''}
+                                                                    onChange={e => {
+                                                                        const cid = e.target.value;
+                                                                        const found = sortedBankAccounts.find(c => String(c.raw_id || c.id) === String(cid));
+                                                                        updateManualBatchField(m.tempId, {
+                                                                            cuenta_bancaria_id: cid,
+                                                                            cuenta_label: found ? formatCuentaLabel(found) : ''
+                                                                        });
+                                                                    }}
+                                                                >
+                                                                    <option value="">-- Cuenta bancaria (opcional para conciliación) --</option>
+                                                                    {sortedBankAccounts.map(c => (
+                                                                        <option key={`manual-c-${m.tempId}-${c.raw_id || c.id}`} value={String(c.raw_id || c.id)}>
+                                                                            {formatCuentaLabel(c)}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                            )}
+                                                            <input
+                                                                type="text"
+                                                                maxLength={255}
+                                                                className="form-control"
+                                                                style={{ height: '27px', fontSize: '0.69rem', padding: '0.12rem 0.45rem', width: '100%' }}
+                                                                placeholder="Nota / concepto..."
+                                                                value={m.nota || ''}
+                                                                onChange={e => updateManualBatchField(m.tempId, { nota: e.target.value })}
+                                                            />
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
-                                            {vencimientoRow?.id && (
-                                                <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.35rem' }}>
+
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                                {isBatchModeActive && (
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                                        <button
+                                                            type="button"
+                                                            className="btn-secondary"
+                                                            disabled={allBatchEntries.length >= 10}
+                                                            onClick={() => handleAddManualBatchItem('NOTA_CREDITO')}
+                                                            style={{ fontSize: '0.7rem', padding: '0.25rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', borderColor: 'rgba(192, 132, 252, 0.45)', color: '#d8b4fe' }}
+                                                        >
+                                                            <Plus size={11} /> + Línea NC / Abono
+                                                        </button>
+                                                        {batchSummary.saldoRestante > 0 && allBatchEntries.length < 10 && (
+                                                            <button
+                                                                type="button"
+                                                                className="btn-secondary"
+                                                                onClick={() => {
+                                                                    setBatchApplyMode('batch');
+                                                                    setManualBatchItems(prev => [
+                                                                        ...prev,
+                                                                        {
+                                                                            tempId: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                                                                            metodo_pago: metodoPago === 'NOTA_CREDITO' ? 'TRANSFERENCIA' : (metodoPago || 'TRANSFERENCIA'),
+                                                                            monto: batchSummary.saldoRestante.toFixed(2),
+                                                                            fecha_pago: fechaPago || todayStr(),
+                                                                            referencia_doc: '',
+                                                                            beneficiario: beneficiario || '',
+                                                                            cuenta_bancaria_id: cuentaBancariaId || '',
+                                                                            cuenta_label: cuentaLabel || '',
+                                                                            tarjeta_ref: tarjetaRef || '',
+                                                                            nota: 'Saldo restante'
+                                                                        }
+                                                                    ]);
+                                                                }}
+                                                                style={{ fontSize: '0.7rem', padding: '0.25rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', borderColor: 'rgba(52, 211, 153, 0.45)', color: '#6ee7b7' }}
+                                                                title="Agrega una línea con el saldo restante exacto para liquidar el 100%"
+                                                            >
+                                                                <CheckCircle size={11} /> + Completar saldo ({mc(batchSummary.saldoRestante)})
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {vencimientoRow?.id && pendingReceipts.length > 0 && (
                                                     <button
                                                         type="button"
                                                         className="btn-secondary"
                                                         disabled={uploadingOnly || compressingFiles || saving}
                                                         onClick={uploadPendingReceiptsNow}
-                                                        style={{ fontSize: '0.72rem', padding: '0.28rem 0.65rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', borderColor: 'rgba(56, 189, 248, 0.45)', color: '#7dd3fc' }}
+                                                        style={{ fontSize: '0.72rem', padding: '0.28rem 0.65rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', borderColor: 'rgba(56, 189, 248, 0.45)', color: '#7dd3fc', marginLeft: 'auto' }}
                                                     >
                                                         <Upload size={12} /> {uploadingOnly ? 'Subiendo...' : `Subir a galería (${pendingReceipts.length})`}
                                                     </button>
-                                                </div>
-                                            )}
+                                                )}
+                                            </div>
                                         </div>
                                     )}
                                 </div>
 
+                                {!isBatchModeActive && (
+                                    <>
                                 {/* SUGERENCIAS INTELIGENTES POR HISTORIAL REAL */}
                                 {sugerencias.mas_usadas_similares?.length > 0 && (
                                     <div style={{
@@ -1752,10 +2395,59 @@ export default function ControlPagosModal({
                                         <span>Aparecerá como <strong>sugerencia</strong> en Conciliación Bancaria (sin duplicar Movimientos Bancarios).</span>
                                     </div>
                                 )}
+                                    </>
+                                )}
+
+                                {/* RESUMEN INFERIOR DE TOTALES DEL LOTE DE NC Y ABONOS (ADM-0019) */}
+                                {isBatchModeActive && (
+                                    <div style={{
+                                        padding: '0.6rem 0.75rem',
+                                        borderRadius: '9px',
+                                        backgroundColor: batchSummary.exceedsBy > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(15, 23, 42, 0.72)',
+                                        border: batchSummary.exceedsBy > 0 ? '1px solid rgba(239, 68, 68, 0.48)' : '1px solid rgba(192, 132, 252, 0.4)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '0.35rem',
+                                        fontSize: '0.75rem'
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                            <span style={{ fontWeight: 800, color: '#e9d5ff', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                <Receipt size={13} color="#c084fc" />
+                                                Total en lote por aplicar ({batchSummary.count} ítem{batchSummary.count === 1 ? '' : 's'})
+                                            </span>
+                                            <span style={{ fontSize: '0.96rem', fontWeight: 800, color: batchSummary.exceedsBy > 0 ? '#f87171' : '#34d399' }}>
+                                                {mc(batchSummary.total)}
+                                            </span>
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem', fontSize: '0.71rem', color: 'var(--text-muted)' }}>
+                                            {batchSummary.ncCount > 0 && (
+                                                <span>
+                                                    Notas de Crédito ({batchSummary.ncCount}): <strong style={{ color: '#d8b4fe' }}>{mc(batchSummary.ncTotal)}</strong>
+                                                </span>
+                                            )}
+                                            {batchSummary.otrosCount > 0 && (
+                                                <span>
+                                                    Otros abonos ({batchSummary.otrosCount}): <strong style={{ color: '#38bdf8' }}>{mc(batchSummary.otrosTotal)}</strong>
+                                                </span>
+                                            )}
+                                            <span>
+                                                Saldo tras aplicar:{' '}
+                                                <strong style={{ color: batchSummary.exceedsBy > 0 ? '#f87171' : (batchSummary.saldoRestante === 0 ? '#34d399' : '#fbbf24') }}>
+                                                    {batchSummary.exceedsBy > 0 ? `Excede por ${mc(batchSummary.exceedsBy)}` : mc(batchSummary.saldoRestante)}
+                                                </strong>
+                                            </span>
+                                        </div>
+                                        {batchSummary.missingAmountCount > 0 && (
+                                            <div style={{ fontSize: '0.7rem', color: '#fbbf24', fontWeight: 600 }}>
+                                                Completa el monto en {batchSummary.missingAmountCount} ítem(s) antes de aplicar el lote.
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* BOTONES DE ACCIÓN */}
                                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap', paddingTop: '0.35rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-                                    {!editingAbonoId && (
+                                    {!editingAbonoId && !isBatchModeActive && (
                                         <button
                                             type="button"
                                             className="btn-secondary"
@@ -1770,11 +2462,23 @@ export default function ControlPagosModal({
                                     <button
                                         type="submit"
                                         className="btn-primary"
-                                        disabled={saving || compressingFiles || uploadingOnly || analyzingOcr}
+                                        disabled={
+                                            saving ||
+                                            compressingFiles ||
+                                            uploadingOnly ||
+                                            analyzingOcr ||
+                                            (isBatchModeActive && (batchSummary.missingAmountCount > 0 || batchSummary.exceedsBy > 0 || batchSummary.count === 0))
+                                        }
                                         style={{ flex: '1 1 175px', fontSize: '0.8rem', padding: '0.45rem 0.9rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
                                     >
                                         <CheckCircle size={15} />
-                                        {saving ? 'Guardando...' : (editingAbonoId ? 'Guardar Cambios' : 'Registrar Abono / Pago')}
+                                        {saving
+                                            ? 'Guardando...'
+                                            : editingAbonoId
+                                                ? 'Guardar Cambios'
+                                                : isBatchModeActive
+                                                    ? `Aplicar ${batchSummary.count} NC/Abonos (${mc(batchSummary.total)})`
+                                                    : 'Registrar Abono / Pago'}
                                     </button>
                                 </div>
                             </form>
@@ -1953,6 +2657,38 @@ export default function ControlPagosModal({
                                             })}
                                         </div>
                                     )}
+
+                                    {/* PIE DE TOTALES ACUMULADOS: NOTAS DE CRÉDITO + ABONOS APLICADOS (ADM-0019) */}
+                                    <div style={{
+                                        marginTop: '0.2rem',
+                                        padding: '0.5rem 0.65rem',
+                                        borderRadius: '8px',
+                                        backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                                        border: '1px solid rgba(255,255,255,0.1)',
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        flexWrap: 'wrap',
+                                        gap: '0.45rem',
+                                        fontSize: '0.72rem'
+                                    }}>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', color: 'var(--text-muted)' }}>
+                                            <span>
+                                                NC ({appliedTotals.ncCount}): <strong style={{ color: '#d8b4fe' }}>{mc(appliedTotals.ncTotal)}</strong>
+                                            </span>
+                                            <span>
+                                                Abonos ({appliedTotals.otrosCount}): <strong style={{ color: '#38bdf8' }}>{mc(appliedTotals.otrosTotal)}</strong>
+                                            </span>
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--text-muted)' }}>
+                                                Total aplicado: <strong style={{ color: '#34d399', fontSize: '0.8rem' }}>{mc(appliedTotals.totalApplied)}</strong>
+                                            </span>
+                                            <span style={{ color: 'var(--text-muted)' }}>
+                                                Pendiente: <strong style={{ color: appliedTotals.saldoPendiente > 0 ? '#fbbf24' : '#34d399' }}>{mc(appliedTotals.saldoPendiente)}</strong>
+                                            </span>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 {/* GALERÍA DE TODOS LOS COMPROBANTES ADJUNTOS */}
