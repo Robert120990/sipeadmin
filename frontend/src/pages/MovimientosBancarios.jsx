@@ -274,7 +274,7 @@ export default function MovimientosBancarios() {
     }, []);
 
     const isTransferTipo = (cod) => ['TR', 'TRANSFERENCIA'].includes(String(cod || '').toUpperCase().trim());
-    const isDebitTipo = (cod) => ['02', 'NC', 'CH'].includes(String(cod || '').toUpperCase().trim());
+    const isDebitTipo = (cod) => ['02', 'NC', 'ND', 'CH'].includes(String(cod || '').toUpperCase().trim());
     const isCreditTipo = (cod) => ['01', '03', 'RM', 'NA'].includes(String(cod || '').toUpperCase().trim());
     const resolveMovementTipo = (codRemesa, currentTipo) => {
         if (isDebitTipo(codRemesa)) return 'CARGO';
@@ -2022,8 +2022,8 @@ export default function MovimientosBancarios() {
                             <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Llave / Doc</th>
                             <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Cuenta</th>
                             <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Concepto</th>
-                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Cargo (Debe)</th>
-                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Abono (Haber)</th>
+                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Cargo / Débito (-)</th>
+                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Abono / Crédito (+)</th>
                             <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Comp.</th>
                             <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Acciones</th>
                         </tr>

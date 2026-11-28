@@ -119,7 +119,7 @@ function parseStrictDBDate(dateStr) {
 
 /**
  * Fuente única de verdad para dirección contable de movimientos bancarios (CARGO vs ABONO).
- * - Códigos de débito: NC, CH, 02
+ * - Códigos de débito: NC, ND, CH, 02
  * - Códigos de crédito: RM, NA, 01, 03
  * - Transferencia (TR / TRANSFERENCIA): respeta estrictamente el `tipo` explícito ('CARGO' | 'ABONO')
  */
@@ -127,7 +127,7 @@ function normalizeMovementDirection({ tipo, codRemesa, cod_remesa, descripcion }
     const cod = String(codRemesa || cod_remesa || '').trim().toUpperCase();
     const rawTipo = String(tipo || '').trim().toUpperCase();
 
-    if (cod === 'NC' || cod === 'CH' || cod === '02') {
+    if (cod === 'NC' || cod === 'ND' || cod === 'CH' || cod === '02') {
         return 'CARGO';
     }
     if (cod === 'RM' || cod === 'NA' || cod === '01' || cod === '03') {
