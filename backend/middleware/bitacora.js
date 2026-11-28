@@ -55,8 +55,9 @@ function autoLogMiddleware() {
         }
 
         res.on('finish', () => {
+            const rawPath = String((req.originalUrl || `${req.baseUrl || ''}${req.path || ''}`).split('?')[0]);
             if (DEBUG_BITACORA) {
-                console.log(`[BITACORA] Finish event: ${req.method} ${req.path} status=${res.statusCode} user=${req.user?.id || 'none'} db=${!!getDb()}`);
+                console.log(`[BITACORA] Finish event: ${req.method} ${rawPath} status=${res.statusCode} user=${req.user?.id || 'none'} db=${!!getDb()}`);
             }
 
             if (!req.user) return;
@@ -65,7 +66,7 @@ function autoLogMiddleware() {
             const db = getDb();
             if (!db) return;
 
-            const pathParts = req.path.replace(/^\/api\//, '').split('/');
+            const pathParts = rawPath.replace(/^\/api\//, '').split('/').filter(Boolean);
             const entidad = pathParts.filter(p => !/^\d+$/.test(p)).join('.') || 'unknown';
 
             let entidadId = null;

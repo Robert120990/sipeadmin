@@ -494,7 +494,11 @@ const initDB = async () => {
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
                 ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
-                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)'],
+                ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
+                ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
+                ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
             ];
 
             for (const [name, desc] of permissionsList) {
@@ -543,6 +547,31 @@ const initDB = async () => {
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
                 INDEX idx_comments_task (task_id)
             );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                task_id INT NOT NULL,
+                comment_id INT NULL,
+                nombre_original VARCHAR(255) NOT NULL,
+                archivo_url VARCHAR(500) NOT NULL,
+                mime_type VARCHAR(80) NOT NULL DEFAULT 'image/webp',
+                tamano_bytes INT NOT NULL DEFAULT 0,
+                ancho INT NULL,
+                alto INT NULL,
+                nota VARCHAR(255) NULL,
+                es_evidencia_cumplimiento TINYINT(1) NOT NULL DEFAULT 0,
+                uploaded_by INT NULL,
+                uploaded_by_name VARCHAR(120) NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (comment_id) REFERENCES task_comments(id) ON DELETE SET NULL,
+                FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL,
+                INDEX idx_task_att_task (task_id),
+                INDEX idx_task_att_comment (comment_id),
+                INDEX idx_task_att_url (archivo_url(191))
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         `);
 
         await pool.query(`
@@ -954,7 +983,11 @@ const initDB = async () => {
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
                 ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
-                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)'],
+                ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
+                ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
+                ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
             ];
             for (const [name, desc] of telegramPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1372,7 +1405,11 @@ const initDB = async () => {
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
                 ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
-                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)'],
+                ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
+                ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
+                ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
             ];
             for (const [name, desc] of ticketPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1469,7 +1506,11 @@ const initDB = async () => {
                 ['/dashboard/finanzas/crecimiento', 'Acceso a Crecimiento Empresarial, Base de Conocimiento IA y Consola AGY'],
                 ['manage_finanzas_crecimiento', 'Gestionar base de conocimientos empresariales y ejecutar planes AGY en servidor'],
                 ['/dashboard/configuracion/agentes-ia', 'Centro de Control de Agentes IA, OpenClaw, n8n y Graphify'],
-                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)']
+                ['/dashboard/operaciones/consulta-pedidos', 'Consulta de Pedidos (Confirmación y Recepción RRS)'],
+                ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
+                ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
+                ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
             ];
             for (const [name, desc] of crecimientoPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [name, desc]);
@@ -1865,7 +1906,118 @@ const initDB = async () => {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             `);
 
-            // 6. Permisos granulares de Bancos y Conciliacion
+            // 6. Tablas F2/F3 de Bancos (Chequeras, Auditoría de Impresión, Reglas, Cruces N:1/1:N y Comprobantes)
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS chequeras (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    cuenta_bancaria_id INT NOT NULL,
+                    serie VARCHAR(30) NULL,
+                    desde BIGINT UNSIGNED NOT NULL,
+                    hasta BIGINT UNSIGNED NOT NULL,
+                    siguiente_correlativo BIGINT UNSIGNED NOT NULL,
+                    alerta_stock_bajo INT NOT NULL DEFAULT 10,
+                    activo TINYINT(1) NOT NULL DEFAULT 1,
+                    notas VARCHAR(255) NULL,
+                    created_by INT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE RESTRICT,
+                    INDEX idx_chequeras_cta_activo (cuenta_bancaria_id, activo, id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await ensureColumn('cheques', 'impreso_at', 'impreso_at DATETIME NULL DEFAULT NULL');
+            await ensureColumn('cheques', 'impreso_por', 'impreso_por INT NULL DEFAULT NULL');
+            await ensureColumn('cheques', 'veces_impreso', 'veces_impreso INT NOT NULL DEFAULT 0');
+            await ensureColumn('cheques', 'chequera_id', 'chequera_id INT NULL DEFAULT NULL');
+            await ensureIndex('cheques', 'idx_chq_chequera', '(chequera_id)');
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS conciliacion_reglas_clasificacion (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    banco_codigo VARCHAR(50) NULL,
+                    cuenta_bancaria_id INT NULL,
+                    nombre VARCHAR(120) NOT NULL,
+                    patron VARCHAR(255) NOT NULL,
+                    tipo_match ENUM('CONTAINS','STARTS_WITH','REGEX','EXACT') NOT NULL DEFAULT 'CONTAINS',
+                    tipo_movimiento ENUM('CARGO','ABONO','AMBOS') NOT NULL DEFAULT 'AMBOS',
+                    signo ENUM('CARGO','ABONO','CUALQUIERA') NOT NULL DEFAULT 'CUALQUIERA',
+                    tipo_remesa_id INT NULL,
+                    concepto_limpio VARCHAR(255) NULL,
+                    cod_cta VARCHAR(50) NULL,
+                    prioridad INT NOT NULL DEFAULT 100,
+                    activo TINYINT(1) NOT NULL DEFAULT 1,
+                    created_by INT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE CASCADE,
+                    FOREIGN KEY (tipo_remesa_id) REFERENCES tipos_remesas(id) ON DELETE SET NULL,
+                    INDEX idx_crc_lookup (activo, banco_codigo, cuenta_bancaria_id, prioridad)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS conciliacion_cruces (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    cuenta_bancaria_id INT NOT NULL,
+                    tipo_cruce ENUM('1_A_N','N_A_1','N_A_M') NOT NULL DEFAULT 'N_A_1',
+                    direccion ENUM('CARGO','ABONO') NOT NULL,
+                    monto_total DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                    fecha_aplicado DATE NOT NULL,
+                    estado ENUM('ACTIVO','DESCONCILIADO') NOT NULL DEFAULT 'ACTIVO',
+                    importacion_id INT NULL,
+                    referencia_banco VARCHAR(120) NULL,
+                    concepto_banco VARCHAR(255) NULL,
+                    notas VARCHAR(255) NULL,
+                    created_by INT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    desconciliado_by INT NULL,
+                    desconciliado_at DATETIME NULL,
+                    FOREIGN KEY (cuenta_bancaria_id) REFERENCES cuentas_bancarias(id) ON DELETE RESTRICT,
+                    INDEX idx_ccruce_cta_estado (cuenta_bancaria_id, estado, fecha_aplicado)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS conciliacion_cruce_items (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    cruce_id INT NOT NULL,
+                    lado ENUM('LIBRO','BANCO') NOT NULL,
+                    origen_tipo ENUM('MOV','CK','EXTRACTO') NOT NULL,
+                    entidad_id INT NULL,
+                    documento VARCHAR(100) NULL,
+                    fecha DATE NULL,
+                    concepto VARCHAR(255) NULL,
+                    monto DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cruce_id) REFERENCES conciliacion_cruces(id) ON DELETE CASCADE,
+                    INDEX idx_ccruce_item_cruce (cruce_id),
+                    INDEX idx_ccruce_item_entidad (origen_tipo, entidad_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            await ensureColumn('movimientos_bancarios', 'comprobante_url', 'comprobante_url VARCHAR(500) NULL DEFAULT NULL');
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS movimientos_bancarios_comprobantes (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    movimiento_id INT NOT NULL,
+                    nombre_original VARCHAR(255) NOT NULL,
+                    archivo_url VARCHAR(500) NOT NULL,
+                    mime_type VARCHAR(80) NOT NULL DEFAULT 'image/webp',
+                    tamano_bytes INT NOT NULL DEFAULT 0,
+                    ancho INT NULL,
+                    alto INT NULL,
+                    nota VARCHAR(255) NULL,
+                    ocr_json JSON NULL,
+                    uploaded_by INT NULL,
+                    uploaded_by_name VARCHAR(100) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (movimiento_id) REFERENCES movimientos_bancarios(id) ON DELETE CASCADE,
+                    INDEX idx_mbc_movimiento (movimiento_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            `);
+
+            // 7. Permisos granulares de Bancos y Conciliacion
             const bancosPerms = [
                 ['close_conciliacion_periodo', 'Cerrar períodos/cortes de Conciliación Bancaria'],
                 ['approve_reapertura_conciliacion', 'Autorizar reapertura de períodos cerrados de Conciliación'],
@@ -1874,7 +2026,11 @@ const initDB = async () => {
                 ['edit_monto_conciliacion', 'Modificar montos en conciliación bancaria'],
                 ['manage_cuentas', 'Gestionar cuentas bancarias'],
                 ['manage_movimientos', 'Gestionar movimientos bancarios'],
-                ['manage_cheques', 'Gestionar cheques bancarios']
+                ['manage_cheques', 'Gestionar cheques bancarios'],
+                ['manage_chequeras', 'Gestionar chequeras y talonarios por cuenta bancaria'],
+                ['manage_conciliacion_reglas', 'Gestionar reglas de autoclasificación de conciliación'],
+                ['manage_cheques_contado', 'Gestionar emisión y sincronización de cheques al contado'],
+                ['manage_check_designer', 'Diseñar formatos y calibración de impresión de cheques']
             ];
             for (const [bPermName, bPermDesc] of bancosPerms) {
                 await pool.query('INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)', [bPermName, bPermDesc]);
@@ -2063,6 +2219,62 @@ const getAccountingDb = async () => {
 };
 
 /**
+ * Asegura de forma idempotente la tabla task_attachments (útil en Vercel o entornos de prueba)
+ */
+const taskAttachmentsInitPromises = new WeakMap();
+const ensureTaskAttachmentsTable = async (dbPool = null) => {
+    const db = dbPool || pool;
+    if (!db || typeof db.query !== 'function') return;
+    if (taskAttachmentsInitPromises.has(db)) {
+        return taskAttachmentsInitPromises.get(db);
+    }
+    const initPromise = (async () => {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                task_id INT NOT NULL,
+                comment_id INT NULL,
+                nombre_original VARCHAR(255) NOT NULL,
+                archivo_url VARCHAR(500) NOT NULL,
+                mime_type VARCHAR(80) NOT NULL DEFAULT 'image/webp',
+                tamano_bytes INT NOT NULL DEFAULT 0,
+                ancho INT NULL,
+                alto INT NULL,
+                nota VARCHAR(255) NULL,
+                es_evidencia_cumplimiento TINYINT(1) NOT NULL DEFAULT 0,
+                uploaded_by INT NULL,
+                uploaded_by_name VARCHAR(120) NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (comment_id) REFERENCES task_comments(id) ON DELETE SET NULL,
+                FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL,
+                INDEX idx_task_att_task (task_id),
+                INDEX idx_task_att_comment (comment_id),
+                INDEX idx_task_att_url (archivo_url(191))
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+        try {
+            const [cols] = await db.query(
+                `SELECT COLUMN_NAME
+                 FROM INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'task_attachments'`
+            );
+            const colSet = new Set((cols || []).map(c => String(c.COLUMN_NAME || '').toLowerCase()));
+            if (colSet.size > 0 && !colSet.has('es_evidencia_cumplimiento')) {
+                await db.query('ALTER TABLE task_attachments ADD COLUMN es_evidencia_cumplimiento TINYINT(1) NOT NULL DEFAULT 0 AFTER nota');
+            }
+        } catch (_) {
+            // Ignorar si INFORMATION_SCHEMA no está disponible en mocks
+        }
+    })().catch((err) => {
+        taskAttachmentsInitPromises.delete(db);
+        throw err;
+    });
+    taskAttachmentsInitPromises.set(db, initPromise);
+    return initPromise;
+};
+
+/**
  * Helper para ejecutar operaciones multi-tabla dentro de una transacción gestionada
  */
 const withTransaction = async (callback) => {
@@ -2082,4 +2294,4 @@ const withTransaction = async (callback) => {
     }
 };
 
-module.exports = { initDB, getDb, getDbIfReady, getExternalDb, getAccountingDb, withRetry, withTransaction, invalidateConfigCache, closeExternalPools, closeAllPools };
+module.exports = { initDB, getDb, getDbIfReady, getExternalDb, getAccountingDb, withRetry, withTransaction, ensureTaskAttachmentsTable, invalidateConfigCache, closeExternalPools, closeAllPools };

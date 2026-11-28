@@ -80,10 +80,16 @@ const largePayloadPrefixes = [
     '/api/consultas/estaciones/precios-competencia/upload',
     '/api/bancos/conciliacion/parse-extracto',
     '/api/bancos/conciliacion/crear-masivo-y-aplicar',
+    '/api/bancos/conciliacion/importar-pdf',
+    '/api/bancos/conciliacion/parse-extracto-pdf',
+    '/api/bancos/movimientos',
+    '/api/bancos/cheques',
+    '/api/cheques',
     '/api/conciliacion/parse-extracto',
     '/api/conciliacion/crear-masivo-y-aplicar',
     '/api/tickets',
-    '/api/operaciones/recordatorios'
+    '/api/operaciones/recordatorios',
+    '/api/tasks'
 ];
 
 app.use((req, res, next) => {
@@ -159,7 +165,19 @@ io.on("connection", (socket) => {
             }
             if (perms.some(p =>
                 String(p).startsWith('/dashboard/bancos/') ||
-                ['manage_conciliacion_bancaria', 'view_conciliacion_bancaria', 'manage_movimientos', 'manage_cheques', 'manage_cuentas', 'approve_reapertura_conciliacion', 'close_conciliacion_periodo'].includes(p)
+                [
+                    'manage_conciliacion_bancaria',
+                    'view_conciliacion_bancaria',
+                    'manage_movimientos',
+                    'manage_cheques',
+                    'manage_cuentas',
+                    'approve_reapertura_conciliacion',
+                    'close_conciliacion_periodo',
+                    'manage_chequeras',
+                    'manage_conciliacion_reglas',
+                    'manage_cheques_contado',
+                    'manage_check_designer'
+                ].includes(p)
             )) {
                 socket.join('perm_bancos');
             }
@@ -225,6 +243,9 @@ app.use('/api/ai/', aiLimiter);
 app.use('/api/finanzas/chat', aiLimiter);
 app.use('/api/finanzas/crecimiento/conversaciones/mensaje', aiLimiter);
 app.use('/api/operaciones/recordatorios/analizar-comprobante', aiLimiter);
+app.use('/api/bancos/movimientos/analizar-comprobante', aiLimiter);
+app.use('/api/bancos/conciliacion/parse-extracto-pdf', aiLimiter);
+app.use('/api/bancos/conciliacion/importar-pdf', aiLimiter);
 app.use('/api/onedrive', heavyProcessLimiter);
 app.use('/api/seguridad/nas/download-db', heavyProcessLimiter);
 app.use('/api/', apiLimiter);
