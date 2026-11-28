@@ -105,6 +105,27 @@ export function hasRoutePermission(user, path) {
     if (path === '/dashboard/bancos/reportes/saldos-chequera' && perms.includes('/dashboard/consultas/saldos-chequera')) {
         return true;
     }
+    if (path === '/dashboard/bancos/cuentas' && (perms.includes('manage_cuentas') || perms.includes('manage_chequeras'))) {
+        return true;
+    }
+    if (path === '/dashboard/bancos/movimientos' && perms.includes('manage_movimientos')) {
+        return true;
+    }
+    if (path === '/dashboard/bancos/conciliacion' && (
+        perms.includes('manage_conciliacion_bancaria') ||
+        perms.includes('view_conciliacion_bancaria')
+    )) {
+        return true;
+    }
+    if (path === '/dashboard/bancos/cheques' && perms.includes('manage_cheques')) {
+        return true;
+    }
+    if (path === '/dashboard/bancos/cheques-contado' && perms.includes('manage_cheques_contado')) {
+        return true;
+    }
+    if (path === '/dashboard/bancos/check-designer' && perms.includes('manage_check_designer')) {
+        return true;
+    }
     return false;
 }
 

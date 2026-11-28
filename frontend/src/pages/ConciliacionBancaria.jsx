@@ -4,7 +4,8 @@ import {
     FileSpreadsheet, Eye, Edit2, CheckCircle2,
     AlertCircle, ArrowRightLeft, Sparkles, Filter, X, ShieldAlert,
     Calendar, Building2, Landmark, Check, Clock, Plus, Link2, Printer,
-    Lock, Unlock, History, AlertTriangle, ShieldCheck
+    Lock, Unlock, History, AlertTriangle, ShieldCheck,
+    Paperclip, Sliders, Trash2, FileText, Layers, Unlink, Play
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -15,9 +16,19 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import ReportPreviewModal from '../components/ReportPreviewModal';
+import ReceiptViewerModal from '../components/ReceiptViewerModal';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
+import {
+    BANCOS_NAV_TARGETS,
+    resolveInitialBancosContext,
+    subscribeBancosNavTarget,
+    saveBancosSelection,
+    findMatchingCuenta
+} from '../utils/bancosNavStorage';
 import { getStoredUser } from '../utils/auth';
 import { formatLocalYMD, todayStr as getTodayStr } from '../utils/date';
+import { sanitizeSpreadsheetRows } from '../utils/exportSanitizer';
+import { useViewport } from '../hooks/useViewport';
 
 const makeIdempotencyKey = () => (
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -25,14 +36,21 @@ const makeIdempotencyKey = () => (
         : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 );
 
+const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
 const parseMoneyInput = (raw) => {
     if (raw === null || raw === undefined || raw === '') return 0;
     const cleaned = String(raw).trim().replace(/[$,\s]/g, '');
     const num = Number(cleaned);
-    return Number.isFinite(num) ? Math.round((num + Number.EPSILON) * 100) / 100 : 0;
+    return Number.isFinite(num) ? round2(num) : 0;
 };
 
 const formatMoney = (val) => Number(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const formatSignedMoney = (val) => {
+    const n = Number(val || 0);
+    return n < 0 ? `-$${formatMoney(Math.abs(n))}` : `$${formatMoney(n)}`;
+};
 
 const formatSvDateTime = (val) => {
     if (!val) return '';
@@ -50,7 +68,51 @@ const formatSvDateTime = (val) => {
     });
 };
 
+const getAgingBadgeMeta = (item) => {
+    if (item?.caduco || item?.aging_bucket === '>180' || item?.bucket === '>180') {
+        return { bg: 'rgba(239, 68, 68, 0.16)', color: '#f87171', border: 'rgba(239, 68, 68, 0.4)', text: '>180d CADUCO' };
+    }
+    if (item?.por_caducar) {
+        return { bg: 'rgba(249, 115, 22, 0.16)', color: '#fb923c', border: 'rgba(249, 115, 22, 0.4)', text: 'POR CADUCAR' };
+    }
+    const bucket = item?.aging_bucket || item?.bucket || '0-30';
+    if (bucket === '91-180') {
+        return { bg: 'rgba(245, 158, 11, 0.14)', color: '#fbbf24', border: 'rgba(245, 158, 11, 0.35)', text: '91-180d' };
+    }
+    if (bucket === '31-90') {
+        return { bg: 'rgba(59, 130, 246, 0.14)', color: '#60a5fa', border: 'rgba(59, 130, 246, 0.35)', text: '31-90d' };
+    }
+    return { bg: 'rgba(16, 185, 129, 0.14)', color: '#34d399', border: 'rgba(16, 185, 129, 0.35)', text: '0-30d' };
+};
+
+const getRowDirection = (row) => (row?.origen_tipo === 'CK' || Number(row?.cargo || 0) > 0 ? 'CARGO' : 'ABONO');
+
+const formatCruceTipoLabel = (tipo) => {
+    if (tipo === 'N_A_1') return 'N:1';
+    if (tipo === '1_A_N') return '1:N';
+    if (tipo === 'N_A_M') return 'N:M';
+    return tipo || 'CRUCE';
+};
+
+const readFileAsDataUrl = (file, forcePdfMime = false) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+        let dataUrl = String(ev.target?.result || '');
+        if (forcePdfMime) {
+            if (dataUrl.startsWith('data:application/octet-stream;base64,')) {
+                dataUrl = dataUrl.replace(/^data:application\/octet-stream;base64,/, 'data:application/pdf;base64,');
+            } else if (dataUrl.startsWith('data:;base64,')) {
+                dataUrl = dataUrl.replace(/^data:;base64,/, 'data:application/pdf;base64,');
+            }
+        }
+        resolve(dataUrl);
+    };
+    reader.onerror = () => reject(new Error(`No se pudo leer el archivo "${file?.name || ''}"`));
+    reader.readAsDataURL(file);
+});
+
 export default function ConciliacionBancaria() {
+    const { isMobile } = useViewport();
     const { addToast } = useToast();
     const { confirm } = useConfirm();
 
@@ -59,7 +121,8 @@ export default function ConciliacionBancaria() {
     const [permFlags, setPermFlags] = useState({
         can_edit_monto: isAdmin || Boolean(user?.permissions?.includes('edit_monto_conciliacion')),
         can_close_periodo: isAdmin || Boolean(user?.permissions?.includes('close_conciliacion_periodo') || user?.permissions?.includes('manage_conciliacion_bancaria') || user?.permissions?.includes('/dashboard/bancos/conciliacion')),
-        can_approve_reapertura: isAdmin || Boolean(user?.permissions?.includes('approve_reapertura_conciliacion'))
+        can_approve_reapertura: isAdmin || Boolean(user?.permissions?.includes('approve_reapertura_conciliacion')),
+        can_manage_reglas: isAdmin || Boolean(user?.permissions?.includes('manage_conciliacion_reglas') || user?.permissions?.includes('manage_conciliacion_bancaria') || user?.permissions?.includes('/dashboard/bancos/conciliacion'))
     });
 
     // Catálogos y Filtros
@@ -143,13 +206,40 @@ export default function ConciliacionBancaria() {
 
     // Saldo en Banco editable con protección contra sobreescritura por Socket.io
     const [saldoBancoManual, setSaldoBancoManual] = useState('');
+    const [isSaldoManualDirty, setIsSaldoManualDirty] = useState(false);
     const isSaldoManualDirtyRef = useRef(false);
     const requestSeqRef = useRef(0);
     const abortCtrlRef = useRef(null);
+    const cuentasRef = useRef([]);
 
-    // Tabs: 'MOVIMIENTOS' | 'PENDIENTES' | 'CONTROL_PAGOS'
+    // Tabs: 'MOVIMIENTOS' | 'PENDIENTES' | 'CRUCES' | 'CONTROL_PAGOS'
     const [activeTab, setActiveTab] = useState('MOVIMIENTOS');
     const [searchTerm, setSearchTerm] = useState('');
+
+    // R3.3: Antigüedad de cheques en circulación
+    const [agingResumen, setAgingResumen] = useState(null);
+    const [agingFilter, setAgingFilter] = useState('TODOS');
+
+    // R4.2: Cruces Agrupados (N:1 / 1:N / N:M)
+    const [crucesActivos, setCrucesActivos] = useState([]);
+    const [loadingCruces, setLoadingCruces] = useState(false);
+    const [showCruceModal, setShowCruceModal] = useState(false);
+    const [cruceBancoMode, setCruceBancoMode] = useState('EXTRACTO'); // 'EXTRACTO' | 'PENDIENTE'
+    const [cruceLibroKeys, setCruceLibroKeys] = useState(new Set());
+    const [cruceBancoPendingKeys, setCruceBancoPendingKeys] = useState(new Set());
+    const [cruceManualBanco, setCruceManualBanco] = useState({
+        referencia_banco: '',
+        concepto_banco: '',
+        monto_banco: '',
+        fecha_aplicado: todayStr,
+        notas: ''
+    });
+
+    // R5.3 + R6.1: Lightbox de comprobantes
+    const [viewerOpen, setViewerOpen] = useState(false);
+    const [viewerItems, setViewerItems] = useState([]);
+    const [viewerIdx, setViewerIdx] = useState(0);
+    const [viewerTitle, setViewerTitle] = useState('Visualizador de Comprobantes');
 
     // Selección múltiple para aplicar en pendientes
     const [selectedPendingKeys, setSelectedPendingKeys] = useState(new Set());
@@ -163,6 +253,32 @@ export default function ConciliacionBancaria() {
     const [showAssignModal, setShowAssignModal] = useState(false);
     const [showPeriodosModal, setShowPeriodosModal] = useState(false);
     const [showReaperturaModal, setShowReaperturaModal] = useState(false);
+    const [showReglasModal, setShowReglasModal] = useState(false);
+
+    // R4.2: Reglas de Autoclasificación
+    const [reglasList, setReglasList] = useState([]);
+    const [loadingReglas, setLoadingReglas] = useState(false);
+    const [reglasFilterCuenta, setReglasFilterCuenta] = useState('');
+    const [reglasFilterBanco, setReglasFilterBanco] = useState('');
+    const [editingReglaId, setEditingReglaId] = useState(null);
+    const [reglaForm, setReglaForm] = useState({
+        nombre: '',
+        banco_codigo: '',
+        cuenta_bancaria_id: '',
+        patron: '',
+        tipo_match: 'CONTAINS',
+        tipo_movimiento: 'AMBOS',
+        tipo_remesa_id: '',
+        concepto_limpio: '',
+        cod_cta: '',
+        prioridad: 100,
+        activo: 1
+    });
+    const [reglaErrorAlert, setReglaErrorAlert] = useState('');
+    const [testReglaDescripcion, setTestReglaDescripcion] = useState('');
+    const [testReglaTipo, setTestReglaTipo] = useState('CARGO');
+    const [testReglaResult, setTestReglaResult] = useState(null);
+    const [testingRegla, setTestingRegla] = useState(false);
 
     // Cierre de período en validación
     const [cerrarPeriodoCheck, setCerrarPeriodoCheck] = useState(false);
@@ -197,14 +313,20 @@ export default function ConciliacionBancaria() {
         version: undefined
     });
 
-    // Estado para Importador de Extractos
+    // Estado para Importador de Extractos (Texto/Excel/CSV + Gemini PDF/Imagen Multimodal)
     const [importBank, setImportBank] = useState('AUTO');
+    const [importMode, setImportMode] = useState('TEXT'); // 'TEXT' | 'AI_MEDIA'
+    const [importFiles, setImportFiles] = useState([]); // [{ nombre_original, mime_type, data_url, sizeBytes }]
     const [importRawText, setImportRawText] = useState('');
     const [importFileName, setImportFileName] = useState('');
     const [parsedExtract, setParsedExtract] = useState(null);
     const [isParsing, setIsParsing] = useState(false);
     const [selectedExtractIndices, setSelectedExtractIndices] = useState(new Set());
     const [showDiscardedRows, setShowDiscardedRows] = useState(false);
+    const [showImportCruceBuilder, setShowImportCruceBuilder] = useState(false);
+    const [importCruceExtractIndices, setImportCruceExtractIndices] = useState(new Set());
+    const [importCruceLibroKeys, setImportCruceLibroKeys] = useState(new Set());
+    const [appliedSugerenciaIdxs, setAppliedSugerenciaIdxs] = useState(new Set());
 
     // Estado para Asignación / Creación desde Extracto o Manual
     const [assignTargetRow, setAssignTargetRow] = useState(null);
@@ -212,30 +334,60 @@ export default function ConciliacionBancaria() {
     const [assignTab, setAssignTab] = useState('CREAR'); // 'CREAR' | 'VINCULAR'
     const [assignFormData, setAssignFormData] = useState({
         tipo: 'CARGO',
+        tipo_remesa_id: null,
         tipo_remesa_codigo: 'NC',
         fecha: todayStr,
         fecha_aplicado: todayStr,
         documento: '',
         concepto: '',
+        cod_cta: '',
+        num_partida: '',
         monto: 0,
         aplicar_inmediatamente: true
     });
     const [linkSearchTerm, setLinkSearchTerm] = useState('');
 
-    // Cargar catálogos iniciales
+    // Cargar catálogos iniciales + contexto de navegación (R5.4)
     useEffect(() => {
         const fetchCatalogos = async () => {
             try {
                 const res = await api.get('/bancos/conciliacion/catalogos');
-                setEmpresas(res.data.empresas || []);
-                setCuentas(res.data.cuentas || []);
+                const loadedEmpresas = res.data.empresas || [];
+                const loadedCuentas = res.data.cuentas || [];
+                cuentasRef.current = loadedCuentas;
+                setEmpresas(loadedEmpresas);
+                setCuentas(loadedCuentas);
                 setTiposRemesas(res.data.tipos_remesas || []);
                 if (res.data.permissions) {
                     setPermFlags(prev => ({ ...prev, ...res.data.permissions }));
                 }
-                if (res.data.cuentas?.length > 0) {
-                    setSelectedCuentaId(String(res.data.cuentas[0].id));
-                    setSelectedEmpresa(String(res.data.cuentas[0].empresa_codigo || ''));
+                if (loadedCuentas.length > 0) {
+                    const initialCtx = resolveInitialBancosContext(BANCOS_NAV_TARGETS.conciliacion);
+                    const matched = findMatchingCuenta(loadedCuentas, initialCtx);
+                    if (matched) {
+                        setSelectedEmpresa(String(matched.empresa_codigo || ''));
+                        setSelectedCuentaId(String(matched.id));
+                    } else if (initialCtx?.empresaId) {
+                        const empMatch = loadedEmpresas.find(e =>
+                            String(e.codigo) === String(initialCtx.empresaId) ||
+                            String(e.id) === String(initialCtx.empresaId)
+                        );
+                        const empCode = empMatch ? String(empMatch.codigo) : String(initialCtx.empresaId);
+                        const firstOfEmp = loadedCuentas.find(c =>
+                            String(c.empresa_codigo) === empCode ||
+                            String(c.empresa_id) === String(initialCtx.empresaId)
+                        );
+                        if (firstOfEmp) {
+                            setSelectedEmpresa(String(firstOfEmp.empresa_codigo || ''));
+                            setSelectedCuentaId(String(firstOfEmp.id));
+                        } else {
+                            setSelectedCuentaId(String(loadedCuentas[0].id));
+                            setSelectedEmpresa(String(loadedCuentas[0].empresa_codigo || ''));
+                        }
+                    } else {
+                        setSelectedCuentaId(String(loadedCuentas[0].id));
+                        setSelectedEmpresa(String(loadedCuentas[0].empresa_codigo || ''));
+                    }
                 }
             } catch (err) {
                 console.error(err);
@@ -243,6 +395,28 @@ export default function ConciliacionBancaria() {
             }
         };
         fetchCatalogos();
+
+        const unsubscribe = subscribeBancosNavTarget(BANCOS_NAV_TARGETS.conciliacion, (detail) => {
+            const list = cuentasRef.current;
+            const match = findMatchingCuenta(list, detail);
+            isSaldoManualDirtyRef.current = false;
+            setAgingFilter('TODOS');
+            if (match) {
+                setSelectedEmpresa(String(match.empresa_codigo || ''));
+                setSelectedCuentaId(String(match.id));
+            } else if (detail?.empresaId) {
+                const firstOfEmp = list.find(c =>
+                    String(c.empresa_codigo) === String(detail.empresaId) ||
+                    String(c.empresa_id) === String(detail.empresaId)
+                );
+                if (firstOfEmp) {
+                    setSelectedEmpresa(String(firstOfEmp.empresa_codigo || ''));
+                    setSelectedCuentaId(String(firstOfEmp.id));
+                }
+            }
+        });
+
+        return unsubscribe;
     }, [addToast]);
 
     const cuentasFiltradas = useMemo(() => {
@@ -308,7 +482,8 @@ export default function ConciliacionBancaria() {
             if (!exists) {
                 setAssignFormData(prev => ({
                     ...prev,
-                    tipo_remesa_codigo: opcionesTipoRemesa[0].codigo || opcionesTipoRemesa[0].id
+                    tipo_remesa_codigo: opcionesTipoRemesa[0].codigo || opcionesTipoRemesa[0].id,
+                    tipo_remesa_id: opcionesTipoRemesa[0].id || null
                 }));
             }
         }
@@ -319,6 +494,7 @@ export default function ConciliacionBancaria() {
             const exists = cuentasFiltradas.some(c => String(c.id) === String(selectedCuentaId));
             if (!exists) {
                 isSaldoManualDirtyRef.current = false;
+                setIsSaldoManualDirty(false);
                 setSelectedCuentaId(String(cuentasFiltradas[0].id));
             }
         } else if (cuentas.length > 0 && selectedEmpresa) {
@@ -326,6 +502,8 @@ export default function ConciliacionBancaria() {
             setCuentaInfo(null);
             setMovimientosConciliados([]);
             setPendientes([]);
+            setAgingResumen(null);
+            setCrucesActivos([]);
         }
     }, [cuentasFiltradas, selectedCuentaId, cuentas.length, selectedEmpresa]);
 
@@ -358,6 +536,8 @@ export default function ConciliacionBancaria() {
             setSugerenciasControlPagos(res.data.sugerencias_control_pagos || []);
             setPeriodosRecientes(res.data.periodos_recientes || []);
             setSolicitudesPendientes(res.data.solicitudes_reapertura_pendientes || []);
+            setAgingResumen(res.data.aging_resumen || res.data.aging_cheques || res.data.resumen?.aging_resumen || null);
+            setCrucesActivos(res.data.cruces_activos || []);
 
             const nextResumen = res.data.resumen || {};
             setResumen(nextResumen);
@@ -385,6 +565,11 @@ export default function ConciliacionBancaria() {
 
     useEffect(() => {
         isSaldoManualDirtyRef.current = false;
+        setIsSaldoManualDirty(false);
+        setAgingFilter('TODOS');
+    }, [selectedCuentaId]);
+
+    useEffect(() => {
         fetchData({ preserveSelection: false });
     }, [selectedCuentaId, desde, hasta, fetchData]);
 
@@ -405,13 +590,38 @@ export default function ConciliacionBancaria() {
     const handleEmpresaChange = (e) => {
         const empCode = e.target.value;
         isSaldoManualDirtyRef.current = false;
+        setIsSaldoManualDirty(false);
+        setAgingFilter('TODOS');
         setSelectedEmpresa(empCode);
         const filtered = cuentas.filter(c => !empCode || String(c.empresa_codigo) === String(empCode));
-        if (filtered.length > 0) {
-            setSelectedCuentaId(String(filtered[0].id));
+        const nextAcc = filtered.length > 0 ? filtered[0] : null;
+        if (nextAcc) {
+            setSelectedCuentaId(String(nextAcc.id));
         } else {
             setSelectedCuentaId('');
         }
+        saveBancosSelection({
+            empresaId: empCode,
+            cuentaId: nextAcc?.id || '',
+            numeroCuenta: nextAcc?.numero || ''
+        });
+    };
+
+    const openReceiptLightbox = (rowOrSug, startIdx = 0, labelPrefix = 'Comprobantes') => {
+        const list = Array.isArray(rowOrSug?.comprobantes) && rowOrSug.comprobantes.length > 0
+            ? rowOrSug.comprobantes
+            : (rowOrSug?.signed_url || rowOrSug?.comprobante_url
+                ? [{
+                    nombre_original: rowOrSug.documento || rowOrSug.referencia_doc || 'Comprobante',
+                    archivo_url: rowOrSug.signed_url || rowOrSug.comprobante_url,
+                    signed_url: rowOrSug.signed_url || rowOrSug.comprobante_url
+                }]
+                : []);
+        if (list.length === 0) return;
+        setViewerItems(list);
+        setViewerIdx(startIdx);
+        setViewerTitle(`${labelPrefix} · ${rowOrSug.documento || rowOrSug.referencia_doc || rowOrSug.descripcion_ref || ''}`);
+        setViewerOpen(true);
     };
 
     const filteredMovimientos = useMemo(() => {
@@ -429,9 +639,15 @@ export default function ConciliacionBancaria() {
     }, [movimientosConciliados, searchTerm]);
 
     const filteredPendientes = useMemo(() => {
-        if (!searchTerm) return pendientes;
+        let base = pendientes;
+        if (agingFilter === 'POR_CADUCAR') {
+            base = base.filter(item => item.origen_tipo === 'CK' && Boolean(item.por_caducar));
+        } else if (agingFilter !== 'TODOS') {
+            base = base.filter(item => item.origen_tipo === 'CK' && (item.aging_bucket || item.bucket) === agingFilter);
+        }
+        if (!searchTerm) return base;
         const q = searchTerm.toLowerCase();
-        return pendientes.filter(item =>
+        return base.filter(item =>
             String(item.documento || '').toLowerCase().includes(q) ||
             String(item.concepto || '').toLowerCase().includes(q) ||
             String(item.beneficiario || '').toLowerCase().includes(q) ||
@@ -439,7 +655,7 @@ export default function ConciliacionBancaria() {
             String(item.fecha_display || '').includes(q) ||
             String(item.monto_display || '').includes(q)
         );
-    }, [pendientes, searchTerm]);
+    }, [pendientes, agingFilter, searchTerm]);
 
     const filteredSugerenciasCP = useMemo(() => {
         if (!searchTerm) return sugerenciasControlPagos;
@@ -453,6 +669,22 @@ export default function ConciliacionBancaria() {
             String(item.monto || '').includes(q)
         );
     }, [sugerenciasControlPagos, searchTerm]);
+
+    const filteredCruces = useMemo(() => {
+        if (!searchTerm) return crucesActivos;
+        const q = searchTerm.toLowerCase();
+        return crucesActivos.filter(c =>
+            String(c.id || '').includes(q) ||
+            String(c.referencia_banco || '').toLowerCase().includes(q) ||
+            String(c.concepto_banco || '').toLowerCase().includes(q) ||
+            String(c.notas || '').toLowerCase().includes(q) ||
+            String(c.tipo_cruce || '').toLowerCase().includes(q) ||
+            (c.items || []).some(it =>
+                String(it.documento || '').toLowerCase().includes(q) ||
+                String(it.concepto || '').toLowerCase().includes(q)
+            )
+        );
+    }, [crucesActivos, searchTerm]);
 
     // Cargar detalles del modal Períodos & Reaperturas & Auditoría
     const loadPeriodosYAuditoria = useCallback(async () => {
@@ -664,8 +896,34 @@ export default function ConciliacionBancaria() {
         }
     };
 
+    const handleDesconciliarCruce = async (cruceId) => {
+        if (submitting || !cruceId) return;
+        const ok = await confirm(
+            `¿Desconciliar el Cruce Agrupado #${cruceId}? Todos los documentos vinculados volverán a quedar pendientes.`,
+            { variant: 'danger' }
+        );
+        if (!ok) return;
+
+        setSubmitting(true);
+        try {
+            const res = await api.post(`/bancos/conciliacion/cruces/${cruceId}/desconciliar`, {}, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+            });
+            addToast(res.data?.message || `Cruce #${cruceId} desconciliado`, 'success');
+            fetchData({ preserveSelection: true });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al desconciliar cruce agrupado', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
     const handleDesconciliar = async (item) => {
         if (submitting) return;
+        if (item.cruce_id) {
+            await handleDesconciliarCruce(item.cruce_id);
+            return;
+        }
         const ok = await confirm(
             `¿Estás seguro de desconciliar el documento "${item.documento || item.concepto}"? Volverá a estar pendiente.`,
             { variant: 'danger' }
@@ -690,6 +948,188 @@ export default function ConciliacionBancaria() {
         }
     };
 
+    // R4.2: Cargar y refrescar Cruces Activos
+    const refreshCrucesActivos = useCallback(async () => {
+        if (!selectedCuentaId) return;
+        setLoadingCruces(true);
+        try {
+            const res = await api.get('/bancos/conciliacion/cruces', {
+                params: { cuenta_id: selectedCuentaId, estado: 'ACTIVO' }
+            });
+            setCrucesActivos(res.data?.cruces || []);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al cargar cruces agrupados', 'error');
+        } finally {
+            setLoadingCruces(false);
+        }
+    }, [selectedCuentaId, addToast]);
+
+    // R4.2: Reglas de Autoclasificación
+    const fetchReglas = useCallback(async () => {
+        setLoadingReglas(true);
+        try {
+            const res = await api.get('/bancos/conciliacion/reglas');
+            setReglasList(res.data?.reglas || []);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al cargar reglas de autoclasificación', 'error');
+        } finally {
+            setLoadingReglas(false);
+        }
+    }, [addToast]);
+
+    useEffect(() => {
+        const handleReglasUpdate = () => {
+            if (showReglasModal) fetchReglas();
+        };
+        socket.on('conciliacion_reglas_updated', handleReglasUpdate);
+        return () => {
+            socket.off('conciliacion_reglas_updated', handleReglasUpdate);
+        };
+    }, [showReglasModal, fetchReglas]);
+
+    const resetReglaForm = () => {
+        setEditingReglaId(null);
+        setReglaErrorAlert('');
+        setReglaForm({
+            nombre: '',
+            banco_codigo: currentCuenta?.banco_codigo || '',
+            cuenta_bancaria_id: selectedCuentaId ? String(selectedCuentaId) : '',
+            patron: '',
+            tipo_match: 'CONTAINS',
+            tipo_movimiento: 'AMBOS',
+            tipo_remesa_id: '',
+            concepto_limpio: '',
+            cod_cta: '',
+            prioridad: 100,
+            activo: 1
+        });
+    };
+
+    const handleOpenReglasModal = () => {
+        resetReglaForm();
+        setTestReglaResult(null);
+        setShowReglasModal(true);
+        fetchReglas();
+    };
+
+    const handleEditRegla = (regla) => {
+        setEditingReglaId(regla.id);
+        setReglaErrorAlert('');
+        setReglaForm({
+            nombre: regla.nombre || '',
+            banco_codigo: regla.banco_codigo || '',
+            cuenta_bancaria_id: regla.cuenta_bancaria_id ? String(regla.cuenta_bancaria_id) : '',
+            patron: regla.patron || '',
+            tipo_match: regla.tipo_match || 'CONTAINS',
+            tipo_movimiento: regla.tipo_movimiento || 'AMBOS',
+            tipo_remesa_id: regla.tipo_remesa_id ? String(regla.tipo_remesa_id) : '',
+            concepto_limpio: regla.concepto_limpio || '',
+            cod_cta: regla.cod_cta || '',
+            prioridad: regla.prioridad ?? 100,
+            activo: regla.activo ? 1 : 0
+        });
+    };
+
+    const handleSaveRegla = async (e) => {
+        e.preventDefault();
+        if (submitting) return;
+        setReglaErrorAlert('');
+        setSubmitting(true);
+        try {
+            const payload = {
+                nombre: reglaForm.nombre.trim(),
+                banco_codigo: reglaForm.banco_codigo ? reglaForm.banco_codigo.trim().toUpperCase() : null,
+                cuenta_bancaria_id: reglaForm.cuenta_bancaria_id ? Number(reglaForm.cuenta_bancaria_id) : null,
+                patron: reglaForm.patron.trim(),
+                tipo_match: reglaForm.tipo_match,
+                tipo_movimiento: reglaForm.tipo_movimiento,
+                tipo_remesa_id: reglaForm.tipo_remesa_id ? Number(reglaForm.tipo_remesa_id) : null,
+                concepto_limpio: reglaForm.concepto_limpio ? reglaForm.concepto_limpio.trim().toUpperCase() : null,
+                cod_cta: reglaForm.cod_cta ? reglaForm.cod_cta.trim() : null,
+                prioridad: Number(reglaForm.prioridad ?? 100),
+                activo: reglaForm.activo ? 1 : 0
+            };
+            if (editingReglaId) {
+                const res = await api.put(`/bancos/conciliacion/reglas/${editingReglaId}`, payload);
+                addToast(res.data?.message || 'Regla actualizada', 'success');
+            } else {
+                const res = await api.post('/bancos/conciliacion/reglas', payload);
+                addToast(res.data?.message || 'Regla creada', 'success');
+            }
+            resetReglaForm();
+            fetchReglas();
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Error al guardar regla de autoclasificación';
+            setReglaErrorAlert(msg);
+            addToast(msg, 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const handleDeleteRegla = async (regla) => {
+        if (submitting) return;
+        const ok = await confirm(
+            `¿Estás seguro de eliminar la regla "${regla.nombre}"?`,
+            { variant: 'danger' }
+        );
+        if (!ok) return;
+        setSubmitting(true);
+        try {
+            const res = await api.delete(`/bancos/conciliacion/reglas/${regla.id}`);
+            addToast(res.data?.message || 'Regla eliminada', 'success');
+            if (editingReglaId === regla.id) resetReglaForm();
+            fetchReglas();
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al eliminar regla', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const handleTestRegla = async () => {
+        if (!testReglaDescripcion.trim()) {
+            addToast('Ingresa una descripción de ejemplo para probar la regla', 'warning');
+            return;
+        }
+        setTestingRegla(true);
+        setReglaErrorAlert('');
+        try {
+            const payload = {
+                descripcion: testReglaDescripcion.trim(),
+                tipo: testReglaTipo,
+                cuenta_bancaria_id: reglaForm.cuenta_bancaria_id ? Number(reglaForm.cuenta_bancaria_id) : (selectedCuentaId ? Number(selectedCuentaId) : null),
+                banco_codigo: reglaForm.banco_codigo ? reglaForm.banco_codigo.trim().toUpperCase() : null
+            };
+            if (reglaForm.patron.trim()) {
+                payload.patron = reglaForm.patron.trim();
+                payload.tipo_match = reglaForm.tipo_match;
+                payload.tipo_movimiento = reglaForm.tipo_movimiento;
+                payload.tipo_remesa_id = reglaForm.tipo_remesa_id ? Number(reglaForm.tipo_remesa_id) : null;
+                payload.concepto_limpio = reglaForm.concepto_limpio ? reglaForm.concepto_limpio.trim().toUpperCase() : null;
+                payload.cod_cta = reglaForm.cod_cta ? reglaForm.cod_cta.trim() : null;
+                payload.nombre = reglaForm.nombre || 'Regla en prueba';
+            }
+            const res = await api.post('/bancos/conciliacion/reglas/probar', payload);
+            setTestReglaResult(res.data);
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Error al probar patrón de regla';
+            setReglaErrorAlert(msg);
+            setTestReglaResult(null);
+            addToast(msg, 'error');
+        } finally {
+            setTestingRegla(false);
+        }
+    };
+
+    const filteredReglas = useMemo(() => {
+        return reglasList.filter(r => {
+            if (reglasFilterCuenta && String(r.cuenta_bancaria_id || '') !== String(reglasFilterCuenta)) return false;
+            if (reglasFilterBanco && String(r.banco_codigo || '').toUpperCase() !== String(reglasFilterBanco).toUpperCase()) return false;
+            return true;
+        });
+    }, [reglasList, reglasFilterCuenta, reglasFilterBanco]);
+
     const handleGuardarValidacion = async () => {
         if (submitting) return;
         const montoNum = parseMoneyInput(saldoBancoManual);
@@ -711,6 +1151,7 @@ export default function ConciliacionBancaria() {
             });
             addToast(res.data?.message || 'Validación de saldo registrada correctamente', 'success');
             isSaldoManualDirtyRef.current = false;
+            setIsSaldoManualDirty(false);
             setShowValidationModal(false);
             setCerrarPeriodoCheck(false);
             setConfirmarConDiferencia(false);
@@ -723,10 +1164,55 @@ export default function ConciliacionBancaria() {
         }
     };
 
-    // Parsear Extracto Bancario
+    // Parsear Extracto Bancario (Texto/Excel/CSV o PDF/Imágenes con Gemini Multimodal)
     const handleParseExtracto = async () => {
+        if (importMode === 'AI_MEDIA') {
+            if (importFiles.length === 0) {
+                addToast('Adjunta un PDF o hasta 10 imágenes del estado de cuenta', 'warning');
+                return;
+            }
+            if (!selectedCuentaId) {
+                addToast('Selecciona una cuenta bancaria', 'warning');
+                return;
+            }
+            setIsParsing(true);
+            try {
+                const res = await api.post('/bancos/conciliacion/parse-extracto-pdf', {
+                    cuenta_id: selectedCuentaId,
+                    banco_formato: importBank,
+                    archivo_nombre: importFileName || importFiles[0]?.nombre_original || 'extracto',
+                    files: importFiles.map(f => ({
+                        data_url: f.data_url,
+                        nombre_original: f.nombre_original,
+                        mime_type: f.mime_type
+                    }))
+                });
+                const txList = res.data.transacciones || [];
+                setParsedExtract(res.data);
+                setShowDiscardedRows(false);
+                setShowImportCruceBuilder(false);
+                setImportCruceExtractIndices(new Set());
+                setImportCruceLibroKeys(new Set());
+                setAppliedSugerenciaIdxs(new Set());
+                if (txList.length > 0) {
+                    const autoIdx = txList
+                        .map((t, i) => (!t.es_duplicado_probable && t.matchType !== 'ALERTA_DIFERENCIA_MONTO' ? i : -1))
+                        .filter(i => i >= 0);
+                    setSelectedExtractIndices(new Set(autoIdx));
+                } else {
+                    setSelectedExtractIndices(new Set());
+                }
+                addToast(`IA procesó ${res.data.total_procesadas || txList.length} transacciones (${res.data.paginas_procesadas || importFiles.length} pág.)`, 'success');
+            } catch (err) {
+                addToast(err.response?.data?.message || 'Error al analizar PDF/imágenes con Gemini IA', 'error');
+            } finally {
+                setIsParsing(false);
+            }
+            return;
+        }
+
         if (!importRawText.trim()) {
-            addToast('Ingresa o pega los datos del estado de cuenta', 'warning');
+            addToast('Ingresa o pega los datos del estado de cuenta, o carga un Excel/CSV/PDF/imagen', 'warning');
             return;
         }
         setIsParsing(true);
@@ -736,18 +1222,22 @@ export default function ConciliacionBancaria() {
                 raw_data: importRawText,
                 banco_formato: importBank
             });
+            const txList = res.data.transacciones || [];
             setParsedExtract(res.data);
             setShowDiscardedRows(false);
-            // Pre-seleccionar automáticamente solo transacciones válidas que NO son duplicados probables ni tienen alerta de diferencia de monto
-            if (res.data.transacciones && res.data.transacciones.length > 0) {
-                const autoIdx = res.data.transacciones
+            setShowImportCruceBuilder(false);
+            setImportCruceExtractIndices(new Set());
+            setImportCruceLibroKeys(new Set());
+            setAppliedSugerenciaIdxs(new Set());
+            if (txList.length > 0) {
+                const autoIdx = txList
                     .map((t, i) => (!t.es_duplicado_probable && t.matchType !== 'ALERTA_DIFERENCIA_MONTO' ? i : -1))
                     .filter(i => i >= 0);
                 setSelectedExtractIndices(new Set(autoIdx));
             } else {
                 setSelectedExtractIndices(new Set());
             }
-            addToast(`Se procesaron ${res.data.total_procesadas} transacciones del extracto`, 'success');
+            addToast(`Se procesaron ${res.data.total_procesadas || txList.length} transacciones del extracto`, 'success');
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al procesar extracto bancario', 'error');
         } finally {
@@ -774,26 +1264,130 @@ export default function ConciliacionBancaria() {
         }
     };
 
-    // Lectura segura de Excel usando arrayBuffer + cellDates + raw: false
+    const updateExtractRowClassification = (idx, patch) => {
+        setParsedExtract(prev => {
+            if (!prev?.transacciones) return prev;
+            const nextTx = [...prev.transacciones];
+            const current = nextTx[idx];
+            if (!current) return prev;
+            const updated = { ...current, ...patch };
+            if (Object.prototype.hasOwnProperty.call(patch, 'concepto_limpio')) {
+                updated.conceptoSugerido = patch.concepto_limpio;
+            }
+            nextTx[idx] = updated;
+            return { ...prev, transacciones: nextTx };
+        });
+    };
+
+    const handleRemoveImportFile = (removeIdx) => {
+        setImportFiles(prev => {
+            const next = prev.filter((_, i) => i !== removeIdx);
+            if (next.length === 0) {
+                setImportMode('TEXT');
+                setImportFileName('');
+            } else {
+                setImportFileName(next.map(f => f.nombre_original).join(', '));
+            }
+            return next;
+        });
+    };
+
+    // Lectura segura de Excel/CSV + PDF/Imágenes para Gemini Multimodal
     const handleFileUpload = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+        const files = Array.from(e.target.files || []);
+        e.target.value = '';
+        if (files.length === 0) return;
 
-        try {
-            setImportFileName(file.name);
-            const buf = await file.arrayBuffer();
-            const wb = XLSX.read(buf, { type: 'array', cellDates: true });
-            const firstSheetName = wb.SheetNames[0];
-            const ws = wb.Sheets[firstSheetName];
-            const data = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'dd/mm/yyyy', defval: '' });
+        const isPdfFile = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+        const isImgFile = (f) => ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'].includes(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name || '');
+        const isSheetFile = (f) => /\.(xlsx|xls|csv)$/i.test(f.name || '');
 
-            const text = data.map(row => row.map(c => String(c ?? '').replace(/\t/g, ' ')).join('\t')).join('\n');
-            setImportRawText(text);
-            addToast(`Archivo cargado: ${file.name} (${data.length} filas)`, 'info');
-        } catch (err) {
-            console.error(err);
-            addToast('Error al leer archivo Excel/CSV', 'error');
+        const first = files[0];
+        if (isPdfFile(first)) {
+            if (files.length > 1) {
+                addToast('Solo puede adjuntar 1 archivo PDF por análisis', 'warning');
+                return;
+            }
+            if (first.size > 15 * 1024 * 1024) {
+                addToast('El archivo PDF excede el límite máximo de 15 MB', 'error');
+                return;
+            }
+            try {
+                const dataUrl = await readFileAsDataUrl(first, true);
+                setImportMode('AI_MEDIA');
+                setImportFiles([{
+                    nombre_original: first.name,
+                    mime_type: 'application/pdf',
+                    data_url: dataUrl,
+                    sizeBytes: first.size
+                }]);
+                setImportFileName(first.name);
+                setImportRawText('');
+                addToast(`PDF listo para Gemini IA: ${first.name}`, 'info');
+            } catch (err) {
+                addToast(err.message || 'Error al leer PDF', 'error');
+            }
+            return;
         }
+
+        if (files.every(isImgFile)) {
+            if (files.length > 10) {
+                addToast('Máximo 10 imágenes por análisis multimodal', 'warning');
+                return;
+            }
+            const oversized = files.find(f => f.size > 10 * 1024 * 1024);
+            if (oversized) {
+                addToast(`La imagen "${oversized.name}" excede el límite de 10 MB`, 'error');
+                return;
+            }
+            try {
+                const loaded = await Promise.all(files.map(async (f) => {
+                    const mime = f.type === 'image/jpg' ? 'image/jpeg' : (f.type || 'image/png');
+                    const dataUrl = await readFileAsDataUrl(f, false);
+                    return {
+                        nombre_original: f.name,
+                        mime_type: mime,
+                        data_url: dataUrl,
+                        sizeBytes: f.size
+                    };
+                }));
+                setImportMode('AI_MEDIA');
+                setImportFiles(loaded);
+                setImportFileName(loaded.map(f => f.nombre_original).join(', '));
+                setImportRawText('');
+                addToast(`${loaded.length} imagen(es) lista(s) para análisis con Gemini IA`, 'info');
+            } catch (err) {
+                addToast(err.message || 'Error al leer imágenes', 'error');
+            }
+            return;
+        }
+
+        if (files.some(isSheetFile)) {
+            if (files.length > 1) {
+                addToast('Seleccione un único archivo Excel/CSV, o bien PDF/imágenes por separado.', 'warning');
+                return;
+            }
+            try {
+                setImportMode('TEXT');
+                setImportFiles([]);
+                setImportFileName(first.name);
+                const buf = await first.arrayBuffer();
+                const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+                const firstSheetName = wb.SheetNames[0];
+                const ws = wb.Sheets[firstSheetName];
+                const data = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'dd/mm/yyyy', defval: '' });
+
+                const text = data.map(row => row.map(c => String(c ?? '').replace(/\t/g, ' ')).join('\t')).join('\n');
+                setImportRawText(text);
+                addToast(`Archivo cargado: ${first.name} (${data.length} filas)`, 'info');
+            } catch (err) {
+                console.error(err);
+                addToast('Error al leer archivo Excel/CSV', 'error');
+            }
+            return;
+        }
+
+        addToast('Formato no soportado. Use Excel (.xlsx/.xls/.csv), PDF (<=15MB) o imágenes PNG/JPG/WEBP (máx. 10).', 'warning');
     };
 
     const handleRequestCloseImportModal = async () => {
@@ -804,6 +1398,11 @@ export default function ConciliacionBancaria() {
         }
         setShowImportModal(false);
         setParsedExtract(null);
+        setImportFiles([]);
+        setImportMode('TEXT');
+        setImportCruceExtractIndices(new Set());
+        setImportCruceLibroKeys(new Set());
+        setAppliedSugerenciaIdxs(new Set());
     };
 
     // Conciliar automáticamente todas las coincidencias exactas/confirmadas del extracto
@@ -839,6 +1438,8 @@ export default function ConciliacionBancaria() {
             setShowImportModal(false);
             setParsedExtract(null);
             setImportRawText('');
+            setImportFiles([]);
+            setImportMode('TEXT');
             setSelectedExtractIndices(new Set());
             fetchData({ preserveSelection: false });
         } catch (err) {
@@ -878,6 +1479,243 @@ export default function ConciliacionBancaria() {
         }
     };
 
+    // R4.2: Aplicar sugerencia de Cruce Agrupado (N:1 / 1:N) desde Extracto
+    const handleApplySugerenciaCruce = async (sug, sugIdx) => {
+        if (submitting || !sug) return;
+        setSubmitting(true);
+        try {
+            const rawBancoItems = sug.banco_items || [];
+            const bancoItems = rawBancoItems.map(b => ({
+                origen_tipo: b.origen_tipo || 'EXTRACTO',
+                documento: b.documento || null,
+                fecha: b.fecha || null,
+                fecha_ymd: b.fecha_ymd || null,
+                concepto: b.concepto || b.descripcion || null,
+                descripcion: b.descripcion || b.concepto || null,
+                monto: Number(b.monto || 0)
+            }));
+            const res = await api.post('/bancos/conciliacion/cruces', {
+                cuenta_bancaria_id: Number(selectedCuentaId),
+                tipo_cruce: sug.tipo_cruce,
+                direccion: sug.direccion,
+                fecha_aplicado: sug.fecha_sugerida || fechaAplicadoInput || todayStr,
+                libro_items: sug.libro_items || [],
+                banco_items: bancoItems,
+                referencia_banco: bancoItems[0]?.documento || null,
+                concepto_banco: bancoItems[0]?.concepto || bancoItems[0]?.descripcion || null,
+                notas: sug.nota_sugerida || 'Cruce agrupado sugerido desde extracto'
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+            });
+            addToast(res.data?.message || 'Cruce agrupado aplicado exitosamente', 'success');
+            setAppliedSugerenciaIdxs(prev => new Set([...prev, sugIdx]));
+
+            // Marcar filas de extracto consumidas 1-a-1 (preservando fila_origen) y quitarlas de selección masiva
+            if (parsedExtract?.transacciones) {
+                const txList = parsedExtract.transacciones;
+                const consumedRows = new Set();
+                for (const b of rawBancoItems) {
+                    let matchIdx = -1;
+                    if (b.fila_origen !== undefined && b.fila_origen !== null) {
+                        matchIdx = txList.findIndex((t, idx) =>
+                            !consumedRows.has(idx) &&
+                            !t.procesado &&
+                            t.fila_origen !== undefined &&
+                            t.fila_origen !== null &&
+                            t.fila_origen === b.fila_origen
+                        );
+                    }
+                    if (matchIdx === -1) {
+                        matchIdx = txList.findIndex((t, idx) =>
+                            !consumedRows.has(idx) &&
+                            !t.procesado &&
+                            Math.abs(Number(t.monto || 0) - Number(b.monto || 0)) < 0.01 &&
+                            String(t.documento || '') === String(b.documento || '') &&
+                            String(t.fecha_ymd || t.fecha || '') === String(b.fecha_ymd || b.fecha || '')
+                        );
+                    }
+                    if (matchIdx !== -1) {
+                        consumedRows.add(matchIdx);
+                    }
+                }
+                const updatedTx = txList.map((t, idx) => (
+                    consumedRows.has(idx) ? { ...t, procesado: true } : t
+                ));
+                setParsedExtract({ ...parsedExtract, transacciones: updatedTx });
+                setSelectedExtractIndices(prev => new Set([...prev].filter(i => !consumedRows.has(i))));
+            }
+            fetchData({ preserveSelection: true });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al aplicar cruce agrupado sugerido', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    // R4.2: Constructor manual de Cruce Agrupado dentro del Import Modal (EXTRACTO <-> PENDIENTES LIBRO)
+    const importCruceSummary = useMemo(() => {
+        const txList = parsedExtract?.transacciones || [];
+        const selectedBank = [...importCruceExtractIndices]
+            .map(i => ({ ...txList[i], _idx: i }))
+            .filter(t => t && !t.procesado);
+        const selectedLibro = pendientes.filter(p => importCruceLibroKeys.has(p.key));
+        const sumBanco = round2(selectedBank.reduce((s, t) => s + Number(t.monto || 0), 0));
+        const sumLibro = round2(selectedLibro.reduce((s, p) => s + Number(p.monto_display || p.monto || 0), 0));
+        const diff = round2(sumBanco - sumLibro);
+        const dirs = new Set([
+            ...selectedBank.map(t => t.tipo),
+            ...selectedLibro.map(p => getRowDirection(p))
+        ]);
+        let tipoCruce = null;
+        if (selectedLibro.length >= 2 && selectedBank.length === 1) tipoCruce = 'N_A_1';
+        else if (selectedLibro.length === 1 && selectedBank.length >= 2) tipoCruce = '1_A_N';
+        else if (selectedLibro.length >= 2 && selectedBank.length >= 2) tipoCruce = 'N_A_M';
+        return {
+            selectedBank,
+            selectedLibro,
+            sumBanco,
+            sumLibro,
+            diff,
+            sameDirection: dirs.size <= 1,
+            direccion: [...dirs][0] || 'CARGO',
+            tipoCruce,
+            isValid: Boolean(tipoCruce) && dirs.size === 1 && Math.abs(diff) <= 0.005
+        };
+    }, [parsedExtract, importCruceExtractIndices, importCruceLibroKeys, pendientes]);
+
+    const handleCreateManualImportCruce = async () => {
+        if (submitting || !importCruceSummary.isValid) return;
+        setSubmitting(true);
+        try {
+            const consumedIdxs = new Set(importCruceSummary.selectedBank.map(b => b._idx));
+            const res = await api.post('/bancos/conciliacion/cruces', {
+                cuenta_bancaria_id: Number(selectedCuentaId),
+                tipo_cruce: importCruceSummary.tipoCruce,
+                direccion: importCruceSummary.direccion,
+                fecha_aplicado: importCruceSummary.selectedBank[0]?.fecha_ymd || fechaAplicadoInput || todayStr,
+                libro_items: importCruceSummary.selectedLibro.map(p => ({ id: p.id, origen_tipo: p.origen_tipo })),
+                banco_items: importCruceSummary.selectedBank.map(b => ({
+                    origen_tipo: 'EXTRACTO',
+                    documento: b.documento || null,
+                    fecha: b.fecha || null,
+                    fecha_ymd: b.fecha_ymd || null,
+                    concepto: b.concepto_limpio || b.conceptoSugerido || b.descripcion || null,
+                    descripcion: b.descripcion || null,
+                    monto: Number(b.monto || 0)
+                })),
+                referencia_banco: importCruceSummary.selectedBank[0]?.documento || null,
+                concepto_banco: importCruceSummary.selectedBank[0]?.descripcion || null,
+                notas: 'Cruce agrupado manual desde importador de extracto'
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+            });
+            addToast(res.data?.message || 'Cruce agrupado creado exitosamente', 'success');
+            if (parsedExtract?.transacciones) {
+                const updatedTx = parsedExtract.transacciones.map((t, idx) => (
+                    consumedIdxs.has(idx) ? { ...t, procesado: true } : t
+                ));
+                setParsedExtract({ ...parsedExtract, transacciones: updatedTx });
+            }
+            setSelectedExtractIndices(prev => new Set([...prev].filter(i => !consumedIdxs.has(i))));
+            setImportCruceExtractIndices(new Set());
+            setImportCruceLibroKeys(new Set());
+            fetchData({ preserveSelection: true });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al crear cruce agrupado', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    // R4.2: Constructor de Cruce Agrupado desde workspace PENDIENTES
+    const handleOpenCruceModal = () => {
+        setCruceLibroKeys(new Set(selectedPendingKeys));
+        setCruceBancoPendingKeys(new Set());
+        setCruceBancoMode('EXTRACTO');
+        const selItems = pendientes.filter(p => selectedPendingKeys.has(p.key));
+        const totalSel = round2(selItems.reduce((s, p) => s + Number(p.monto_display || p.monto || 0), 0));
+        setCruceManualBanco({
+            referencia_banco: '',
+            concepto_banco: '',
+            monto_banco: totalSel > 0 ? String(totalSel) : '',
+            fecha_aplicado: fechaAplicadoInput || todayStr,
+            notas: ''
+        });
+        setShowCruceModal(true);
+    };
+
+    const cruceModalSummary = useMemo(() => {
+        const libroItems = pendientes.filter(p => cruceLibroKeys.has(p.key));
+        const sumLibro = round2(libroItems.reduce((s, p) => s + Number(p.monto_display || p.monto || 0), 0));
+        const dirsLibro = new Set(libroItems.map(p => getRowDirection(p)));
+        let bancoItemsPayload = [];
+        let sumBanco = 0;
+        let allDirs = new Set(dirsLibro);
+        if (cruceBancoMode === 'EXTRACTO') {
+            const m = parseMoneyInput(cruceManualBanco.monto_banco);
+            sumBanco = m;
+            if (m > 0) {
+                bancoItemsPayload = [{
+                    origen_tipo: 'EXTRACTO',
+                    documento: cruceManualBanco.referencia_banco.trim() || null,
+                    fecha_ymd: cruceManualBanco.fecha_aplicado || todayStr,
+                    concepto: cruceManualBanco.concepto_banco.trim() || 'MOVIMIENTO BANCARIO EXTRACTO',
+                    monto: m
+                }];
+            }
+        } else {
+            const bancoPend = pendientes.filter(p => cruceBancoPendingKeys.has(p.key) && !cruceLibroKeys.has(p.key));
+            sumBanco = round2(bancoPend.reduce((s, p) => s + Number(p.monto_display || p.monto || 0), 0));
+            bancoPend.forEach(p => allDirs.add(getRowDirection(p)));
+            bancoItemsPayload = bancoPend.map(p => ({ id: p.id, origen_tipo: p.origen_tipo }));
+        }
+        let tipoCruce = null;
+        if (libroItems.length >= 2 && bancoItemsPayload.length === 1) tipoCruce = 'N_A_1';
+        else if (libroItems.length === 1 && bancoItemsPayload.length >= 2) tipoCruce = '1_A_N';
+        else if (libroItems.length >= 2 && bancoItemsPayload.length >= 2) tipoCruce = 'N_A_M';
+        const diff = round2(sumBanco - sumLibro);
+        return {
+            libroItems,
+            bancoItemsPayload,
+            sumLibro,
+            sumBanco,
+            diff,
+            sameDirection: allDirs.size === 1,
+            direccion: [...allDirs][0] || 'CARGO',
+            tipoCruce,
+            isValid: Boolean(tipoCruce) && allDirs.size === 1 && Math.abs(diff) <= 0.005
+        };
+    }, [pendientes, cruceLibroKeys, cruceBancoPendingKeys, cruceBancoMode, cruceManualBanco]);
+
+    const handleSubmitCruceModal = async (e) => {
+        e.preventDefault();
+        if (submitting || !cruceModalSummary.isValid) return;
+        setSubmitting(true);
+        try {
+            const res = await api.post('/bancos/conciliacion/cruces', {
+                cuenta_bancaria_id: Number(selectedCuentaId),
+                tipo_cruce: cruceModalSummary.tipoCruce,
+                direccion: cruceModalSummary.direccion,
+                fecha_aplicado: cruceManualBanco.fecha_aplicado || fechaAplicadoInput || todayStr,
+                libro_items: cruceModalSummary.libroItems.map(p => ({ id: p.id, origen_tipo: p.origen_tipo })),
+                banco_items: cruceModalSummary.bancoItemsPayload,
+                referencia_banco: cruceManualBanco.referencia_banco.trim() || null,
+                concepto_banco: cruceManualBanco.concepto_banco.trim() || null,
+                notas: cruceManualBanco.notas.trim() || null
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+            });
+            addToast(res.data?.message || 'Cruce agrupado registrado exitosamente', 'success');
+            setShowCruceModal(false);
+            setSelectedPendingKeys(new Set());
+            fetchData({ preserveSelection: false });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al registrar cruce agrupado', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
     const handleOpenAssignModal = (row, index) => {
         setAssignTargetRow(row);
         setAssignTargetIndex(index !== undefined ? index : null);
@@ -910,14 +1748,22 @@ export default function ConciliacionBancaria() {
         const fallbackCod = isCargo
             ? (matchingOptions.some(o => (o.codigo || o.id) === 'NC') ? 'NC' : (matchingOptions[0]?.codigo || matchingOptions[0]?.id || 'NC'))
             : (matchingOptions.some(o => (o.codigo || o.id) === 'RM') ? 'RM' : (matchingOptions[0]?.codigo || matchingOptions[0]?.id || 'RM'));
+        const chosenCod = row?.tipo_remesa_codigo || fallbackCod;
+        const matchedRemesa = tiposRemesasCuenta.find(tr =>
+            (row?.tipo_remesa_id && String(tr.id) === String(row.tipo_remesa_id)) ||
+            String(tr.codigo || tr.id || '').toUpperCase() === String(chosenCod).toUpperCase()
+        );
 
         setAssignFormData({
             tipo: row?.tipo || 'CARGO',
-            tipo_remesa_codigo: row?.tipo_remesa_codigo || fallbackCod,
+            tipo_remesa_id: row?.tipo_remesa_id || matchedRemesa?.id || null,
+            tipo_remesa_codigo: chosenCod,
             fecha: ymdFecha,
             fecha_aplicado: ymdFecha || todayStr,
             documento: row?.documento || '',
-            concepto: row?.conceptoSugerido || row?.descripcion || '',
+            concepto: row?.concepto_limpio || row?.conceptoSugerido || row?.descripcion || '',
+            cod_cta: row?.cod_cta || '',
+            num_partida: row?.num_partida || '',
             monto: Number(row?.monto || 0),
             aplicar_inmediatamente: true
         });
@@ -935,17 +1781,19 @@ export default function ConciliacionBancaria() {
             const desc = String(tr.descripcion || '').toUpperCase();
             return cod === 'NC' || cod === 'CH' || cod === '02' || desc.includes('CARGO') || desc.includes('CHEQUE') || desc.includes('DEBITO') || desc.includes('TRANSFER') || desc.includes('TRASLADO') || cod === 'TR' || cod === '04';
         });
-        const initialCod = cargoOptions.some(o => (o.codigo || o.id) === 'NC')
-            ? 'NC'
-            : (cargoOptions[0]?.codigo || cargoOptions[0]?.id || 'NC');
+        const initialOption = cargoOptions.find(o => (o.codigo || o.id) === 'NC') || cargoOptions[0];
+        const initialCod = initialOption?.codigo || initialOption?.id || 'NC';
 
         setAssignFormData({
             tipo: 'CARGO',
+            tipo_remesa_id: initialOption?.id || null,
             tipo_remesa_codigo: initialCod,
             fecha: todayStr,
             fecha_aplicado: todayStr,
             documento: '',
             concepto: '',
+            cod_cta: '',
+            num_partida: '',
             monto: '',
             aplicar_inmediatamente: true
         });
@@ -969,7 +1817,11 @@ export default function ConciliacionBancaria() {
         try {
             const res = await api.post('/bancos/conciliacion/crear-y-aplicar', {
                 cuenta_bancaria_id: selectedCuentaId,
-                ...assignFormData
+                ...assignFormData,
+                concepto_limpio: assignFormData.concepto || null,
+                tipo_remesa_id: assignFormData.tipo_remesa_id || null,
+                cod_cta: assignFormData.cod_cta || null,
+                num_partida: assignFormData.num_partida || null
             }, {
                 headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
             });
@@ -980,6 +1832,11 @@ export default function ConciliacionBancaria() {
                 updatedTx[assignTargetIndex] = {
                     ...updatedTx[assignTargetIndex],
                     procesado: true,
+                    concepto_limpio: assignFormData.concepto,
+                    tipo_remesa_id: assignFormData.tipo_remesa_id || null,
+                    tipo_remesa_codigo: assignFormData.tipo_remesa_codigo,
+                    cod_cta: assignFormData.cod_cta || null,
+                    num_partida: assignFormData.num_partida || null,
                     match: {
                         id: res.data.id,
                         origen_tipo: 'MOV',
@@ -1095,6 +1952,11 @@ export default function ConciliacionBancaria() {
                 })),
                 items: withoutMatch.map(t => ({
                     ...t,
+                    tipo_remesa_id: t.tipo_remesa_id || null,
+                    tipo_remesa_codigo: t.tipo_remesa_codigo || (t.tipo === 'CARGO' ? 'NC' : 'RM'),
+                    cod_cta: t.cod_cta || null,
+                    num_partida: t.num_partida || null,
+                    concepto_limpio: t.concepto_limpio || t.conceptoSugerido || t.descripcion || '',
                     fecha_aplicado: t.fecha_ymd || fechaAplicadoInput || todayStr
                 }))
             }, {
@@ -1106,7 +1968,12 @@ export default function ConciliacionBancaria() {
             setParsedExtract(null);
             setImportRawText('');
             setImportFileName('');
+            setImportFiles([]);
+            setImportMode('TEXT');
             setSelectedExtractIndices(new Set());
+            setImportCruceExtractIndices(new Set());
+            setImportCruceLibroKeys(new Set());
+            setAppliedSugerenciaIdxs(new Set());
             fetchData({ preserveSelection: false });
         } catch (err) {
             addToast(err.response?.data?.message || 'Error al procesar movimientos seleccionados', 'error');
@@ -1171,10 +2038,30 @@ export default function ConciliacionBancaria() {
                 'Referencia': s.referencia_doc || '',
                 'Monto': Number(s.monto || 0)
             }));
-            const ws = XLSX.utils.json_to_sheet(formatted);
+            const ws = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRows(formatted));
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'CONTROL_PAGOS');
             XLSX.writeFile(wb, `Conciliacion_ControlPagos_${cuentaNom}_${hasta}.xlsx`);
+            addToast('Archivo Excel descargado', 'success');
+            return;
+        }
+
+        if (activeTab === 'CRUCES') {
+            if (filteredCruces.length === 0) return;
+            const formatted = filteredCruces.map(c => ({
+                'Cruce #': c.id,
+                'Tipo': formatCruceTipoLabel(c.tipo_cruce),
+                'Dirección': c.direccion || '',
+                'Fecha Aplicado': c.fecha_aplicado_display || c.fecha_aplicado_ymd || '',
+                'Referencia Banco': c.referencia_banco || '',
+                'Concepto Banco': c.concepto_banco || '',
+                'Monto Total': Number(c.monto_total || 0),
+                'Notas': c.notas || ''
+            }));
+            const ws = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRows(formatted));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'CRUCES');
+            XLSX.writeFile(wb, `Conciliacion_Cruces_${cuentaNom}_${hasta}.xlsx`);
             addToast('Archivo Excel descargado', 'success');
             return;
         }
@@ -1197,7 +2084,7 @@ export default function ConciliacionBancaria() {
             };
         });
 
-        const ws = XLSX.utils.json_to_sheet(formatted);
+        const ws = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRows(formatted));
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, activeTab);
         XLSX.writeFile(wb, `Conciliacion_${cuentaNom}_${hasta}.xlsx`);
@@ -1253,6 +2140,52 @@ export default function ConciliacionBancaria() {
             setPreviewTitle(title);
             setPreviewSubtitle(sub);
             setPreviewFileName(`Conciliacion_ControlPagos_${cuentaNom}_${hasta}.pdf`);
+            setShowPdfPreview(true);
+            return;
+        }
+
+        if (activeTab === 'CRUCES') {
+            if (filteredCruces.length === 0) return;
+            const title = 'Conciliación Bancaria - Cruces Agrupados Activos';
+            doc.setFontSize(14);
+            doc.text(title, 14, 15);
+            doc.setFontSize(9);
+            const sub = `Cuenta: ${cuentaInfo?.banco_nombre || ''} - ${cuentaInfo?.numero || ''} | Corte: ${hasta}`;
+            doc.text(sub, 14, 22);
+
+            const totalCruces = filteredCruces.reduce((acc, c) => acc + Number(c.monto_total || 0), 0);
+            autoTable(doc, {
+                head: [['CRUCE #', 'TIPO', 'DIR', 'APLICADO', 'REF. BANCO', 'CONCEPTO / NOTAS', 'MONTO ($)']],
+                body: filteredCruces.map(c => [
+                    `#${c.id}`,
+                    formatCruceTipoLabel(c.tipo_cruce),
+                    c.direccion || '',
+                    c.fecha_aplicado_display || c.fecha_aplicado_ymd || '',
+                    c.referencia_banco || '-',
+                    c.concepto_banco || c.notas || '-',
+                    `$${formatMoney(c.monto_total)}`
+                ]),
+                startY: 28,
+                theme: 'striped',
+                styles: { fontSize: 8, cellPadding: 2 },
+                headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] },
+                foot: [[
+                    { content: `TOTAL (${filteredCruces.length} cruces):`, colSpan: 6, styles: { halign: 'right', fontStyle: 'bold' } },
+                    { content: `$${formatMoney(totalCruces)}`, styles: { halign: 'right', fontStyle: 'bold' } }
+                ]],
+                didDrawPage: (data) => {
+                    const pageCount = doc.internal.getNumberOfPages();
+                    doc.setFontSize(8);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text(`Página ${data.pageNumber} de ${pageCount}`, doc.internal.pageSize.width - 14, doc.internal.pageSize.height - 8, { align: 'right' });
+                    doc.text('SIPE Admin - Reporte de Conciliación Bancaria', 14, doc.internal.pageSize.height - 8);
+                }
+            });
+            setPreviewPdfBlob(doc.output('blob'));
+            setPreviewTotalPages(doc.internal.getNumberOfPages());
+            setPreviewTitle(title);
+            setPreviewSubtitle(sub);
+            setPreviewFileName(`Conciliacion_Cruces_${cuentaNom}_${hasta}.pdf`);
             setShowPdfPreview(true);
             return;
         }
@@ -1375,6 +2308,39 @@ export default function ConciliacionBancaria() {
     const esDiferenciaCero = Math.abs(diferenciaActual) < 0.009;
     const isRangeClosed = Boolean(resumen.periodo_cerrado_hasta && hasta && hasta <= resumen.periodo_cerrado_hasta);
 
+    const seleccionPendientePreview = useMemo(() => {
+        if (!selectedPendingKeys.size) {
+            return {
+                deltaAbonos: 0,
+                deltaCargos: 0,
+                saldoSistemaProyectado: saldoConciliadoLibros,
+                diferenciaProyectada: diferenciaActual,
+                esCuadradoProyectado: esDiferenciaCero
+            };
+        }
+        let deltaAbonos = 0;
+        let deltaCargos = 0;
+        for (const item of pendientes) {
+            if (!selectedPendingKeys.has(item.key)) continue;
+            if (item.origen_tipo === 'CK') {
+                deltaCargos += Number(item.monto_display || item.monto || 0);
+            } else if (Number(item.abono || 0) > 0) {
+                deltaAbonos += Number(item.abono || 0);
+            } else if (Number(item.cargo || 0) > 0) {
+                deltaCargos += Number(item.cargo || 0);
+            }
+        }
+        const saldoSistemaProyectado = round2(saldoConciliadoLibros + deltaAbonos - deltaCargos);
+        const diferenciaProyectada = round2(saldoBancoActual - saldoSistemaProyectado);
+        return {
+            deltaAbonos: round2(deltaAbonos),
+            deltaCargos: round2(deltaCargos),
+            saldoSistemaProyectado,
+            diferenciaProyectada,
+            esCuadradoProyectado: Math.abs(diferenciaProyectada) < 0.009
+        };
+    }, [pendientes, selectedPendingKeys, saldoConciliadoLibros, saldoBancoActual, diferenciaActual, esDiferenciaCero]);
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
 
@@ -1407,6 +2373,17 @@ export default function ConciliacionBancaria() {
                     >
                         <UploadCloud size={16} /> Importar Extracto
                     </button>
+                    {permFlags.can_manage_reglas && (
+                        <button
+                            type="button"
+                            onClick={handleOpenReglasModal}
+                            className="btn-secondary"
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', height: '36px', fontSize: '0.825rem' }}
+                            title="Reglas automáticas de clasificación para extractos bancarios"
+                        >
+                            <Sliders size={15} /> Reglas IA
+                        </button>
+                    )}
                     <button
                         onClick={() => handleOpenPeriodosModal(solicitudesPendientes.length > 0 ? 'SOLICITUDES' : 'PERIODOS')}
                         className="btn-secondary"
@@ -1458,7 +2435,7 @@ export default function ConciliacionBancaria() {
             {/* 2. Barra de Filtros de Cuenta y Periodo */}
             <div className="card glass" style={{ padding: '1rem 1.25rem' }}>
                 <div style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                    <div style={{ flex: '1 1 190px' }}>
+                    <div style={{ flex: '1 1 190px', minWidth: 0 }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
                             <Building2 size={14} /> Contribuyente / Empresa:
                         </label>
@@ -1474,13 +2451,25 @@ export default function ConciliacionBancaria() {
                         </select>
                     </div>
 
-                    <div style={{ flex: '2 1 300px' }}>
+                    <div style={{ flex: '2 1 240px', minWidth: 0 }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
                             <Landmark size={14} /> Cuenta Bancaria:
                         </label>
                         <select
                             value={selectedCuentaId}
-                            onChange={(e) => { isSaldoManualDirtyRef.current = false; setSelectedCuentaId(e.target.value); }}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                isSaldoManualDirtyRef.current = false;
+                                setIsSaldoManualDirty(false);
+                                setAgingFilter('TODOS');
+                                setSelectedCuentaId(val);
+                                const acc = cuentas.find(c => String(c.id) === String(val));
+                                saveBancosSelection({
+                                    empresaId: acc?.empresa_codigo || selectedEmpresa,
+                                    cuentaId: val,
+                                    numeroCuenta: acc?.numero || ''
+                                });
+                            }}
                             style={{ width: '100%', height: '36px', borderRadius: 'var(--border-radius)', padding: '0 0.5rem', fontWeight: '500', fontSize: '0.825rem' }}
                         >
                             {sortCuentas(cuentasFiltradas).map(c => (
@@ -1491,7 +2480,7 @@ export default function ConciliacionBancaria() {
                         </select>
                     </div>
 
-                    <div style={{ flex: '1 1 150px' }}>
+                    <div style={{ flex: '1 1 150px', minWidth: 0 }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
                             <Clock size={14} /> Periodo:
                         </label>
@@ -1511,7 +2500,7 @@ export default function ConciliacionBancaria() {
                         </select>
                     </div>
 
-                    <div style={{ width: '138px' }}>
+                    <div style={{ flex: '1 1 130px', maxWidth: '150px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
                             <Calendar size={14} /> Desde:
                         </label>
@@ -1523,7 +2512,7 @@ export default function ConciliacionBancaria() {
                         />
                     </div>
 
-                    <div style={{ width: '138px' }}>
+                    <div style={{ flex: '1 1 130px', maxWidth: '150px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
                             <Calendar size={14} /> Hasta:
                         </label>
@@ -1626,6 +2615,266 @@ export default function ConciliacionBancaria() {
                 )}
             </div>
 
+            {/* 3.5 Barra Fija (Sticky) y Flujo Guiado en 3 Bloques (R5.6) */}
+            <div className="card glass" style={{
+                position: isMobile ? 'static' : 'sticky',
+                top: isMobile ? undefined : '0px',
+                zIndex: 25,
+                padding: '0.7rem 1rem',
+                background: 'var(--card-bg)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.32)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.55rem'
+            }}>
+                <div className="form-grid form-grid-3" style={{ gap: '0.65rem', alignItems: 'stretch' }}>
+                    {/* Bloque 1: Saldo Banco (Extracto) */}
+                    <div style={{
+                        minWidth: 0,
+                        padding: '0.6rem 0.75rem',
+                        borderRadius: 'var(--border-radius)',
+                        background: 'rgba(59, 130, 246, 0.06)',
+                        border: '1px solid rgba(59, 130, 246, 0.28)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '0.4rem'
+                    }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ fontSize: '0.74rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: '#93c5fd' }}>
+                                1. Saldo Banco (Extracto)
+                            </span>
+                            {isSaldoManualDirty && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        isSaldoManualDirtyRef.current = false;
+                                        setIsSaldoManualDirty(false);
+                                        setSaldoBancoManual(resumen?.saldo_banco !== undefined ? String(resumen.saldo_banco) : '0');
+                                    }}
+                                    title="Restaurar al último saldo validado en servidor"
+                                    style={{ background: 'none', border: 'none', padding: 0, color: '#93c5fd', cursor: 'pointer', fontSize: '0.68rem', textDecoration: 'underline', minHeight: 'auto' }}
+                                >
+                                    Restaurar
+                                </button>
+                            )}
+                        </div>
+
+                        <div>
+                            <label
+                                htmlFor="saldo-banco-real-manual"
+                                style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted)', marginBottom: '0.2rem' }}
+                            >
+                                *SALDO BANCO REAL (MANUAL)
+                            </label>
+                            <div style={{ position: 'relative' }}>
+                                <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-muted)' }}>$</span>
+                                <input
+                                    id="saldo-banco-real-manual"
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={saldoBancoManual}
+                                    onChange={e => {
+                                        isSaldoManualDirtyRef.current = true;
+                                        setIsSaldoManualDirty(true);
+                                        setSaldoBancoManual(e.target.value);
+                                    }}
+                                    placeholder="0.00"
+                                    title="Digite manualmente el saldo real visible en su banca en línea o estado de cuenta"
+                                    style={{
+                                        width: '100%',
+                                        height: '36px',
+                                        paddingLeft: '22px',
+                                        paddingRight: '0.65rem',
+                                        fontWeight: '700',
+                                        fontSize: '0.95rem',
+                                        textAlign: 'right',
+                                        background: 'rgba(0,0,0,0.3)',
+                                        border: '2px solid rgba(59, 130, 246, 0.55)'
+                                    }}
+                                />
+                            </div>
+                        </div>
+
+                        <div
+                            style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem', fontSize: '0.74rem', color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.35rem' }}
+                            title="Saldo en Chequera (Libros): incluye movimientos y cheques emitidos aún en tránsito"
+                        >
+                            <span style={{ fontWeight: 700 }}>SALDO CHEQUERA (CK)</span>
+                            <strong style={{ color: 'var(--text)', fontSize: '0.84rem' }}>{formatSignedMoney(saldoChequeraActual)}</strong>
+                        </div>
+                        {Number(resumen.saldo_inicial || 0) !== 0 && (
+                            <div style={{ fontSize: '0.7rem', color: '#93c5fd' }}>
+                                Saldo Inicial: <strong>{formatSignedMoney(resumen.saldo_inicial)}</strong>
+                                {resumen.fecha_saldo_inicial ? ` (desde ${resumen.fecha_saldo_inicial})` : ''}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Bloque 2: Partidas en Tránsito */}
+                    <div style={{
+                        minWidth: 0,
+                        padding: '0.6rem 0.75rem',
+                        borderRadius: 'var(--border-radius)',
+                        background: 'rgba(245, 158, 11, 0.05)',
+                        border: '1px solid var(--border)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '0.4rem'
+                    }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ fontSize: '0.74rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: '#fbbf24' }}>
+                                2. Partidas en Tránsito
+                            </span>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: '999px', background: 'rgba(245, 158, 11, 0.14)', color: '#fbbf24' }}>
+                                {pendientes.length} pend.
+                            </span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.76rem' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem' }}>
+                                <span style={{ color: 'var(--text-muted)' }}>(−) Abonos en Tránsito</span>
+                                <strong style={{ color: '#10b981' }}>{formatSignedMoney(abonosEnTransito)}</strong>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem' }}>
+                                <span style={{ color: 'var(--text-muted)' }}>(+) Cheques/Cargos en Tránsito</span>
+                                <strong style={{ color: '#f59e0b' }}>{formatSignedMoney(cargosChequesEnTransito)}</strong>
+                            </div>
+                        </div>
+
+                        <div
+                            style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.35rem 0.55rem',
+                                borderRadius: 'var(--border-radius)',
+                                background: 'rgba(255,255,255,0.03)',
+                                border: '1px solid var(--border)'
+                            }}
+                            title="Saldo Banco según Sistema (Aplicado) = Saldo Chequera (CK) − Abonos en Tránsito + Cheques/Cargos en Tránsito"
+                        >
+                            <span style={{ fontSize: '0.71rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                                SALDO BANCO (SISTEMA)
+                            </span>
+                            <strong style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
+                                {formatSignedMoney(saldoConciliadoLibros)}
+                            </strong>
+                        </div>
+
+                        {Number(resumen.cheques_reservados_count || 0) > 0 && (
+                            <div style={{ fontSize: '0.7rem', color: '#fbbf24', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.25rem' }}>
+                                <AlertTriangle size={12} />
+                                <span>{resumen.cheques_reservados_count} ch. reservado(s) excluidos ({formatSignedMoney(resumen.cheques_reservados_monto)})</span>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Bloque 3: Diferencia ($0.00) */}
+                    <div style={{
+                        minWidth: 0,
+                        padding: '0.6rem 0.75rem',
+                        borderRadius: 'var(--border-radius)',
+                        background: esDiferenciaCero ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                        border: `1px solid ${esDiferenciaCero ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.45)'}`,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '0.45rem'
+                    }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ fontSize: '0.74rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em', color: esDiferenciaCero ? '#34d399' : '#f87171' }}>
+                                3. Diferencia ($0.00)
+                            </span>
+                            <span style={{
+                                fontSize: '0.68rem',
+                                fontWeight: 700,
+                                padding: '0.1rem 0.45rem',
+                                borderRadius: '999px',
+                                background: esDiferenciaCero ? 'rgba(16, 185, 129, 0.18)' : 'rgba(239, 68, 68, 0.18)',
+                                color: esDiferenciaCero ? '#34d399' : '#f87171'
+                            }}>
+                                {esDiferenciaCero ? 'Cuadrado' : 'Por cuadrar'}
+                            </span>
+                        </div>
+
+                        <div style={{
+                            minHeight: '36px',
+                            padding: '0.25rem 0.7rem',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '0.4rem',
+                            fontWeight: '800',
+                            fontSize: '0.98rem',
+                            background: esDiferenciaCero ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                            border: `2px solid ${esDiferenciaCero ? '#10b981' : '#ef4444'}`,
+                            color: esDiferenciaCero ? '#10b981' : '#ef4444',
+                            borderRadius: 'var(--border-radius)'
+                        }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', fontWeight: 800 }}>
+                                {esDiferenciaCero ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+                                DIF (REAL − SISTEMA)
+                            </span>
+                            <span>{formatSignedMoney(diferenciaActual)}</span>
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setCerrarPeriodoCheck(false);
+                                setConfirmarConDiferencia(false);
+                                setNotasValidacion(`Validación conciliación al ${hasta}`);
+                                setShowValidationModal(true);
+                            }}
+                            className="btn-primary"
+                            style={{
+                                width: '100%',
+                                height: '36px',
+                                padding: '0 1rem',
+                                fontWeight: '700',
+                                fontSize: '0.82rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.4rem',
+                                background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)'
+                            }}
+                        >
+                            <CheckSquare size={15} /> PROCESAR Y GUARDAR
+                        </button>
+                    </div>
+                </div>
+
+                {/* Vista previa en tiempo real al seleccionar pendientes */}
+                {activeTab === 'PENDIENTES' && selectedPendingKeys.size > 0 && (
+                    <div style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.45rem',
+                        padding: '0.32rem 0.65rem',
+                        borderRadius: '6px',
+                        fontSize: '0.75rem',
+                        background: seleccionPendientePreview.esCuadradoProyectado ? 'rgba(16, 185, 129, 0.16)' : 'rgba(59, 130, 246, 0.14)',
+                        border: `1px solid ${seleccionPendientePreview.esCuadradoProyectado ? 'rgba(16, 185, 129, 0.45)' : 'rgba(59, 130, 246, 0.35)'}`,
+                        color: seleccionPendientePreview.esCuadradoProyectado ? '#6ee7b7' : '#bfdbfe',
+                        fontWeight: 600
+                    }}>
+                        <span>
+                            Al conciliar {selectedPendingKeys.size} selec.: Sistema <strong>{formatSignedMoney(seleccionPendientePreview.saldoSistemaProyectado)}</strong> · Dif <strong>{formatSignedMoney(seleccionPendientePreview.diferenciaProyectada)}</strong>
+                        </span>
+                    </div>
+                )}
+            </div>
+
             {/* 4. Selector de Pestañas & Búsqueda */}
             <div className="card glass" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -1643,6 +2892,15 @@ export default function ConciliacionBancaria() {
                         style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', height: '36px', padding: '0 1rem', fontWeight: '600', fontSize: '0.82rem' }}
                     >
                         <ArrowRightLeft size={15} /> PENDIENTES ({filteredPendientes.length})
+                    </button>
+
+                    <button
+                        onClick={() => { setActiveTab('CRUCES'); setSelectedPendingKeys(new Set()); refreshCrucesActivos(); }}
+                        className={activeTab === 'CRUCES' ? 'btn-primary' : 'btn-secondary'}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', height: '36px', padding: '0 1rem', fontWeight: '600', fontSize: '0.82rem' }}
+                        title="Cruces agrupados N:1, 1:N y N:M activos"
+                    >
+                        <Layers size={15} /> CRUCES ({crucesActivos.length})
                     </button>
 
                     <button
@@ -1664,8 +2922,8 @@ export default function ConciliacionBancaria() {
                     </button>
                 </div>
 
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div style={{ position: 'relative', minWidth: '220px' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', flex: '1 1 240px', minWidth: 0, justifyContent: 'flex-end' }}>
+                    <div style={{ position: 'relative', flex: '1 1 200px', minWidth: '180px', maxWidth: '100%' }}>
                         <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                         <input
                             type="text"
@@ -1688,7 +2946,7 @@ export default function ConciliacionBancaria() {
                                 type="date"
                                 value={fechaAplicadoInput}
                                 onChange={e => setFechaAplicadoInput(e.target.value)}
-                                style={{ height: '32px', fontSize: '0.82rem' }}
+                                style={{ height: '32px', fontSize: '0.82rem', width: '138px' }}
                             />
                             <button
                                 onClick={handleConciliarSeleccionados}
@@ -1698,10 +2956,71 @@ export default function ConciliacionBancaria() {
                             >
                                 <Check size={14} /> {submitting ? 'Procesando...' : `CONCILIAR (${selectedPendingKeys.size})`}
                             </button>
+                            <button
+                                type="button"
+                                onClick={handleOpenCruceModal}
+                                disabled={pendientes.length === 0 || submitting}
+                                className="btn-secondary"
+                                style={{ height: '32px', padding: '0 0.75rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.3rem', borderColor: selectedPendingKeys.size >= 1 ? 'rgba(99, 102, 241, 0.5)' : undefined }}
+                                title="Agrupar múltiples pendientes contra 1 movimiento bancario o viceversa (N:1 / 1:N / N:M)"
+                            >
+                                <Layers size={14} /> Cruce Agrupado
+                            </button>
                         </div>
                     )}
                 </div>
             </div>
+
+            {/* R3.3 Barra de Antigüedad de Cheques en Tránsito (solo en PENDIENTES) */}
+            {activeTab === 'PENDIENTES' && (agingResumen?.total_cheques || 0) > 0 && (
+                <div className="card glass" style={{ padding: '0.65rem 1rem', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', flexWrap: 'wrap' }}>
+                        <Clock size={15} style={{ color: '#f59e0b' }} />
+                        <span style={{ fontWeight: 700 }}>Antigüedad Cheques en Tránsito:</span>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                            <strong>{agingResumen.total_cheques}</strong> ch. · <strong style={{ color: 'var(--text)' }}>${formatMoney(agingResumen.total_monto)}</strong>
+                        </span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
+                        <button
+                            type="button"
+                            onClick={() => setAgingFilter('TODOS')}
+                            className={agingFilter === 'TODOS' ? 'btn-primary' : 'btn-secondary'}
+                            style={{ height: '28px', padding: '0 0.65rem', fontSize: '0.74rem' }}
+                        >
+                            Todos ({pendientes.length})
+                        </button>
+                        {(agingResumen.buckets_list || []).map(b => (
+                            <button
+                                key={b.bucket}
+                                type="button"
+                                onClick={() => setAgingFilter(prev => (prev === b.bucket ? 'TODOS' : b.bucket))}
+                                className={agingFilter === b.bucket ? 'btn-primary' : 'btn-secondary'}
+                                style={{ height: '28px', padding: '0 0.65rem', fontSize: '0.74rem' }}
+                            >
+                                {b.bucket === '>180' ? '>180d Caducos' : `${b.bucket}d`} ({b.count} · ${formatMoney(b.total_monto)})
+                            </button>
+                        ))}
+                        {Number(agingResumen.por_caducar_count || 0) > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => setAgingFilter(prev => (prev === 'POR_CADUCAR' ? 'TODOS' : 'POR_CADUCAR'))}
+                                className={agingFilter === 'POR_CADUCAR' ? 'btn-primary' : 'btn-secondary'}
+                                style={{
+                                    height: '28px',
+                                    padding: '0 0.65rem',
+                                    fontSize: '0.74rem',
+                                    borderColor: 'rgba(249, 115, 22, 0.5)',
+                                    color: agingFilter === 'POR_CADUCAR' ? '#fff' : '#fb923c'
+                                }}
+                            >
+                                Por caducar 150-180d ({agingResumen.por_caducar_count} · ${formatMoney(agingResumen.por_caducar_monto)})
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* 5. Tabla de Datos */}
             {activeTab === 'CONTROL_PAGOS' ? (
@@ -1746,8 +3065,14 @@ export default function ConciliacionBancaria() {
                                             {sug.ubicacion || 'General'}
                                             {sug.beneficiario ? ` · A favor de: ${sug.beneficiario}` : ''}
                                             {sug.notas ? ` · ${sug.notas}` : ''}
-                                            {sug.comprobantes_count > 0 && sug.comprobante_url && (
-                                                <> · <a href={sug.comprobante_url} target="_blank" rel="noopener noreferrer" style={{ color: '#38bdf8' }}>Ver comprobante ({sug.comprobantes_count})</a></>
+                                            {(sug.comprobantes_count > 0 || sug.comprobante_url || sug.signed_url) && (
+                                                <> · <button
+                                                    type="button"
+                                                    onClick={() => openReceiptLightbox(sug, 0, 'Control de Pagos')}
+                                                    style={{ background: 'none', border: 'none', padding: 0, color: '#38bdf8', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                                >
+                                                    <Paperclip size={11} /> Ver comprobante ({sug.comprobantes_count || sug.comprobantes?.length || 1})
+                                                </button></>
                                             )}
                                         </div>
                                     </td>
@@ -1805,6 +3130,95 @@ export default function ConciliacionBancaria() {
                         </tbody>
                     </table>
                 </div>
+            ) : activeTab === 'CRUCES' ? (
+                <div className="card glass table-responsive" style={{ padding: 0 }}>
+                    <table style={{ minWidth: '920px', width: '100%', fontSize: '0.8rem' }}>
+                        <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Cruce</th>
+                                <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Tipo / Dir</th>
+                                <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Aplicado</th>
+                                <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Referencia / Concepto Banco</th>
+                                <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Partidas Vinculadas</th>
+                                <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Monto Total</th>
+                                <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {loadingCruces ? (
+                                <tr>
+                                    <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                        Cargando cruces agrupados...
+                                    </td>
+                                </tr>
+                            ) : filteredCruces.length === 0 ? (
+                                <tr>
+                                    <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                        No hay cruces agrupados activos para esta cuenta. Usa &ldquo;Cruce Agrupado&rdquo; en Pendientes o en el Importador de Extractos.
+                                    </td>
+                                </tr>
+                            ) : filteredCruces.map(c => {
+                                const libroIts = (c.items || []).filter(i => i.lado === 'LIBRO');
+                                const bancoIts = (c.items || []).filter(i => i.lado === 'BANCO');
+                                const isClosedCruce = Boolean(resumen.periodo_cerrado_hasta && c.fecha_aplicado_ymd && c.fecha_aplicado_ymd <= resumen.periodo_cerrado_hasta);
+                                return (
+                                    <tr key={c.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontWeight: 700, fontFamily: 'monospace' }}>#{c.id}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                            <span style={{
+                                                padding: '0.15rem 0.45rem',
+                                                borderRadius: '4px',
+                                                fontSize: '0.72rem',
+                                                fontWeight: 700,
+                                                background: 'rgba(99, 102, 241, 0.18)',
+                                                color: '#a5b4fc'
+                                            }}>
+                                                {formatCruceTipoLabel(c.tipo_cruce)} · {c.direccion}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', color: '#10b981', whiteSpace: 'nowrap' }}>
+                                            {c.fecha_aplicado_display || c.fecha_aplicado_ymd}
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem' }}>
+                                            <div style={{ fontWeight: 600 }}>{c.referencia_banco || 'Sin ref.'}</div>
+                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                                {c.concepto_banco || c.notas || '-'}
+                                            </div>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem' }}>
+                                            <div>
+                                                <strong style={{ color: '#93c5fd' }}>Libros ({libroIts.length}):</strong>{' '}
+                                                {libroIts.map(it => `${it.origen_tipo}#${it.documento || it.entidad_id} ($${formatMoney(it.monto)})`).join(', ') || '-'}
+                                            </div>
+                                            <div style={{ color: 'var(--text-muted)' }}>
+                                                <strong style={{ color: '#6ee7b7' }}>Banco ({bancoIts.length}):</strong>{' '}
+                                                {bancoIts.map(it => `${it.origen_tipo}${it.documento ? `#${it.documento}` : ''} ($${formatMoney(it.monto)})`).join(', ') || '-'}
+                                            </div>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 800, whiteSpace: 'nowrap', color: c.direccion === 'CARGO' ? '#ef4444' : '#10b981' }}>
+                                            ${formatMoney(c.monto_total)}
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                            {isClosedCruce ? (
+                                                <span title="Período cerrado" style={{ color: 'var(--text-muted)' }}><Lock size={14} /></span>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    disabled={submitting}
+                                                    onClick={() => handleDesconciliarCruce(c.id)}
+                                                    className="btn-secondary"
+                                                    style={{ height: '28px', padding: '0 0.6rem', fontSize: '0.72rem', color: '#f87171', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                                >
+                                                    <Unlink size={13} /> Desconciliar
+                                                </button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
             ) : (
                 <div className="card glass table-responsive" style={{ padding: 0 }}>
                     <table style={{ minWidth: '950px', width: '100%', whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
@@ -1856,9 +3270,16 @@ export default function ConciliacionBancaria() {
                                     const isSelected = selectedPendingKeys.has(row.key);
                                     const isRowClosed = Boolean(
                                         resumen.periodo_cerrado_hasta &&
-                                        ((row.fecha_aplicado_ymd && row.fecha_aplicado_ymd <= resumen.periodo_cerrado_hasta) ||
-                                         (row.fecha_ymd && row.fecha_ymd <= resumen.periodo_cerrado_hasta && activeTab === 'MOVIMIENTOS'))
+                                        (row.cruce_id
+                                            ? (row.fecha_aplicado_ymd && row.fecha_aplicado_ymd <= resumen.periodo_cerrado_hasta)
+                                            : ((row.fecha_aplicado_ymd && row.fecha_aplicado_ymd <= resumen.periodo_cerrado_hasta) ||
+                                               (row.fecha_ymd && row.fecha_ymd <= resumen.periodo_cerrado_hasta && activeTab === 'MOVIMIENTOS')))
                                     );
+                                    const agingMeta = activeTab === 'PENDIENTES' && row.origen_tipo === 'CK' && row.dias_circulacion !== undefined && row.dias_circulacion !== null
+                                        ? getAgingBadgeMeta(row)
+                                        : null;
+                                    const hasReceipt = row.origen_tipo === 'MOV' && (row.comprobantes_count > 0 || row.comprobante_url || row.signed_url);
+
                                     return (
                                         <tr
                                             key={row.key || idx}
@@ -1885,7 +3306,39 @@ export default function ConciliacionBancaria() {
                                                 {renderTipoBadge(row.tipo)}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace', fontWeight: '600' }}>
-                                                {row.documento || '-'}
+                                                <div>{row.documento || '-'}</div>
+                                                {agingMeta && (
+                                                    <span style={{
+                                                        display: 'inline-block',
+                                                        marginTop: '2px',
+                                                        fontFamily: 'inherit',
+                                                        fontSize: '0.68rem',
+                                                        fontWeight: 700,
+                                                        padding: '0.1rem 0.35rem',
+                                                        borderRadius: '4px',
+                                                        background: agingMeta.bg,
+                                                        color: agingMeta.color,
+                                                        border: `1px solid ${agingMeta.border}`
+                                                    }}>
+                                                        {row.dias_circulacion}d · {agingMeta.text}
+                                                    </span>
+                                                )}
+                                                {activeTab === 'MOVIMIENTOS' && row.cruce_id && (
+                                                    <span style={{
+                                                        display: 'inline-block',
+                                                        marginTop: '2px',
+                                                        fontFamily: 'inherit',
+                                                        fontSize: '0.68rem',
+                                                        fontWeight: 700,
+                                                        padding: '0.1rem 0.35rem',
+                                                        borderRadius: '4px',
+                                                        background: 'rgba(99, 102, 241, 0.16)',
+                                                        color: '#a5b4fc',
+                                                        border: '1px solid rgba(99, 102, 241, 0.35)'
+                                                    }}>
+                                                        Cruce #{row.cruce_id} ({formatCruceTipoLabel(row.cruce_tipo)})
+                                                    </span>
+                                                )}
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={row.concepto}>
                                                 {row.concepto || '-'}
@@ -1911,6 +3364,18 @@ export default function ConciliacionBancaria() {
                                                     >
                                                         <Eye size={15} />
                                                     </button>
+                                                    {hasReceipt && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openReceiptLightbox(row, 0, 'Movimiento Bancario')}
+                                                            className="icon-btn"
+                                                            title={`Ver comprobante(s) (${row.comprobantes_count || row.comprobantes?.length || 1})`}
+                                                            style={{ padding: '4px', color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '0.72rem' }}
+                                                        >
+                                                            <Paperclip size={14} />
+                                                            <span>{row.comprobantes_count || row.comprobantes?.length || 1}</span>
+                                                        </button>
+                                                    )}
                                                     {!row.es_contabilizado && !isRowClosed ? (
                                                         <button
                                                             onClick={() => handleOpenEdit(row)}
@@ -1931,10 +3396,10 @@ export default function ConciliacionBancaria() {
                                                                 onClick={() => handleDesconciliar(row)}
                                                                 disabled={submitting}
                                                                 className="icon-btn"
-                                                                title="Desconciliar documento"
+                                                                title={row.cruce_id ? `Desconciliar Cruce Agrupado #${row.cruce_id}` : 'Desconciliar documento'}
                                                                 style={{ padding: '4px', color: '#ef4444' }}
                                                             >
-                                                                <X size={15} />
+                                                                {row.cruce_id ? <Unlink size={15} /> : <X size={15} />}
                                                             </button>
                                                         )
                                                     ) : (
@@ -1959,162 +3424,11 @@ export default function ConciliacionBancaria() {
                 </div>
             )}
 
-            {/* 6. Barra Inferior de Totales y Ecuación de Conciliación Oficial */}
-            <div className="card glass" style={{
-                padding: '1rem 1.25rem',
-                border: '1px solid rgba(255,255,255,0.15)',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.75rem'
-            }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                    <div style={{ display: 'flex', gap: '1.15rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        {/* Saldo en Banco */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontWeight: '700', fontSize: '0.85rem', letterSpacing: '0.3px' }}>*SALDO EN BANCO</span>
-                            <div style={{ position: 'relative' }}>
-                                <span style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', fontWeight: 'bold', color: 'var(--text-muted)' }}>$</span>
-                                <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={saldoBancoManual}
-                                    onChange={e => {
-                                        isSaldoManualDirtyRef.current = true;
-                                        setSaldoBancoManual(e.target.value);
-                                    }}
-                                    style={{
-                                        width: '145px',
-                                        height: '38px',
-                                        paddingLeft: '22px',
-                                        fontWeight: '700',
-                                        fontSize: '0.98rem',
-                                        textAlign: 'right',
-                                        background: 'rgba(0,0,0,0.25)',
-                                        border: '2px solid rgba(59, 130, 246, 0.4)'
-                                    }}
-                                />
-                            </div>
-                        </div>
-
-                        {/* Saldo Conciliado en Libros */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontWeight: '700', fontSize: '0.85rem', letterSpacing: '0.3px' }}>SALDO CONCILIADO</span>
-                            <div style={{
-                                minWidth: '140px',
-                                height: '38px',
-                                padding: '0 0.85rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'flex-end',
-                                fontWeight: '700',
-                                fontSize: '0.98rem',
-                                background: 'rgba(0,0,0,0.25)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 'var(--border-radius)'
-                            }}>
-                                ${formatMoney(saldoConciliadoLibros)}
-                            </div>
-                        </div>
-
-                        {/* Diferencia Real */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontWeight: '700', fontSize: '0.85rem', letterSpacing: '0.3px' }}>DIF REAL</span>
-                            <div style={{
-                                minWidth: '125px',
-                                height: '38px',
-                                padding: '0 0.85rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'flex-end',
-                                fontWeight: '800',
-                                fontSize: '0.98rem',
-                                background: esDiferenciaCero ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                                border: `2px solid ${esDiferenciaCero ? '#10b981' : '#ef4444'}`,
-                                color: esDiferenciaCero ? '#10b981' : '#ef4444',
-                                borderRadius: 'var(--border-radius)'
-                            }}>
-                                ${formatMoney(diferenciaActual)}
-                            </div>
-                            {esDiferenciaCero && (
-                                <span title="¡Conciliado perfectamente al centavo!" style={{ color: '#10b981' }}>
-                                    <CheckCircle2 size={22} />
-                                </span>
-                            )}
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <button
-                            onClick={() => {
-                                setCerrarPeriodoCheck(false);
-                                setConfirmarConDiferencia(false);
-                                setNotasValidacion(`Validación conciliación al ${hasta}`);
-                                setShowValidationModal(true);
-                            }}
-                            className="btn-primary"
-                            style={{
-                                height: '38px',
-                                padding: '0 1.25rem',
-                                fontWeight: '700',
-                                fontSize: '0.85rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.45rem',
-                                background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)'
-                            }}
-                        >
-                            <CheckSquare size={17} /> PROCESAR Y GUARDAR
-                        </button>
-                    </div>
-                </div>
-
-                {/* Desglose transparente de partidas en tránsito */}
-                <div style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: '0.85rem',
-                    fontSize: '0.78rem',
-                    color: 'var(--text-muted)',
-                    borderTop: '1px solid rgba(255,255,255,0.08)',
-                    paddingTop: '0.6rem',
-                    alignItems: 'center'
-                }}>
-                    <span>
-                        Saldo en Chequera (Libros): <strong style={{ color: 'var(--text)' }}>${formatMoney(saldoChequeraActual)}</strong>
-                    </span>
-                    <span>−</span>
-                    <span>
-                        Abonos en Tránsito: <strong style={{ color: '#10b981' }}>${formatMoney(abonosEnTransito)}</strong>
-                    </span>
-                    <span>+</span>
-                    <span>
-                        Cheques y Cargos en Tránsito: <strong style={{ color: '#f59e0b' }}>${formatMoney(cargosChequesEnTransito)}</strong>
-                    </span>
-                    <span>=</span>
-                    <span>
-                        Saldo Conciliado: <strong style={{ color: 'var(--primary)' }}>${formatMoney(saldoConciliadoLibros)}</strong>
-                    </span>
-                    {Number(resumen.saldo_inicial || 0) !== 0 && (
-                        <span style={{ marginLeft: 'auto', color: '#93c5fd' }}>
-                            Saldo Inicial: <strong>${formatMoney(resumen.saldo_inicial)}</strong>
-                            {resumen.fecha_saldo_inicial ? ` (desde ${resumen.fecha_saldo_inicial})` : ''}
-                        </span>
-                    )}
-                    {Number(resumen.cheques_reservados_count || 0) > 0 && (
-                        <span style={{ color: '#fbbf24', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                            <AlertTriangle size={13} />
-                            {resumen.cheques_reservados_count} cheque(s) retenido(s)/reservado(s) excluidos (${formatMoney(resumen.cheques_reservados_monto)})
-                        </span>
-                    )}
-                </div>
-            </div>
-
             {/* ── MODAL 1: IMPORTADOR DE EXTRACTO BANCARIO MULTIBANCO ── */}
             <Modal
                 open={showImportModal}
                 onClose={handleRequestCloseImportModal}
-                title="Importar Extracto Bancario Multibanco"
+                title="Importar Extracto Bancario Multibanco (Excel / CSV / PDF / Imágenes IA)"
                 size="xl"
                 footer={(
                     <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -2162,7 +3476,7 @@ export default function ConciliacionBancaria() {
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     <div style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap', alignItems: 'center', background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: 'var(--border-radius)' }}>
-                        <div style={{ flex: '1 1 200px' }}>
+                        <div style={{ flex: '1 1 190px', minWidth: 0 }}>
                             <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Formato del Banco:</label>
                             <select
                                 value={importBank}
@@ -2181,46 +3495,122 @@ export default function ConciliacionBancaria() {
                             </select>
                         </div>
 
-                        <div style={{ flex: '1 1 240px' }}>
-                            <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Cargar Archivo Excel / CSV:</label>
+                        <div style={{ flex: '2 1 240px', minWidth: 0 }}>
+                            <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
+                                Cargar Excel/CSV o PDF (≤15MB) / Imágenes IA (1-10, ≤10MB c/u):
+                            </label>
                             <input
                                 type="file"
-                                accept=".xlsx, .xls, .csv"
+                                accept=".xlsx,.xls,.csv,.pdf,image/png,image/jpeg,image/webp"
+                                multiple
                                 onChange={handleFileUpload}
                                 style={{ width: '100%', fontSize: '0.8rem' }}
                             />
                         </div>
 
-                        <div style={{ alignSelf: 'flex-end' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignSelf: 'flex-end' }}>
+                            {permFlags.can_manage_reglas && (
+                                <button
+                                    type="button"
+                                    onClick={handleOpenReglasModal}
+                                    className="btn-secondary"
+                                    style={{ height: '36px', display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem' }}
+                                >
+                                    <Sliders size={14} /> Reglas IA
+                                </button>
+                            )}
                             <button
                                 onClick={handleParseExtracto}
-                                disabled={isParsing || !importRawText.trim()}
+                                disabled={isParsing || (importMode === 'AI_MEDIA' ? importFiles.length === 0 : !importRawText.trim())}
                                 className="btn-primary"
                                 style={{ height: '36px', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.825rem' }}
                             >
                                 {isParsing ? <RefreshCw size={15} className="animate-spin" /> : <Sparkles size={15} />}
-                                Analizar Extracto
+                                {isParsing
+                                    ? (importMode === 'AI_MEDIA' ? 'Analizando con Gemini IA...' : 'Analizando...')
+                                    : (importMode === 'AI_MEDIA' ? 'Analizar PDF/Imágenes con IA' : 'Analizar Extracto')}
                             </button>
                         </div>
                     </div>
+
+                    {importMode === 'AI_MEDIA' && importFiles.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', padding: '0.6rem 0.75rem', borderRadius: 'var(--border-radius)', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.3)', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#c4b5fd', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <FileText size={14} /> Archivos IA ({importFiles.length}):
+                            </span>
+                            {importFiles.map((f, idx) => (
+                                <span key={idx} style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    padding: '0.2rem 0.5rem',
+                                    borderRadius: '999px',
+                                    fontSize: '0.74rem',
+                                    background: 'rgba(0,0,0,0.25)',
+                                    border: '1px solid rgba(255,255,255,0.12)'
+                                }}>
+                                    <span>{f.nombre_original}</span>
+                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                                        ({(Number(f.sizeBytes || 0) / (1024 * 1024)).toFixed(2)} MB)
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleRemoveImportFile(idx)}
+                                        style={{ background: 'none', border: 'none', padding: 0, color: '#f87171', cursor: 'pointer', display: 'inline-flex' }}
+                                        title="Quitar archivo"
+                                    >
+                                        <X size={13} />
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                    )}
 
                     <div>
                         <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
                             O pega directamente aquí las filas copiadas de tu Excel o Banca en Línea:
                         </label>
                         <textarea
-                            rows={4}
+                            rows={3}
                             placeholder="Pega aquí las filas copiadas (Ctrl+V)... Ejemplo: 28/08/2026   10004567   REMESA CUENTA CORRIENTE SERSAPROSA   $250.00"
                             value={importRawText}
-                            onChange={e => setImportRawText(e.target.value)}
+                            onChange={e => {
+                                setImportRawText(e.target.value);
+                                if (e.target.value.trim() && importMode === 'AI_MEDIA') {
+                                    setImportMode('TEXT');
+                                    setImportFiles([]);
+                                }
+                            }}
                             style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.78rem', padding: '0.5rem' }}
                         />
                     </div>
 
                     {parsedExtract && parsedExtract.transacciones && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                            {/* Diagnóstico del extracto */}
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem', padding: '0.65rem 0.85rem', borderRadius: 'var(--border-radius)', background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(37, 99, 235, 0.25)', fontSize: '0.76rem', alignItems: 'center' }}>
+                            {/* Diagnóstico del extracto + metadata IA/Reglas */}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.55rem', padding: '0.65rem 0.85rem', borderRadius: 'var(--border-radius)', background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(37, 99, 235, 0.25)', fontSize: '0.76rem', alignItems: 'center' }}>
+                                {parsedExtract.origen_parser && (
+                                    <span style={{ padding: '0.12rem 0.45rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.2)', color: '#c4b5fd', fontWeight: 700 }}>
+                                        {parsedExtract.origen_parser}
+                                    </span>
+                                )}
+                                {parsedExtract.banco_detectado && (
+                                    <span>Banco: <strong>{parsedExtract.banco_detectado}</strong></span>
+                                )}
+                                {parsedExtract.moneda && (
+                                    <span>Moneda: <strong>{parsedExtract.moneda}</strong></span>
+                                )}
+                                {parsedExtract.model_used && (
+                                    <span style={{ color: 'var(--text-muted)' }}>Modelo: <strong>{parsedExtract.model_used}</strong></span>
+                                )}
+                                {parsedExtract.paginas_procesadas !== undefined && parsedExtract.paginas_procesadas !== null && (
+                                    <span>Páginas: <strong>{parsedExtract.paginas_procesadas}</strong></span>
+                                )}
+                                {Number(parsedExtract.reglas_aplicadas_count || 0) > 0 && (
+                                    <span style={{ padding: '0.12rem 0.45rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.18)', color: '#34d399', fontWeight: 700 }}>
+                                        Reglas IA aplicadas: {parsedExtract.reglas_aplicadas_count}
+                                    </span>
+                                )}
                                 <span>Cargos Extracto: <strong style={{ color: '#ef4444' }}>${formatMoney(parsedExtract.resumen_extracto?.total_cargos)}</strong></span>
                                 <span>·</span>
                                 <span>Abonos Extracto: <strong style={{ color: '#10b981' }}>${formatMoney(parsedExtract.resumen_extracto?.total_abonos)}</strong></span>
@@ -2238,17 +3628,140 @@ export default function ConciliacionBancaria() {
                                         <AlertTriangle size={14} /> Este archivo ya fue importado anteriormente ({formatSvDateTime(parsedExtract.extracto_ya_importado.created_at)})
                                     </span>
                                 )}
-                                {parsedExtract.filas_descartadas?.length > 0 && (
+                                <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                                     <button
                                         type="button"
-                                        onClick={() => setShowDiscardedRows(v => !v)}
+                                        onClick={() => setShowImportCruceBuilder(v => !v)}
                                         className="btn-secondary"
-                                        style={{ marginLeft: 'auto', height: '24px', padding: '0 0.5rem', fontSize: '0.72rem' }}
+                                        style={{ height: '24px', padding: '0 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                                     >
-                                        {showDiscardedRows ? 'Ocultar' : 'Ver'} {parsedExtract.filas_descartadas.length} fila(s) omitida(s)
+                                        <Layers size={12} /> {showImportCruceBuilder ? 'Ocultar Cruce Manual' : 'Cruce Agrupado Manual (N:1 / 1:N)'}
                                     </button>
-                                )}
+                                    {parsedExtract.filas_descartadas?.length > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowDiscardedRows(v => !v)}
+                                            className="btn-secondary"
+                                            style={{ height: '24px', padding: '0 0.5rem', fontSize: '0.72rem' }}
+                                        >
+                                            {showDiscardedRows ? 'Ocultar' : 'Ver'} {parsedExtract.filas_descartadas.length} fila(s) omitida(s)
+                                        </button>
+                                    )}
+                                </div>
                             </div>
+
+                            {/* Sugerencias automáticas de cruces agrupados (N:1 / 1:N) */}
+                            {Array.isArray(parsedExtract.sugerencias_cruces_agrupados) && parsedExtract.sugerencias_cruces_agrupados.length > 0 && (
+                                <div style={{ padding: '0.65rem 0.85rem', borderRadius: 'var(--border-radius)', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.35)', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a5b4fc', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <Layers size={14} /> Sugerencias de Cruce Agrupado Detectadas ({parsedExtract.sugerencias_cruces_agrupados.length})
+                                    </div>
+                                    {parsedExtract.sugerencias_cruces_agrupados.map((sug, sIdx) => {
+                                        const applied = appliedSugerenciaIdxs.has(sIdx);
+                                        return (
+                                            <div key={sIdx} style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', padding: '0.45rem 0.6rem', borderRadius: '6px', background: 'rgba(0,0,0,0.2)', fontSize: '0.75rem' }}>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                    <div>
+                                                        <strong>{formatCruceTipoLabel(sug.tipo_cruce)} · {sug.direccion}</strong> · Monto: <strong>${formatMoney(sug.monto_total)}</strong>
+                                                    </div>
+                                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>
+                                                        {sug.nota_sugerida || `${(sug.libro_items || []).length} partida(s) libros ↔ ${(sug.banco_items || []).length} fila(s) banco`}
+                                                    </div>
+                                                </div>
+                                                {applied ? (
+                                                    <span style={{ color: '#10b981', fontWeight: 700 }}>✓ Aplicado</span>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        disabled={submitting}
+                                                        onClick={() => handleApplySugerenciaCruce(sug, sIdx)}
+                                                        className="btn-primary"
+                                                        style={{ height: '28px', padding: '0 0.7rem', fontSize: '0.74rem', background: '#10b981' }}
+                                                    >
+                                                        Aplicar Sugerencia
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {/* Constructor Manual de Cruce Agrupado dentro del Importador */}
+                            {showImportCruceBuilder && (
+                                <div style={{ padding: '0.75rem', borderRadius: 'var(--border-radius)', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'flex', flexDirection: 'column', gap: '0.6rem', fontSize: '0.76rem' }}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                                        <strong style={{ color: '#6ee7b7' }}>Constructor Manual de Cruce Agrupado (Extracto ↔ Pendientes Libros)</strong>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem', alignItems: 'center' }}>
+                                            <span>Banco ({importCruceSummary.selectedBank.length}): <strong>${formatMoney(importCruceSummary.sumBanco)}</strong></span>
+                                            <span>Libros ({importCruceSummary.selectedLibro.length}): <strong>${formatMoney(importCruceSummary.sumLibro)}</strong></span>
+                                            <span style={{ color: Math.abs(importCruceSummary.diff) <= 0.005 ? '#10b981' : '#f87171', fontWeight: 700 }}>
+                                                Dif: ${formatMoney(importCruceSummary.diff)}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                disabled={!importCruceSummary.isValid || submitting}
+                                                onClick={handleCreateManualImportCruce}
+                                                className="btn-primary"
+                                                style={{ height: '28px', padding: '0 0.75rem', fontSize: '0.74rem' }}
+                                            >
+                                                {importCruceSummary.tipoCruce ? `Crear Cruce ${formatCruceTipoLabel(importCruceSummary.tipoCruce)}` : 'Seleccione N:1 / 1:N / N:M'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="form-grid form-grid-2" style={{ gap: '0.65rem' }}>
+                                        <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.4rem' }}>
+                                            <div style={{ fontWeight: 700, marginBottom: '0.25rem', color: 'var(--text-muted)' }}>1. Filas del Extracto (sin procesar):</div>
+                                            {parsedExtract.transacciones.map((t, idx) => {
+                                                if (t.procesado || t.es_duplicado_probable) return null;
+                                                const checked = importCruceExtractIndices.has(idx);
+                                                return (
+                                                    <label key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0', cursor: 'pointer', fontSize: '0.74rem' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={checked}
+                                                            onChange={() => {
+                                                                setImportCruceExtractIndices(prev => {
+                                                                    const n = new Set(prev);
+                                                                    if (n.has(idx)) n.delete(idx);
+                                                                    else n.add(idx);
+                                                                    return n;
+                                                                });
+                                                            }}
+                                                            style={{ width: '16px', height: '16px' }}
+                                                        />
+                                                        <span>{t.fecha} · {t.tipo} · {t.documento || 'S/D'} · <strong>${formatMoney(t.monto)}</strong> — {String(t.descripcion || '').slice(0, 35)}</span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                        <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.4rem' }}>
+                                            <div style={{ fontWeight: 700, marginBottom: '0.25rem', color: 'var(--text-muted)' }}>2. Partidas Pendientes en Libros:</div>
+                                            {pendientes.map(p => {
+                                                const checked = importCruceLibroKeys.has(p.key);
+                                                return (
+                                                    <label key={p.key} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0', cursor: 'pointer', fontSize: '0.74rem' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={checked}
+                                                            onChange={() => {
+                                                                setImportCruceLibroKeys(prev => {
+                                                                    const n = new Set(prev);
+                                                                    if (n.has(p.key)) n.delete(p.key);
+                                                                    else n.add(p.key);
+                                                                    return n;
+                                                                });
+                                                            }}
+                                                            style={{ width: '16px', height: '16px' }}
+                                                        />
+                                                        <span>{p.fecha_display} · {getRowDirection(p)} · {p.origen_tipo}#{p.documento || p.id} · <strong>${formatMoney(p.monto_display || p.monto)}</strong></span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
                             {showDiscardedRows && parsedExtract.filas_descartadas?.length > 0 && (
                                 <div style={{ maxHeight: '110px', overflowY: 'auto', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', fontSize: '0.72rem' }}>
@@ -2259,10 +3772,10 @@ export default function ConciliacionBancaria() {
                             )}
 
                             <div className="table-responsive" style={{ maxHeight: '340px', overflowY: 'auto' }}>
-                                <table style={{ minWidth: '950px', width: '100%', fontSize: '0.78rem' }}>
+                                <table style={{ minWidth: '1000px', width: '100%', fontSize: '0.8rem' }}>
                                     <thead>
-                                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
-                                            <th style={{ width: '36px', textAlign: 'center', padding: '6px 4px' }}>
+                                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                            <th style={{ width: '36px', textAlign: 'center', padding: '0.45rem 0.5rem' }}>
                                                 <button
                                                     type="button"
                                                     onClick={handleSelectAllExtract}
@@ -2272,13 +3785,13 @@ export default function ConciliacionBancaria() {
                                                     <CheckSquare size={15} />
                                                 </button>
                                             </th>
-                                            <th style={{ padding: '6px' }}>FECHA</th>
-                                            <th style={{ padding: '6px' }}>DOC</th>
-                                            <th style={{ padding: '6px' }}>DESCRIPCIÓN EXTRACTO</th>
-                                            <th style={{ padding: '6px', textAlign: 'right' }}>MONTO</th>
-                                            <th style={{ padding: '6px', textAlign: 'center' }}>TIPO</th>
-                                            <th style={{ padding: '6px' }}>ESTADO DE CRUCE</th>
-                                            <th style={{ padding: '6px', textAlign: 'center' }}>ACCIÓN</th>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>FECHA</th>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>DOC</th>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>DESCRIPCIÓN / AUTOCLASIFICACIÓN</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>MONTO</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>TIPO</th>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>ESTADO DE CRUCE</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>ACCIÓN</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -2287,6 +3800,7 @@ export default function ConciliacionBancaria() {
                                             const isSelected = selectedExtractIndices.has(idx);
                                             const isDup = Boolean(t.es_duplicado_probable);
                                             const isDiffAlert = t.matchType === 'ALERTA_DIFERENCIA_MONTO';
+                                            const canInlineEdit = !t.procesado && !hasMatch && !isDup;
 
                                             return (
                                                 <tr
@@ -2306,7 +3820,7 @@ export default function ConciliacionBancaria() {
                                                                             : 'transparent'
                                                     }}
                                                 >
-                                                    <td style={{ textAlign: 'center', padding: '6px 4px' }}>
+                                                    <td style={{ textAlign: 'center', padding: '0.45rem 0.5rem' }}>
                                                         <button
                                                             type="button"
                                                             disabled={t.procesado || isDup}
@@ -2316,23 +3830,84 @@ export default function ConciliacionBancaria() {
                                                             {isSelected ? <CheckSquare size={15} /> : <Square size={15} />}
                                                         </button>
                                                     </td>
-                                                    <td style={{ padding: '6px', whiteSpace: 'nowrap' }}>{t.fecha}</td>
-                                                    <td style={{ padding: '6px', fontFamily: 'monospace', fontWeight: '600' }}>{t.documento || '-'}</td>
-                                                    <td style={{ padding: '6px', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={t.descripcion}>
-                                                        <div style={{ fontWeight: '500' }}>{t.descripcion}</div>
-                                                        {t.conceptoSugerido && t.conceptoSugerido !== t.descripcion && (
-                                                            <div style={{ fontSize: '0.72rem', color: 'var(--primary)', opacity: 0.9 }}>
-                                                                ↳ {t.conceptoSugerido}
+                                                    <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{t.fecha}</td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace', fontWeight: '600' }}>{t.documento || '-'}</td>
+                                                    <td style={{ padding: '0.45rem 0.5rem', maxWidth: '330px' }} title={t.descripcion}>
+                                                        <div style={{ fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.descripcion}</div>
+                                                        {t.regla_aplicada && (
+                                                            <div style={{ fontSize: '0.7rem', color: '#34d399', fontWeight: 700, marginTop: '2px' }}>
+                                                                Regla IA: {t.regla_aplicada.nombre}
                                                             </div>
                                                         )}
+                                                        {canInlineEdit ? (
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '4px' }}>
+                                                                <input
+                                                                    type="text"
+                                                                    value={t.concepto_limpio ?? t.conceptoSugerido ?? ''}
+                                                                    placeholder="Concepto limpio..."
+                                                                    onChange={e => updateExtractRowClassification(idx, { concepto_limpio: e.target.value.toUpperCase() })}
+                                                                    style={{ flex: '2 1 140px', height: '26px', fontSize: '0.72rem', padding: '0 0.4rem', textTransform: 'uppercase' }}
+                                                                />
+                                                                <input
+                                                                    type="text"
+                                                                    value={t.cod_cta || ''}
+                                                                    placeholder="Cód. Cta"
+                                                                    onChange={e => updateExtractRowClassification(idx, { cod_cta: e.target.value })}
+                                                                    style={{ width: '80px', height: '26px', fontSize: '0.72rem', padding: '0 0.4rem' }}
+                                                                />
+                                                                <input
+                                                                    type="text"
+                                                                    value={t.num_partida || ''}
+                                                                    placeholder="Partida"
+                                                                    onChange={e => updateExtractRowClassification(idx, { num_partida: e.target.value })}
+                                                                    style={{ width: '75px', height: '26px', fontSize: '0.72rem', padding: '0 0.4rem' }}
+                                                                />
+                                                            </div>
+                                                        ) : (
+                                                            <>
+                                                                {(t.concepto_limpio || (t.conceptoSugerido && t.conceptoSugerido !== t.descripcion)) && (
+                                                                    <div style={{ fontSize: '0.72rem', color: 'var(--primary)', opacity: 0.9 }}>
+                                                                        ↳ {t.concepto_limpio || t.conceptoSugerido}
+                                                                    </div>
+                                                                )}
+                                                                {(t.cod_cta || t.num_partida) && (
+                                                                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                                                        {t.cod_cta ? `Cta: ${t.cod_cta}` : ''}
+                                                                        {t.cod_cta && t.num_partida ? ' · ' : ''}
+                                                                        {t.num_partida ? `Partida: ${t.num_partida}` : ''}
+                                                                    </div>
+                                                                )}
+                                                            </>
+                                                        )}
                                                     </td>
-                                                    <td style={{ padding: '6px', textAlign: 'right', fontWeight: 'bold', color: t.tipo === 'CARGO' ? '#ef4444' : '#10b981', whiteSpace: 'nowrap' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 'bold', color: t.tipo === 'CARGO' ? '#ef4444' : '#10b981', whiteSpace: 'nowrap' }}>
                                                         ${formatMoney(t.monto)}
                                                     </td>
-                                                    <td style={{ padding: '6px', textAlign: 'center' }}>
-                                                        {renderTipoBadge(t.tipo_remesa_codigo || (t.tipo === 'CARGO' ? 'NC' : 'RM'))}
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                        {canInlineEdit && tiposRemesasCuenta.length > 0 ? (
+                                                            <select
+                                                                value={t.tipo_remesa_codigo || (t.tipo === 'CARGO' ? 'NC' : 'RM')}
+                                                                onChange={e => {
+                                                                    const cod = e.target.value;
+                                                                    const tr = tiposRemesasCuenta.find(r => String(r.codigo || r.id) === String(cod));
+                                                                    updateExtractRowClassification(idx, {
+                                                                        tipo_remesa_codigo: cod,
+                                                                        tipo_remesa_id: tr?.id || null
+                                                                    });
+                                                                }}
+                                                                style={{ height: '26px', fontSize: '0.72rem', padding: '0 0.35rem', width: '78px' }}
+                                                            >
+                                                                {tiposRemesasCuenta.map(tr => (
+                                                                    <option key={tr.codigo || tr.id} value={tr.codigo || tr.id}>
+                                                                        {tr.codigo || tr.id}
+                                                                    </option>
+                                                                ))}
+                                                            </select>
+                                                        ) : (
+                                                            renderTipoBadge(t.tipo_remesa_codigo || (t.tipo === 'CARGO' ? 'NC' : 'RM'))
+                                                        )}
                                                     </td>
-                                                    <td style={{ padding: '6px' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem' }}>
                                                         {t.procesado ? (
                                                             <span style={{ color: '#10b981', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
                                                                 <CheckCircle2 size={14} /> Conciliado en esta sesión
@@ -2353,7 +3928,7 @@ export default function ConciliacionBancaria() {
                                                             <span style={{ color: 'var(--text-muted)' }}>Nuevo (sin coincidencia)</span>
                                                         )}
                                                     </td>
-                                                    <td style={{ padding: '6px', textAlign: 'center' }}>
+                                                    <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                         {t.procesado ? (
                                                             <span style={{ color: '#10b981', fontWeight: '700', fontSize: '0.78rem' }}>✓ Listo</span>
                                                         ) : isDup ? (
@@ -2437,10 +4012,35 @@ export default function ConciliacionBancaria() {
                                 </div>
                             </div>
                             <div>
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Número de Partida:</span>
-                                <div>{selectedItem.num_partida || 'Sin partida'}</div>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Número de Partida / Cód. Cta:</span>
+                                <div>{selectedItem.num_partida || 'Sin partida'}{selectedItem.cod_cta ? ` · Cta: ${selectedItem.cod_cta}` : ''}</div>
                             </div>
                         </div>
+
+                        {selectedItem.origen_tipo === 'CK' && selectedItem.dias_circulacion !== undefined && selectedItem.dias_circulacion !== null && (
+                            <div style={{
+                                padding: '0.55rem 0.75rem',
+                                borderRadius: 'var(--border-radius)',
+                                background: getAgingBadgeMeta(selectedItem).bg,
+                                border: `1px solid ${getAgingBadgeMeta(selectedItem).border}`,
+                                color: getAgingBadgeMeta(selectedItem).color,
+                                fontSize: '0.8rem',
+                                fontWeight: 700,
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                flexWrap: 'wrap',
+                                gap: '0.5rem'
+                            }}>
+                                <span>Antigüedad en Circulación: {selectedItem.dias_circulacion} días</span>
+                                <span>{selectedItem.label || getAgingBadgeMeta(selectedItem).text}</span>
+                            </div>
+                        )}
+
+                        {selectedItem.cruce_id && (
+                            <div style={{ padding: '0.5rem 0.75rem', borderRadius: 'var(--border-radius)', background: 'rgba(99, 102, 241, 0.14)', border: '1px solid rgba(99, 102, 241, 0.35)', fontSize: '0.8rem', color: '#a5b4fc' }}>
+                                Vinculado al <strong>Cruce Agrupado #{selectedItem.cruce_id}</strong> ({formatCruceTipoLabel(selectedItem.cruce_tipo)})
+                            </div>
+                        )}
 
                         {selectedItem.beneficiario && (
                             <div>
@@ -2455,6 +4055,19 @@ export default function ConciliacionBancaria() {
                                 {selectedItem.concepto || '-'}
                             </div>
                         </div>
+
+                        {selectedItem.origen_tipo === 'MOV' && (selectedItem.comprobantes_count > 0 || selectedItem.comprobante_url || selectedItem.signed_url) && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => openReceiptLightbox(selectedItem, 0, 'Movimiento Bancario')}
+                                    className="btn-primary"
+                                    style={{ height: '36px', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem' }}
+                                >
+                                    <Paperclip size={15} /> Ver Comprobantes ({selectedItem.comprobantes_count || selectedItem.comprobantes?.length || 1})
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </Modal>
@@ -2521,11 +4134,11 @@ export default function ConciliacionBancaria() {
                         />
                     </div>
 
-                    <div style={{ display: 'flex', gap: '1rem', marginTop: '0.4rem' }}>
-                        <button type="button" onClick={() => setShowEditModal(false)} className="btn-secondary" style={{ flex: 1 }} disabled={submitting}>
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
+                        <button type="button" onClick={() => setShowEditModal(false)} className="btn-secondary" style={{ flex: '1 1 120px' }} disabled={submitting}>
                             Cancelar
                         </button>
-                        <button type="submit" className="btn-primary" style={{ flex: 2 }} disabled={submitting}>
+                        <button type="submit" className="btn-primary" style={{ flex: '2 1 160px' }} disabled={submitting}>
                             {submitting ? 'Guardando...' : 'Guardar Cambios'}
                         </button>
                     </div>
@@ -2546,28 +4159,28 @@ export default function ConciliacionBancaria() {
 
                     <div className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.84rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span>Saldo en Banco (Extracto):</span>
-                            <strong>${formatMoney(saldoBancoActual)}</strong>
+                            <span>Saldo Banco Real (Manual):</span>
+                            <strong>{formatSignedMoney(saldoBancoActual)}</strong>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span>Saldo en Chequera (Libros):</span>
-                            <span>${formatMoney(saldoChequeraActual)}</span>
+                            <span>Saldo Chequera (CK):</span>
+                            <span>{formatSignedMoney(saldoChequeraActual)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                             <span>(−) Abonos en Tránsito:</span>
-                            <span>${formatMoney(abonosEnTransito)}</span>
+                            <span>{formatSignedMoney(abonosEnTransito)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                             <span>(+) Cheques y Cargos en Tránsito:</span>
-                            <span>${formatMoney(cargosChequesEnTransito)}</span>
+                            <span>{formatSignedMoney(cargosChequesEnTransito)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border)', paddingTop: '0.4rem' }}>
-                            <span>Saldo Conciliado en Libros:</span>
-                            <strong>${formatMoney(saldoConciliadoLibros)}</strong>
+                            <span>Saldo Banco (Sistema / Conciliado):</span>
+                            <strong>{formatSignedMoney(saldoConciliadoLibros)}</strong>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', color: esDiferenciaCero ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
-                            <span>Diferencia Real:</span>
-                            <span>${formatMoney(diferenciaActual)}</span>
+                            <span>Diferencia (Real − Sistema):</span>
+                            <span>{formatSignedMoney(diferenciaActual)}</span>
                         </div>
                     </div>
 
@@ -2607,11 +4220,11 @@ export default function ConciliacionBancaria() {
                         </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: '1rem', marginTop: '0.25rem' }}>
-                        <button onClick={() => setShowValidationModal(false)} className="btn-secondary" style={{ flex: 1 }} disabled={submitting}>
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                        <button onClick={() => setShowValidationModal(false)} className="btn-secondary" style={{ flex: '1 1 120px' }} disabled={submitting}>
                             Cancelar
                         </button>
-                        <button onClick={handleGuardarValidacion} disabled={submitting} className="btn-primary" style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                        <button onClick={handleGuardarValidacion} disabled={submitting} className="btn-primary" style={{ flex: '2 1 160px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
                             <Check size={16} /> {submitting ? 'Guardando...' : (cerrarPeriodoCheck ? 'Validar y Cerrar Período' : 'Confirmar Validación')}
                         </button>
                     </div>
@@ -2653,7 +4266,7 @@ export default function ConciliacionBancaria() {
                         </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
                         <button
                             type="button"
                             onClick={() => setAssignTab('CREAR')}
@@ -2678,13 +4291,13 @@ export default function ConciliacionBancaria() {
                         <form onSubmit={handleSaveAssignCreate} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
                             <div>
                                 <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem', display: 'block' }}>Tipo de Operación:</label>
-                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <button
                                         type="button"
                                         onClick={() => setAssignFormData(prev => ({ ...prev, tipo: 'CARGO' }))}
                                         className={assignFormData.tipo === 'CARGO' ? 'btn-primary' : 'btn-secondary'}
                                         style={{
-                                            flex: 1,
+                                            flex: '1 1 140px',
                                             height: '36px',
                                             background: assignFormData.tipo === 'CARGO' ? '#dc2626' : undefined,
                                             color: '#fff',
@@ -2699,7 +4312,7 @@ export default function ConciliacionBancaria() {
                                         onClick={() => setAssignFormData(prev => ({ ...prev, tipo: 'ABONO' }))}
                                         className={assignFormData.tipo === 'ABONO' ? 'btn-primary' : 'btn-secondary'}
                                         style={{
-                                            flex: 1,
+                                            flex: '1 1 140px',
                                             height: '36px',
                                             background: assignFormData.tipo === 'ABONO' ? '#10b981' : undefined,
                                             color: '#fff',
@@ -2717,7 +4330,11 @@ export default function ConciliacionBancaria() {
                                     <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Tipo Documento / Remesa:</label>
                                     <select
                                         value={assignFormData.tipo_remesa_codigo}
-                                        onChange={e => setAssignFormData({ ...assignFormData, tipo_remesa_codigo: e.target.value })}
+                                        onChange={e => {
+                                            const cod = e.target.value;
+                                            const tr = opcionesTipoRemesa.find(o => String(o.codigo || o.id) === String(cod));
+                                            setAssignFormData({ ...assignFormData, tipo_remesa_codigo: cod, tipo_remesa_id: tr?.id || null });
+                                        }}
                                         style={{ width: '100%', height: '36px', borderRadius: 'var(--border-radius)', fontSize: '0.825rem' }}
                                     >
                                         {opcionesTipoRemesa.map(tr => (
@@ -2762,6 +4379,28 @@ export default function ConciliacionBancaria() {
                                     />
                                 </div>
 
+                                <div>
+                                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Código Cuenta Contable (opcional):</label>
+                                    <input
+                                        type="text"
+                                        value={assignFormData.cod_cta || ''}
+                                        onChange={e => setAssignFormData({ ...assignFormData, cod_cta: e.target.value })}
+                                        placeholder="Ej: 1102-01"
+                                        style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>No. Partida (opcional):</label>
+                                    <input
+                                        type="text"
+                                        value={assignFormData.num_partida || ''}
+                                        onChange={e => setAssignFormData({ ...assignFormData, num_partida: e.target.value })}
+                                        placeholder="Ej: P-2026-01"
+                                        style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                    />
+                                </div>
+
                                 <div className="span-2">
                                     <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>Monto ($):</label>
                                     <input
@@ -2802,11 +4441,11 @@ export default function ConciliacionBancaria() {
                                 </label>
                             </div>
 
-                            <div style={{ display: 'flex', gap: '1rem', marginTop: '0.25rem' }}>
-                                <button type="button" onClick={() => setShowAssignModal(false)} className="btn-secondary" style={{ flex: 1 }} disabled={submitting}>
+                            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                                <button type="button" onClick={() => setShowAssignModal(false)} className="btn-secondary" style={{ flex: '1 1 120px' }} disabled={submitting}>
                                     Cancelar
                                 </button>
-                                <button type="submit" disabled={submitting} className="btn-primary" style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontWeight: '700' }}>
+                                <button type="submit" disabled={submitting} className="btn-primary" style={{ flex: '2 1 160px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontWeight: '700' }}>
                                     <Check size={16} /> {submitting ? 'Guardando...' : 'Guardar y Conciliar'}
                                 </button>
                             </div>
@@ -2827,15 +4466,15 @@ export default function ConciliacionBancaria() {
                             </div>
 
                             <div className="table-responsive" style={{ maxHeight: '280px', overflowY: 'auto' }}>
-                                <table style={{ minWidth: '700px', width: '100%', fontSize: '0.78rem' }}>
+                                <table style={{ minWidth: '800px', width: '100%', fontSize: '0.8rem' }}>
                                     <thead>
-                                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
-                                            <th style={{ padding: '6px' }}>FECHA</th>
-                                            <th style={{ padding: '6px' }}>TIPO</th>
-                                            <th style={{ padding: '6px' }}>DOC</th>
-                                            <th style={{ padding: '6px' }}>CONCEPTO</th>
-                                            <th style={{ padding: '6px', textAlign: 'right' }}>MONTO</th>
-                                            <th style={{ padding: '6px', textAlign: 'center' }}>ACCIÓN</th>
+                                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>FECHA</th>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>TIPO</th>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>DOC</th>
+                                            <th style={{ padding: '0.45rem 0.5rem' }}>CONCEPTO</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>MONTO</th>
+                                            <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>ACCIÓN</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -2860,16 +4499,16 @@ export default function ConciliacionBancaria() {
                                                             background: isHighlighted ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
                                                         }}
                                                     >
-                                                        <td style={{ padding: '6px' }}>{p.fecha_display}</td>
-                                                        <td style={{ padding: '6px', textAlign: 'center' }}>{renderTipoBadge(p.tipo)}</td>
-                                                        <td style={{ padding: '6px', fontFamily: 'monospace', fontWeight: 'bold' }}>{p.documento || '-'}</td>
-                                                        <td style={{ padding: '6px', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.concepto}>
+                                                        <td style={{ padding: '0.45rem 0.5rem' }}>{p.fecha_display}</td>
+                                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>{renderTipoBadge(p.tipo)}</td>
+                                                        <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace', fontWeight: 'bold' }}>{p.documento || '-'}</td>
+                                                        <td style={{ padding: '0.45rem 0.5rem', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.concepto}>
                                                             {p.concepto}
                                                         </td>
-                                                        <td style={{ padding: '6px', textAlign: 'right', fontWeight: 'bold', color: esCargo ? '#ef4444' : '#10b981' }}>
+                                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 'bold', color: esCargo ? '#ef4444' : '#10b981' }}>
                                                             ${formatMoney(p.monto_display || p.monto)}
                                                         </td>
-                                                        <td style={{ padding: '6px', textAlign: 'center' }}>
+                                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                             <button
                                                                 type="button"
                                                                 disabled={submitting}
@@ -2931,9 +4570,9 @@ export default function ConciliacionBancaria() {
                         <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Cargando historial...</div>
                     ) : periodosTab === 'PERIODOS' ? (
                         <div className="table-responsive" style={{ maxHeight: '380px', overflowY: 'auto' }}>
-                            <table style={{ minWidth: '820px', width: '100%', fontSize: '0.78rem' }}>
+                            <table style={{ minWidth: '820px', width: '100%', fontSize: '0.8rem' }}>
                                 <thead>
-                                    <tr style={{ borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: '0.72rem' }}>
+                                    <tr style={{ borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: '0.74rem' }}>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Fecha Corte</th>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Estado</th>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right' }}>Banco</th>
@@ -2951,7 +4590,7 @@ export default function ConciliacionBancaria() {
                                             <td style={{ padding: '0.45rem 0.5rem', fontWeight: 700 }}>{p.fecha_corte_display || p.fecha_corte}</td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                 <span style={{
-                                                    fontSize: '0.7rem',
+                                                    fontSize: '0.72rem',
                                                     padding: '0.15rem 0.45rem',
                                                     borderRadius: '4px',
                                                     fontWeight: 700,
@@ -3002,9 +4641,9 @@ export default function ConciliacionBancaria() {
                         </div>
                     ) : periodosTab === 'SOLICITUDES' ? (
                         <div className="table-responsive" style={{ maxHeight: '380px', overflowY: 'auto' }}>
-                            <table style={{ minWidth: '850px', width: '100%', fontSize: '0.78rem' }}>
+                            <table style={{ minWidth: '850px', width: '100%', fontSize: '0.8rem' }}>
                                 <thead>
-                                    <tr style={{ borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: '0.72rem' }}>
+                                    <tr style={{ borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: '0.74rem' }}>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Cuenta / Corte</th>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Solicitante</th>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Motivo</th>
@@ -3028,7 +4667,7 @@ export default function ConciliacionBancaria() {
                                             <td style={{ padding: '0.45rem 0.5rem', maxWidth: '240px' }}>{s.motivo_solicitud}</td>
                                             <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                 <span style={{
-                                                    fontSize: '0.7rem',
+                                                    fontSize: '0.72rem',
                                                     padding: '0.15rem 0.45rem',
                                                     borderRadius: '4px',
                                                     fontWeight: 700,
@@ -3048,7 +4687,7 @@ export default function ConciliacionBancaria() {
                                                             onChange={e => setResolucionComentarios(prev => ({ ...prev, [s.id]: e.target.value }))}
                                                             style={{ height: '28px', fontSize: '0.74rem' }}
                                                         />
-                                                        <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                                                             <button
                                                                 type="button"
                                                                 disabled={submitting}
@@ -3082,9 +4721,9 @@ export default function ConciliacionBancaria() {
                         </div>
                     ) : (
                         <div className="table-responsive" style={{ maxHeight: '380px', overflowY: 'auto' }}>
-                            <table style={{ minWidth: '850px', width: '100%', fontSize: '0.76rem' }}>
+                            <table style={{ minWidth: '850px', width: '100%', fontSize: '0.8rem' }}>
                                 <thead>
-                                    <tr style={{ borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                    <tr style={{ borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: '0.74rem' }}>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Fecha/Hora</th>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Usuario</th>
                                         <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Acción</th>
@@ -3097,11 +4736,11 @@ export default function ConciliacionBancaria() {
                                         <tr><td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No hay eventos de auditoría registrados para esta cuenta.</td></tr>
                                     ) : auditoriaList.map(a => (
                                         <tr key={a.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                            <td style={{ padding: '0.4rem 0.5rem', whiteSpace: 'nowrap' }}>{formatSvDateTime(a.created_at)}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>{a.username || 'sistema'}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem' }}><code>{a.accion}</code></td>
-                                            <td style={{ padding: '0.4rem 0.5rem' }}>{a.entidad} #{a.entidad_id || '-'}</td>
-                                            <td style={{ padding: '0.4rem 0.5rem', maxWidth: '340px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={JSON.stringify({ motivo: a.motivo, before: a.before_json, after: a.after_json })}>
+                                            <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>{formatSvDateTime(a.created_at)}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontWeight: 600 }}>{a.username || 'sistema'}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem' }}><code>{a.accion}</code></td>
+                                            <td style={{ padding: '0.45rem 0.5rem' }}>{a.entidad} #{a.entidad_id || '-'}</td>
+                                            <td style={{ padding: '0.45rem 0.5rem', maxWidth: '340px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={JSON.stringify({ motivo: a.motivo, before: a.before_json, after: a.after_json })}>
                                                 {a.motivo || (a.after_json ? JSON.stringify(a.after_json).slice(0, 95) : JSON.stringify(a.before_json || {}).slice(0, 95))}
                                             </td>
                                         </tr>
@@ -3136,16 +4775,512 @@ export default function ConciliacionBancaria() {
                             style={{ width: '100%', padding: '0.5rem', fontSize: '0.84rem' }}
                         />
                     </div>
-                    <div style={{ display: 'flex', gap: '0.75rem' }}>
-                        <button type="button" onClick={() => setShowReaperturaModal(false)} className="btn-secondary" style={{ flex: 1 }} disabled={submitting}>
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <button type="button" onClick={() => setShowReaperturaModal(false)} className="btn-secondary" style={{ flex: '1 1 120px' }} disabled={submitting}>
                             Cancelar
                         </button>
-                        <button type="submit" className="btn-primary" style={{ flex: 2 }} disabled={submitting}>
+                        <button type="submit" className="btn-primary" style={{ flex: '2 1 160px' }} disabled={submitting}>
                             {submitting ? 'Enviando...' : 'Enviar Solicitud de Reapertura'}
                         </button>
                     </div>
                 </form>
             </Modal>
+
+            {/* ── MODAL 8: GESTOR DE REGLAS DE AUTOCLASIFICACIÓN IA ── */}
+            <Modal
+                open={showReglasModal}
+                onClose={() => setShowReglasModal(false)}
+                title="Reglas de Autoclasificación de Extractos (IA)"
+                size="lg"
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                    {reglaErrorAlert && (
+                        <div style={{
+                            padding: '0.6rem 0.85rem',
+                            borderRadius: 'var(--border-radius)',
+                            background: 'rgba(239, 68, 68, 0.14)',
+                            border: '1px solid rgba(239, 68, 68, 0.4)',
+                            color: '#fca5a5',
+                            fontSize: '0.8rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.45rem'
+                        }}>
+                            <AlertCircle size={16} />
+                            <span>{reglaErrorAlert}</span>
+                        </div>
+                    )}
+
+                    {/* Formulario Crear / Editar Regla */}
+                    <form onSubmit={handleSaveRegla} className="card glass" style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <strong style={{ fontSize: '0.85rem' }}>
+                                {editingReglaId ? `Editando Regla #${editingReglaId}` : 'Nueva Regla de Autoclasificación'}
+                            </strong>
+                            {editingReglaId && (
+                                <button type="button" onClick={resetReglaForm} className="btn-secondary" style={{ height: '28px', padding: '0 0.65rem', fontSize: '0.74rem' }}>
+                                    + Nueva Regla
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="form-grid form-grid-2" style={{ gap: '0.65rem' }}>
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Nombre de la Regla *:</label>
+                                <input
+                                    type="text"
+                                    required
+                                    maxLength={120}
+                                    value={reglaForm.nombre}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, nombre: e.target.value }))}
+                                    placeholder="Ej: Comisión Bancaria Mensual"
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                />
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Patrón de Coincidencia *:</label>
+                                <input
+                                    type="text"
+                                    required
+                                    maxLength={255}
+                                    value={reglaForm.patron}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, patron: e.target.value }))}
+                                    placeholder="Ej: COMISION POS | ^REMESA\\s+\\d+"
+                                    style={{ width: '100%', height: '36px', fontFamily: 'monospace', fontSize: '0.825rem' }}
+                                />
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Tipo de Match:</label>
+                                <select
+                                    value={reglaForm.tipo_match}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, tipo_match: e.target.value }))}
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                >
+                                    <option value="CONTAINS">CONTAINS (Contiene texto)</option>
+                                    <option value="STARTS_WITH">STARTS_WITH (Comienza con)</option>
+                                    <option value="EXACT">EXACT (Coincidencia exacta)</option>
+                                    <option value="REGEX">REGEX (Expresión regular segura)</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Aplica a Tipo Movimiento:</label>
+                                <select
+                                    value={reglaForm.tipo_movimiento}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, tipo_movimiento: e.target.value }))}
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                >
+                                    <option value="AMBOS">AMBOS (Cargo y Abono)</option>
+                                    <option value="CARGO">CARGO (Solo salidas)</option>
+                                    <option value="ABONO">ABONO (Solo entradas)</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Alcance Cuenta Bancaria (opcional):</label>
+                                <select
+                                    value={reglaForm.cuenta_bancaria_id}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, cuenta_bancaria_id: e.target.value }))}
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                >
+                                    <option value="">-- Global / Por Banco --</option>
+                                    {sortCuentas(cuentas).map(c => (
+                                        <option key={c.id} value={c.id}>
+                                            {formatCuentaLabel(c)}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Alcance Banco Código (opcional):</label>
+                                <input
+                                    type="text"
+                                    value={reglaForm.banco_codigo}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, banco_codigo: e.target.value.toUpperCase() }))}
+                                    placeholder="Ej: PROMERICA, BAC, AGRICOLA"
+                                    style={{ width: '100%', height: '36px', textTransform: 'uppercase', fontSize: '0.825rem' }}
+                                />
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Tipo Remesa Destino:</label>
+                                <select
+                                    value={reglaForm.tipo_remesa_id}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, tipo_remesa_id: e.target.value }))}
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                >
+                                    <option value="">-- Sin asignar --</option>
+                                    {tiposRemesas.map(tr => (
+                                        <option key={tr.id || tr.codigo} value={tr.id || ''}>
+                                            {tr.codigo} - {tr.descripcion}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Código Cuenta Contable (`cod_cta`):</label>
+                                <input
+                                    type="text"
+                                    value={reglaForm.cod_cta}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, cod_cta: e.target.value }))}
+                                    placeholder="Ej: 5103-02"
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                />
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Concepto Limpio Asignado:</label>
+                                <input
+                                    type="text"
+                                    value={reglaForm.concepto_limpio}
+                                    onChange={e => setReglaForm(prev => ({ ...prev, concepto_limpio: e.target.value.toUpperCase() }))}
+                                    placeholder="Ej: COMISION BANCARIA POS"
+                                    style={{ width: '100%', height: '36px', textTransform: 'uppercase', fontSize: '0.825rem' }}
+                                />
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                <div style={{ width: '115px' }}>
+                                    <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Prioridad:</label>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={99999}
+                                        value={reglaForm.prioridad}
+                                        onChange={e => setReglaForm(prev => ({ ...prev, prioridad: e.target.value }))}
+                                        style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                    />
+                                </div>
+                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer', userSelect: 'none', height: '36px' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(reglaForm.activo)}
+                                        onChange={e => setReglaForm(prev => ({ ...prev, activo: e.target.checked ? 1 : 0 }))}
+                                        style={{ width: '16px', height: '16px' }}
+                                    />
+                                    <span>Activa</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        {/* Probador en Vivo de Reglas */}
+                        <div style={{ padding: '0.6rem 0.75rem', borderRadius: '6px', background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(37, 99, 235, 0.25)', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                            <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#93c5fd' }}>Probador en Vivo de Patrón / Regla:</div>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                                <input
+                                    type="text"
+                                    value={testReglaDescripcion}
+                                    onChange={e => setTestReglaDescripcion(e.target.value)}
+                                    placeholder="Pega una descripción bancaria de prueba..."
+                                    style={{ flex: '2 1 200px', height: '34px', fontSize: '0.8rem' }}
+                                />
+                                <select
+                                    value={testReglaTipo}
+                                    onChange={e => setTestReglaTipo(e.target.value)}
+                                    style={{ width: '115px', height: '34px', fontSize: '0.8rem' }}
+                                >
+                                    <option value="CARGO">CARGO</option>
+                                    <option value="ABONO">ABONO</option>
+                                </select>
+                                <button
+                                    type="button"
+                                    disabled={testingRegla}
+                                    onClick={handleTestRegla}
+                                    className="btn-secondary"
+                                    style={{ height: '34px', padding: '0 0.85rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                >
+                                    <Play size={13} /> {testingRegla ? 'Probando...' : 'Probar Regla'}
+                                </button>
+                            </div>
+                            {testReglaResult && (
+                                <div style={{ fontSize: '0.75rem', paddingTop: '0.2rem' }}>
+                                    {(testReglaResult.resultados || []).map((r, i) => (
+                                        <div key={i} style={{ color: r.regla_aplicada ? '#34d399' : '#fbbf24' }}>
+                                            {r.regla_aplicada
+                                                ? `✓ Coincidió (${r.regla_aplicada.nombre}) → Remesa: ${r.tipo_remesa_codigo || '-'} | Concepto: ${r.concepto_limpio || '-'} | Cta: ${r.cod_cta || '-'}`
+                                                : `Sin coincidencia (evaluadas ${testReglaResult.reglas_evaluadas || 0} regla(s))`}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <button type="button" onClick={resetReglaForm} className="btn-secondary" style={{ height: '36px', fontSize: '0.8rem' }} disabled={submitting}>
+                                Limpiar
+                            </button>
+                            <button type="submit" className="btn-primary" style={{ height: '36px', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }} disabled={submitting}>
+                                <Check size={15} /> {editingReglaId ? 'Actualizar Regla' : 'Guardar Regla'}
+                            </button>
+                        </div>
+                    </form>
+
+                    {/* Filtros de Lista de Reglas */}
+                    <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <select
+                            value={reglasFilterCuenta}
+                            onChange={e => setReglasFilterCuenta(e.target.value)}
+                            style={{ flex: '2 1 200px', height: '34px', fontSize: '0.8rem' }}
+                        >
+                            <option value="">Todas las Cuentas</option>
+                            {sortCuentas(cuentas).map(c => (
+                                <option key={c.id} value={c.id}>{formatCuentaLabel(c)}</option>
+                            ))}
+                        </select>
+                        <input
+                            type="text"
+                            value={reglasFilterBanco}
+                            onChange={e => setReglasFilterBanco(e.target.value)}
+                            placeholder="Filtrar por banco código..."
+                            style={{ flex: '1 1 140px', height: '34px', fontSize: '0.8rem' }}
+                        />
+                        {(reglasFilterCuenta || reglasFilterBanco) && (
+                            <button
+                                type="button"
+                                onClick={() => { setReglasFilterCuenta(''); setReglasFilterBanco(''); }}
+                                className="btn-secondary"
+                                style={{ height: '34px', padding: '0 0.75rem', fontSize: '0.78rem' }}
+                            >
+                                Limpiar Filtros
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Tabla de Reglas */}
+                    <div className="table-responsive" style={{ maxHeight: '260px', overflowY: 'auto' }}>
+                        <table style={{ minWidth: '840px', width: '100%', fontSize: '0.8rem' }}>
+                            <thead>
+                                <tr style={{ borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: '0.74rem' }}>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Regla / Alcance</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Patrón / Match</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Mov.</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left' }}>Destino (Remesa / Concepto / Cta)</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Prior.</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Estado</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loadingReglas ? (
+                                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>Cargando reglas...</td></tr>
+                                ) : filteredReglas.length === 0 ? (
+                                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>No hay reglas registradas con este filtro.</td></tr>
+                                ) : filteredReglas.map(r => (
+                                    <tr key={r.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                        <td style={{ padding: '0.45rem 0.5rem' }}>
+                                            <div style={{ fontWeight: 700 }}>{r.nombre}</div>
+                                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                {r.cuenta_bancaria_id
+                                                    ? `Cuenta: ${r.cuenta_numero || r.cuenta_bancaria_id}`
+                                                    : (r.banco_codigo ? `Banco: ${r.banco_codigo}` : 'Global')}
+                                            </div>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem' }}>
+                                            <code style={{ fontSize: '0.74rem' }}>{r.patron}</code>
+                                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{r.tipo_match}</div>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>{r.tipo_movimiento}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem' }}>
+                                            <div>{r.tipo_remesa_codigo || '-'} · {r.concepto_limpio || '-'}</div>
+                                            {r.cod_cta && <div style={{ color: 'var(--text-muted)' }}>Cta: {r.cod_cta}</div>}
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontWeight: 700 }}>{r.prioridad}</td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                            <span style={{
+                                                fontSize: '0.72rem',
+                                                padding: '0.15rem 0.45rem',
+                                                borderRadius: '4px',
+                                                fontWeight: 700,
+                                                background: r.activo ? 'rgba(16,185,129,0.18)' : 'rgba(239,68,68,0.18)',
+                                                color: r.activo ? '#34d399' : '#f87171'
+                                            }}>
+                                                {r.activo ? 'ACTIVA' : 'INACTIVA'}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                            <div style={{ display: 'inline-flex', gap: '0.35rem' }}>
+                                                <button type="button" onClick={() => handleEditRegla(r)} className="icon-btn" title="Editar regla" style={{ padding: '4px' }}>
+                                                    <Edit2 size={14} />
+                                                </button>
+                                                <button type="button" onClick={() => handleDeleteRegla(r)} className="icon-btn" title="Eliminar regla" style={{ padding: '4px', color: '#ef4444' }}>
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* ── MODAL 9: CRUCE AGRUPADO (N:1 / 1:N / N:M) DESDE PENDIENTES ── */}
+            <Modal
+                open={showCruceModal}
+                onClose={() => setShowCruceModal(false)}
+                title="Cruce Agrupado (N:1 / 1:N / N:M)"
+                size="lg"
+            >
+                <form onSubmit={handleSubmitCruceModal} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
+                        <button
+                            type="button"
+                            onClick={() => setCruceBancoMode('EXTRACTO')}
+                            className={cruceBancoMode === 'EXTRACTO' ? 'btn-primary' : 'btn-secondary'}
+                            style={{ height: '32px', padding: '0 0.85rem', fontSize: '0.78rem' }}
+                        >
+                            Contra Movimiento del Banco (Extracto)
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setCruceBancoMode('PENDIENTE')}
+                            className={cruceBancoMode === 'PENDIENTE' ? 'btn-primary' : 'btn-secondary'}
+                            style={{ height: '32px', padding: '0 0.85rem', fontSize: '0.78rem' }}
+                        >
+                            Contra Partidas Pendientes (Misma Dirección)
+                        </button>
+                    </div>
+
+                    <div>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 700, marginBottom: '0.3rem', color: 'var(--text-muted)' }}>
+                            1. Partidas en Libros Seleccionadas ({cruceModalSummary.libroItems.length}):
+                        </div>
+                        <div style={{ maxHeight: '170px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', padding: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            {pendientes.map(p => {
+                                const checked = cruceLibroKeys.has(p.key);
+                                return (
+                                    <label key={p.key} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', cursor: 'pointer', userSelect: 'none' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => {
+                                                setCruceLibroKeys(prev => {
+                                                    const n = new Set(prev);
+                                                    if (n.has(p.key)) n.delete(p.key);
+                                                    else n.add(p.key);
+                                                    return n;
+                                                });
+                                            }}
+                                            style={{ width: '16px', height: '16px' }}
+                                        />
+                                        <span>{p.fecha_display} · {getRowDirection(p)} · {p.origen_tipo}#{p.documento || p.id} · <strong>${formatMoney(p.monto_display || p.monto)}</strong> — {p.concepto}</span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {cruceBancoMode === 'EXTRACTO' ? (
+                        <div className="form-grid form-grid-2" style={{ gap: '0.75rem' }}>
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Monto Banco ($)*:</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    required
+                                    value={cruceManualBanco.monto_banco}
+                                    onChange={e => setCruceManualBanco(prev => ({ ...prev, monto_banco: e.target.value }))}
+                                    style={{ width: '100%', height: '36px', fontWeight: 700, fontSize: '0.88rem' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Fecha Aplicado*:</label>
+                                <input
+                                    type="date"
+                                    required
+                                    value={cruceManualBanco.fecha_aplicado}
+                                    onChange={e => setCruceManualBanco(prev => ({ ...prev, fecha_aplicado: e.target.value }))}
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Referencia / Doc. Banco:</label>
+                                <input
+                                    type="text"
+                                    value={cruceManualBanco.referencia_banco}
+                                    onChange={e => setCruceManualBanco(prev => ({ ...prev, referencia_banco: e.target.value.toUpperCase() }))}
+                                    placeholder="Ej: LOTE-9001"
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>Concepto Banco / Notas:</label>
+                                <input
+                                    type="text"
+                                    value={cruceManualBanco.concepto_banco}
+                                    onChange={e => setCruceManualBanco(prev => ({ ...prev, concepto_banco: e.target.value }))}
+                                    placeholder="Ej: Liquidación agrupada POS"
+                                    style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
+                                />
+                            </div>
+                        </div>
+                    ) : (
+                        <div>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 700, marginBottom: '0.3rem', color: 'var(--text-muted)' }}>
+                                2. Partidas Lado Banco ({cruceModalSummary.bancoItemsPayload.length}):
+                            </div>
+                            <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--border-radius)', padding: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                {pendientes.filter(p => !cruceLibroKeys.has(p.key)).map(p => {
+                                    const checked = cruceBancoPendingKeys.has(p.key);
+                                    return (
+                                        <label key={p.key} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', cursor: 'pointer', userSelect: 'none' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={() => {
+                                                    setCruceBancoPendingKeys(prev => {
+                                                        const n = new Set(prev);
+                                                        if (n.has(p.key)) n.delete(p.key);
+                                                        else n.add(p.key);
+                                                        return n;
+                                                    });
+                                                }}
+                                                style={{ width: '16px', height: '16px' }}
+                                            />
+                                            <span>{p.fecha_display} · {getRowDirection(p)} · {p.origen_tipo}#{p.documento || p.id} · <strong>${formatMoney(p.monto_display || p.monto)}</strong> — {p.concepto}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="card glass" style={{ padding: '0.7rem 0.9rem', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '0.65rem', fontSize: '0.8rem' }}>
+                        <span>Suma Libros: <strong>${formatMoney(cruceModalSummary.sumLibro)}</strong></span>
+                        <span>Suma Banco: <strong>${formatMoney(cruceModalSummary.sumBanco)}</strong></span>
+                        <span style={{ color: Math.abs(cruceModalSummary.diff) <= 0.005 ? '#10b981' : '#f87171', fontWeight: 800 }}>
+                            Diferencia: ${formatMoney(cruceModalSummary.diff)}
+                        </span>
+                        <span style={{ color: cruceModalSummary.sameDirection ? '#93c5fd' : '#f87171' }}>
+                            {!cruceModalSummary.sameDirection
+                                ? 'Las partidas deben ser todas CARGO o todas ABONO'
+                                : (cruceModalSummary.tipoCruce ? `Tipo: ${formatCruceTipoLabel(cruceModalSummary.tipoCruce)} (${cruceModalSummary.direccion})` : 'Seleccione N:1, 1:N o N:M')}
+                        </span>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <button type="button" onClick={() => setShowCruceModal(false)} className="btn-secondary" style={{ flex: '1 1 120px' }} disabled={submitting}>
+                            Cancelar
+                        </button>
+                        <button type="submit" className="btn-primary" style={{ flex: '2 1 160px' }} disabled={!cruceModalSummary.isValid || submitting}>
+                            {submitting ? 'Registrando Cruce...' : 'Confirmar Cruce Agrupado'}
+                        </button>
+                    </div>
+                </form>
+            </Modal>
+
+            <ReceiptViewerModal
+                open={viewerOpen}
+                onClose={() => setViewerOpen(false)}
+                comprobantes={viewerItems}
+                initialIndex={viewerIdx}
+                title={viewerTitle}
+            />
 
             <ReportPreviewModal
                 isOpen={showPdfPreview}
@@ -3153,7 +5288,7 @@ export default function ConciliacionBancaria() {
                 pdfSource={previewPdfBlob}
                 title={previewTitle}
                 subtitle={previewSubtitle}
-                badge={activeTab === 'MOVIMIENTOS' ? 'CONCILIADOS' : (activeTab === 'CONTROL_PAGOS' ? 'CONTROL PAGOS' : 'PENDIENTES')}
+                badge={activeTab === 'MOVIMIENTOS' ? 'CONCILIADOS' : (activeTab === 'CONTROL_PAGOS' ? 'CONTROL PAGOS' : (activeTab === 'CRUCES' ? 'CRUCES' : 'PENDIENTES'))}
                 totalPages={previewTotalPages}
                 fileName={previewFileName}
             />

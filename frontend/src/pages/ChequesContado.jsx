@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Search, FileText, CheckCircle, CreditCard, RefreshCw, Check, Unlink, Edit2 } from 'lucide-react';
+import { Search, CheckCircle, CreditCard, RefreshCw, Check, Unlink, Edit2 } from 'lucide-react';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
+import { moneyFmt } from '../utils/format';
 
 const ToggleSwitch = ({ checked, onChange }) => (
     <button
@@ -59,6 +60,8 @@ const ChequesContado = () => {
     const [chequeNum, setChequeNum] = useState('');
     const [cuentaSelected, setCuentaSelected] = useState('');
     const [registrarEnBancos, setRegistrarEnBancos] = useState(false);
+    const [cuentaResumen, setCuentaResumen] = useState(null);
+    const [loadingResumen, setLoadingResumen] = useState(false);
 
     useEffect(() => {
         fetchEstaciones();
@@ -98,12 +101,47 @@ const ChequesContado = () => {
         }
     };
 
+    const notifyTalonarioAlerta = (alerta) => {
+        if (!alerta) return;
+        const serieTxt = alerta.serie ? ` (${alerta.serie})` : '';
+        if (alerta.agotado) {
+            addToast(`Talonario${serieTxt} agotado (hasta #${alerta.hasta}). Registre un nuevo talonario.`, 'warning');
+        } else {
+            addToast(`Talonario${serieTxt} con stock bajo: quedan ${alerta.restantes} cheque(s) (hasta #${alerta.hasta}).`, 'warning');
+        }
+    };
+
+    const handleCuentaChange = async (cuentaId, modeOverride = null) => {
+        setCuentaSelected(cuentaId);
+        if (!cuentaId) {
+            setCuentaResumen(null);
+            return;
+        }
+        setLoadingResumen(true);
+        try {
+            const res = await api.get('/cheques/cuenta-resumen', {
+                params: { cuenta_bancaria_id: cuentaId }
+            });
+            const summary = res.data || null;
+            setCuentaResumen(summary);
+            const activeMode = modeOverride || modalMode;
+            if (summary?.siguiente_correlativo && (activeMode === 'generar' || !chequeNum.trim())) {
+                setChequeNum(String(summary.siguiente_correlativo));
+            }
+        } catch (e) {
+            setCuentaResumen(null);
+        } finally {
+            setLoadingResumen(false);
+        }
+    };
+
     const openModal = (sol, mode = 'asignar') => {
         setSelectedSolicitud(sol);
         setModalMode(mode);
         setChequeNum(sol.num_cheque && sol.num_cheque.trim() !== '' ? sol.num_cheque.trim() : '');
         setCuentaSelected('');
         setRegistrarEnBancos(false);
+        setCuentaResumen(null);
         setShowModal(true);
     };
 
@@ -116,16 +154,22 @@ const ChequesContado = () => {
 
         setSubmitting(true);
         try {
-            await api.post('/cheques/contado/marcar-emitido', {
+            const res = await api.post('/cheques/contado/marcar-emitido', {
                 llave: selectedSolicitud.llave,
+                estacion_solicitud: estacion,
                 id_empresa: estacion,
                 cheque_num: chequeNum.trim(),
-                cuenta_bancaria_id: registrarEnBancos ? cuentaSelected : null,
-                registrar_en_bancos: registrarEnBancos
+                cuenta_bancaria_id: registrarEnBancos ? Number(cuentaSelected) : null,
+                registrar_en_bancos: registrarEnBancos,
+                a_nombre: selectedSolicitud?.nombre || '',
+                chequera_id: registrarEnBancos ? (cuentaResumen?.talonario_activo?.id || null) : null
             }, {
                 headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
             });
             addToast(`Solicitud marcada con el cheque #${chequeNum.trim()}`, 'success');
+            if (res.data?.talonario_alerta) {
+                notifyTalonarioAlerta(res.data.talonario_alerta);
+            }
             setShowModal(false);
             handleConsultar();
         } catch (e) {
@@ -145,19 +189,25 @@ const ChequesContado = () => {
 
         setSubmitting(true);
         try {
-            await api.post('/cheques/contado/generar', {
+            const res = await api.post('/cheques/contado/generar', {
                 llave: selectedSolicitud.llave,
+                estacion_solicitud: estacion,
+                cuenta_bancaria_id: Number(cuenta.corr),
                 id_empresa: cuenta.empresa_codigo,
                 numero_cuenta: cuenta.numero,
                 cheque_num: chequeNum.trim(),
                 fecha: selectedSolicitud.fecha,
                 valor: selectedSolicitud.monto,
                 a_nombre: selectedSolicitud.nombre,
-                concepto: 'PAGO A PROVEEDOR (CONTADO)'
+                concepto: 'PAGO A PROVEEDOR (CONTADO)',
+                chequera_id: cuentaResumen?.talonario_activo?.id || null
             }, {
                 headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
             });
             addToast('Cheque generado exitosamente', 'success');
+            if (res.data?.talonario_alerta) {
+                notifyTalonarioAlerta(res.data.talonario_alerta);
+            }
             setShowModal(false);
             handleConsultar();
         } catch (e) {
@@ -222,19 +272,95 @@ const ChequesContado = () => {
 
     const isPending = (sol) => !sol.num_cheque || sol.num_cheque.trim() === '';
 
+    const renderCuentaResumenChip = () => {
+        if (!cuentaSelected) return null;
+        if (loadingResumen) {
+            return (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Consultando saldo de chequera y correlativo...
+                </div>
+            );
+        }
+        if (!cuentaResumen) return null;
+        const saldo = Number(cuentaResumen.saldo_chequera || 0);
+        const tal = cuentaResumen.talonario_activo;
+        return (
+            <div style={{
+                marginTop: '0.45rem',
+                padding: '0.45rem 0.65rem',
+                borderRadius: '6px',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '0.5rem 0.85rem',
+                alignItems: 'center',
+                fontSize: '0.76rem'
+            }}>
+                <span>
+                    Saldo Chequera:{' '}
+                    <strong style={{ color: saldo < 0 ? '#ef4444' : '#10b981' }}>
+                        {moneyFmt(saldo)}
+                    </strong>
+                </span>
+                <span style={{ color: 'var(--text-muted)' }}>
+                    Último #: <strong style={{ color: 'var(--text)' }}>{cuentaResumen.ultimo_numero_cheque || 'N/A'}</strong>
+                </span>
+                {cuentaResumen.siguiente_correlativo && (
+                    <button
+                        type="button"
+                        onClick={() => setChequeNum(String(cuentaResumen.siguiente_correlativo))}
+                        title="Aplicar número de cheque sugerido"
+                        style={{
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '9999px',
+                            border: '1px solid rgba(59,130,246,0.35)',
+                            background: 'rgba(59,130,246,0.12)',
+                            color: '#60a5fa',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Sugerido: #{cuentaResumen.siguiente_correlativo}
+                    </button>
+                )}
+                {tal && (
+                    <span
+                        className="badge"
+                        style={{
+                            fontSize: '0.72rem',
+                            padding: '0.15rem 0.45rem',
+                            background: tal.agotado ? 'rgba(239,68,68,0.15)' : (tal.stock_bajo ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.15)'),
+                            color: tal.agotado ? '#ef4444' : (tal.stock_bajo ? '#f59e0b' : '#10b981'),
+                            border: `1px solid ${tal.agotado ? 'rgba(239,68,68,0.3)' : (tal.stock_bajo ? 'rgba(245,158,11,0.3)' : 'rgba(16,185,129,0.3)')}`
+                        }}
+                    >
+                        Talonario{tal.serie ? ` ${tal.serie}` : ''}: {tal.disponibles} disp.
+                    </span>
+                )}
+            </div>
+        );
+    };
+
     return (
-        <div style={{ animation: 'fadeIn 0.5s ease-out' }}>
-            <div className="page-header">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', animation: 'fadeIn 0.5s ease-out' }}>
+            <div className="page-header" style={{ marginBottom: '0.5rem' }}>
                 <div>
-                    <h1 style={{ color: 'var(--primary)', marginBottom: '0.25rem' }}>Emisión de Cheques de Contado</h1>
-                    <p style={{ color: 'var(--text-muted)' }}>Generar cheques a partir de solicitudes de pago de contado.</p>
+                    <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.25rem', margin: 0, color: 'var(--primary)' }}>
+                        <CreditCard size={22} color="var(--primary)" />
+                        Emisión de Cheques de Contado
+                    </h1>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0.2rem 0 0 0' }}>
+                        Generar cheques a partir de solicitudes de pago de contado.
+                    </p>
                 </div>
             </div>
 
-            <div className="card glass" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div className="card glass" style={{ padding: '1rem 1.25rem', display: 'flex', gap: '0.85rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: '1 1 220px', flexWrap: 'wrap' }}>
                     <label style={{ fontSize: '0.8rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>ESTACIÓN</label>
-                    <select value={estacion} onChange={e => setEstacion(e.target.value)} style={{ width: '100%', maxWidth: '280px', height: '36px', fontSize: '0.825rem' }}>
+                    <select value={estacion} onChange={e => setEstacion(e.target.value)} style={{ flex: '1 1 180px', maxWidth: '300px', height: '36px', fontSize: '0.825rem' }}>
                         <option value="">Seleccione...</option>
                         {estaciones.map(emp => (
                             <option key={emp.id} value={emp.id}>{emp.id} - {emp.nombre}</option>
@@ -244,7 +370,7 @@ const ChequesContado = () => {
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                     <ToggleSwitch checked={soloPendientes} onChange={setSoloPendientes} />
-                    <span style={{ fontSize: '0.85rem', color: soloPendientes ? 'var(--primary)' : 'var(--text-muted)' }}>
+                    <span style={{ fontSize: '0.825rem', color: soloPendientes ? 'var(--primary)' : 'var(--text-muted)' }}>
                         Solo pendientes
                     </span>
                 </div>
@@ -274,15 +400,15 @@ const ChequesContado = () => {
                 </button>
 
                 {solicitudes.length > 0 && (
-                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                         <span>Total: <strong style={{ color: 'var(--text)' }}>{solicitudes.length}</strong></span>
                         <span>Suma: <strong style={{ color: 'var(--primary)' }}>{fmtMonto(solicitudes.reduce((acc, s) => acc + Number(s.monto || 0), 0))}</strong></span>
                     </div>
                 )}
             </div>
 
-            <div className="card glass table-responsive">
-                <table style={{ width: '100%', minWidth: '850px', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+            <div className="card glass table-responsive" style={{ padding: 0 }}>
+                <table style={{ width: '100%', minWidth: '850px', borderCollapse: 'collapse', fontSize: '0.8rem', marginTop: 0 }}>
                     <thead>
                         <tr style={{ backgroundColor: 'rgba(0,0,0,0.2)', textAlign: 'left' }}>
                             <th style={{ padding: '0.45rem 0.5rem', color: 'var(--text-muted)', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Fecha</th>
@@ -329,8 +455,8 @@ const ChequesContado = () => {
                                                 <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>{sol.num_cheque}</span>
                                                 {sol.matched_local && (
                                                     <span style={{
-                                                        fontSize: '0.68rem',
-                                                        padding: '0.1rem 0.35rem',
+                                                        fontSize: '0.72rem',
+                                                        padding: '0.15rem 0.45rem',
                                                         borderRadius: '4px',
                                                         background: 'rgba(59, 130, 246, 0.15)',
                                                         color: '#3b82f6',
@@ -344,7 +470,7 @@ const ChequesContado = () => {
                                     </td>
                                     <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                         {isPending(sol) ? (
-                                            <div style={{ display: 'inline-flex', gap: '0.35rem', justifyContent: 'center' }}>
+                                            <div style={{ display: 'inline-flex', gap: '0.35rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                                                 <button
                                                     type="button"
                                                     onClick={() => openModal(sol, 'asignar')}
@@ -383,7 +509,7 @@ const ChequesContado = () => {
                                                 </button>
                                             </div>
                                         ) : (
-                                            <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center', justifyContent: 'center' }}>
+                                            <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
                                                 <button
                                                     type="button"
                                                     onClick={() => openModal(sol, 'asignar')}
@@ -446,7 +572,7 @@ const ChequesContado = () => {
                 }
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.6rem' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.6rem' }}>
                         <button
                             type="button"
                             onClick={() => setModalMode('asignar')}
@@ -465,7 +591,12 @@ const ChequesContado = () => {
                         </button>
                         <button
                             type="button"
-                            onClick={() => setModalMode('generar')}
+                            onClick={() => {
+                                setModalMode('generar');
+                                if (cuentaSelected && cuentaResumen?.siguiente_correlativo && !chequeNum.trim()) {
+                                    setChequeNum(String(cuentaResumen.siguiente_correlativo));
+                                }
+                            }}
                             style={{
                                 padding: '0.4rem 0.85rem',
                                 fontSize: '0.8rem',
@@ -533,7 +664,7 @@ const ChequesContado = () => {
                                     <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuenta Bancaria *</label>
                                     <select
                                         value={cuentaSelected}
-                                        onChange={e => setCuentaSelected(e.target.value)}
+                                        onChange={e => handleCuentaChange(e.target.value, 'asignar')}
                                         style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
                                     >
                                         <option value="">Seleccione cuenta...</option>
@@ -543,6 +674,7 @@ const ChequesContado = () => {
                                             </option>
                                         ))}
                                     </select>
+                                    {renderCuentaResumenChip()}
                                 </div>
                             )}
 
@@ -565,7 +697,7 @@ const ChequesContado = () => {
                                 <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cuenta Bancaria *</label>
                                 <select
                                     value={cuentaSelected}
-                                    onChange={e => setCuentaSelected(e.target.value)}
+                                    onChange={e => handleCuentaChange(e.target.value, 'generar')}
                                     style={{ width: '100%', height: '36px', fontSize: '0.825rem' }}
                                 >
                                     <option value="">Seleccione cuenta...</option>
@@ -575,6 +707,7 @@ const ChequesContado = () => {
                                         </option>
                                     ))}
                                 </select>
+                                {renderCuentaResumenChip()}
                             </div>
 
                             <div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import { Printer, Search, FileText, CheckSquare, Square, AlertCircle } from 'lucide-react';
 import DesignerService from '../modules/check-designer/services/DesignerService';
 import CheckPdfService from '../modules/check-designer/services/CheckPdfService';
@@ -9,6 +10,26 @@ import ReportPreviewModal from '../components/ReportPreviewModal';
 import { formatCuentaLabel, sortCuentas } from '../utils/cuentaUtils';
 import { numeroALetras, formatMonto, formatearFechaEnLetras, formatearFechaEnLetrasCorta } from '../utils/numeroALetras';
 import { getStoredUser } from '../utils/auth';
+
+const SV_TZ = 'America/El_Salvador';
+
+const formatSvDateTime = (val) => {
+    if (!val) return '';
+    try {
+        const dt = new Date(val);
+        if (isNaN(dt.getTime())) return String(val);
+        return new Intl.DateTimeFormat('es-SV', {
+            timeZone: SV_TZ,
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        }).format(dt);
+    } catch {
+        return String(val);
+    }
+};
 
 export default function ImpresionCheques() {
     const [cuentas, setCuentas] = useState([]);
@@ -37,6 +58,7 @@ export default function ImpresionCheques() {
     const [previewFileName, setPreviewFileName] = useState('cheques.pdf');
 
     const { addToast } = useToast();
+    const { confirm } = useConfirm();
     const navigate = useNavigate();
 
     // Cargar catálogos y formatos al montar
@@ -225,6 +247,7 @@ export default function ImpresionCheques() {
 
     // Imprimir cheques seleccionados (abre vista previa con PDF a página completa Carta)
     const handlePrintSelected = async () => {
+        if (printing) return;
         if (!currentFormato) {
             addToast('Debe seleccionar un formato de impresión válido', 'warning');
             return;
@@ -234,8 +257,46 @@ export default function ImpresionCheques() {
             return;
         }
 
+        const reimpresos = selectedCheques.filter(c => Number(c.veces_impreso || 0) > 0);
+        if (reimpresos.length > 0) {
+            const listaNumeros = reimpresos.slice(0, 10).map(c => `#${c.cheque || c.llave}`).join(', ') +
+                (reimpresos.length > 10 ? ` y ${reimpresos.length - 10} más` : '');
+            const confirmarReimpresion = await confirm(
+                `${reimpresos.length === 1 ? 'El siguiente cheque ya fue impreso anteriormente' : `${reimpresos.length} cheques seleccionados ya fueron impresos anteriormente`}: ${listaNumeros}.\n\n¿Desea generar una reimpresión?`,
+                { title: 'Reimpresión de Cheques', confirmText: 'Continuar e Imprimir', cancelText: 'Cancelar', variant: 'primary' }
+            );
+            if (!confirmarReimpresion) return;
+        }
+
         setPrinting(true);
         try {
+            const auditRes = await api.post('/cheques/registrar-impresion-lote', {
+                ids: selectedCheques.map(c => c.id),
+                formato_id: currentFormato.id,
+                printer_name: currentFormato.printer_name || null
+            });
+
+            if (auditRes.data?.advertencia_reimpresion) {
+                addToast(auditRes.data.advertencia_reimpresion, 'warning');
+            }
+
+            const resultados = Array.isArray(auditRes.data?.resultados) ? auditRes.data.resultados : [];
+            if (resultados.length > 0) {
+                const byId = new Map(resultados.map(r => [Number(r.id), r]));
+                setCheques(prev => prev.map(item => {
+                    const upd = byId.get(Number(item.id));
+                    return upd
+                        ? {
+                            ...item,
+                            impreso_at: upd.impreso_at,
+                            impreso_por: upd.impreso_por,
+                            impreso_por_nombre: upd.impreso_por_nombre,
+                            veces_impreso: upd.veces_impreso
+                        }
+                        : item;
+                }));
+            }
+
             const campos = currentFormato.design_json?.campos || [];
             const listaDatos = selectedCheques.map(formatChequeData);
 
@@ -255,7 +316,7 @@ export default function ImpresionCheques() {
             setPreviewFileName(`Cheques_${currentCuenta?.nombre || 'Banco'}_${desdeCheque}-${hastaCheque}.pdf`);
             setShowPreviewModal(true);
         } catch (error) {
-            addToast('Error al preparar la vista previa de cheques', 'error');
+            addToast(error.response?.data?.message || 'Error al preparar la vista previa de cheques', 'error');
         } finally {
             setPrinting(false);
         }
@@ -263,13 +324,46 @@ export default function ImpresionCheques() {
 
     // Imprimir un solo cheque (abre vista previa con PDF a página completa Carta)
     const handlePrintSingle = async (cheque) => {
+        if (printing) return;
         if (!currentFormato) {
             addToast('Debe seleccionar un formato de impresión válido', 'warning');
             return;
         }
 
+        if (Number(cheque.veces_impreso || 0) > 0) {
+            const ultimaInfo = cheque.impreso_at
+                ? ` (última: ${formatSvDateTime(cheque.impreso_at)}${cheque.impreso_por_nombre ? ` por ${cheque.impreso_por_nombre}` : ''})`
+                : '';
+            const confirmarReimpresion = await confirm(
+                `Este cheque (#${cheque.cheque || cheque.llave}) ya fue impreso ${cheque.veces_impreso} ${Number(cheque.veces_impreso) === 1 ? 'vez' : 'veces'}${ultimaInfo}.\n\n¿Desea generar una reimpresión?`,
+                { title: 'Reimpresión de Cheque', confirmText: 'Continuar e Imprimir', cancelText: 'Cancelar', variant: 'primary' }
+            );
+            if (!confirmarReimpresion) return;
+        }
+
         setPrinting(true);
         try {
+            const auditRes = await api.post(`/cheques/${cheque.id}/registrar-impresion`, {
+                formato_id: currentFormato.id,
+                printer_name: currentFormato.printer_name || null
+            });
+
+            if (auditRes.data?.advertencia_reimpresion) {
+                addToast(auditRes.data.advertencia_reimpresion, 'warning');
+            }
+
+            setCheques(prev => prev.map(item => (
+                item.id === cheque.id
+                    ? {
+                        ...item,
+                        impreso_at: auditRes.data.impreso_at,
+                        impreso_por: auditRes.data.impreso_por,
+                        impreso_por_nombre: auditRes.data.impreso_por_nombre,
+                        veces_impreso: auditRes.data.veces_impreso
+                    }
+                    : item
+            )));
+
             const campos = currentFormato.design_json?.campos || [];
             const datos = formatChequeData(cheque);
             const listaDatos = [datos];
@@ -290,7 +384,7 @@ export default function ImpresionCheques() {
             setPreviewFileName(`Cheque_${cheque.cheque || cheque.llave}.pdf`);
             setShowPreviewModal(true);
         } catch (error) {
-            addToast('Error al preparar vista previa del cheque', 'error');
+            addToast(error.response?.data?.message || 'Error al preparar vista previa del cheque', 'error');
         } finally {
             setPrinting(false);
         }
@@ -317,9 +411,9 @@ export default function ImpresionCheques() {
             <div className="card glass" style={{ padding: '1rem 1.25rem' }}>
                 <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                     {/* Fila 1: Cuenta Bancaria y Formato */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.85rem' }}>
+                    <div className="form-grid form-grid-2" style={{ gap: '0.85rem' }}>
                         {/* Cuenta Bancaria */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0 }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.025em' }}>
                                 Cuenta Bancaria *
                             </label>
@@ -329,7 +423,7 @@ export default function ImpresionCheques() {
                                 onChange={handleCuentaChange}
                                 disabled={loadingCatalogos}
                                 required
-                                style={{ height: '36px', fontSize: '0.825rem', padding: '0.35rem 0.65rem' }}
+                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0.35rem 0.65rem' }}
                             >
                                 <option value="">-- Seleccione una cuenta bancaria --</option>
                                 {sortCuentas(cuentas).map(c => (
@@ -341,7 +435,7 @@ export default function ImpresionCheques() {
                         </div>
 
                         {/* Formato de Cheque */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0 }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.025em' }}>
                                 Formato Guardado *
                             </label>
@@ -351,7 +445,7 @@ export default function ImpresionCheques() {
                                 onChange={(e) => setSelectedFormatoId(e.target.value)}
                                 disabled={loadingCatalogos || formatos.length === 0}
                                 required
-                                style={{ height: '36px', fontSize: '0.825rem', padding: '0.35rem 0.65rem' }}
+                                style={{ width: '100%', height: '36px', fontSize: '0.825rem', padding: '0.35rem 0.65rem' }}
                             >
                                 <option value="">-- Seleccionar formato --</option>
                                 {formatos.map(f => (
@@ -421,12 +515,13 @@ export default function ImpresionCheques() {
                         <div style={{ width: '1px', height: '24px', background: 'var(--border)', margin: '0 0.25rem' }} />
 
                         {/* Filtros secundarios */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', height: '36px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem 1rem', minHeight: '36px' }}>
                             <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontSize: '0.8rem', userSelect: 'none' }}>
                                 <input
                                     type="checkbox"
                                     checked={excluirAnulados}
                                     onChange={(e) => setExcluirAnulados(e.target.checked)}
+                                    style={{ width: '16px', height: '16px', margin: 0, cursor: 'pointer', flexShrink: 0 }}
                                 />
                                 <span>Ocultar Anulados</span>
                             </label>
@@ -435,30 +530,33 @@ export default function ImpresionCheques() {
                                     type="checkbox"
                                     checked={excluirReservados}
                                     onChange={(e) => setExcluirReservados(e.target.checked)}
+                                    style={{ width: '16px', height: '16px', margin: 0, cursor: 'pointer', flexShrink: 0 }}
                                 />
                                 <span>Ocultar Reservados / No Emitidos</span>
                             </label>
                         </div>
 
                         {/* Formato Activo Info */}
-                        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', height: '36px' }}>
+                        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', flexWrap: 'wrap', minHeight: '36px', maxWidth: '100%' }}>
                             {currentFormato ? (
                                 <div style={{
                                     fontSize: '0.75rem',
                                     color: 'var(--text-muted)',
                                     display: 'inline-flex',
                                     alignItems: 'center',
+                                    flexWrap: 'wrap',
                                     gap: '0.4rem',
                                     background: 'rgba(37, 99, 235, 0.08)',
                                     padding: '0.3rem 0.65rem',
                                     borderRadius: '6px',
-                                    border: '1px solid rgba(37, 99, 235, 0.2)'
+                                    border: '1px solid rgba(37, 99, 235, 0.2)',
+                                    maxWidth: '100%'
                                 }}>
                                     <FileText size={13} color="var(--primary)" />
                                     <span>Formato: <strong style={{ color: 'var(--text)' }}>{currentFormato.name}</strong> ({currentFormato.width} x {currentFormato.height} mm)</span>
                                 </div>
                             ) : selectedCuentaId && (
-                                <div style={{ fontSize: '0.75rem', color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <div style={{ fontSize: '0.75rem', color: '#f59e0b', display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem' }}>
                                     <AlertCircle size={13} />
                                     <span>Sin formato vinculado.</span>
                                     <button
@@ -581,27 +679,44 @@ export default function ImpresionCheques() {
                                                     {c.concepto || '-'}
                                                 </td>
                                                 <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
-                                                    {isAnulado ? (
-                                                        <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
-                                                            Anulado
-                                                        </span>
-                                                    ) : isReservado ? (
-                                                        <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
-                                                            Reservado
-                                                        </span>
-                                                    ) : (
-                                                        <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
-                                                            Normal
-                                                        </span>
-                                                    )}
+                                                    <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                                        {isAnulado ? (
+                                                            <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
+                                                                Anulado
+                                                            </span>
+                                                        ) : isReservado ? (
+                                                            <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                                                                Reservado
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{ padding: '0.15rem 0.45rem', borderRadius: '4px', fontSize: '0.72rem', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+                                                                Normal
+                                                            </span>
+                                                        )}
+                                                        {Number(c.veces_impreso || 0) > 0 && (
+                                                            <span
+                                                                className="badge"
+                                                                title={`Impreso ${c.veces_impreso} ${Number(c.veces_impreso) === 1 ? 'vez' : 'veces'}${c.impreso_at ? ` · Última: ${formatSvDateTime(c.impreso_at)}` : ''}${c.impreso_por_nombre ? ` · ${c.impreso_por_nombre}` : ''}`}
+                                                                style={{
+                                                                    fontSize: '0.72rem',
+                                                                    padding: '0.15rem 0.45rem',
+                                                                    color: '#60a5fa',
+                                                                    background: 'rgba(59,130,246,0.15)',
+                                                                    border: '1px solid rgba(59,130,246,0.3)'
+                                                                }}
+                                                            >
+                                                                Impreso {c.veces_impreso}x
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </td>
                                                 <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                     <button
                                                         type="button"
                                                         onClick={() => handlePrintSingle(c)}
-                                                        disabled={!currentFormato}
-                                                        style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: currentFormato ? 'pointer' : 'not-allowed', padding: '0.2rem', display: 'inline-flex' }}
-                                                        title="Imprimir este cheque individualmente"
+                                                        disabled={!currentFormato || printing}
+                                                        style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: (currentFormato && !printing) ? 'pointer' : 'not-allowed', padding: '0.2rem', display: 'inline-flex' }}
+                                                        title={Number(c.veces_impreso || 0) > 0 ? `Reimprimir cheque (impreso ${c.veces_impreso}x)` : 'Imprimir este cheque individualmente'}
                                                     >
                                                         <Printer size={15} />
                                                     </button>

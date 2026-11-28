@@ -101,6 +101,9 @@ const PrintEngine = {
                 // Sin calibración disponible, continuar con valores por defecto
             }
         }
+        const offsetX = Number(calibracion.offset_x) || 0;
+        const offsetY = Number(calibracion.offset_y) || 0;
+        const scale = Number(calibracion.scale) || 1;
 
         const camposHtml = campos
             .filter(c => c.visible !== false)
@@ -138,10 +141,10 @@ const PrintEngine = {
         box-sizing: border-box;
         overflow: hidden;
     }
-    .sheet { position: relative; width: ${widthMm}mm; height: ${heightMm}mm; overflow: hidden; }
+    .sheet { position: relative; width: ${widthMm}mm; height: ${heightMm}mm; overflow: visible; }
     .content { position: absolute; left: 0; top: 0; width: ${widthPx}px; height: ${heightPx}px;
-             transform: scale(${Number(calibracion.scale) || 1});
-             transform-origin: ${(Number(calibracion.offset_x) || 0) * -1}px ${(Number(calibracion.offset_y) || 0) * -1}px; }
+             transform-origin: top left;
+             transform: translate(${offsetX}mm, ${offsetY}mm) scale(${scale}); }
 </style>
 </head>
 <body>
@@ -177,6 +180,9 @@ const PrintEngine = {
                 // Sin calibración disponible, continuar con valores por defecto
             }
         }
+        const offsetX = Number(calibracion.offset_x) || 0;
+        const offsetY = Number(calibracion.offset_y) || 0;
+        const scale = Number(calibracion.scale) || 1;
 
         const visibleCampos = (campos || []).filter(c => c.visible !== false);
 
@@ -227,7 +233,7 @@ const PrintEngine = {
         position: relative;
         width: ${widthMm}mm;
         height: ${heightMm}mm;
-        overflow: hidden;
+        overflow: visible;
     }
     .content {
         position: absolute;
@@ -235,8 +241,8 @@ const PrintEngine = {
         top: 0;
         width: ${widthPx}px;
         height: ${heightPx}px;
-        transform: scale(${Number(calibracion.scale) || 1});
-        transform-origin: ${(Number(calibracion.offset_x) || 0) * -1}px ${(Number(calibracion.offset_y) || 0) * -1}px;
+        transform-origin: top left;
+        transform: translate(${offsetX}mm, ${offsetY}mm) scale(${scale});
     }
 </style>
 </head>
