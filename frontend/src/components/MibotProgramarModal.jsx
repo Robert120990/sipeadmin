@@ -2,10 +2,13 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
     Bot, Send, Clock, Calendar, Users, CheckCircle2, Bell,
     CreditCard, ClipboardList, ShieldCheck, CalendarClock,
-    Search, Trash2, XCircle, RefreshCw, AlertCircle, UserCheck
+    Search, Trash2, XCircle, RefreshCw, AlertCircle, UserCheck,
+    Paperclip, Upload, Camera, FileText, Eye, X
 } from 'lucide-react';
 import api from '../services/api';
 import Modal from './Modal';
+import ReceiptViewerModal from './ReceiptViewerModal';
+import { compressReceiptFile, formatBytes } from '../utils/receiptCompressor';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 
@@ -155,6 +158,22 @@ export default function MibotProgramarModal({
     const [loadingExisting, setLoadingExisting] = useState(false);
     const [sendingExistingId, setSendingExistingId] = useState(null);
 
+    // Adjuntos de tarea para envío por Telegram (solo cuando taskRow está presente)
+    const [taskAttachments, setTaskAttachments] = useState([]);
+    const [loadingTaskAttachments, setLoadingTaskAttachments] = useState(false);
+    const [incluirAdjuntos, setIncluirAdjuntos] = useState(true);
+    const [selectedAttachmentIds, setSelectedAttachmentIds] = useState([]);
+    const [pendingMedia, setPendingMedia] = useState([]);
+    const [compressingMedia, setCompressingMedia] = useState(false);
+    const [dragOverMedia, setDragOverMedia] = useState(false);
+    const [viewerOpen, setViewerOpen] = useState(false);
+    const [viewerItems, setViewerItems] = useState([]);
+    const [viewerIdx, setViewerIdx] = useState(0);
+
+    const mediaFileInputRef = useRef(null);
+    const mediaCameraInputRef = useRef(null);
+    const confirmOpenRef = useRef(false);
+
     const vencimientoRowRef = useRef(vencimientoRow);
     const taskRowRef = useRef(taskRow);
     vencimientoRowRef.current = vencimientoRow;
@@ -238,6 +257,71 @@ export default function MibotProgramarModal({
         }
     }, []);
 
+    const loadTaskAttachments = useCallback(async (tId) => {
+        if (!tId) {
+            setTaskAttachments([]);
+            setSelectedAttachmentIds([]);
+            return;
+        }
+        setLoadingTaskAttachments(true);
+        try {
+            const res = await api.get(`/tasks/${tId}/attachments`);
+            const atts = Array.isArray(res.data?.attachments) ? res.data.attachments : [];
+            setTaskAttachments(atts);
+            setSelectedAttachmentIds(atts.map(a => Number(a.id)).filter(Boolean));
+            setIncluirAdjuntos(true);
+        } catch (_) {
+            setTaskAttachments([]);
+            setSelectedAttachmentIds([]);
+        } finally {
+            setLoadingTaskAttachments(false);
+        }
+    }, []);
+
+    const processTaskMediaFiles = useCallback(async (fileList) => {
+        const files = Array.from(fileList || []).filter(Boolean);
+        if (files.length === 0) return;
+        setCompressingMedia(true);
+        const added = [];
+        try {
+            for (const f of files) {
+                try {
+                    const compressed = await compressReceiptFile(f);
+                    added.push({
+                        tempId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                        ...compressed,
+                        nota: ''
+                    });
+                } catch (err) {
+                    addToast(err?.message || `No se pudo procesar "${f.name || 'archivo'}"`, 'warning');
+                }
+            }
+            if (added.length > 0) {
+                setPendingMedia(prev => [...prev, ...added].slice(0, 10));
+                setIncluirAdjuntos(true);
+            }
+        } finally {
+            setCompressingMedia(false);
+        }
+    }, [addToast]);
+
+    useEffect(() => {
+        if (!open || !taskRow || viewerOpen) return undefined;
+        const onPaste = (e) => {
+            if (confirmOpenRef.current) return;
+            const items = Array.from(e.clipboardData?.items || []);
+            const files = items
+                .filter(it => it.kind === 'file')
+                .map(it => it.getAsFile())
+                .filter(Boolean);
+            if (files.length === 0) return;
+            e.preventDefault();
+            processTaskMediaFiles(files);
+        };
+        window.addEventListener('paste', onPaste);
+        return () => window.removeEventListener('paste', onPaste);
+    }, [open, taskRow, viewerOpen, processTaskMediaFiles]);
+
     useEffect(() => {
         if (!open) return;
 
@@ -248,10 +332,16 @@ export default function MibotProgramarModal({
         setRecipientSearch('');
         setSelectedIds([]);
         setSelectedSipeUserIds([]);
+        setPendingMedia([]);
+        setViewerOpen(false);
+        setDragOverMedia(false);
 
         const inOneHour = getSvNowDateTimeParts(60);
 
         if (currentVencimiento) {
+            setTaskAttachments([]);
+            setSelectedAttachmentIds([]);
+            setIncluirAdjuntos(false);
             const isParcial = currentVencimiento.estado_pago === 'PARCIAL';
             const saldoVal = currentVencimiento.saldo_pendiente !== undefined && currentVencimiento.saldo_pendiente !== null
                 ? Number(currentVencimiento.saldo_pendiente || 0)
@@ -295,7 +385,11 @@ export default function MibotProgramarModal({
             setFrecuencia('UNA_VEZ');
             setCrearTareaSistema(false);
             loadExistingForTask(currentTask.id);
+            loadTaskAttachments(currentTask.id);
         } else {
+            setTaskAttachments([]);
+            setSelectedAttachmentIds([]);
+            setIncluirAdjuntos(false);
             const initTipo = defaultTipo || 'RECORDATORIO_PAGO';
             setTipo(initTipo);
             setTitulo(
@@ -471,6 +565,27 @@ export default function MibotProgramarModal({
 
         setSaving(true);
         try {
+            let finalAttachmentIds = [...selectedAttachmentIds];
+            if (taskRow?.id && pendingMedia.length > 0) {
+                const upRes = await api.post(`/tasks/${taskRow.id}/attachments`, {
+                    attachments: pendingMedia.map(m => ({
+                        data_url: m.data_url,
+                        nombre_original: m.nombre_original,
+                        mime_type: m.mime_type,
+                        tamano_bytes: m.tamano_bytes,
+                        ancho: m.ancho,
+                        alto: m.alto,
+                        nota: m.nota ? m.nota.trim() : null
+                    }))
+                });
+                const createdAtts = Array.isArray(upRes.data?.attachments) ? upRes.data.attachments : [];
+                const createdIds = createdAtts.map(a => Number(a.id)).filter(Boolean);
+                finalAttachmentIds = [...new Set([...finalAttachmentIds, ...createdIds])];
+                setTaskAttachments(prev => [...prev, ...createdAtts]);
+                setSelectedAttachmentIds(finalAttachmentIds);
+                setPendingMedia([]);
+            }
+
             const payload = {
                 tipo,
                 titulo: titulo.trim(),
@@ -491,7 +606,9 @@ export default function MibotProgramarModal({
                     task_id: taskRow.id,
                     ubicacion: taskRow.categoria || 'Operaciones',
                     fecha_vencimiento: taskRow.fecha_vencimiento ? String(taskRow.fecha_vencimiento).slice(0, 10) : null,
-                    prioridad: taskRow.prioridad || 'media'
+                    prioridad: taskRow.prioridad || 'media',
+                    incluir_adjuntos: Boolean(incluirAdjuntos && finalAttachmentIds.length > 0),
+                    attachment_ids: Boolean(incluirAdjuntos) ? finalAttachmentIds : []
                 } : {
                     crear_tarea_sistema: Boolean(crearTareaSistema && ['TAREA', 'VALIDACION', 'REUNION'].includes(tipo)),
                     prioridad: prioridadTarea,
@@ -549,7 +666,14 @@ export default function MibotProgramarModal({
     };
 
     const handleCancelExisting = async (prog) => {
-        if (!await confirm(`¿Cancelar el aviso MiBot "${prog.titulo}"? Dejará de enviarse automáticamente.`, { variant: 'danger' })) return;
+        confirmOpenRef.current = true;
+        let ok = false;
+        try {
+            ok = await confirm(`¿Cancelar el aviso MiBot "${prog.titulo}"? Dejará de enviarse automáticamente.`, { variant: 'danger' });
+        } finally {
+            confirmOpenRef.current = false;
+        }
+        if (!ok) return;
         try {
             await api.patch(`/telegram/mibot/programaciones/${prog.id}/estado`, { estado: 'CANCELADO' });
             addToast('Programación MiBot cancelada', 'success');
@@ -562,7 +686,14 @@ export default function MibotProgramarModal({
     };
 
     const handleDeleteExisting = async (prog) => {
-        if (!await confirm(`¿Eliminar definitivamente el aviso MiBot "${prog.titulo}"?`, { variant: 'danger' })) return;
+        confirmOpenRef.current = true;
+        let ok = false;
+        try {
+            ok = await confirm(`¿Eliminar definitivamente el aviso MiBot "${prog.titulo}"?`, { variant: 'danger' });
+        } finally {
+            confirmOpenRef.current = false;
+        }
+        if (!ok) return;
         try {
             await api.delete(`/telegram/mibot/programaciones/${prog.id}`);
             addToast('Programación MiBot eliminada', 'success');
@@ -575,9 +706,10 @@ export default function MibotProgramarModal({
     };
 
     return (
+        <>
         <Modal
             open={open}
-            onClose={() => !saving && onClose()}
+            onClose={() => !saving && !viewerOpen && !confirmOpenRef.current && onClose()}
             title={
                 vencimientoRow
                     ? `MiBot Telegram — Programar Aviso (#${vencimientoRow.id_recordatorio || vencimientoRow.id})`
@@ -1119,6 +1251,301 @@ export default function MibotProgramarModal({
                         )}
                     </div>
 
+                    {/* 5. ADJUNTOS DE LA TAREA PARA ENVÍO POR TELEGRAM (R7.4) */}
+                    {taskRow && (
+                        <div style={{
+                            padding: '0.75rem',
+                            borderRadius: '9px',
+                            border: incluirAdjuntos ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid var(--border)',
+                            backgroundColor: incluirAdjuntos ? 'rgba(56, 189, 248, 0.06)' : 'rgba(255,255,255,0.02)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.55rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text)', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={incluirAdjuntos}
+                                        onChange={e => setIncluirAdjuntos(e.target.checked)}
+                                        style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                                    />
+                                    <Paperclip size={14} color="#38bdf8" />
+                                    <span>5. Enviar capturas y PDFs adjuntos por Telegram</span>
+                                </label>
+
+                                {taskAttachments.length > 0 && (
+                                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => {
+                                                setIncluirAdjuntos(true);
+                                                setSelectedAttachmentIds(taskAttachments.map(a => Number(a.id)).filter(Boolean));
+                                            }}
+                                            style={{ height: '25px', padding: '0 0.5rem', fontSize: '0.7rem' }}
+                                        >
+                                            Todos ({taskAttachments.length})
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => setSelectedAttachmentIds([])}
+                                            style={{ height: '25px', padding: '0 0.5rem', fontSize: '0.7rem' }}
+                                        >
+                                            Ninguno
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {loadingTaskAttachments ? (
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Cargando adjuntos de la tarea...</div>
+                            ) : taskAttachments.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', maxHeight: '140px', overflowY: 'auto' }}>
+                                    {taskAttachments.map((att, idx) => {
+                                        const attId = Number(att.id);
+                                        const isChecked = selectedAttachmentIds.includes(attId);
+                                        const isPdf = att.mime_type === 'application/pdf' || /\.pdf$/i.test(att.nombre_original || att.archivo_url || '');
+                                        const previewUrl = att.signed_url || att.archivo_url;
+                                        return (
+                                            <div
+                                                key={attId}
+                                                style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.4rem',
+                                                    padding: '0.32rem 0.45rem',
+                                                    borderRadius: '7px',
+                                                    border: isChecked && incluirAdjuntos ? '1px solid #38bdf8' : '1px solid var(--border)',
+                                                    backgroundColor: isChecked && incluirAdjuntos ? 'rgba(56, 189, 248, 0.14)' : 'rgba(255,255,255,0.03)',
+                                                    flex: '1 1 180px',
+                                                    maxWidth: '100%',
+                                                    minWidth: 0
+                                                }}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isChecked}
+                                                    disabled={!incluirAdjuntos}
+                                                    onChange={() => {
+                                                        setSelectedAttachmentIds(prev => (
+                                                            prev.includes(attId) ? prev.filter(x => x !== attId) : [...prev, attId]
+                                                        ));
+                                                    }}
+                                                    style={{ width: '16px', height: '16px', flexShrink: 0, cursor: 'pointer' }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setViewerItems(taskAttachments);
+                                                        setViewerIdx(idx);
+                                                        setViewerOpen(true);
+                                                    }}
+                                                    style={{
+                                                        width: '32px',
+                                                        height: '32px',
+                                                        borderRadius: '5px',
+                                                        overflow: 'hidden',
+                                                        border: '1px solid var(--border)',
+                                                        backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        padding: 0,
+                                                        cursor: 'pointer',
+                                                        flexShrink: 0
+                                                    }}
+                                                    title="Vista previa"
+                                                >
+                                                    {isPdf ? (
+                                                        <FileText size={16} color="#f87171" />
+                                                    ) : (
+                                                        <img src={previewUrl} alt={att.nombre_original} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                    )}
+                                                </button>
+                                                <div style={{ minWidth: 0, flex: 1 }}>
+                                                    <div style={{ fontSize: '0.73rem', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                        {att.nombre_original}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)' }}>
+                                                        {formatBytes(att.tamano_bytes)}{att.nota ? ` · ${att.nota}` : ''}
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    className="icon-btn"
+                                                    onClick={() => {
+                                                        setViewerItems(taskAttachments);
+                                                        setViewerIdx(idx);
+                                                        setViewerOpen(true);
+                                                    }}
+                                                    title="Ampliar"
+                                                    style={{ width: '24px', height: '24px', padding: 0, flexShrink: 0 }}
+                                                >
+                                                    <Eye size={13} />
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {/* Subir / pegar / arrastrar nuevas capturas directo en MiBot */}
+                            <div
+                                onDragOver={(e) => { e.preventDefault(); setDragOverMedia(true); }}
+                                onDragLeave={() => setDragOverMedia(false)}
+                                onDrop={(e) => {
+                                    e.preventDefault();
+                                    setDragOverMedia(false);
+                                    if (e.dataTransfer?.files?.length) {
+                                        processTaskMediaFiles(e.dataTransfer.files);
+                                    }
+                                }}
+                                style={{
+                                    padding: '0.5rem 0.65rem',
+                                    borderRadius: '7px',
+                                    border: dragOverMedia ? '1px dashed #38bdf8' : '1px dashed var(--border)',
+                                    backgroundColor: dragOverMedia ? 'rgba(56, 189, 248, 0.12)' : 'rgba(15, 23, 42, 0.28)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    flexWrap: 'wrap',
+                                    gap: '0.45rem'
+                                }}
+                            >
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', flex: '1 1 170px', minWidth: 0 }}>
+                                    {compressingMedia
+                                        ? 'Optimizando captura...'
+                                        : 'Pega con Ctrl+V, arrastra aquí o adjunta nueva imagen/PDF (se guardará en la tarea antes de enviar).'}
+                                </span>
+                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                    <input
+                                        ref={mediaFileInputRef}
+                                        type="file"
+                                        multiple
+                                        accept="image/*,.pdf"
+                                        style={{ display: 'none' }}
+                                        onChange={(e) => {
+                                            if (e.target.files?.length) processTaskMediaFiles(e.target.files);
+                                            e.target.value = '';
+                                        }}
+                                    />
+                                    <input
+                                        ref={mediaCameraInputRef}
+                                        type="file"
+                                        accept="image/*"
+                                        capture="environment"
+                                        style={{ display: 'none' }}
+                                        onChange={(e) => {
+                                            if (e.target.files?.length) processTaskMediaFiles(e.target.files);
+                                            e.target.value = '';
+                                        }}
+                                    />
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => mediaFileInputRef.current?.click()}
+                                        disabled={compressingMedia || saving}
+                                        style={{ height: '28px', padding: '0 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                    >
+                                        <Upload size={12} /> Archivo / PDF
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => mediaCameraInputRef.current?.click()}
+                                        disabled={compressingMedia || saving}
+                                        style={{ height: '28px', padding: '0 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                    >
+                                        <Camera size={12} /> Cámara
+                                    </button>
+                                </div>
+                            </div>
+
+                            {pendingMedia.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                    {pendingMedia.map((pm, idx) => {
+                                        const isPdf = pm.mime_type === 'application/pdf';
+                                        return (
+                                            <div
+                                                key={pm.tempId}
+                                                style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.4rem',
+                                                    padding: '0.35rem 0.45rem',
+                                                    borderRadius: '7px',
+                                                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                                                    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+                                                    flex: '1 1 200px',
+                                                    maxWidth: '100%',
+                                                    minWidth: 0
+                                                }}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setViewerItems(pendingMedia);
+                                                        setViewerIdx(idx);
+                                                        setViewerOpen(true);
+                                                    }}
+                                                    style={{
+                                                        width: '32px',
+                                                        height: '32px',
+                                                        borderRadius: '5px',
+                                                        overflow: 'hidden',
+                                                        border: '1px solid var(--border)',
+                                                        backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        padding: 0,
+                                                        cursor: 'pointer',
+                                                        flexShrink: 0
+                                                    }}
+                                                    title="Vista previa"
+                                                >
+                                                    {isPdf ? (
+                                                        <FileText size={16} color="#f87171" />
+                                                    ) : (
+                                                        <img src={pm.data_url} alt={pm.nombre_original} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                    )}
+                                                </button>
+                                                <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                                    <div style={{ fontSize: '0.71rem', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                        {pm.nombre_original} ({formatBytes(pm.tamano_bytes)})
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        className="form-control"
+                                                        maxLength={255}
+                                                        placeholder="Nota breve (opcional)..."
+                                                        value={pm.nota || ''}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            setPendingMedia(prev => prev.map(x => x.tempId === pm.tempId ? { ...x, nota: val } : x));
+                                                        }}
+                                                        style={{ height: '24px', fontSize: '0.7rem', padding: '0 0.4rem' }}
+                                                    />
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    className="icon-btn"
+                                                    onClick={() => setPendingMedia(prev => prev.filter(x => x.tempId !== pm.tempId))}
+                                                    title="Quitar captura"
+                                                    style={{ width: '24px', height: '24px', padding: 0, flexShrink: 0, color: '#ef4444' }}
+                                                >
+                                                    <X size={13} />
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* 5. SINCRONIZACIÓN CON TABLERO DE TAREAS Y TARJETA INFORMATIVA EN SISTEMA */}
                     {!vencimientoRow && !taskRow && ['TAREA', 'VALIDACION', 'REUNION'].includes(tipo) && (
                         <div style={{
@@ -1214,7 +1641,9 @@ export default function MibotProgramarModal({
                             </div>
                         ) : existingList.length === 0 ? (
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', padding: '0.4rem' }}>
-                                Aún no hay avisos MiBot programados para este vencimiento.
+                                {taskRow
+                                    ? 'Aún no hay avisos MiBot programados para esta tarea.'
+                                    : 'Aún no hay avisos MiBot programados para este vencimiento.'}
                             </div>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: '210px', overflowY: 'auto' }}>
@@ -1313,5 +1742,13 @@ export default function MibotProgramarModal({
                 )}
             </div>
         </Modal>
+        <ReceiptViewerModal
+            open={viewerOpen}
+            onClose={() => setViewerOpen(false)}
+            comprobantes={viewerItems}
+            initialIndex={viewerIdx}
+            title="Vista previa de adjunto MiBot"
+        />
+        </>
     );
 }

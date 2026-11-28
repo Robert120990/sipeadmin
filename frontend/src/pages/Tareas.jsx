@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import api from '../services/api';
 import socket from '../services/socket';
 import { todayStr } from '../utils/date';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import ReceiptViewerModal from '../components/ReceiptViewerModal';
+import { compressReceiptFile, formatBytes } from '../utils/receiptCompressor';
+import { sanitizeSpreadsheetRows } from '../utils/exportSanitizer';
 import MibotProgramarModal, {
     MIBOT_TIPO_OPTIONS,
     formatMibotDateTime,
@@ -38,7 +41,13 @@ import {
     Bell,
     XCircle,
     Users,
-    X
+    X,
+    Paperclip,
+    Upload,
+    Camera,
+    FileText,
+    ShieldCheck,
+    Save
 } from 'lucide-react';
 
 const COLUMNS = [
@@ -116,9 +125,16 @@ export default function Tareas() {
         mibot_enviar_ahora: true,
         mibot_fecha: '',
         mibot_hora: '08:00',
-        mibot_frecuencia: 'UNA_VEZ'
+        mibot_frecuencia: 'UNA_VEZ',
+        mibot_incluir_adjuntos: true
     });
     const [newSubtaskText, setNewSubtaskText] = useState('');
+
+    // Form Attachments (Crear / Editar)
+    const [formExistingAttachments, setFormExistingAttachments] = useState([]);
+    const [formPendingAttachments, setFormPendingAttachments] = useState([]);
+    const [loadingFormAttachments, setLoadingFormAttachments] = useState(false);
+    const [formDragOver, setFormDragOver] = useState(false);
 
     // Detail & Comments Modal
     const [showDetailModal, setShowDetailModal] = useState(false);
@@ -126,6 +142,29 @@ export default function Tareas() {
     const [taskComments, setTaskComments] = useState([]);
     const [newCommentText, setNewCommentText] = useState('');
     const [submittingComment, setSubmittingComment] = useState(false);
+
+    // Detail Attachments & Fulfillment Evidence
+    const [detailAttachments, setDetailAttachments] = useState([]);
+    const [detailPendingAttachments, setDetailPendingAttachments] = useState([]);
+    const [detailIsEvidence, setDetailIsEvidence] = useState(false);
+    const [detailDragOver, setDetailDragOver] = useState(false);
+    const [uploadingDetailFiles, setUploadingDetailFiles] = useState(false);
+    const [editingAttId, setEditingAttId] = useState(null);
+    const [editingAttNota, setEditingAttNota] = useState('');
+    const [savingAttNota, setSavingAttNota] = useState(false);
+
+    // Compression & ReceiptViewerModal Lightbox
+    const [compressingFiles, setCompressingFiles] = useState(false);
+    const [viewerOpen, setViewerOpen] = useState(false);
+    const [viewerItems, setViewerItems] = useState([]);
+    const [viewerIdx, setViewerIdx] = useState(0);
+    const [viewerTitle, setViewerTitle] = useState('Adjuntos de Tarea');
+
+    const formFileInputRef = useRef(null);
+    const formCameraInputRef = useRef(null);
+    const detailFileInputRef = useRef(null);
+    const detailCameraInputRef = useRef(null);
+    const confirmOpenRef = useRef(false);
 
     // Drag & Drop State
     const [draggedTaskId, setDraggedTaskId] = useState(null);
@@ -288,6 +327,7 @@ export default function Tareas() {
                     if (res.data) {
                         setSelectedTask(res.data);
                         setTaskComments(res.data.comments || []);
+                        setDetailAttachments(res.data.attachments || []);
                         setShowDetailModal(true);
                     }
                 }).catch(() => {});
@@ -296,6 +336,55 @@ export default function Tareas() {
         window.addEventListener('sipe:open-task-detail', onOpenTaskDetail);
         return () => window.removeEventListener('sipe:open-task-detail', onOpenTaskDetail);
     }, [tasks]);
+
+    // Procesar archivos (imagen -> WebP comprimido, o PDF) para Form o Detalle
+    const processAttachmentFiles = useCallback(async (fileList, target = 'detail') => {
+        const files = Array.from(fileList || []).filter(Boolean);
+        if (files.length === 0) return;
+        setCompressingFiles(true);
+        const added = [];
+        try {
+            for (const f of files) {
+                try {
+                    const compressed = await compressReceiptFile(f);
+                    added.push({
+                        tempId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                        ...compressed,
+                        nota: ''
+                    });
+                } catch (err) {
+                    addToast(err?.message || `No se pudo procesar "${f.name || 'archivo'}"`, 'warning');
+                }
+            }
+            if (added.length > 0) {
+                if (target === 'form') {
+                    setFormPendingAttachments(prev => [...prev, ...added].slice(0, 10));
+                } else {
+                    setDetailPendingAttachments(prev => [...prev, ...added].slice(0, 10));
+                }
+            }
+        } finally {
+            setCompressingFiles(false);
+        }
+    }, [addToast]);
+
+    // Listener scoped Ctrl+V para pegar capturas cuando un modal de Tareas está activo y no ocluido
+    useEffect(() => {
+        if (!(showModalForm || showDetailModal) || viewerOpen || mibotModalOpen) return undefined;
+        const onPaste = (e) => {
+            if (confirmOpenRef.current) return;
+            const items = Array.from(e.clipboardData?.items || []);
+            const files = items
+                .filter(it => it.kind === 'file')
+                .map(it => it.getAsFile())
+                .filter(Boolean);
+            if (files.length === 0) return;
+            e.preventDefault();
+            processAttachmentFiles(files, showDetailModal ? 'detail' : 'form');
+        };
+        window.addEventListener('paste', onPaste);
+        return () => window.removeEventListener('paste', onPaste);
+    }, [showModalForm, showDetailModal, viewerOpen, mibotModalOpen, processAttachmentFiles]);
 
     // Mis Tareas y Actividades Asignadas Activas para la Tarjeta Informativa
     const myAssignedTasks = useMemo(() => {
@@ -570,7 +659,14 @@ export default function Tareas() {
         const msg = nuevoEstado === 'CANCELADO'
             ? `¿Cancelar la programación MiBot "${prog.titulo}"?`
             : `¿Cambiar estado de "${prog.titulo}" a ${nuevoEstado}?`;
-        if (!await confirm(msg, nuevoEstado === 'CANCELADO' ? { variant: 'danger' } : {})) return;
+        confirmOpenRef.current = true;
+        let ok = false;
+        try {
+            ok = await confirm(msg, nuevoEstado === 'CANCELADO' ? { variant: 'danger' } : {});
+        } finally {
+            confirmOpenRef.current = false;
+        }
+        if (!ok) return;
         try {
             await api.patch(`/telegram/mibot/programaciones/${prog.id}/estado`, { estado: nuevoEstado });
             addToast(`Programación MiBot actualizada a ${nuevoEstado}`, 'success');
@@ -582,7 +678,14 @@ export default function Tareas() {
     };
 
     const handleDeleteMibotProg = async (prog) => {
-        if (!await confirm(`¿Eliminar definitivamente la programación MiBot "${prog.titulo}"?`, { variant: 'danger' })) return;
+        confirmOpenRef.current = true;
+        let ok = false;
+        try {
+            ok = await confirm(`¿Eliminar definitivamente la programación MiBot "${prog.titulo}"?`, { variant: 'danger' });
+        } finally {
+            confirmOpenRef.current = false;
+        }
+        if (!ok) return;
         try {
             await api.delete(`/telegram/mibot/programaciones/${prog.id}`);
             addToast('Programación MiBot eliminada', 'success');
@@ -650,6 +753,8 @@ export default function Tareas() {
         if (mibotRecipients.length === 0) {
             fetchMibotRecipients();
         }
+        setFormPendingAttachments([]);
+        setFormDragOver(false);
         const today = todayStr();
         if (task) {
             const linkedTgId = getLinkedTelegramIdForUser(task.assigned_to);
@@ -673,12 +778,21 @@ export default function Tareas() {
                 mibot_enviar_ahora: true,
                 mibot_fecha: task.fecha_vencimiento ? String(task.fecha_vencimiento).split('T')[0] : today,
                 mibot_hora: task.hora_limite ? String(task.hora_limite).substring(0, 5) : '08:00',
-                mibot_frecuencia: 'UNA_VEZ'
+                mibot_frecuencia: 'UNA_VEZ',
+                mibot_incluir_adjuntos: true
             });
+            setFormExistingAttachments([]);
+            setLoadingFormAttachments(true);
+            api.get(`/tasks/${task.id}/attachments`)
+                .then(res => setFormExistingAttachments(Array.isArray(res.data?.attachments) ? res.data.attachments : []))
+                .catch(() => setFormExistingAttachments([]))
+                .finally(() => setLoadingFormAttachments(false));
         } else {
             const defaultAssigned = currentUser.id || '';
             const linkedTgId = getLinkedTelegramIdForUser(defaultAssigned);
             setEditingTask(null);
+            setFormExistingAttachments([]);
+            setLoadingFormAttachments(false);
             setFormData({
                 titulo: '',
                 descripcion: '',
@@ -697,7 +811,8 @@ export default function Tareas() {
                 mibot_enviar_ahora: true,
                 mibot_fecha: today,
                 mibot_hora: '08:00',
-                mibot_frecuencia: 'UNA_VEZ'
+                mibot_frecuencia: 'UNA_VEZ',
+                mibot_incluir_adjuntos: true
             });
         }
         setNewSubtaskText('');
@@ -728,9 +843,20 @@ export default function Tareas() {
             ? undefined
             : [...new Set([formData.assigned_to, ...(formData.assigned_to_ids || [])].map(Number).filter(Boolean))];
 
+        const pendingPayload = formPendingAttachments.map(a => ({
+            data_url: a.data_url,
+            nombre_original: a.nombre_original,
+            mime_type: a.mime_type,
+            tamano_bytes: a.tamano_bytes,
+            ancho: a.ancho,
+            alto: a.alto,
+            nota: a.nota && a.nota.trim() ? a.nota.trim() : null
+        }));
+
         const payload = {
             ...formData,
             ...(allAssignees ? { assigned_to_ids: allAssignees } : {}),
+            ...(!editingTask && pendingPayload.length > 0 ? { attachments: pendingPayload } : {}),
             mibot: formData.mibot_enabled ? {
                 enabled: true,
                 tipo: formData.mibot_tipo || 'TAREA',
@@ -739,7 +865,8 @@ export default function Tareas() {
                 programado_para: formData.mibot_enviar_ahora
                     ? undefined
                     : `${formData.mibot_fecha || formData.fecha_vencimiento} ${formData.mibot_hora || '08:00'}:00`,
-                frecuencia: formData.mibot_frecuencia || 'UNA_VEZ'
+                frecuencia: formData.mibot_frecuencia || 'UNA_VEZ',
+                incluir_adjuntos: Boolean(formData.mibot_incluir_adjuntos)
             } : null
         };
 
@@ -749,6 +876,9 @@ export default function Tareas() {
             let multiCount = 1;
             let multiAssigneesNames = null;
             if (editingTask) {
+                if (pendingPayload.length > 0) {
+                    await api.post(`/tasks/${editingTask.id}/attachments`, { attachments: pendingPayload });
+                }
                 const res = await api.put(`/tasks/${editingTask.id}`, payload);
                 savedTask = res.data?.task;
                 savedMibot = res.data?.mibot;
@@ -772,6 +902,7 @@ export default function Tareas() {
                     timestamp: new Date().toISOString()
                 });
             }
+            setFormPendingAttachments([]);
             setShowModalForm(false);
             fetchTasks(true);
             fetchMibotProgramaciones();
@@ -783,7 +914,13 @@ export default function Tareas() {
 
     // Delete task
     const handleDeleteTask = async (task) => {
-        const ok = await confirm(`¿Estás seguro de eliminar la tarea "${task.titulo}"?`, { variant: 'danger' });
+        confirmOpenRef.current = true;
+        let ok = false;
+        try {
+            ok = await confirm(`¿Estás seguro de eliminar la tarea "${task.titulo}"?`, { variant: 'danger' });
+        } finally {
+            confirmOpenRef.current = false;
+        }
         if (!ok) return;
 
         try {
@@ -804,22 +941,143 @@ export default function Tareas() {
         setSelectedTask(task);
         setShowDetailModal(true);
         setNewCommentText('');
+        setDetailPendingAttachments([]);
+        setDetailIsEvidence(false);
+        setDetailDragOver(false);
+        setEditingAttId(null);
+        setEditingAttNota('');
+        setDetailAttachments(Array.isArray(task.attachments) ? task.attachments : []);
         try {
             const res = await api.get(`/tasks/${task.id}`);
             setSelectedTask(res.data);
             setTaskComments(res.data.comments || []);
+            setDetailAttachments(Array.isArray(res.data.attachments) ? res.data.attachments : []);
         } catch (err) {
             console.error(err);
         }
     };
 
-    // Add comment
+    const handleOpenViewer = (items, index = 0, title = 'Adjuntos de Tarea') => {
+        if (!Array.isArray(items) || items.length === 0) return;
+        setViewerItems(items);
+        setViewerIdx(index);
+        setViewerTitle(title);
+        setViewerOpen(true);
+    };
+
+    const handleQuickOpenAttachments = async (task) => {
+        if (!task?.id) return;
+        try {
+            const res = await api.get(`/tasks/${task.id}/attachments`);
+            const atts = Array.isArray(res.data?.attachments) ? res.data.attachments : [];
+            if (atts.length === 0) {
+                addToast('Esta tarea no tiene adjuntos.', 'info');
+                return;
+            }
+            handleOpenViewer(atts, 0, `Adjuntos — #${task.id} ${task.titulo}`);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al cargar adjuntos de la tarea', 'error');
+        }
+    };
+
+    const handleUploadDetailAttachments = async () => {
+        if (!selectedTask?.id || detailPendingAttachments.length === 0) return;
+        setUploadingDetailFiles(true);
+        try {
+            const res = await api.post(`/tasks/${selectedTask.id}/attachments`, {
+                es_evidencia_cumplimiento: Boolean(detailIsEvidence),
+                attachments: detailPendingAttachments.map(a => ({
+                    data_url: a.data_url,
+                    nombre_original: a.nombre_original,
+                    mime_type: a.mime_type,
+                    tamano_bytes: a.tamano_bytes,
+                    ancho: a.ancho,
+                    alto: a.alto,
+                    nota: a.nota && a.nota.trim() ? a.nota.trim() : null,
+                    es_evidencia_cumplimiento: Boolean(detailIsEvidence)
+                }))
+            });
+            const created = Array.isArray(res.data?.attachments) ? res.data.attachments : [];
+            setDetailAttachments(prev => [...prev, ...created]);
+            setDetailPendingAttachments([]);
+            setDetailIsEvidence(false);
+            addToast(res.data?.message || 'Adjunto(s) subido(s) con éxito', 'success');
+            fetchTasks(true);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al subir adjuntos', 'error');
+        } finally {
+            setUploadingDetailFiles(false);
+        }
+    };
+
+    const handleSaveAttachmentNota = async (att) => {
+        if (!att?.id) return;
+        setSavingAttNota(true);
+        try {
+            const res = await api.patch(`/tasks/attachments/${att.id}`, { nota: editingAttNota });
+            const updated = res.data?.attachment || { ...att, nota: editingAttNota };
+            setDetailAttachments(prev => prev.map(x => Number(x.id) === Number(att.id) ? updated : x));
+            setFormExistingAttachments(prev => prev.map(x => Number(x.id) === Number(att.id) ? updated : x));
+            setEditingAttId(null);
+            setEditingAttNota('');
+            addToast('Nota de adjunto actualizada', 'success');
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al actualizar nota del adjunto', 'error');
+        } finally {
+            setSavingAttNota(false);
+        }
+    };
+
+    const handleDeleteAttachment = async (att) => {
+        if (!att?.id) return;
+        confirmOpenRef.current = true;
+        let ok = false;
+        try {
+            ok = await confirm(`¿Eliminar el adjunto "${att.nombre_original || 'archivo'}"?`, { variant: 'danger' });
+        } finally {
+            confirmOpenRef.current = false;
+        }
+        if (!ok) return;
+        try {
+            await api.delete(`/tasks/attachments/${att.id}`);
+            setDetailAttachments(prev => prev.filter(x => Number(x.id) !== Number(att.id)));
+            setFormExistingAttachments(prev => prev.filter(x => Number(x.id) !== Number(att.id)));
+            setTaskComments(prev => prev.map(c => ({
+                ...c,
+                attachments: Array.isArray(c.attachments) ? c.attachments.filter(x => Number(x.id) !== Number(att.id)) : []
+            })));
+            setViewerItems(prev => {
+                const next = prev.filter(x => Number(x.id) !== Number(att.id));
+                if (next.length === 0) setViewerOpen(false);
+                return next;
+            });
+            addToast('Adjunto eliminado con éxito', 'success');
+            fetchTasks(true);
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al eliminar adjunto', 'error');
+        }
+    };
+
+    // Add comment (optionally with staged fulfillment evidence attachments)
     const handleAddComment = async (e) => {
         e.preventDefault();
-        if (!newCommentText.trim() || !selectedTask) return;
+        if ((!newCommentText.trim() && detailPendingAttachments.length === 0) || !selectedTask) return;
         setSubmittingComment(true);
         try {
-            const res = await api.post(`/tasks/${selectedTask.id}/comments`, { comentario: newCommentText.trim() });
+            const res = await api.post(`/tasks/${selectedTask.id}/comments`, {
+                comentario: newCommentText.trim(),
+                es_evidencia_cumplimiento: Boolean(detailIsEvidence),
+                attachments: detailPendingAttachments.map(a => ({
+                    data_url: a.data_url,
+                    nombre_original: a.nombre_original,
+                    mime_type: a.mime_type,
+                    tamano_bytes: a.tamano_bytes,
+                    ancho: a.ancho,
+                    alto: a.alto,
+                    nota: a.nota && a.nota.trim() ? a.nota.trim() : null,
+                    es_evidencia_cumplimiento: Boolean(detailIsEvidence)
+                }))
+            });
             if (res.data?.comment) {
                 setTaskComments(prev => (
                     prev.some(c => c.id != null && c.id === res.data.comment.id)
@@ -827,11 +1085,17 @@ export default function Tareas() {
                         : [...prev, res.data.comment]
                 ));
             }
+            if (Array.isArray(res.data?.attachments) && res.data.attachments.length > 0) {
+                setDetailAttachments(prev => [...prev, ...res.data.attachments]);
+                setDetailPendingAttachments([]);
+                setDetailIsEvidence(false);
+            }
             setNewCommentText('');
-            addToast('Comentario registrado', 'success');
+            addToast(res.data?.attachments?.length ? 'Comentario y evidencia registrados' : 'Comentario registrado', 'success');
+            fetchTasks(true);
         } catch (err) {
             console.error(err);
-            addToast('Error al publicar comentario', 'error');
+            addToast(err.response?.data?.message || 'Error al publicar comentario', 'error');
         } finally {
             setSubmittingComment(false);
         }
@@ -884,7 +1148,7 @@ export default function Tareas() {
             'Fecha Creación': t.created_at ? formatDateTimeSpanish(t.created_at) : ''
         }));
 
-        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+        const worksheet = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRows(dataToExport));
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Tareas');
         XLSX.writeFile(workbook, `Reporte_Tareas_SIPE_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -924,6 +1188,8 @@ export default function Tareas() {
                     {/* View mode toggle */}
                     <div style={{
                         display: 'inline-flex',
+                        flexWrap: 'wrap',
+                        maxWidth: '100%',
                         background: 'var(--bg-secondary)',
                         padding: '2px',
                         borderRadius: '8px',
@@ -1166,7 +1432,7 @@ export default function Tareas() {
                                 Categoría: <strong style={{ color: 'var(--text-primary)' }}>{recentAssignedCard.task.categoria || 'General'}</strong>
                             </span>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                             <button
                                 type="button"
                                 className="btn-secondary"
@@ -1271,7 +1537,7 @@ export default function Tareas() {
                         </button>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(275px, 1fr))', gap: '0.6rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '0.6rem' }}>
                         {myAssignedTasks.slice(0, 4).map(t => {
                             const pBadge = getPriorityBadge(t.prioridad);
                             const dBadge = getDeadlineBadge(t);
@@ -1396,7 +1662,7 @@ export default function Tareas() {
                             className="form-control"
                             value={filterUser}
                             onChange={(e) => setFilterUser(e.target.value)}
-                            style={{ height: '36px', width: '200px', fontSize: '0.825rem' }}
+                            style={{ height: '36px', width: '200px', maxWidth: '100%', fontSize: '0.825rem' }}
                         >
                             <option value="">-- Todos los colaboradores --</option>
                             {usersList.map(u => (
@@ -1412,7 +1678,7 @@ export default function Tareas() {
                         className="form-control"
                         value={filterPrioridad}
                         onChange={(e) => setFilterPrioridad(e.target.value)}
-                        style={{ height: '36px', width: '135px', fontSize: '0.825rem' }}
+                        style={{ height: '36px', width: '135px', maxWidth: '100%', fontSize: '0.825rem' }}
                     >
                         <option value="todas">Prioridad: Todas</option>
                         <option value="urgente">Urgente</option>
@@ -1426,7 +1692,7 @@ export default function Tareas() {
                         className="form-control"
                         value={filterCategoria}
                         onChange={(e) => setFilterCategoria(e.target.value)}
-                        style={{ height: '36px', width: '145px', fontSize: '0.825rem' }}
+                        style={{ height: '36px', width: '145px', maxWidth: '100%', fontSize: '0.825rem' }}
                     >
                         <option value="todas">Categoría: Todas</option>
                         {CATEGORIAS.map(cat => (
@@ -1446,7 +1712,7 @@ export default function Tareas() {
                 /* TABLERO KANBAN */
                 <div style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))',
                     gap: '1rem',
                     alignItems: 'start'
                 }}>
@@ -1702,7 +1968,34 @@ export default function Tareas() {
                                                         </div>
 
                                                         {/* Quick action buttons */}
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                                                            {Number(task.attachments_count) > 0 && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleQuickOpenAttachments(task);
+                                                                    }}
+                                                                    style={{
+                                                                        background: 'rgba(56, 189, 248, 0.14)',
+                                                                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                                                                        borderRadius: '5px',
+                                                                        padding: '2px 5px',
+                                                                        cursor: 'pointer',
+                                                                        color: '#38bdf8',
+                                                                        display: 'inline-flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '3px',
+                                                                        fontSize: '0.7rem',
+                                                                        fontWeight: 700
+                                                                    }}
+                                                                    title={`Ver ${task.attachments_count} adjunto(s)`}
+                                                                >
+                                                                    <Paperclip size={12} />
+                                                                    <span>{task.attachments_count}</span>
+                                                                </button>
+                                                            )}
+
                                                             {task.comments_count > 0 && (
                                                                 <button
                                                                     type="button"
@@ -1802,10 +2095,37 @@ export default function Tareas() {
                                             }}
                                         >
                                             <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                                                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                    <span onClick={() => handleOpenDetail(task)} style={{ cursor: 'pointer', color: 'var(--primary)' }}>
-                                                        {task.titulo}
-                                                    </span>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                        <span onClick={() => handleOpenDetail(task)} style={{ cursor: 'pointer', color: 'var(--primary)' }}>
+                                                            {task.titulo}
+                                                        </span>
+                                                        {Number(task.attachments_count) > 0 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleQuickOpenAttachments(task);
+                                                                }}
+                                                                style={{
+                                                                    background: 'rgba(56, 189, 248, 0.14)',
+                                                                    border: '1px solid rgba(56, 189, 248, 0.35)',
+                                                                    borderRadius: '5px',
+                                                                    padding: '1px 6px',
+                                                                    cursor: 'pointer',
+                                                                    color: '#38bdf8',
+                                                                    display: 'inline-flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '3px',
+                                                                    fontSize: '0.69rem',
+                                                                    fontWeight: 700
+                                                                }}
+                                                                title={`Ver ${task.attachments_count} adjunto(s)`}
+                                                            >
+                                                                📎 {task.attachments_count}
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                     {task.descripcion && (
                                                         <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                             {task.descripcion}
@@ -2207,7 +2527,7 @@ export default function Tareas() {
             <Modal
                 open={showModalForm}
                 isOpen={showModalForm}
-                onClose={() => setShowModalForm(false)}
+                onClose={() => { if (!viewerOpen && !mibotModalOpen && !confirmOpenRef.current) setShowModalForm(false); }}
                 title={editingTask ? 'Editar Tarea' : 'Nueva Asignación de Tarea'}
                 size="lg"
             >
@@ -2466,7 +2786,7 @@ export default function Tareas() {
                         <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
                             Lista de Verificación / Sub-tareas (Opcional)
                         </label>
-                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                             <input
                                 type="text"
                                 className="form-control"
@@ -2474,7 +2794,7 @@ export default function Tareas() {
                                 value={newSubtaskText}
                                 onChange={(e) => setNewSubtaskText(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddSubtask(); } }}
-                                style={{ height: '36px', fontSize: '0.825rem' }}
+                                style={{ height: '36px', fontSize: '0.825rem', flex: '1 1 180px', minWidth: 0 }}
                             />
                             <button
                                 type="button"
@@ -2503,6 +2823,224 @@ export default function Tareas() {
                                         </button>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* CAPTURAS Y DOCUMENTOS ADJUNTOS (R7.2) */}
+                    <div
+                        className="span-2"
+                        style={{
+                            padding: '0.75rem 0.9rem',
+                            borderRadius: '9px',
+                            border: formDragOver ? '1px dashed #38bdf8' : '1px solid var(--border-color)',
+                            background: formDragOver ? 'rgba(56, 189, 248, 0.08)' : 'var(--bg-secondary)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.55rem'
+                        }}
+                        onDragOver={(e) => { e.preventDefault(); setFormDragOver(true); }}
+                        onDragLeave={() => setFormDragOver(false)}
+                        onDrop={(e) => {
+                            e.preventDefault();
+                            setFormDragOver(false);
+                            if (e.dataTransfer?.files?.length) {
+                                processAttachmentFiles(e.dataTransfer.files, 'form');
+                            }
+                        }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem' }}>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <Paperclip size={15} color="#38bdf8" />
+                                Capturas y Documentos Adjuntos ({formExistingAttachments.length + formPendingAttachments.length})
+                            </span>
+                            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                <input
+                                    ref={formFileInputRef}
+                                    type="file"
+                                    multiple
+                                    accept="image/*,.pdf"
+                                    style={{ display: 'none' }}
+                                    onChange={(e) => {
+                                        if (e.target.files?.length) processAttachmentFiles(e.target.files, 'form');
+                                        e.target.value = '';
+                                    }}
+                                />
+                                <input
+                                    ref={formCameraInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    capture="environment"
+                                    style={{ display: 'none' }}
+                                    onChange={(e) => {
+                                        if (e.target.files?.length) processAttachmentFiles(e.target.files, 'form');
+                                        e.target.value = '';
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => formFileInputRef.current?.click()}
+                                    disabled={compressingFiles}
+                                    style={{ height: '30px', padding: '0 0.65rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                >
+                                    <Upload size={13} /> Archivo / PDF
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => formCameraInputRef.current?.click()}
+                                    disabled={compressingFiles}
+                                    style={{ height: '30px', padding: '0 0.65rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                >
+                                    <Camera size={13} /> Cámara
+                                </button>
+                            </div>
+                        </div>
+
+                        <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                            {compressingFiles
+                                ? 'Comprimiendo imagen a WebP...'
+                                : 'Pega capturas con Ctrl+V, arrastra aquí imágenes (WebP/JPG/PNG) o documentos PDF (máx. 10 por envío).'}
+                        </div>
+
+                        {loadingFormAttachments && (
+                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Cargando adjuntos guardados...</div>
+                        )}
+
+                        {formExistingAttachments.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                {formExistingAttachments.map((att, idx) => {
+                                    const isPdf = att.mime_type === 'application/pdf' || /\.pdf$/i.test(att.nombre_original || att.archivo_url || '');
+                                    const previewUrl = att.signed_url || att.archivo_url;
+                                    return (
+                                        <div
+                                            key={att.id}
+                                            style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                padding: '0.35rem 0.5rem',
+                                                borderRadius: '7px',
+                                                border: '1px solid var(--border-color)',
+                                                background: 'var(--bg-card)',
+                                                flex: '1 1 200px',
+                                                maxWidth: '100%',
+                                                minWidth: 0
+                                            }}
+                                        >
+                                            <button
+                                                type="button"
+                                                onClick={() => handleOpenViewer(formExistingAttachments, idx, `Adjuntos — ${formData.titulo || 'Tarea'}`)}
+                                                style={{
+                                                    width: '36px',
+                                                    height: '36px',
+                                                    borderRadius: '5px',
+                                                    overflow: 'hidden',
+                                                    border: '1px solid var(--border-color)',
+                                                    background: 'var(--bg-secondary)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    padding: 0,
+                                                    cursor: 'pointer',
+                                                    flexShrink: 0
+                                                }}
+                                                title="Ver en visor"
+                                            >
+                                                {isPdf ? <FileText size={16} color="#ef4444" /> : <img src={previewUrl} alt={att.nombre_original} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                                            </button>
+                                            <div style={{ minWidth: 0, flex: 1 }}>
+                                                <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {att.nombre_original}
+                                                </div>
+                                                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                                    {formatBytes(att.tamano_bytes)}{att.nota ? ` · ${att.nota}` : ''}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleDeleteAttachment(att)}
+                                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px', flexShrink: 0 }}
+                                                title="Eliminar adjunto"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {formPendingAttachments.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                {formPendingAttachments.map((att, idx) => {
+                                    const isPdf = att.mime_type === 'application/pdf';
+                                    return (
+                                        <div
+                                            key={att.tempId}
+                                            style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '0.4rem',
+                                                padding: '0.35rem 0.5rem',
+                                                borderRadius: '7px',
+                                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                                background: 'rgba(16, 185, 129, 0.08)',
+                                                flex: '1 1 220px',
+                                                maxWidth: '100%',
+                                                minWidth: 0
+                                            }}
+                                        >
+                                            <button
+                                                type="button"
+                                                onClick={() => handleOpenViewer(formPendingAttachments, idx, 'Vista previa de adjuntos por guardar')}
+                                                style={{
+                                                    width: '36px',
+                                                    height: '36px',
+                                                    borderRadius: '5px',
+                                                    overflow: 'hidden',
+                                                    border: '1px solid var(--border-color)',
+                                                    background: 'var(--bg-secondary)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    padding: 0,
+                                                    cursor: 'pointer',
+                                                    flexShrink: 0
+                                                }}
+                                                title="Previsualizar"
+                                            >
+                                                {isPdf ? <FileText size={16} color="#ef4444" /> : <img src={att.data_url} alt={att.nombre_original} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                                            </button>
+                                            <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                                <div style={{ fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {att.nombre_original} · {formatBytes(att.tamano_bytes)}
+                                                </div>
+                                                <input
+                                                    type="text"
+                                                    className="form-control"
+                                                    maxLength={255}
+                                                    placeholder="Nota breve (opcional)..."
+                                                    value={att.nota || ''}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        setFormPendingAttachments(prev => prev.map(x => x.tempId === att.tempId ? { ...x, nota: val } : x));
+                                                    }}
+                                                    style={{ height: '25px', fontSize: '0.72rem', padding: '0 0.45rem' }}
+                                                />
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setFormPendingAttachments(prev => prev.filter(x => x.tempId !== att.tempId))}
+                                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px', flexShrink: 0 }}
+                                                title="Quitar"
+                                            >
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -2671,12 +3209,23 @@ export default function Tareas() {
                                         </div>
                                     </div>
                                 )}
+
+                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(formData.mibot_incluir_adjuntos)}
+                                        onChange={e => setFormData({ ...formData, mibot_incluir_adjuntos: e.target.checked })}
+                                        style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                                    />
+                                    <Paperclip size={13} color="#38bdf8" />
+                                    <span>Incluir capturas y PDFs adjuntos en el envío de Telegram</span>
+                                </label>
                             </div>
                         )}
                     </div>
 
                     {/* Actions */}
-                    <div className="span-2" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
+                    <div className="span-2" style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.65rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
                         <button
                             type="button"
                             className="btn-secondary"
@@ -2706,7 +3255,7 @@ export default function Tareas() {
                 <Modal
                     open={showDetailModal}
                     isOpen={showDetailModal}
-                    onClose={() => setShowDetailModal(false)}
+                    onClose={() => { if (!viewerOpen && !mibotModalOpen && !confirmOpenRef.current) setShowDetailModal(false); }}
                     title={`Detalle de Tarea #${selectedTask.id}`}
                     size="md"
                 >
@@ -2919,6 +3468,316 @@ export default function Tareas() {
                             </div>
                         )}
 
+                        {/* Evidencias y Adjuntos Section (R7.2 & R7.3) */}
+                        <div
+                            style={{
+                                borderTop: '1px solid var(--border-color)',
+                                paddingTop: '0.75rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.55rem'
+                            }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                    <Paperclip size={15} color="#38bdf8" />
+                                    Evidencias y Adjuntos ({detailAttachments.length})
+                                </span>
+                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                    <input
+                                        ref={detailFileInputRef}
+                                        type="file"
+                                        multiple
+                                        accept="image/*,.pdf"
+                                        style={{ display: 'none' }}
+                                        onChange={(e) => {
+                                            if (e.target.files?.length) processAttachmentFiles(e.target.files, 'detail');
+                                            e.target.value = '';
+                                        }}
+                                    />
+                                    <input
+                                        ref={detailCameraInputRef}
+                                        type="file"
+                                        accept="image/*"
+                                        capture="environment"
+                                        style={{ display: 'none' }}
+                                        onChange={(e) => {
+                                            if (e.target.files?.length) processAttachmentFiles(e.target.files, 'detail');
+                                            e.target.value = '';
+                                        }}
+                                    />
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => detailFileInputRef.current?.click()}
+                                        disabled={compressingFiles || uploadingDetailFiles}
+                                        style={{ height: '30px', padding: '0 0.6rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                    >
+                                        <Upload size={13} /> Subir archivo / PDF
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => detailCameraInputRef.current?.click()}
+                                        disabled={compressingFiles || uploadingDetailFiles}
+                                        style={{ height: '30px', padding: '0 0.6rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                    >
+                                        <Camera size={13} /> Cámara
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Dropzone + Ctrl+V + checkbox evidencia */}
+                            <div
+                                onDragOver={(e) => { e.preventDefault(); setDetailDragOver(true); }}
+                                onDragLeave={() => setDetailDragOver(false)}
+                                onDrop={(e) => {
+                                    e.preventDefault();
+                                    setDetailDragOver(false);
+                                    if (e.dataTransfer?.files?.length) {
+                                        processAttachmentFiles(e.dataTransfer.files, 'detail');
+                                    }
+                                }}
+                                style={{
+                                    padding: '0.55rem 0.7rem',
+                                    borderRadius: '8px',
+                                    border: detailDragOver ? '1px dashed #38bdf8' : '1px dashed var(--border-color)',
+                                    background: detailDragOver ? 'rgba(56, 189, 248, 0.1)' : 'var(--bg-secondary)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.4rem'
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                    <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                                        {compressingFiles
+                                            ? 'Optimizando captura...'
+                                            : 'Pega con Ctrl+V o arrastra capturas/PDFs aquí para adjuntar o enviar junto al comentario.'}
+                                    </span>
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.76rem', fontWeight: 600, color: detailIsEvidence ? '#34d399' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={detailIsEvidence}
+                                            onChange={e => setDetailIsEvidence(e.target.checked)}
+                                            style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                                        />
+                                        <ShieldCheck size={14} color={detailIsEvidence ? '#10b981' : 'var(--text-muted)'} />
+                                        <span>Marcar como evidencia de cumplimiento</span>
+                                    </label>
+                                </div>
+
+                                {detailPendingAttachments.length > 0 && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.2rem' }}>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                            {detailPendingAttachments.map((att, idx) => {
+                                                const isPdf = att.mime_type === 'application/pdf';
+                                                return (
+                                                    <div
+                                                        key={att.tempId}
+                                                        style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.4rem',
+                                                            padding: '0.35rem 0.45rem',
+                                                            borderRadius: '7px',
+                                                            border: '1px solid rgba(16, 185, 129, 0.45)',
+                                                            background: 'rgba(16, 185, 129, 0.08)',
+                                                            flex: '1 1 210px',
+                                                            maxWidth: '100%',
+                                                            minWidth: 0
+                                                        }}
+                                                    >
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleOpenViewer(detailPendingAttachments, idx, 'Vista previa antes de subir')}
+                                                            style={{
+                                                                width: '34px',
+                                                                height: '34px',
+                                                                borderRadius: '5px',
+                                                                overflow: 'hidden',
+                                                                border: '1px solid var(--border-color)',
+                                                                background: 'var(--bg-card)',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                padding: 0,
+                                                                cursor: 'pointer',
+                                                                flexShrink: 0
+                                                            }}
+                                                        >
+                                                            {isPdf ? <FileText size={16} color="#ef4444" /> : <img src={att.data_url} alt={att.nombre_original} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                                                        </button>
+                                                        <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                                            <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                {att.nombre_original} · {formatBytes(att.tamano_bytes)}
+                                                            </div>
+                                                            <input
+                                                                type="text"
+                                                                className="form-control"
+                                                                maxLength={255}
+                                                                placeholder="Nota breve (opcional)..."
+                                                                value={att.nota || ''}
+                                                                onChange={(e) => {
+                                                                    const val = e.target.value;
+                                                                    setDetailPendingAttachments(prev => prev.map(x => x.tempId === att.tempId ? { ...x, nota: val } : x));
+                                                                }}
+                                                                style={{ height: '24px', fontSize: '0.71rem', padding: '0 0.4rem' }}
+                                                            />
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setDetailPendingAttachments(prev => prev.filter(x => x.tempId !== att.tempId))}
+                                                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '3px', flexShrink: 0 }}
+                                                            title="Quitar"
+                                                        >
+                                                            <X size={14} />
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn-primary"
+                                                disabled={uploadingDetailFiles}
+                                                onClick={handleUploadDetailAttachments}
+                                                style={{ height: '30px', padding: '0 0.75rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                            >
+                                                <Upload size={13} />
+                                                <span>{uploadingDetailFiles ? 'Subiendo...' : `Subir adjunto(s) ahora (${detailPendingAttachments.length})`}</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Galería de adjuntos guardados */}
+                            {detailAttachments.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                                    {detailAttachments.map((att, idx) => {
+                                        const isPdf = att.mime_type === 'application/pdf' || /\.pdf$/i.test(att.nombre_original || att.archivo_url || '');
+                                        const previewUrl = att.signed_url || att.archivo_url;
+                                        const isEditingThis = Number(editingAttId) === Number(att.id);
+                                        return (
+                                            <div
+                                                key={att.id}
+                                                style={{
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    gap: '0.3rem',
+                                                    padding: '0.4rem 0.5rem',
+                                                    borderRadius: '7px',
+                                                    border: att.es_evidencia_cumplimiento ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid var(--border-color)',
+                                                    background: 'var(--bg-card)',
+                                                    flex: '1 1 220px',
+                                                    maxWidth: '100%',
+                                                    minWidth: 0
+                                                }}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleOpenViewer(detailAttachments, idx, `Adjuntos — #${selectedTask.id} ${selectedTask.titulo}`)}
+                                                        style={{
+                                                            width: '40px',
+                                                            height: '40px',
+                                                            borderRadius: '6px',
+                                                            overflow: 'hidden',
+                                                            border: '1px solid var(--border-color)',
+                                                            background: 'var(--bg-secondary)',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            padding: 0,
+                                                            cursor: 'pointer',
+                                                            flexShrink: 0
+                                                        }}
+                                                        title="Abrir en visor"
+                                                    >
+                                                        {isPdf ? <FileText size={18} color="#ef4444" /> : <img src={previewUrl} alt={att.nombre_original} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                                                    </button>
+                                                    <div style={{ minWidth: 0, flex: 1 }}>
+                                                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {att.nombre_original}
+                                                        </div>
+                                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.3rem', alignItems: 'center' }}>
+                                                            <span>{formatBytes(att.tamano_bytes)}</span>
+                                                            {att.uploaded_by_name && <span>· {att.uploaded_by_name}</span>}
+                                                        </div>
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.15rem' }}>
+                                                            {att.es_evidencia_cumplimiento && (
+                                                                <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.08rem 0.35rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.16)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.35)' }}>
+                                                                    ✅ Evidencia
+                                                                </span>
+                                                            )}
+                                                            {att.comment_id && (
+                                                                <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '0.08rem 0.35rem', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.14)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                                                                    💬 Comentario
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ display: 'inline-flex', gap: '0.15rem', flexShrink: 0 }}>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                if (isEditingThis) {
+                                                                    setEditingAttId(null);
+                                                                    setEditingAttNota('');
+                                                                } else {
+                                                                    setEditingAttId(att.id);
+                                                                    setEditingAttNota(att.nota || '');
+                                                                }
+                                                            }}
+                                                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '3px' }}
+                                                            title="Editar nota"
+                                                        >
+                                                            <Edit2 size={13} />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteAttachment(att)}
+                                                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '3px' }}
+                                                            title="Eliminar adjunto"
+                                                        >
+                                                            <Trash2 size={13} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                {isEditingThis ? (
+                                                    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                                                        <input
+                                                            type="text"
+                                                            className="form-control"
+                                                            maxLength={255}
+                                                            placeholder="Nota del adjunto..."
+                                                            value={editingAttNota}
+                                                            onChange={(e) => setEditingAttNota(e.target.value)}
+                                                            style={{ height: '26px', fontSize: '0.72rem', flex: '1 1 120px', minWidth: 0, padding: '0 0.45rem' }}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            className="btn-primary"
+                                                            disabled={savingAttNota}
+                                                            onClick={() => handleSaveAttachmentNota(att)}
+                                                            style={{ height: '26px', padding: '0 0.5rem', fontSize: '0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}
+                                                        >
+                                                            <Save size={11} /> Guardar
+                                                        </button>
+                                                    </div>
+                                                ) : att.nota ? (
+                                                    <div style={{ fontSize: '0.71rem', color: 'var(--text-secondary)', wordBreak: 'break-word' }}>
+                                                        📝 {att.nota}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
                         {/* Comments / Bitácora Section */}
                         <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                             <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -2962,35 +3821,71 @@ export default function Tareas() {
                                             <span style={{ fontSize: '0.78rem', color: 'var(--text-primary)', whiteSpace: 'pre-line' }}>
                                                 {c.comentario}
                                             </span>
+                                            {Array.isArray(c.attachments) && c.attachments.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.25rem' }}>
+                                                    {c.attachments.map((ca, caIdx) => (
+                                                        <button
+                                                            key={ca.id || caIdx}
+                                                            type="button"
+                                                            onClick={() => handleOpenViewer(c.attachments, caIdx, `Evidencia de Comentario — #${selectedTask.id}`)}
+                                                            style={{
+                                                                fontSize: '0.69rem',
+                                                                padding: '0.12rem 0.45rem',
+                                                                borderRadius: '5px',
+                                                                border: '1px solid rgba(56, 189, 248, 0.35)',
+                                                                background: 'rgba(56, 189, 248, 0.12)',
+                                                                color: '#38bdf8',
+                                                                cursor: 'pointer',
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                gap: '0.25rem'
+                                                            }}
+                                                        >
+                                                            <Paperclip size={11} />
+                                                            <span>{ca.nombre_original}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     ))
                                 )}
                             </div>
 
                             {/* Add comment input */}
-                            <form onSubmit={handleAddComment} style={{ display: 'flex', gap: '0.45rem' }}>
+                            <form onSubmit={handleAddComment} style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
                                 <input
                                     type="text"
                                     className="form-control"
-                                    placeholder="Escribe un comentario o nota de avance..."
+                                    placeholder={detailPendingAttachments.length > 0 ? 'Nota o comentario de la evidencia (opcional)...' : 'Escribe un comentario o nota de avance...'}
                                     value={newCommentText}
                                     onChange={(e) => setNewCommentText(e.target.value)}
-                                    style={{ height: '34px', fontSize: '0.8rem' }}
+                                    style={{ height: '34px', fontSize: '0.8rem', flex: '1 1 180px', minWidth: 0 }}
                                 />
                                 <button
                                     type="submit"
-                                    disabled={submittingComment || !newCommentText.trim()}
+                                    disabled={submittingComment || (!newCommentText.trim() && detailPendingAttachments.length === 0)}
                                     className="btn-primary"
                                     style={{ height: '34px', padding: '0 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
                                 >
                                     <Send size={13} />
-                                    <span>Enviar</span>
+                                    <span>{detailPendingAttachments.length > 0 ? 'Enviar con evidencia' : 'Enviar'}</span>
                                 </button>
                             </form>
                         </div>
                     </div>
                 </Modal>
             )}
+
+            {/* VISOR LIGHTBOX DE ADJUNTOS Y EVIDENCIAS (R7.3) */}
+            <ReceiptViewerModal
+                open={viewerOpen}
+                onClose={() => { if (!confirmOpenRef.current) setViewerOpen(false); }}
+                comprobantes={viewerItems}
+                initialIndex={viewerIdx}
+                title={viewerTitle}
+                onDelete={handleDeleteAttachment}
+            />
 
             {/* MODAL COMPARTIDO MIBOT TELEGRAM PARA AGENDAR / NOTIFICAR TAREAS, ACTIVIDADES Y REUNIONES */}
             <MibotProgramarModal

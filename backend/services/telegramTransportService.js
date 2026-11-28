@@ -280,9 +280,133 @@ const sendChatAction = async (chatId, action = 'typing') => {
 };
 
 /**
- * Enviar un documento (ej. reporte PDF tamaño Carta) a un chat de Telegram
+ * Detecta el MIME type de una imagen por extensión o firma mágica (soporta WebP, GIF, JPEG, PNG)
  */
-const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE.pdf', caption = '') => {
+const detectImageMimeType = (filename = '', buffer = null) => {
+    const ext = String(filename || '').trim().toLowerCase();
+    if (ext.endsWith('.webp')) return 'image/webp';
+    if (ext.endsWith('.gif')) return 'image/gif';
+    if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) return 'image/jpeg';
+    if (ext.endsWith('.png')) return 'image/png';
+
+    if (Buffer.isBuffer(buffer) && buffer.length >= 12) {
+        if (buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+            return 'image/webp';
+        }
+        const head6 = buffer.subarray(0, 6).toString('ascii');
+        if (head6 === 'GIF87a' || head6 === 'GIF89a') {
+            return 'image/gif';
+        }
+    }
+    if (Buffer.isBuffer(buffer) && buffer.length >= 4) {
+        if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+            return 'image/png';
+        }
+        if (buffer[0] === 0xFF && buffer[1] === 0xD8) {
+            return 'image/jpeg';
+        }
+    }
+    return 'image/png';
+};
+
+/**
+ * Detecta el MIME type de un documento por extensión o firma mágica
+ */
+const detectDocumentMimeType = (filename = '', buffer = null) => {
+    const ext = String(filename || '').trim().toLowerCase();
+    if (ext.endsWith('.pdf')) return 'application/pdf';
+    if (ext.endsWith('.webp')) return 'image/webp';
+    if (ext.endsWith('.gif')) return 'image/gif';
+    if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) return 'image/jpeg';
+    if (ext.endsWith('.png')) return 'image/png';
+    if (ext.endsWith('.txt')) return 'text/plain';
+    if (ext.endsWith('.csv')) return 'text/csv';
+    if (ext.endsWith('.json')) return 'application/json';
+    if (ext.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    if (ext.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (ext.endsWith('.zip')) return 'application/zip';
+
+    if (Buffer.isBuffer(buffer) && buffer.length >= 5) {
+        if (buffer.subarray(0, 5).toString('ascii') === '%PDF-') return 'application/pdf';
+        if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+            return 'image/webp';
+        }
+        const head6 = buffer.length >= 6 ? buffer.subarray(0, 6).toString('ascii') : '';
+        if (head6 === 'GIF87a' || head6 === 'GIF89a') return 'image/gif';
+        if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return 'image/png';
+        if (buffer[0] === 0xFF && buffer[1] === 0xD8) return 'image/jpeg';
+    }
+    return 'application/octet-stream';
+};
+
+/**
+ * Trunca un caption de Telegram a <= 1020 chars evitando cortar a mitad de una etiqueta HTML
+ */
+const truncateTelegramCaption = (caption = '', maxLen = 1020) => {
+    if (!caption) return '';
+    const str = String(caption);
+    const safeMax = Math.max(1, Math.min(1024, Number(maxLen) || 1020));
+    if (str.length <= safeMax) return str;
+
+    let cut = str.slice(0, safeMax);
+    let closingSuffix = '';
+    const tagRegex = /<\/?([a-zA-Z0-9-]+)(?:\s[^>]*)?>/g;
+    const entityAtStartRegex = /^&(?:[a-zA-Z]{2,10}|#\d{1,7}|#x[0-9a-fA-F]{1,6});/;
+
+    // Bucle acotado: cut solo decrece hasta caber junto con todas las etiquetas de cierre pendientes
+    for (let iter = 0; iter <= safeMax; iter += 1) {
+        const lastOpen = cut.lastIndexOf('<');
+        const lastClose = cut.lastIndexOf('>');
+        if (lastOpen > lastClose) {
+            cut = cut.slice(0, lastOpen);
+        }
+
+        // Evitar partir entidades HTML (&amp;, &lt;, &#123;, etc.) al final del corte
+        const lastAmp = cut.lastIndexOf('&');
+        if (lastAmp !== -1 && !cut.slice(lastAmp).includes(';')) {
+            const entityMatch = entityAtStartRegex.exec(str.slice(lastAmp));
+            if (entityMatch && lastAmp + entityMatch[0].length > cut.length) {
+                cut = cut.slice(0, lastAmp);
+            }
+        }
+
+        const tagStack = [];
+        tagRegex.lastIndex = 0;
+        let m;
+        while ((m = tagRegex.exec(cut)) !== null) {
+            const full = m[0];
+            const tagName = m[1].toLowerCase();
+            if (full.startsWith('</')) {
+                const idx = tagStack.lastIndexOf(tagName);
+                if (idx !== -1) tagStack.splice(idx, 1);
+            } else if (!full.endsWith('/>')) {
+                tagStack.push(tagName);
+            }
+        }
+
+        closingSuffix = tagStack.slice().reverse().map((t) => `</${t}>`).join('');
+        if (cut.length + closingSuffix.length <= safeMax) {
+            break;
+        }
+
+        const nextLen = Math.max(0, safeMax - closingSuffix.length);
+        if (nextLen >= cut.length) {
+            cut = cut.slice(0, Math.max(0, cut.length - 1));
+        } else {
+            cut = cut.slice(0, nextLen);
+        }
+    }
+
+    if (!closingSuffix) {
+        return cut.trimEnd();
+    }
+    return `${cut.trimEnd()}${closingSuffix}`;
+};
+
+/**
+ * Enviar un documento (ej. reporte PDF tamaño Carta o adjunto) a un chat de Telegram
+ */
+const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE.pdf', caption = '', replyMarkup = null) => {
     if (!fileBuffer || !Buffer.isBuffer(fileBuffer) || fileBuffer.length === 0) {
         throw new Error('Buffer de documento inválido o vacío');
     }
@@ -290,46 +414,10 @@ const sendTelegramDocument = async (chatId, fileBuffer, filename = 'Reporte_SIPE
     const { token } = await getBotToken();
     if (!token) return null;
 
-    const safeCaption = caption ? String(caption).slice(0, 1020) : '';
-    const formData = new FormData();
-    formData.append('chat_id', String(chatId));
-    if (safeCaption) {
-        formData.append('caption', safeCaption);
-        formData.append('parse_mode', 'HTML');
-    }
-    const blob = new Blob([fileBuffer], { type: 'application/pdf' });
-    formData.append('document', blob, filename);
+    const safeFilename = filename || 'Reporte_SIPE.pdf';
+    const mimeType = detectDocumentMimeType(safeFilename, fileBuffer);
+    const safeCaption = truncateTelegramCaption(caption, 1020);
 
-    // Propiedades descriptivas adjuntas para inspección y pruebas
-    formData.chat_id = chatId;
-    formData.caption = safeCaption;
-    formData.parse_mode = 'HTML';
-    formData.filename = filename;
-    formData.fileBuffer = fileBuffer;
-
-    try {
-        const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendDocument`, formData, {
-            timeout: 30000
-        });
-        return res.data?.result || res.data || null;
-    } catch (err) {
-        console.error('[TelegramBot] Error enviando documento a chat:', chatId, redactSecrets(err.message));
-        return null;
-    }
-};
-
-/**
- * Enviar una imagen (PNG/JPEG, ej. gráficas ejecutivas) a un chat de Telegram
- */
-const sendTelegramPhoto = async (chatId, imageBuffer, caption = '', replyMarkup = null, filename = 'Grafica_SIPE.png') => {
-    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
-        throw new Error('Buffer de imagen inválido o vacío');
-    }
-
-    const { token } = await getBotToken();
-    if (!token) return null;
-
-    const safeCaption = caption ? String(caption).slice(0, 1020) : '';
     const buildForm = (useHtml) => {
         const formData = new FormData();
         formData.append('chat_id', String(chatId));
@@ -341,16 +429,76 @@ const sendTelegramPhoto = async (chatId, imageBuffer, caption = '', replyMarkup 
         if (replyMarkup && typeof replyMarkup === 'object') {
             formData.append('reply_markup', JSON.stringify(replyMarkup));
         }
-        const mimeType = String(filename || '').toLowerCase().endsWith('.jpg') || String(filename || '').toLowerCase().endsWith('.jpeg')
-            ? 'image/jpeg'
-            : 'image/png';
+        const blob = new Blob([fileBuffer], { type: mimeType });
+        formData.append('document', blob, safeFilename);
+
+        // Propiedades descriptivas adjuntas para inspección y pruebas
+        formData.chat_id = chatId;
+        formData.caption = safeCaption;
+        formData.parse_mode = useHtml ? 'HTML' : null;
+        formData.filename = safeFilename;
+        formData.mimeType = mimeType;
+        formData.fileBuffer = fileBuffer;
+        formData.reply_markup = replyMarkup || null;
+        return formData;
+    };
+
+    try {
+        const res = await axios.post(`${TELEGRAM_API_BASE}${token}/sendDocument`, buildForm(true), {
+            timeout: 30000
+        });
+        return res.data?.result || res.data || null;
+    } catch (err) {
+        if (err.response?.data?.description?.includes("can't parse entities") && safeCaption) {
+            try {
+                const fbRes = await axios.post(`${TELEGRAM_API_BASE}${token}/sendDocument`, buildForm(false), {
+                    timeout: 30000
+                });
+                return fbRes.data?.result || fbRes.data || null;
+            } catch (fbErr) {
+                console.error('[TelegramBot] Error enviando documento fallback:', redactSecrets(fbErr.message));
+                return null;
+            }
+        }
+        console.error('[TelegramBot] Error enviando documento a chat:', chatId, redactSecrets(err.message));
+        return null;
+    }
+};
+
+/**
+ * Enviar una imagen (WebP/PNG/JPEG/GIF, ej. capturas o gráficas ejecutivas) a un chat de Telegram
+ */
+const sendTelegramPhoto = async (chatId, imageBuffer, caption = '', replyMarkup = null, filename = 'Grafica_SIPE.png') => {
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+        throw new Error('Buffer de imagen inválido o vacío');
+    }
+
+    const { token } = await getBotToken();
+    if (!token) return null;
+
+    const safeFilename = filename || 'Grafica_SIPE.png';
+    const mimeType = detectImageMimeType(safeFilename, imageBuffer);
+    const safeCaption = truncateTelegramCaption(caption, 1020);
+
+    const buildForm = (useHtml) => {
+        const formData = new FormData();
+        formData.append('chat_id', String(chatId));
+        if (safeCaption) {
+            const cap = useHtml ? safeCaption : safeCaption.replace(/<[^>]*>?/gm, '');
+            formData.append('caption', cap);
+            if (useHtml) formData.append('parse_mode', 'HTML');
+        }
+        if (replyMarkup && typeof replyMarkup === 'object') {
+            formData.append('reply_markup', JSON.stringify(replyMarkup));
+        }
         const blob = new Blob([imageBuffer], { type: mimeType });
-        formData.append('photo', blob, filename || 'Grafica_SIPE.png');
+        formData.append('photo', blob, safeFilename);
 
         formData.chat_id = chatId;
         formData.caption = safeCaption;
         formData.parse_mode = useHtml ? 'HTML' : null;
-        formData.filename = filename || 'Grafica_SIPE.png';
+        formData.filename = safeFilename;
+        formData.mimeType = mimeType;
         formData.fileBuffer = imageBuffer;
         formData.reply_markup = replyMarkup || null;
         return formData;
@@ -577,6 +725,9 @@ module.exports = {
     sendTelegramMessage,
     sendTelegramMessageDetailed,
     sendChatAction,
+    detectImageMimeType,
+    detectDocumentMimeType,
+    truncateTelegramCaption,
     sendTelegramDocument,
     sendTelegramPhoto,
     sendTelegramAudio,

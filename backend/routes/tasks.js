@@ -1,6 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { getDb, getExternalDb } = require('../db');
+const dbModule = require('../db');
+const getDb = (...args) => dbModule.getDb(...args);
+const getExternalDb = (...args) => dbModule.getExternalDb(...args);
+const ensureTaskAttachmentsTable = (...args) => (
+    typeof dbModule.ensureTaskAttachmentsTable === 'function'
+        ? dbModule.ensureTaskAttachmentsTable(...args)
+        : Promise.resolve()
+);
 const { authenticateToken, requirePermission, isAdminUser } = require('../middleware/auth');
 const { sendSafeError } = require('../utils/errorHandler');
 const {
@@ -8,7 +15,12 @@ const {
     createMibotProgramacion,
     getActiveMibotSummaryByTaskIds,
     listMibotProgramaciones,
-    setRealtimeIo
+    setRealtimeIo,
+    normalizeIncomingTaskAttachments,
+    saveTaskAttachmentBuffer,
+    unlinkTaskAttachmentFile,
+    deleteTaskAttachmentFileIfUnreferenced,
+    formatSignedTaskAttachmentRow
 } = require('../services/mibotNotifierService');
 
 router.use((req, _res, next) => {
@@ -74,6 +86,115 @@ const hasTaskManagePermission = (user) => {
     return taskPerms.some(p => perms.includes(p));
 };
 
+const hasManageTasksOnly = (user) => {
+    if (!user) return false;
+    if (isAdminUser(user)) return true;
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    return perms.includes('manage_tasks');
+};
+
+const isTaskCreatorOrAssignee = (user, task) => {
+    if (!user || !task) return false;
+    const uid = Number(user.id);
+    return Number(task.created_by) === uid || Number(task.assigned_to) === uid;
+};
+
+const canAccessTask = (user, task) => {
+    return hasTaskManagePermission(user) || isTaskCreatorOrAssignee(user, task);
+};
+
+const canModifyAttachment = (user, task, att) => {
+    if (!user || !task) return false;
+    if (hasManageTasksOnly(user)) return true;
+    const uid = Number(user.id);
+    if (Number(task.created_by) === uid) return true;
+    if (att && att.uploaded_by && Number(att.uploaded_by) === uid) return true;
+    return false;
+};
+
+async function runInTaskTransaction(db, callback) {
+    if (db && typeof db.getConnection === 'function') {
+        const conn = await db.getConnection();
+        try {
+            await conn.beginTransaction();
+            const result = await callback(conn);
+            await conn.commit();
+            return result;
+        } catch (err) {
+            await conn.rollback();
+            throw err;
+        } finally {
+            conn.release();
+        }
+    }
+    if (typeof dbModule.getDbIfReady === 'function' && dbModule.getDbIfReady() && typeof dbModule.withTransaction === 'function') {
+        return dbModule.withTransaction(callback);
+    }
+    return callback(db);
+}
+
+async function fetchTaskAttachmentsByTaskId(dbOrConn, taskId) {
+    const [attRows] = await dbOrConn.query(
+        'SELECT * FROM task_attachments WHERE task_id = ? ORDER BY created_at ASC, id ASC',
+        [Number(taskId)]
+    );
+    return (attRows || []).map(formatSignedTaskAttachmentRow);
+}
+
+async function insertTaskAttachmentRow(conn, {
+    taskId,
+    commentId = null,
+    savedFile,
+    ancho = null,
+    alto = null,
+    nota = null,
+    esEvidenciaCumplimiento = false,
+    uploadedBy = null,
+    uploadedByName = null
+}) {
+    const [insRes] = await conn.query(
+        `INSERT INTO task_attachments
+            (task_id, comment_id, nombre_original, archivo_url, mime_type, tamano_bytes, ancho, alto, nota, uploaded_by, uploaded_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+            Number(taskId),
+            commentId ? Number(commentId) : null,
+            savedFile.nombre_original,
+            savedFile.archivo_url,
+            savedFile.mime_type,
+            savedFile.tamano_bytes,
+            ancho,
+            alto,
+            nota,
+            uploadedBy ? Number(uploadedBy) : null,
+            uploadedByName ? String(uploadedByName).slice(0, 120) : null
+        ]
+    );
+    const insertId = insRes?.insertId;
+    if (esEvidenciaCumplimiento && insertId) {
+        await conn.query(
+            'UPDATE task_attachments SET es_evidencia_cumplimiento = ? WHERE id = ?',
+            [1, insertId]
+        ).catch(() => {});
+    }
+    return formatSignedTaskAttachmentRow({
+        id: insertId,
+        task_id: Number(taskId),
+        comment_id: commentId ? Number(commentId) : null,
+        nombre_original: savedFile.nombre_original,
+        archivo_url: savedFile.archivo_url,
+        mime_type: savedFile.mime_type,
+        tamano_bytes: savedFile.tamano_bytes,
+        ancho,
+        alto,
+        nota,
+        es_evidencia_cumplimiento: Boolean(esEvidenciaCumplimiento),
+        uploaded_by: uploadedBy ? Number(uploadedBy) : null,
+        uploaded_by_name: uploadedByName ? String(uploadedByName).slice(0, 120) : null,
+        created_at: new Date().toISOString()
+    });
+}
+
 /**
  * GET /api/tasks/collaborators
  * Retrieve all active collaborators/users available for task assignment
@@ -120,6 +241,7 @@ router.get('/collaborators', authenticateToken, async (req, res) => {
 router.get('/', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
+        await ensureTaskAttachmentsTable(db).catch(() => {});
         const {
             search,
             assigned_to,
@@ -205,11 +327,27 @@ router.get('/', authenticateToken, async (req, res) => {
         `;
 
         const [rows] = await db.query(query, params);
-        const mibotMap = await getActiveMibotSummaryByTaskIds(db, rows.map(r => r.id));
+        const taskIds = rows.map(r => Number(r.id)).filter(n => Number.isFinite(n) && n > 0);
+        const attCountMap = new Map();
+        if (taskIds.length > 0) {
+            const ph = taskIds.map(() => '?').join(',');
+            const [attRows] = await db.query(
+                `SELECT task_id FROM task_attachments WHERE task_id IN (${ph})`,
+                taskIds
+            ).catch(() => [[]]);
+            for (const ar of (attRows || [])) {
+                const tid = Number(ar.task_id);
+                attCountMap.set(tid, (attCountMap.get(tid) || 0) + 1);
+            }
+        }
+        const mibotMap = await getActiveMibotSummaryByTaskIds(db, taskIds);
 
-        // Normalize checklist JSON & attach MiBot summary
+        // Normalize checklist JSON & attach MiBot summary & attachments_count
         const tasks = rows.map(t => ({
             ...t,
+            attachments_count: attCountMap.has(Number(t.id))
+                ? attCountMap.get(Number(t.id))
+                : Number(t.attachments_count || 0),
             checklist: typeof t.checklist === 'string' ? JSON.parse(t.checklist) : (t.checklist || []),
             mibot_summary: mibotMap.get(Number(t.id)) || null
         }));
@@ -266,7 +404,11 @@ async function scheduleMibotForTask({ db, req, task, mibotConfig }) {
             enviar_ahora: Boolean(mibotConfig.enviar_ahora),
             programado_para: mibotConfig.enviar_ahora ? undefined : mibotConfig.programado_para,
             frecuencia: mibotConfig.frecuencia || 'UNA_VEZ',
-            prioridad: task.prioridad || 'media'
+            prioridad: task.prioridad || 'media',
+            incluir_adjuntos: Boolean(mibotConfig.incluir_adjuntos),
+            attachment_ids: Boolean(mibotConfig.incluir_adjuntos) && Array.isArray(mibotConfig.attachment_ids)
+                ? mibotConfig.attachment_ids
+                : undefined
         },
         actorUser: req.user,
         io,
@@ -333,12 +475,149 @@ router.get('/kpis/summary', authenticateToken, async (req, res) => {
 });
 
 /**
+ * PATCH /api/tasks/attachments/:attachmentId
+ * Update attachment note and/or fulfillment evidence flag
+ * (Registered BEFORE /:id routes so Express does not shadow it)
+ */
+router.patch('/attachments/:attachmentId', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureTaskAttachmentsTable(db).catch(() => {});
+        const attachmentId = parseInt(req.params.attachmentId, 10);
+        if (!Number.isFinite(attachmentId) || attachmentId <= 0) {
+            return res.status(400).json({ message: 'ID de adjunto inválido.' });
+        }
+
+        const [attRows] = await db.query('SELECT * FROM task_attachments WHERE id = ?', [attachmentId]);
+        if (!attRows || attRows.length === 0) {
+            return res.status(404).json({ message: 'Adjunto no encontrado.' });
+        }
+        const att = attRows[0];
+
+        const [taskRows] = await db.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [att.task_id]);
+        if (!taskRows || taskRows.length === 0) {
+            return res.status(404).json({ message: 'Tarea asociada no encontrada.' });
+        }
+        const task = taskRows[0];
+
+        if (!canModifyAttachment(req.user, task, att)) {
+            return res.status(403).json({ message: 'No tiene permisos para modificar este adjunto.' });
+        }
+
+        const hasNota = Object.prototype.hasOwnProperty.call(req.body || {}, 'nota');
+        const hasEvidencia = Object.prototype.hasOwnProperty.call(req.body || {}, 'es_evidencia_cumplimiento');
+        if (!hasNota && !hasEvidencia) {
+            return res.status(400).json({ message: 'Debe indicar al menos nota o es_evidencia_cumplimiento.' });
+        }
+
+        const nextNota = hasNota
+            ? (req.body.nota !== null && req.body.nota !== undefined && String(req.body.nota).trim()
+                ? String(req.body.nota).trim().slice(0, 255)
+                : null)
+            : (att.nota || null);
+        const nextEvidencia = hasEvidencia
+            ? Boolean(req.body.es_evidencia_cumplimiento)
+            : Boolean(att.es_evidencia_cumplimiento);
+
+        await db.query(
+            'UPDATE task_attachments SET nota = ?, es_evidencia_cumplimiento = ? WHERE id = ?',
+            [nextNota, nextEvidencia ? 1 : 0, attachmentId]
+        );
+
+        const updatedAttachment = formatSignedTaskAttachmentRow({
+            ...att,
+            nota: nextNota,
+            es_evidencia_cumplimiento: nextEvidencia
+        });
+
+        emitTaskEvent(req, 'tasks:changed', {
+            action: 'attachment_updated',
+            taskId: Number(att.task_id),
+            attachment: updatedAttachment
+        });
+
+        res.json({
+            message: 'Adjunto actualizado con éxito',
+            attachment: updatedAttachment
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al actualizar el adjunto');
+    }
+});
+
+/**
+ * DELETE /api/tasks/attachments/:attachmentId
+ * Delete a task attachment with refcount-safe physical file removal
+ * (Registered BEFORE /:id routes so Express does not shadow it)
+ */
+router.delete('/attachments/:attachmentId', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureTaskAttachmentsTable(db).catch(() => {});
+        const attachmentId = parseInt(req.params.attachmentId, 10);
+        if (!Number.isFinite(attachmentId) || attachmentId <= 0) {
+            return res.status(400).json({ message: 'ID de adjunto inválido.' });
+        }
+
+        const deletedInfo = await runInTaskTransaction(db, async (conn) => {
+            const [attRows] = await conn.query('SELECT * FROM task_attachments WHERE id = ?', [attachmentId]);
+            if (!attRows || attRows.length === 0) {
+                const err = new Error('Adjunto no encontrado.');
+                err.status = 404;
+                throw err;
+            }
+            const att = attRows[0];
+
+            const [taskRows] = await conn.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [att.task_id]);
+            if (!taskRows || taskRows.length === 0) {
+                const err = new Error('Tarea asociada no encontrada.');
+                err.status = 404;
+                throw err;
+            }
+            const task = taskRows[0];
+
+            if (!canModifyAttachment(req.user, task, att)) {
+                const err = new Error('No tiene permisos para eliminar este adjunto.');
+                err.status = 403;
+                throw err;
+            }
+
+            await conn.query('DELETE FROM task_attachments WHERE id = ?', [attachmentId]);
+            return {
+                taskId: Number(att.task_id),
+                archivoUrl: att.archivo_url
+            };
+        });
+
+        await deleteTaskAttachmentFileIfUnreferenced(db, deletedInfo.archivoUrl);
+
+        emitTaskEvent(req, 'tasks:changed', {
+            action: 'attachment_deleted',
+            taskId: deletedInfo.taskId,
+            attachmentId
+        });
+
+        res.json({
+            message: 'Adjunto eliminado con éxito',
+            task_id: deletedInfo.taskId,
+            attachment_id: attachmentId
+        });
+    } catch (error) {
+        if (error.status === 400 || error.status === 403 || error.status === 404) {
+            return res.status(error.status).json({ message: error.message });
+        }
+        sendSafeError(res, error, 'Error al eliminar el adjunto');
+    }
+});
+
+/**
  * GET /api/tasks/:id
- * Retrieve single task with comments
+ * Retrieve single task with comments and attachments
  */
 router.get('/:id', authenticateToken, async (req, res) => {
     try {
         const db = getDb();
+        await ensureTaskAttachmentsTable(db).catch(() => {});
         const taskId = req.params.id;
 
         const [tasks] = await db.query(`
@@ -361,14 +640,14 @@ router.get('/:id', authenticateToken, async (req, res) => {
         }
 
         const task = tasks[0];
-        if (!hasTaskManagePermission(req.user) && Number(task.created_by) !== Number(req.user.id) && Number(task.assigned_to) !== Number(req.user.id)) {
+        if (!canAccessTask(req.user, task)) {
             return res.status(403).json({ message: 'No tiene permisos para ver esta tarea.' });
         }
 
         task.checklist = typeof task.checklist === 'string' ? JSON.parse(task.checklist) : (task.checklist || []);
 
-        // Fetch comments & MiBot schedules
-        const [commentsResult, mibotMap, mibotProgramaciones] = await Promise.all([
+        // Fetch comments, attachments & MiBot schedules
+        const [commentsResult, attachments, mibotMap, mibotProgramaciones] = await Promise.all([
             db.query(`
                 SELECT 
                     tc.*,
@@ -379,14 +658,22 @@ router.get('/:id', authenticateToken, async (req, res) => {
                 WHERE tc.task_id = ?
                 ORDER BY tc.created_at ASC
             `, [taskId]),
+            fetchTaskAttachmentsByTaskId(db, taskId),
             getActiveMibotSummaryByTaskIds(db, [taskId]),
             listMibotProgramaciones(db, { taskId: Number(taskId), limit: 25 }).catch(() => [])
         ]);
         const [comments] = commentsResult;
 
+        const commentsWithAttachments = (comments || []).map(c => ({
+            ...c,
+            attachments: attachments.filter(a => Number(a.comment_id) === Number(c.id))
+        }));
+
         res.json({
             ...task,
-            comments,
+            comments: commentsWithAttachments,
+            attachments,
+            attachments_count: attachments.length,
             mibot_summary: mibotMap.get(Number(taskId)) || null,
             mibot_programaciones: mibotProgramaciones || []
         });
@@ -396,12 +683,149 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 /**
+ * GET /api/tasks/:id/attachments
+ * List attachments for a task
+ */
+router.get('/:id/attachments', authenticateToken, async (req, res) => {
+    try {
+        const db = getDb();
+        await ensureTaskAttachmentsTable(db).catch(() => {});
+        const taskId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(taskId) || taskId <= 0) {
+            return res.status(400).json({ message: 'ID de tarea inválido.' });
+        }
+
+        const [taskRows] = await db.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [taskId]);
+        if (!taskRows || taskRows.length === 0) {
+            return res.status(404).json({ message: 'Tarea no encontrada' });
+        }
+        if (!canAccessTask(req.user, taskRows[0])) {
+            return res.status(403).json({ message: 'No tiene permisos para ver los adjuntos de esta tarea.' });
+        }
+
+        const attachments = await fetchTaskAttachmentsByTaskId(db, taskId);
+        res.json({
+            task_id: taskId,
+            attachments,
+            count: attachments.length
+        });
+    } catch (error) {
+        sendSafeError(res, error, 'Error al consultar adjuntos de la tarea');
+    }
+});
+
+/**
+ * POST /api/tasks/:id/attachments
+ * Upload 1 or up to 10 attachments (images or PDFs) to an existing task
+ */
+router.post('/:id/attachments', authenticateToken, async (req, res) => {
+    const savedFilesForRollback = [];
+    try {
+        const db = getDb();
+        await ensureTaskAttachmentsTable(db).catch(() => {});
+        const taskId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(taskId) || taskId <= 0) {
+            return res.status(400).json({ message: 'ID de tarea inválido.' });
+        }
+
+        const incomingAttachments = normalizeIncomingTaskAttachments(req.body || {});
+        if (incomingAttachments.length === 0) {
+            return res.status(400).json({ message: 'Debe proporcionar al menos un archivo adjunto válido.' });
+        }
+
+        const commentIdRaw = req.body?.comment_id !== undefined && req.body?.comment_id !== null && req.body?.comment_id !== ''
+            ? parseInt(req.body.comment_id, 10)
+            : null;
+        if (req.body?.comment_id !== undefined && req.body?.comment_id !== null && req.body?.comment_id !== '' && (!Number.isFinite(commentIdRaw) || commentIdRaw <= 0)) {
+            return res.status(400).json({ message: 'ID de comentario inválido.' });
+        }
+
+        const uploaderName = req.user.nombre || req.user.username || 'Usuario';
+
+        const savedAttachments = await runInTaskTransaction(db, async (conn) => {
+            const [taskRows] = await conn.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [taskId]);
+            if (!taskRows || taskRows.length === 0) {
+                const err = new Error('Tarea no encontrada');
+                err.status = 404;
+                throw err;
+            }
+            if (!canAccessTask(req.user, taskRows[0])) {
+                const err = new Error('No tiene permisos para adjuntar archivos a esta tarea.');
+                err.status = 403;
+                throw err;
+            }
+
+            if (commentIdRaw) {
+                const [commentRows] = await conn.query(
+                    'SELECT id, task_id FROM task_comments WHERE id = ? AND task_id = ?',
+                    [commentIdRaw, taskId]
+                );
+                if (!commentRows || commentRows.length === 0) {
+                    const err = new Error('El comentario indicado no pertenece a esta tarea.');
+                    err.status = 400;
+                    throw err;
+                }
+            }
+
+            const inserted = [];
+            for (const item of incomingAttachments) {
+                const savedFile = saveTaskAttachmentBuffer({
+                    parsed: item.parsed,
+                    nombreOriginal: item.nombre_original,
+                    taskId,
+                    prefix: 'tarea'
+                });
+                savedFilesForRollback.push(savedFile.archivo_url);
+                const row = await insertTaskAttachmentRow(conn, {
+                    taskId,
+                    commentId: commentIdRaw,
+                    savedFile,
+                    ancho: item.ancho,
+                    alto: item.alto,
+                    nota: item.nota,
+                    esEvidenciaCumplimiento: item.es_evidencia_cumplimiento,
+                    uploadedBy: req.user.id,
+                    uploadedByName: uploaderName
+                });
+                inserted.push(row);
+            }
+            return inserted;
+        });
+
+        emitTaskEvent(req, 'tasks:changed', {
+            action: 'attachments_added',
+            taskId,
+            attachments: savedAttachments
+        });
+
+        res.status(201).json({
+            message: savedAttachments.length > 1
+                ? `${savedAttachments.length} adjuntos guardados con éxito`
+                : 'Adjunto guardado con éxito',
+            task_id: taskId,
+            attachments: savedAttachments,
+            attachment: savedAttachments[0]
+        });
+    } catch (error) {
+        for (const url of savedFilesForRollback) {
+            unlinkTaskAttachmentFile(url);
+        }
+        if (error.status === 400 || error.status === 403 || error.status === 404) {
+            return res.status(error.status).json({ message: error.message });
+        }
+        sendSafeError(res, error, 'Error al guardar adjunto(s) de tarea');
+    }
+});
+
+/**
  * POST /api/tasks
  * Create a new task (and optionally schedule/dispatch MiBot Telegram notification)
  */
 router.post('/', authenticateToken, requirePermission(taskPerms), async (req, res) => {
+    const savedFilesForRollback = [];
     try {
         const db = getDb();
+        await ensureTaskAttachmentsTable(db).catch(() => {});
         const {
             titulo,
             descripcion,
@@ -436,6 +860,7 @@ router.post('/', authenticateToken, requirePermission(taskPerms), async (req, re
             return res.status(400).json({ message: 'La fecha de vencimiento es obligatoria.' });
         }
 
+        const incomingAttachments = normalizeIncomingTaskAttachments(req.body || {});
         const checklistJson = JSON.stringify(Array.isArray(checklist) ? checklist : []);
         const creatorName = req.user.nombre || req.user.username || 'Un usuario';
 
@@ -465,63 +890,106 @@ router.post('/', authenticateToken, requirePermission(taskPerms), async (req, re
         }
         const extraUnmappedTgIds = selectedDestIds.filter(id => !mappedTgIds.has(id));
 
+        const persistedTasks = await runInTaskTransaction(db, async (conn) => {
+            const insertedTasks = [];
+            const savedDiskEntries = [];
+            for (const item of incomingAttachments) {
+                const savedFile = saveTaskAttachmentBuffer({
+                    parsed: item.parsed,
+                    nombreOriginal: item.nombre_original,
+                    taskId: 0,
+                    prefix: 'tarea'
+                });
+                savedFilesForRollback.push(savedFile.archivo_url);
+                savedDiskEntries.push({ item, savedFile });
+            }
+
+            for (let idx = 0; idx < assigneeIds.length; idx++) {
+                const targetUserId = assigneeIds[idx];
+
+                const [result] = await conn.query(`
+                    INSERT INTO tasks (
+                        titulo,
+                        descripcion,
+                        tipo_plazo,
+                        fecha_inicio,
+                        fecha_vencimiento,
+                        hora_limite,
+                        prioridad,
+                        estado,
+                        categoria,
+                        assigned_to,
+                        created_by,
+                        checklist
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?)
+                `, [
+                    titulo.trim().toUpperCase(),
+                    descripcion ? descripcion.trim() : null,
+                    tipo_plazo,
+                    tipo_plazo === 'rango' && fecha_inicio ? fecha_inicio : null,
+                    fecha_vencimiento,
+                    hora_limite || null,
+                    prioridad,
+                    categoria || 'General',
+                    targetUserId,
+                    req.user.id,
+                    checklistJson
+                ]);
+
+                const newTaskId = result.insertId;
+                const taskAtts = [];
+                for (const entry of savedDiskEntries) {
+                    const attRow = await insertTaskAttachmentRow(conn, {
+                        taskId: newTaskId,
+                        commentId: null,
+                        savedFile: entry.savedFile,
+                        ancho: entry.item.ancho,
+                        alto: entry.item.alto,
+                        nota: entry.item.nota,
+                        esEvidenciaCumplimiento: entry.item.es_evidencia_cumplimiento,
+                        uploadedBy: req.user.id,
+                        uploadedByName: creatorName
+                    });
+                    taskAtts.push(attRow);
+                }
+
+                const [rows] = await conn.query(`
+                    SELECT 
+                        t.*,
+                        DATE_FORMAT(t.fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
+                        DATE_FORMAT(t.fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento,
+                        COALESCE(u1.nombre, u1.username) AS assigned_user_name,
+                        COALESCE(u2.nombre, u2.username) AS created_user_name
+                    FROM tasks t
+                    LEFT JOIN users u1 ON t.assigned_to = u1.id
+                    LEFT JOIN users u2 ON t.created_by = u2.id
+                    WHERE t.id = ?
+                `, [newTaskId]);
+
+                insertedTasks.push({
+                    idx,
+                    targetUserId,
+                    task: {
+                        ...rows[0],
+                        checklist: Array.isArray(checklist) ? checklist : [],
+                        attachments: taskAtts,
+                        attachments_count: taskAtts.length
+                    }
+                });
+            }
+            return insertedTasks;
+        });
+
         const createdTasks = [];
         let firstMibotResult = null;
         let firstMibotStatusLabel = null;
         let totalMibotSent = 0;
         let totalMibotRecipients = 0;
 
-        for (let idx = 0; idx < assigneeIds.length; idx++) {
-            const targetUserId = assigneeIds[idx];
-
-            const [result] = await db.query(`
-                INSERT INTO tasks (
-                    titulo,
-                    descripcion,
-                    tipo_plazo,
-                    fecha_inicio,
-                    fecha_vencimiento,
-                    hora_limite,
-                    prioridad,
-                    estado,
-                    categoria,
-                    assigned_to,
-                    created_by,
-                    checklist
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?)
-            `, [
-                titulo.trim().toUpperCase(),
-                descripcion ? descripcion.trim() : null,
-                tipo_plazo,
-                tipo_plazo === 'rango' && fecha_inicio ? fecha_inicio : null,
-                fecha_vencimiento,
-                hora_limite || null,
-                prioridad,
-                categoria || 'General',
-                targetUserId,
-                req.user.id,
-                checklistJson
-            ]);
-
-            const newTaskId = result.insertId;
-
-            const [rows] = await db.query(`
-                SELECT 
-                    t.*,
-                    DATE_FORMAT(t.fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
-                    DATE_FORMAT(t.fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento,
-                    COALESCE(u1.nombre, u1.username) AS assigned_user_name,
-                    COALESCE(u2.nombre, u2.username) AS created_user_name
-                FROM tasks t
-                LEFT JOIN users u1 ON t.assigned_to = u1.id
-                LEFT JOIN users u2 ON t.created_by = u2.id
-                WHERE t.id = ?
-            `, [newTaskId]);
-
-            let createdTask = {
-                ...rows[0],
-                checklist: Array.isArray(checklist) ? checklist : []
-            };
+        for (const entry of persistedTasks) {
+            const { idx, targetUserId } = entry;
+            let createdTask = entry.task;
+            const newTaskId = createdTask.id;
 
             let mibotResult = null;
             let mibotStatusLabel = null;
@@ -536,11 +1004,20 @@ router.post('/', authenticateToken, requirePermission(taskPerms), async (req, re
                     }
 
                     if (destsForThisTask.length > 0) {
+                        const createdAttIds = (createdTask.attachments || []).map(a => a.id).filter(Boolean);
+                        const shouldIncludeMedia = mibot.incluir_adjuntos !== undefined
+                            ? Boolean(mibot.incluir_adjuntos)
+                            : createdAttIds.length > 0;
                         mibotResult = await scheduleMibotForTask({
                             db,
                             req,
                             task: createdTask,
-                            mibotConfig: { ...mibot, destinatario_ids: destsForThisTask }
+                            mibotConfig: {
+                                ...mibot,
+                                destinatario_ids: destsForThisTask,
+                                incluir_adjuntos: shouldIncludeMedia,
+                                attachment_ids: Array.isArray(mibot.attachment_ids) ? mibot.attachment_ids : createdAttIds
+                            }
                         });
                         if (!firstMibotResult) firstMibotResult = mibotResult;
                         if (mibotResult?.programacion) {
@@ -620,6 +1097,12 @@ router.post('/', authenticateToken, requirePermission(taskPerms), async (req, re
             mibot: firstMibotResult
         });
     } catch (error) {
+        for (const url of savedFilesForRollback) {
+            unlinkTaskAttachmentFile(url);
+        }
+        if (error.status === 400 || error.status === 403 || error.status === 404) {
+            return res.status(error.status).json({ message: error.message });
+        }
         sendSafeError(res, error, 'Error al crear la tarea');
     }
 });
@@ -639,7 +1122,7 @@ router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
         }
 
         const taskRow = existingTasks[0];
-        if (!isAdminUser(req.user) && taskRow.created_by !== req.user.id && taskRow.assigned_to !== req.user.id) {
+        if (!isAdminUser(req.user) && Number(taskRow.created_by) !== Number(req.user.id) && Number(taskRow.assigned_to) !== Number(req.user.id)) {
             return res.status(403).json({ message: 'No tiene permisos para modificar esta tarea.' });
         }
 
@@ -720,9 +1203,13 @@ router.put('/:id', authenticateToken, requirePermission(taskPerms), async (req, 
             WHERE t.id = ?
         `, [taskId]);
 
+        await ensureTaskAttachmentsTable(db).catch(() => {});
+        const existingAttachments = await fetchTaskAttachmentsByTaskId(db, taskId);
         let updatedTask = {
             ...rows[0],
-            checklist: typeof rows[0]?.checklist === 'string' ? JSON.parse(rows[0].checklist) : (rows[0]?.checklist || [])
+            checklist: typeof rows[0]?.checklist === 'string' ? JSON.parse(rows[0].checklist) : (rows[0]?.checklist || []),
+            attachments: existingAttachments,
+            attachments_count: existingAttachments.length
         };
 
         let mibotResult = null;
@@ -941,86 +1428,176 @@ router.patch('/:id/checklist', authenticateToken, async (req, res) => {
 
 /**
  * DELETE /api/tasks/:id
- * Delete task (admin or creator)
+ * Delete task (admin or creator) and cleanup unreferenced attachment files
  */
 router.delete('/:id', authenticateToken, requirePermission(taskPerms), async (req, res) => {
     try {
         const db = getDb();
-        const taskId = req.params.id;
-
-        const [tasks] = await db.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [taskId]);
-        if (tasks.length === 0) {
-            return res.status(404).json({ message: 'Tarea no encontrada' });
+        await ensureTaskAttachmentsTable(db).catch(() => {});
+        const taskId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(taskId) || taskId <= 0) {
+            return res.status(400).json({ message: 'ID de tarea inválido.' });
         }
 
-        const task = tasks[0];
-        // Allow deletion if Administrator, creator or assigned
-        if (!isAdminUser(req.user) && task.created_by !== req.user.id) {
-            return res.status(403).json({ message: 'No tiene permisos para eliminar esta tarea.' });
-        }
+        const deletedUrls = await runInTaskTransaction(db, async (conn) => {
+            const [tasks] = await conn.query('SELECT id, created_by, assigned_to FROM tasks WHERE id = ?', [taskId]);
+            if (tasks.length === 0) {
+                const err = new Error('Tarea no encontrada');
+                err.status = 404;
+                throw err;
+            }
 
-        await db.query('DELETE FROM tasks WHERE id = ?', [taskId]);
+            const task = tasks[0];
+            if (!isAdminUser(req.user) && Number(task.created_by) !== Number(req.user.id)) {
+                const err = new Error('No tiene permisos para eliminar esta tarea.');
+                err.status = 403;
+                throw err;
+            }
+
+            const [attRows] = await conn.query(
+                'SELECT archivo_url FROM task_attachments WHERE task_id = ?',
+                [taskId]
+            );
+            const urls = [...new Set((attRows || []).map(r => r.archivo_url).filter(Boolean))];
+
+            await conn.query('DELETE FROM tasks WHERE id = ?', [taskId]);
+            return urls;
+        });
+
+        for (const url of deletedUrls) {
+            await deleteTaskAttachmentFileIfUnreferenced(db, url);
+        }
 
         emitTaskEvent(req, 'tasks:changed', { action: 'deleted', taskId });
 
         res.json({ message: 'Tarea eliminada con éxito' });
     } catch (error) {
+        if (error.status === 400 || error.status === 403 || error.status === 404) {
+            return res.status(error.status).json({ message: error.message });
+        }
         sendSafeError(res, error, 'Error al eliminar la tarea');
     }
 });
 
 /**
  * POST /api/tasks/:id/comments
- * Add comment to task
+ * Add comment (and optional fulfillment evidence attachments) to task
  */
-router.post('/:id/comments', authenticateToken, requirePermission(taskPerms), async (req, res) => {
+router.post('/:id/comments', authenticateToken, async (req, res) => {
+    const savedFilesForRollback = [];
     try {
         const db = getDb();
-        const taskId = req.params.id;
-        const { comentario } = req.body;
-
-        if (!comentario || !comentario.trim()) {
-            return res.status(400).json({ message: 'El comentario no puede estar vacío.' });
+        await ensureTaskAttachmentsTable(db).catch(() => {});
+        const taskId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(taskId) || taskId <= 0) {
+            return res.status(400).json({ message: 'ID de tarea inválido.' });
         }
 
-        const [result] = await db.query(`
-            INSERT INTO task_comments (task_id, user_id, comentario)
-            VALUES (?, ?, ?)
-        `, [taskId, req.user.id, comentario.trim()]);
+        const incomingAttachments = normalizeIncomingTaskAttachments(req.body || {});
+        const rawComentario = typeof req.body?.comentario === 'string' ? req.body.comentario.trim() : '';
+        if (!rawComentario && incomingAttachments.length === 0) {
+            return res.status(400).json({ message: 'El comentario no puede estar vacío.' });
+        }
+        const effectiveComentario = rawComentario || '📎 Evidencia adjunta';
+        const authorName = req.user.nombre || req.user.username || 'Usuario';
 
-        const [newComments] = await db.query(`
-            SELECT 
-                tc.*,
-                COALESCE(u.nombre, u.username) AS user_name,
-                u.username
-            FROM task_comments tc
-            JOIN users u ON tc.user_id = u.id
-            WHERE tc.id = ?
-        `, [result.insertId]);
+        const { taskInfo, createdComment, savedAttachments } = await runInTaskTransaction(db, async (conn) => {
+            const [tRows] = await conn.query('SELECT id, created_by, assigned_to, titulo FROM tasks WHERE id = ?', [taskId]);
+            if (!tRows || tRows.length === 0) {
+                const err = new Error('Tarea no encontrada');
+                err.status = 404;
+                throw err;
+            }
+            const tRow = tRows[0];
+            if (!canAccessTask(req.user, tRow)) {
+                const err = new Error('No tiene permisos para comentar en esta tarea.');
+                err.status = 403;
+                throw err;
+            }
 
-        const createdComment = newComments[0];
+            const [result] = await conn.query(`
+                INSERT INTO task_comments (task_id, user_id, comentario)
+                VALUES (?, ?, ?)
+            `, [taskId, req.user.id, effectiveComentario]);
 
-        emitTaskEvent(req, 'tasks:comment_added', { taskId: Number(taskId), comment: createdComment });
+            const commentId = result.insertId;
+            const insertedAttachments = [];
+            for (const item of incomingAttachments) {
+                const savedFile = saveTaskAttachmentBuffer({
+                    parsed: item.parsed,
+                    nombreOriginal: item.nombre_original,
+                    taskId,
+                    prefix: 'tarea'
+                });
+                savedFilesForRollback.push(savedFile.archivo_url);
+                const attRow = await insertTaskAttachmentRow(conn, {
+                    taskId,
+                    commentId,
+                    savedFile,
+                    ancho: item.ancho,
+                    alto: item.alto,
+                    nota: item.nota,
+                    esEvidenciaCumplimiento: item.es_evidencia_cumplimiento || Boolean(req.body?.es_evidencia_cumplimiento),
+                    uploadedBy: req.user.id,
+                    uploadedByName: authorName
+                });
+                insertedAttachments.push(attRow);
+            }
+
+            const [newComments] = await conn.query(`
+                SELECT 
+                    tc.*,
+                    COALESCE(u.nombre, u.username) AS user_name,
+                    u.username
+                FROM task_comments tc
+                JOIN users u ON tc.user_id = u.id
+                WHERE tc.id = ?
+            `, [commentId]);
+
+            const commentRow = {
+                ...(newComments[0] || {
+                    id: commentId,
+                    task_id: taskId,
+                    user_id: req.user.id,
+                    comentario: effectiveComentario,
+                    user_name: authorName,
+                    username: req.user.username || '',
+                    created_at: new Date().toISOString()
+                }),
+                attachments: insertedAttachments
+            };
+
+            return {
+                taskInfo: tRow,
+                createdComment: commentRow,
+                savedAttachments: insertedAttachments
+            };
+        });
+
+        emitTaskEvent(req, 'tasks:comment_added', { taskId, comment: createdComment });
+        if (savedAttachments.length > 0) {
+            emitTaskEvent(req, 'tasks:changed', {
+                action: 'attachments_added',
+                taskId,
+                attachments: savedAttachments
+            });
+        }
 
         // Notify other participant of the new comment
         try {
-            const [tRows] = await db.query('SELECT created_by, assigned_to, titulo FROM tasks WHERE id = ?', [taskId]);
-            if (tRows.length > 0) {
-                const taskInfo = tRows[0];
-                const commenterName = req.user.nombre || req.user.username || 'Un usuario';
-                const targetUserId = req.user.id === taskInfo.assigned_to ? taskInfo.created_by : taskInfo.assigned_to;
-                if (targetUserId && targetUserId !== req.user.id) {
-                    await createAndEmitNotification(req, {
-                        userId: targetUserId,
-                        type: 'task_comment',
-                        title: 'Nuevo Comentario en Tarea',
-                        message: `${commenterName} comentó en "${taskInfo.titulo}": ${comentario.trim().substring(0, 70)}...`,
-                        data: {
-                            taskId,
-                            link: '/dashboard/operaciones/tareas'
-                        }
-                    });
-                }
+            const commenterName = req.user.nombre || req.user.username || 'Un usuario';
+            const targetUserId = Number(req.user.id) === Number(taskInfo.assigned_to) ? taskInfo.created_by : taskInfo.assigned_to;
+            if (targetUserId && Number(targetUserId) !== Number(req.user.id)) {
+                await createAndEmitNotification(req, {
+                    userId: targetUserId,
+                    type: 'task_comment',
+                    title: 'Nuevo Comentario en Tarea',
+                    message: `${commenterName} comentó en "${taskInfo.titulo}": ${effectiveComentario.substring(0, 70)}...`,
+                    data: {
+                        taskId,
+                        link: '/dashboard/operaciones/tareas'
+                    }
+                });
             }
         } catch (notifErr) {
             console.warn('[Tasks Comment Notification] Warning:', notifErr.message);
@@ -1028,9 +1605,16 @@ router.post('/:id/comments', authenticateToken, requirePermission(taskPerms), as
 
         res.status(201).json({
             message: 'Comentario agregado con éxito',
-            comment: createdComment
+            comment: createdComment,
+            attachments: savedAttachments
         });
     } catch (error) {
+        for (const url of savedFilesForRollback) {
+            unlinkTaskAttachmentFile(url);
+        }
+        if (error.status === 400 || error.status === 403 || error.status === 404) {
+            return res.status(error.status).json({ message: error.message });
+        }
         sendSafeError(res, error, 'Error al agregar comentario a la tarea');
     }
 });

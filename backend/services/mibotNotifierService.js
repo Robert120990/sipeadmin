@@ -1,14 +1,343 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const cron = require('node-cron');
 const dbModule = require('../db');
 const getDb = (...args) => dbModule.getDb(...args);
 const getExternalDb = (...args) => dbModule.getExternalDb(...args);
+const { signUploadUrl } = require('../utils/uploadSigner');
 const { escapeHtml } = require('./telegramTextAndDates');
 const {
     sendTelegramMessage,
     sendTelegramMessageDetailed,
+    sendTelegramPhoto,
+    sendTelegramDocument,
+    truncateTelegramCaption,
     answerCallbackQuery,
     editMessageReplyMarkup
 } = require('./telegramTransportService');
+
+const TAREAS_UPLOADS_DIR = path.join(__dirname, '..', 'uploads', 'tareas');
+const TAREAS_UPLOAD_URL_PREFIX = '/api/uploads/tareas/';
+
+/**
+ * Valida estrictamente un DataURL de adjunto de tarea (WebP/JPG/PNG <= 5MB; PDF <= 10MB) por firma mágica
+ */
+function parseTaskAttachmentDataUrl(dataUrl) {
+    if (!dataUrl || typeof dataUrl !== 'string') {
+        const err = new Error('Archivo adjunto vacío o inválido');
+        err.status = 400;
+        throw err;
+    }
+
+    const match = dataUrl.match(/^data:(image\/(?:webp|jpeg|jpg|png)|application\/pdf);base64,([A-Za-z0-9+/=\s]+)$/i);
+    if (!match) {
+        const err = new Error('Formato de adjunto no soportado. Use imagen (WebP/JPG/PNG) o PDF.');
+        err.status = 400;
+        throw err;
+    }
+
+    const mimeType = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+    const rawBase64 = match[2].replace(/\s+/g, '');
+    const buffer = Buffer.from(rawBase64, 'base64');
+
+    if (buffer.length === 0) {
+        const err = new Error('El archivo adjunto está vacío');
+        err.status = 400;
+        throw err;
+    }
+
+    const isPdf = mimeType === 'application/pdf';
+    const maxBytes = isPdf ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
+    if (buffer.length > maxBytes) {
+        const err = new Error(isPdf ? 'El PDF supera el límite de 10 MB' : 'La imagen supera el límite de 5 MB');
+        err.status = 400;
+        throw err;
+    }
+
+    if (isPdf) {
+        if (buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+            const err = new Error('El archivo PDF no tiene una firma válida');
+            err.status = 400;
+            throw err;
+        }
+    } else if (mimeType === 'image/webp') {
+        const riff = buffer.subarray(0, 4).toString('ascii');
+        const webp = buffer.subarray(8, 12).toString('ascii');
+        if (riff !== 'RIFF' || webp !== 'WEBP') {
+            const err = new Error('La imagen WebP no tiene una firma válida');
+            err.status = 400;
+            throw err;
+        }
+    } else if (mimeType === 'image/png') {
+        if (buffer[0] !== 0x89 || buffer[1] !== 0x50 || buffer[2] !== 0x4E || buffer[3] !== 0x47) {
+            const err = new Error('La imagen PNG no tiene una firma válida');
+            err.status = 400;
+            throw err;
+        }
+    } else if (mimeType === 'image/jpeg') {
+        if (buffer[0] !== 0xFF || buffer[1] !== 0xD8) {
+            const err = new Error('La imagen JPG no tiene una firma válida');
+            err.status = 400;
+            throw err;
+        }
+    }
+
+    const extMap = {
+        'image/webp': 'webp',
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'application/pdf': 'pdf'
+    };
+
+    return {
+        mimeType,
+        buffer,
+        ext: extMap[mimeType] || 'webp',
+        base64: rawBase64
+    };
+}
+
+/**
+ * Normaliza y valida por adelantado una lista de adjuntos entrantes (max 10 por solicitud)
+ */
+function normalizeIncomingTaskAttachments(body = {}, defaults = {}) {
+    let rawList = [];
+    if (Array.isArray(body.attachments)) {
+        rawList = body.attachments;
+    } else if (body.attachment && typeof body.attachment === 'object') {
+        rawList = [body.attachment];
+    } else if (body.data_url) {
+        rawList = [body];
+    }
+
+    if (rawList.length > 10) {
+        const err = new Error('Máximo 10 adjuntos por solicitud');
+        err.status = 400;
+        throw err;
+    }
+
+    const defaultEvidence = Boolean(defaults.es_evidencia_cumplimiento ?? body.es_evidencia_cumplimiento);
+    const defaultNota = defaults.nota !== undefined ? defaults.nota : body.nota;
+
+    return rawList.map((item) => {
+        if (!item || typeof item !== 'object') {
+            const err = new Error('Estructura de adjunto inválida');
+            err.status = 400;
+            throw err;
+        }
+        const parsed = parseTaskAttachmentDataUrl(item.data_url);
+        const rawName = String(item.nombre_original || `adjunto.${parsed.ext}`).trim();
+        const safeName = path.basename(rawName).slice(0, 255) || `adjunto.${parsed.ext}`;
+        const rawNota = item.nota !== undefined ? item.nota : defaultNota;
+        const safeNota = rawNota !== undefined && rawNota !== null && String(rawNota).trim()
+            ? String(rawNota).trim().slice(0, 255)
+            : null;
+        const ancho = item.ancho !== undefined && item.ancho !== null && Number.isFinite(Number(item.ancho))
+            ? Math.trunc(Number(item.ancho)) : null;
+        const alto = item.alto !== undefined && item.alto !== null && Number.isFinite(Number(item.alto))
+            ? Math.trunc(Number(item.alto)) : null;
+        const esEvidencia = item.es_evidencia_cumplimiento !== undefined
+            ? Boolean(item.es_evidencia_cumplimiento)
+            : defaultEvidence;
+
+        return {
+            parsed,
+            nombre_original: safeName,
+            ancho,
+            alto,
+            nota: safeNota,
+            es_evidencia_cumplimiento: esEvidencia
+        };
+    });
+}
+
+function saveTaskAttachmentBuffer({ parsed, nombreOriginal, taskId = 0, prefix = 'tarea' }) {
+    fs.mkdirSync(TAREAS_UPLOADS_DIR, { recursive: true });
+    const safeTaskId = parseInt(taskId, 10) || 0;
+    const safePrefix = String(prefix || 'tarea').replace(/[^a-zA-Z0-9_-]/g, '') || 'tarea';
+    const rand = crypto.randomBytes(6).toString('hex');
+    const filename = `${safePrefix}_${safeTaskId}_${Date.now()}_${rand}.${parsed.ext}`;
+    const filepath = path.join(TAREAS_UPLOADS_DIR, filename);
+    fs.writeFileSync(filepath, parsed.buffer);
+
+    const safeOrig = path.basename(String(nombreOriginal || `adjunto.${parsed.ext}`)).slice(0, 255) || `adjunto.${parsed.ext}`;
+    return {
+        archivo_url: `${TAREAS_UPLOAD_URL_PREFIX}${filename}`,
+        mime_type: parsed.mimeType,
+        tamano_bytes: parsed.buffer.length,
+        nombre_original: safeOrig
+    };
+}
+
+function unlinkTaskAttachmentFile(archivoUrl = '') {
+    try {
+        const cleanUrl = String(archivoUrl || '').split('?')[0];
+        if (!cleanUrl || !cleanUrl.startsWith(TAREAS_UPLOAD_URL_PREFIX)) return false;
+        const filename = path.basename(cleanUrl);
+        if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) return false;
+        const baseDir = path.resolve(TAREAS_UPLOADS_DIR);
+        const resolved = path.resolve(TAREAS_UPLOADS_DIR, filename);
+        if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) return false;
+        if (fs.existsSync(resolved)) {
+            fs.unlinkSync(resolved);
+            return true;
+        }
+        return false;
+    } catch (err) {
+        console.warn('[Tareas] No se pudo eliminar archivo físico:', err.message);
+        return false;
+    }
+}
+
+async function deleteTaskAttachmentFileIfUnreferenced(connOrDb, archivoUrl = '') {
+    const cleanUrl = String(archivoUrl || '').split('?')[0];
+    if (!cleanUrl || !cleanUrl.startsWith(TAREAS_UPLOAD_URL_PREFIX)) return false;
+    if (connOrDb && typeof connOrDb.query === 'function') {
+        try {
+            const [rows] = await connOrDb.query(
+                'SELECT COUNT(*) AS cnt FROM task_attachments WHERE archivo_url = ?',
+                [cleanUrl]
+            );
+            const first = rows && rows[0];
+            const count = first && first.cnt !== undefined
+                ? Number(first.cnt)
+                : (rows || []).filter(r => !r.archivo_url || String(r.archivo_url).split('?')[0] === cleanUrl).length;
+            if (count > 0) return false;
+        } catch (err) {
+            if (!/ER_NO_SUCH_TABLE|doesn't exist/i.test(String(err.message || ''))) {
+                console.warn('[Tareas] Aviso verificando referencias de adjunto:', err.message);
+                return false;
+            }
+        }
+    }
+    return unlinkTaskAttachmentFile(cleanUrl);
+}
+
+function readSavedTaskAttachmentBuffer(archivoUrl = '') {
+    const cleanUrl = String(archivoUrl || '').split('?')[0];
+    if (!cleanUrl || !cleanUrl.startsWith(TAREAS_UPLOAD_URL_PREFIX)) {
+        throw new Error('Ruta de adjunto de tarea inválida');
+    }
+    const filename = path.basename(cleanUrl);
+    if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) {
+        throw new Error('Nombre de archivo de adjunto inválido');
+    }
+    const baseDir = path.resolve(TAREAS_UPLOADS_DIR);
+    const resolved = path.resolve(TAREAS_UPLOADS_DIR, filename);
+    if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) {
+        throw new Error('Acceso fuera del directorio permitido');
+    }
+    if (!fs.existsSync(resolved)) {
+        const err = new Error('Archivo adjunto no encontrado en el servidor');
+        err.code = 'ENOENT';
+        throw err;
+    }
+    const ext = path.extname(filename).toLowerCase().replace('.', '');
+    const mimeMap = { webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', pdf: 'application/pdf' };
+    const mimeType = mimeMap[ext] || 'application/octet-stream';
+    const buffer = fs.readFileSync(resolved);
+    return { buffer, mimeType, ext, filename };
+}
+
+function formatSignedTaskAttachmentRow(row = {}) {
+    const cleanUrl = String(row.archivo_url || '').split('?')[0];
+    return {
+        id: row.id ? Number(row.id) : null,
+        task_id: row.task_id ? Number(row.task_id) : null,
+        comment_id: row.comment_id ? Number(row.comment_id) : null,
+        nombre_original: row.nombre_original || 'adjunto',
+        archivo_url: cleanUrl,
+        signed_url: cleanUrl ? signUploadUrl(cleanUrl) : '',
+        mime_type: row.mime_type || 'image/webp',
+        tamano_bytes: Number(row.tamano_bytes || 0),
+        ancho: row.ancho !== null && row.ancho !== undefined ? Number(row.ancho) : null,
+        alto: row.alto !== null && row.alto !== undefined ? Number(row.alto) : null,
+        nota: row.nota || null,
+        es_evidencia_cumplimiento: Boolean(row.es_evidencia_cumplimiento),
+        uploaded_by: row.uploaded_by ? Number(row.uploaded_by) : null,
+        uploaded_by_name: row.uploaded_by_name || null,
+        created_at: row.created_at || null
+    };
+}
+
+function parseAttachmentIdsJson(raw) {
+    if (!raw) return [];
+    let arr = raw;
+    if (typeof raw === 'string') {
+        try {
+            arr = JSON.parse(raw);
+        } catch {
+            return [];
+        }
+    }
+    if (!Array.isArray(arr)) return [];
+    return [...new Set(arr.map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0))];
+}
+
+function formatMibotAttachmentCaption(prog, att) {
+    const taskPrefix = prog?.task_id ? `📎 <b>Tarea #${prog.task_id}</b> · ` : '📎 ';
+    const name = escapeHtml(att?.nombre_original || 'Adjunto');
+    const nota = att?.nota ? `\n📝 <i>${escapeHtml(att.nota)}</i>` : '';
+    const evidence = att?.es_evidencia_cumplimiento ? '\n✅ <i>Evidencia de cumplimiento</i>' : '';
+    return truncateTelegramCaption(`${taskPrefix}${name}${nota}${evidence}`, 1020);
+}
+
+async function loadTaskMediaForMibot(db, taskId, { incluirAdjuntos = false, attachmentIds = [] } = {}) {
+    const cleanTaskId = parseInt(taskId, 10);
+    const idList = parseAttachmentIdsJson(attachmentIds);
+    if (!db || !Number.isFinite(cleanTaskId) || cleanTaskId <= 0) return [];
+    if (!incluirAdjuntos && idList.length === 0) return [];
+
+    let rows = [];
+    try {
+        const [fetched] = await db.query(
+            'SELECT * FROM task_attachments WHERE task_id = ? ORDER BY id ASC',
+            [cleanTaskId]
+        );
+        rows = Array.isArray(fetched) ? fetched : [];
+    } catch (err) {
+        console.warn('[MiBot] No se pudieron consultar adjuntos de tarea:', err.message);
+        return [];
+    }
+
+    if (idList.length > 0) {
+        const idSet = new Set(idList);
+        rows = rows.filter(r => idSet.has(Number(r.id)));
+    }
+
+    const items = [];
+    for (const row of rows) {
+        try {
+            const cleanUrl = String(row.archivo_url || '').split('?')[0];
+            if (!cleanUrl || !cleanUrl.startsWith(TAREAS_UPLOAD_URL_PREFIX)) continue;
+            const diskFilename = path.basename(cleanUrl);
+            if (!diskFilename || !/^[a-zA-Z0-9._-]+$/.test(diskFilename)) continue;
+            const baseDir = path.resolve(TAREAS_UPLOADS_DIR);
+            const diskPath = path.resolve(TAREAS_UPLOADS_DIR, diskFilename);
+            if (!diskPath.startsWith(baseDir + path.sep) && diskPath !== baseDir) continue;
+
+            const buffer = await fs.promises.readFile(diskPath);
+            if (!buffer || buffer.length === 0) continue;
+
+            const displayFilename = path.basename(String(row.nombre_original || diskFilename)).slice(0, 255) || diskFilename;
+            const mime = String(row.mime_type || '').toLowerCase();
+            const isImage = (mime.startsWith('image/') && !mime.includes('svg')) || /\.(webp|png|jpe?g|gif)$/i.test(displayFilename);
+
+            items.push({
+                id: Number(row.id),
+                filename: displayFilename,
+                mimeType: mime || (isImage ? 'image/webp' : 'application/pdf'),
+                isImage,
+                buffer,
+                caption: formatMibotAttachmentCaption({ task_id: cleanTaskId }, row)
+            });
+        } catch (readErr) {
+            console.warn(`[MiBot] Adjunto #${row?.id || '?'} omitido al leer disco (${readErr.code || readErr.message})`);
+        }
+    }
+    return items;
+}
 
 const MIBOT_TIMEZONE = 'America/El_Salvador';
 
@@ -274,6 +603,8 @@ async function ensureMibotSchema(db) {
                 vencimiento_id INT NULL,
                 recordatorio_id INT NULL,
                 task_id INT NULL,
+                incluir_adjuntos TINYINT(1) NOT NULL DEFAULT 0,
+                attachment_ids_json TEXT NULL,
                 ubicacion VARCHAR(120) NULL,
                 monto_total DECIMAL(14,2) NULL,
                 monto_pendiente DECIMAL(14,2) NULL,
@@ -305,6 +636,12 @@ async function ensureMibotSchema(db) {
             if (!progColSet.has('task_id')) {
                 await db.query('ALTER TABLE mibot_programaciones ADD COLUMN task_id INT NULL AFTER recordatorio_id');
                 await db.query('ALTER TABLE mibot_programaciones ADD INDEX idx_mibot_prog_task (task_id, estado)').catch(() => {});
+            }
+            if (!progColSet.has('incluir_adjuntos')) {
+                await db.query('ALTER TABLE mibot_programaciones ADD COLUMN incluir_adjuntos TINYINT(1) NOT NULL DEFAULT 0 AFTER task_id');
+            }
+            if (!progColSet.has('attachment_ids_json')) {
+                await db.query('ALTER TABLE mibot_programaciones ADD COLUMN attachment_ids_json TEXT NULL AFTER incluir_adjuntos');
             }
         } catch (progColErr) {
             if (!/Duplicate column/i.test(String(progColErr.message || ''))) {
@@ -808,6 +1145,8 @@ function hydrateProgramacionRow(prog, destRows = []) {
         vencimiento_id: prog.vencimiento_id ? Number(prog.vencimiento_id) : null,
         recordatorio_id: prog.recordatorio_id ? Number(prog.recordatorio_id) : null,
         task_id: prog.task_id ? Number(prog.task_id) : null,
+        incluir_adjuntos: Boolean(prog.incluir_adjuntos),
+        attachment_ids: parseAttachmentIdsJson(prog.attachment_ids_json),
         monto_total: prog.monto_total !== null && prog.monto_total !== undefined ? Number(prog.monto_total) : null,
         monto_pendiente: prog.monto_pendiente !== null && prog.monto_pendiente !== undefined ? Number(prog.monto_pendiente) : null,
         programado_para: dbDatetimeToSvSql(prog.programado_para),
@@ -1052,6 +1391,8 @@ async function createMibotProgramacion({
     payload = {},
     actorUser = null,
     sendTelegramFn = sendTelegramMessage,
+    sendPhotoFn = sendTelegramPhoto,
+    sendDocumentFn = sendTelegramDocument,
     io = null,
     skipSystemNotification = false
 }) {
@@ -1280,6 +1621,17 @@ async function createMibotProgramacion({
     );
 
     const programacionId = insertRes.insertId;
+    const attachmentIds = parseAttachmentIdsJson(payload.attachment_ids);
+    const incluirAdjuntos = Boolean(payload.incluir_adjuntos) || attachmentIds.length > 0;
+
+    if (incluirAdjuntos || attachmentIds.length > 0) {
+        await db.query(
+            `UPDATE mibot_programaciones
+             SET incluir_adjuntos = ?, attachment_ids_json = ?
+             WHERE id = ?`,
+            [incluirAdjuntos ? 1 : 0, attachmentIds.length > 0 ? JSON.stringify(attachmentIds) : null, programacionId]
+        ).catch(() => {});
+    }
 
     for (const u of eligibleUsers) {
         await db.query(
@@ -1303,6 +1655,9 @@ async function createMibotProgramacion({
             externalDb,
             programacionId,
             sendTelegramFn,
+            sendPhotoFn,
+            sendDocumentFn,
+            mediaOptions: { incluirAdjuntos, attachmentIds },
             isAutomaticCron: false,
             emitSystemNotif: false
         });
@@ -1384,6 +1739,9 @@ async function dispatchMibotProgramacion({
     externalDb = null,
     programacionId,
     sendTelegramFn = sendTelegramMessage,
+    sendPhotoFn = sendTelegramPhoto,
+    sendDocumentFn = sendTelegramDocument,
+    mediaOptions = null,
     onlyDestinatarioIds = null,
     isSnoozeFollowup = false,
     isAutomaticCron = false,
@@ -1438,8 +1796,22 @@ async function dispatchMibotProgramacion({
     const nowSv = nowSqlOverride || getElSalvadorNowSql();
     let sent = 0;
     let failed = 0;
+    let mediaSent = 0;
     const errors = [];
     const useDetailedTransport = sendTelegramFn === sendTelegramMessage;
+
+    const effectiveIncluirAdjuntos = Boolean(
+        mediaOptions && mediaOptions.incluirAdjuntos !== undefined
+            ? mediaOptions.incluirAdjuntos
+            : prog.incluir_adjuntos
+    );
+    const effectiveAttachmentIds = (mediaOptions && Array.isArray(mediaOptions.attachmentIds))
+        ? mediaOptions.attachmentIds
+        : parseAttachmentIdsJson(prog.attachment_ids_json);
+    const mediaItems = await loadTaskMediaForMibot(db, prog.task_id, {
+        incluirAdjuntos: effectiveIncluirAdjuntos,
+        attachmentIds: effectiveAttachmentIds
+    });
 
     for (const dest of targetDests) {
         const others = allDests.filter(o => Number(o.id) !== Number(dest.id));
@@ -1455,12 +1827,35 @@ async function dispatchMibotProgramacion({
         try {
             let tgRes = null;
             let detailedError = null;
-            if (useDetailedTransport) {
-                const detailed = await sendTelegramMessageDetailed(dest.telegram_user_id, htmlText, keyboard);
-                tgRes = detailed.ok ? detailed.result : null;
-                detailedError = detailed.error || null;
-            } else {
-                tgRes = await sendTelegramFn(dest.telegram_user_id, htmlText, keyboard);
+            let singlePhotoDelivered = false;
+
+            if (mediaItems.length === 1 && mediaItems[0].isImage && htmlText.length <= 1020) {
+                try {
+                    const photoRes = await sendPhotoFn(
+                        dest.telegram_user_id,
+                        mediaItems[0].buffer,
+                        htmlText,
+                        keyboard,
+                        mediaItems[0].filename
+                    );
+                    if (photoRes) {
+                        tgRes = photoRes;
+                        singlePhotoDelivered = true;
+                        mediaSent += 1;
+                    }
+                } catch (photoErr) {
+                    console.warn(`[MiBot] Aviso enviando foto única a ${dest.telegram_user_id}, usando fallback texto:`, photoErr.message);
+                }
+            }
+
+            if (!tgRes) {
+                if (useDetailedTransport) {
+                    const detailed = await sendTelegramMessageDetailed(dest.telegram_user_id, htmlText, keyboard);
+                    tgRes = detailed.ok ? detailed.result : null;
+                    detailedError = detailed.error || null;
+                } else {
+                    tgRes = await sendTelegramFn(dest.telegram_user_id, htmlText, keyboard);
+                }
             }
 
             if (tgRes) {
@@ -1476,6 +1871,22 @@ async function dispatchMibotProgramacion({
                     [nowSv, msgId, dest.id]
                 );
                 sent += 1;
+
+                if (!singlePhotoDelivered && mediaItems.length > 0) {
+                    for (const item of mediaItems) {
+                        try {
+                            let mediaRes = null;
+                            if (item.isImage) {
+                                mediaRes = await sendPhotoFn(dest.telegram_user_id, item.buffer, item.caption, null, item.filename);
+                            } else {
+                                mediaRes = await sendDocumentFn(dest.telegram_user_id, item.buffer, item.filename, item.caption);
+                            }
+                            if (mediaRes) mediaSent += 1;
+                        } catch (mediaErr) {
+                            console.warn(`[MiBot] Aviso enviando adjunto "${item.filename}" a ${dest.telegram_user_id}:`, mediaErr.message);
+                        }
+                    }
+                }
             } else {
                 const errText = String(detailedError || 'Telegram no confirmó entrega (verifique chat ID o bot activo)').slice(0, 240);
                 await db.query(
@@ -1576,6 +1987,7 @@ async function dispatchMibotProgramacion({
         total: targetDests.length,
         sent,
         failed,
+        media_sent: mediaSent,
         errors
     };
 }
@@ -1917,6 +2329,8 @@ async function processDueMibotSchedules({
     db = null,
     externalDb = undefined,
     sendTelegramFn = sendTelegramMessage,
+    sendPhotoFn = sendTelegramPhoto,
+    sendDocumentFn = sendTelegramDocument,
     nowSqlOverride = null
 } = {}) {
     const conn = db || getDb();
@@ -1945,6 +2359,8 @@ async function processDueMibotSchedules({
                 externalDb: extConn,
                 programacionId: row.id,
                 sendTelegramFn,
+                sendPhotoFn,
+                sendDocumentFn,
                 isAutomaticCron: true,
                 nowSqlOverride: nowSv,
                 io: getRealtimeIo()
@@ -1977,6 +2393,8 @@ async function processDueMibotSchedules({
                 externalDb: extConn,
                 programacionId: sr.programacion_id,
                 sendTelegramFn,
+                sendPhotoFn,
+                sendDocumentFn,
                 onlyDestinatarioIds: [sr.dest_id],
                 isSnoozeFollowup: true,
                 isAutomaticCron: true,
@@ -2278,6 +2696,17 @@ module.exports = {
     addMinutesToSvSql,
     computeNextScheduleSql,
     formatDisplayDateTimeSv,
+    TAREAS_UPLOADS_DIR,
+    parseTaskAttachmentDataUrl,
+    normalizeIncomingTaskAttachments,
+    saveTaskAttachmentBuffer,
+    unlinkTaskAttachmentFile,
+    deleteTaskAttachmentFileIfUnreferenced,
+    readSavedTaskAttachmentBuffer,
+    formatSignedTaskAttachmentRow,
+    parseAttachmentIdsJson,
+    formatMibotAttachmentCaption,
+    loadTaskMediaForMibot,
     ensureMibotSchema,
     ensureMibotDigestTable,
     resolveRecipientDisplayName,
