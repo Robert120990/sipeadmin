@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     Scale, Search, CheckSquare, Square, RefreshCw, UploadCloud,
     FileSpreadsheet, Eye, Edit2, CheckCircle2,
@@ -22,6 +23,7 @@ import {
     BANCOS_NAV_TARGETS,
     resolveInitialBancosContext,
     subscribeBancosNavTarget,
+    navigateToBancosTarget,
     saveBancosSelection,
     findMatchingCuenta
 } from '../utils/bancosNavStorage';
@@ -112,6 +114,7 @@ const readFileAsDataUrl = (file, forcePdfMime = false) => new Promise((resolve, 
 });
 
 export default function ConciliacionBancaria() {
+    const navigate = useNavigate();
     const { isMobile } = useViewport();
     const { addToast } = useToast();
     const { confirm } = useConfirm();
@@ -212,9 +215,19 @@ export default function ConciliacionBancaria() {
     const abortCtrlRef = useRef(null);
     const cuentasRef = useRef([]);
 
-    // Tabs: 'MOVIMIENTOS' | 'PENDIENTES' | 'CRUCES' | 'CONTROL_PAGOS'
+    // Tabs: 'MOVIMIENTOS' | 'PENDIENTES' | 'CRUCES' | 'TRANSFERENCIAS' | 'CONTROL_PAGOS'
     const [activeTab, setActiveTab] = useState('MOVIMIENTOS');
     const [searchTerm, setSearchTerm] = useState('');
+    const [onlyInternalTransfers, setOnlyInternalTransfers] = useState(false);
+
+    // Identificación de Transferencias Internas
+    const [transferenciasInternas, setTransferenciasInternas] = useState({
+        vinculadas: [],
+        sugerencias_espejo: [],
+        total_vinculadas: 0,
+        total_asimetricas: 0,
+        total_sugerencias_espejo: 0
+    });
 
     // R3.3: Antigüedad de cheques en circulación
     const [agingResumen, setAgingResumen] = useState(null);
@@ -538,6 +551,13 @@ export default function ConciliacionBancaria() {
             setSolicitudesPendientes(res.data.solicitudes_reapertura_pendientes || []);
             setAgingResumen(res.data.aging_resumen || res.data.aging_cheques || res.data.resumen?.aging_resumen || null);
             setCrucesActivos(res.data.cruces_activos || []);
+            setTransferenciasInternas(res.data.transferencias_internas || {
+                vinculadas: [],
+                sugerencias_espejo: [],
+                total_vinculadas: 0,
+                total_asimetricas: 0,
+                total_sugerencias_espejo: 0
+            });
 
             const nextResumen = res.data.resumen || {};
             setResumen(nextResumen);
@@ -625,21 +645,32 @@ export default function ConciliacionBancaria() {
     };
 
     const filteredMovimientos = useMemo(() => {
-        if (!searchTerm) return movimientosConciliados;
+        let base = movimientosConciliados;
+        if (onlyInternalTransfers) {
+            base = base.filter(item => Boolean(item.es_transferencia_interna));
+        }
+        if (!searchTerm) return base;
         const q = searchTerm.toLowerCase();
-        return movimientosConciliados.filter(item =>
+        return base.filter(item =>
             String(item.documento || '').toLowerCase().includes(q) ||
             String(item.concepto || '').toLowerCase().includes(q) ||
             String(item.beneficiario || '').toLowerCase().includes(q) ||
             String(item.tipo || '').toLowerCase().includes(q) ||
+            String(item.transfer_group_id || '').toLowerCase().includes(q) ||
+            String(item.transfer_contraparte?.numero_cuenta || '').toLowerCase().includes(q) ||
+            String(item.transfer_contraparte?.banco_nombre || '').toLowerCase().includes(q) ||
+            String(item.transfer_contraparte?.empresa_nombre || '').toLowerCase().includes(q) ||
             String(item.fecha_display || '').includes(q) ||
             String(item.fecha_aplicado_display || '').includes(q) ||
             String(item.monto_display || '').includes(q)
         );
-    }, [movimientosConciliados, searchTerm]);
+    }, [movimientosConciliados, onlyInternalTransfers, searchTerm]);
 
     const filteredPendientes = useMemo(() => {
         let base = pendientes;
+        if (onlyInternalTransfers) {
+            base = base.filter(item => Boolean(item.es_transferencia_interna));
+        }
         if (agingFilter === 'POR_CADUCAR') {
             base = base.filter(item => item.origen_tipo === 'CK' && Boolean(item.por_caducar));
         } else if (agingFilter !== 'TODOS') {
@@ -652,10 +683,43 @@ export default function ConciliacionBancaria() {
             String(item.concepto || '').toLowerCase().includes(q) ||
             String(item.beneficiario || '').toLowerCase().includes(q) ||
             String(item.tipo || '').toLowerCase().includes(q) ||
+            String(item.transfer_group_id || '').toLowerCase().includes(q) ||
+            String(item.transfer_contraparte?.numero_cuenta || '').toLowerCase().includes(q) ||
+            String(item.transfer_contraparte?.banco_nombre || '').toLowerCase().includes(q) ||
+            String(item.transfer_contraparte?.empresa_nombre || '').toLowerCase().includes(q) ||
             String(item.fecha_display || '').includes(q) ||
             String(item.monto_display || '').includes(q)
         );
-    }, [pendientes, agingFilter, searchTerm]);
+    }, [pendientes, onlyInternalTransfers, agingFilter, searchTerm]);
+
+    const filteredTransferenciasVinculadas = useMemo(() => {
+        const list = transferenciasInternas?.vinculadas || [];
+        if (!searchTerm) return list;
+        const q = searchTerm.toLowerCase();
+        return list.filter(t =>
+            String(t.transfer_group_id || '').toLowerCase().includes(q) ||
+            String(t.documento || '').toLowerCase().includes(q) ||
+            String(t.concepto || '').toLowerCase().includes(q) ||
+            String(t.transfer_contraparte?.numero_cuenta || '').toLowerCase().includes(q) ||
+            String(t.transfer_contraparte?.banco_nombre || '').toLowerCase().includes(q) ||
+            String(t.transfer_contraparte?.empresa_nombre || '').toLowerCase().includes(q) ||
+            String(t.monto || '').includes(q)
+        );
+    }, [transferenciasInternas, searchTerm]);
+
+    const filteredSugerenciasEspejo = useMemo(() => {
+        const list = transferenciasInternas?.sugerencias_espejo || [];
+        if (!searchTerm) return list;
+        const q = searchTerm.toLowerCase();
+        return list.filter(s =>
+            String(s.movimiento_local_documento || '').toLowerCase().includes(q) ||
+            String(s.movimiento_local_concepto || '').toLowerCase().includes(q) ||
+            String(s.numero_cuenta || '').toLowerCase().includes(q) ||
+            String(s.banco_nombre || '').toLowerCase().includes(q) ||
+            String(s.empresa_nombre || '').toLowerCase().includes(q) ||
+            String(s.monto || '').includes(q)
+        );
+    }, [transferenciasInternas, searchTerm]);
 
     const filteredSugerenciasCP = useMemo(() => {
         if (!searchTerm) return sugerenciasControlPagos;
@@ -1449,6 +1513,135 @@ export default function ConciliacionBancaria() {
         }
     };
 
+    // Vincular espejo existente en Transferencias Internas (tab TRANSFERENCIAS)
+    const handleVincularEspejoExistente = async (sug) => {
+        if (submitting || !sug) return;
+        const ok = await confirm(
+            `¿Vincular el movimiento local ($${formatMoney(sug.monto)}) con el movimiento espejo #${sug.movimiento_contraparte_id} en ${sug.banco_nombre} #${sug.numero_cuenta} (${sug.empresa_nombre})?`
+        );
+        if (!ok) return;
+
+        setSubmitting(true);
+        try {
+            const res = await api.post('/bancos/conciliacion/vincular-transferencia-interna', {
+                modo: 'VINCULAR_EXISTENTES',
+                cuenta_bancaria_id: Number(selectedCuentaId),
+                movimiento_id: sug.movimiento_local_id,
+                movimiento_contraparte_id: sug.movimiento_contraparte_id
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+            });
+            addToast(res.data?.message || 'Transferencia interna vinculada', 'success');
+            fetchData({ preserveSelection: true });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al vincular transferencia interna', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    // Conciliar y vincular desde fila de extracto bancario con espejo detectado en otra cuenta
+    const handleConciliarYCrearEspejoDesdeExtracto = async (t, index) => {
+        const det = t?.transferencia_interna_detectada;
+        if (submitting || !det || !det.movimiento_espejo_id) return;
+        setSubmitting(true);
+        try {
+            const res = await api.post('/bancos/conciliacion/vincular-transferencia-interna', {
+                modo: 'CREAR_Y_VINCULAR_ESPEJO',
+                cuenta_bancaria_id: Number(selectedCuentaId),
+                movimiento_contraparte_id: det.movimiento_espejo_id,
+                fecha: t.fecha_ymd || todayStr,
+                fecha_aplicado: t.fecha_ymd || fechaAplicadoInput || todayStr,
+                documento: t.documento || '',
+                concepto: t.concepto_limpio || t.descripcion || '',
+                cod_cta: t.cod_cta || '',
+                num_partida: t.num_partida || '',
+                aplicar_inmediatamente: true
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+            });
+            addToast(res.data?.message || 'Movimiento conciliado y vinculado con su espejo', 'success');
+            if (parsedExtract) {
+                const updatedTx = [...parsedExtract.transacciones];
+                updatedTx[index] = {
+                    ...updatedTx[index],
+                    procesado: true,
+                    transferencia_interna_detectada: {
+                        ...det,
+                        tipo: 'VINCULADA',
+                        transfer_group_id: res.data?.transfer_group_id || det.transfer_group_id
+                    }
+                };
+                setParsedExtract({ ...parsedExtract, transacciones: updatedTx });
+                setSelectedExtractIndices(prev => {
+                    const next = new Set(prev);
+                    next.delete(index);
+                    return next;
+                });
+            }
+            fetchData({ preserveSelection: true });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al vincular y conciliar espejo interno', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    // Crear par de transferencia completo desde extracto bancario cuando detectó cuenta interna
+    const handleCrearParTransferenciaDesdeExtracto = async (t, index) => {
+        const det = t?.transferencia_interna_detectada;
+        if (submitting || !det || !det.cuenta_contraparte_id) return;
+        const ok = await confirm(
+            `Se registrará una transferencia interna por $${formatMoney(t.monto)} entre esta cuenta (ya aplicada) y ${det.banco_nombre} #${det.numero_cuenta} (${det.empresa_nombre || 'Contraparte'}, quedando en tránsito hasta su conciliación). ¿Deseas continuar?`
+        );
+        if (!ok) return;
+
+        setSubmitting(true);
+        try {
+            const res = await api.post('/bancos/conciliacion/vincular-transferencia-interna', {
+                modo: 'CREAR_PAR_COMPLETO',
+                cuenta_bancaria_id: Number(selectedCuentaId),
+                cuenta_contraparte_id: det.cuenta_contraparte_id,
+                direccion_actual: t.tipo,
+                fecha: t.fecha_ymd || todayStr,
+                fecha_aplicado: t.fecha_ymd || fechaAplicadoInput || todayStr,
+                documento: t.documento || '',
+                concepto: t.concepto_limpio || t.descripcion || '',
+                monto: Number(t.monto || 0),
+                cod_cta: t.cod_cta || '',
+                num_partida: t.num_partida || '',
+                aplicar_inmediatamente: true,
+                aplicar_contraparte: false
+            }, {
+                headers: { 'X-Idempotency-Key': makeIdempotencyKey() }
+            });
+            addToast(res.data?.message || 'Transferencia interna creada y aplicada', 'success');
+            if (parsedExtract) {
+                const updatedTx = [...parsedExtract.transacciones];
+                updatedTx[index] = {
+                    ...updatedTx[index],
+                    procesado: true,
+                    transferencia_interna_detectada: {
+                        ...det,
+                        tipo: 'VINCULADA',
+                        transfer_group_id: res.data?.transfer_group_id
+                    }
+                };
+                setParsedExtract({ ...parsedExtract, transacciones: updatedTx });
+                setSelectedExtractIndices(prev => {
+                    const next = new Set(prev);
+                    next.delete(index);
+                    return next;
+                });
+            }
+            fetchData({ preserveSelection: true });
+        } catch (err) {
+            addToast(err.response?.data?.message || 'Error al crear transferencia interna desde extracto', 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
     const handleConciliarSingleMatch = async (t, index) => {
         if (submitting || !t.match || t.es_duplicado_probable) return;
         setSubmitting(true);
@@ -2046,6 +2239,27 @@ export default function ConciliacionBancaria() {
             return;
         }
 
+        if (activeTab === 'TRANSFERENCIAS') {
+            if (filteredTransferenciasVinculadas.length === 0) return;
+            const formatted = filteredTransferenciasVinculadas.map(t => ({
+                'Correlativo': t.transfer_group_id || '',
+                'Fecha': t.fecha_display || '',
+                'Dirección': t.direccion || '',
+                'Documento': t.documento || '',
+                'Concepto': t.concepto || '',
+                'Cuenta Contraparte': t.transfer_contraparte ? `${t.transfer_contraparte.banco_nombre} #${t.transfer_contraparte.numero_cuenta} (${t.transfer_contraparte.empresa_nombre})` : '',
+                'Tipo': t.transfer_contraparte?.intercompany ? 'Inter-Empresa' : 'Misma Empresa',
+                'Simetría': t.estado_simetria || '',
+                'Monto': Number(t.monto || 0)
+            }));
+            const ws = XLSX.utils.json_to_sheet(sanitizeSpreadsheetRows(formatted));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'TRANSFERENCIAS');
+            XLSX.writeFile(wb, `Conciliacion_Transferencias_${cuentaNom}_${hasta}.xlsx`);
+            addToast('Archivo Excel descargado', 'success');
+            return;
+        }
+
         if (activeTab === 'CRUCES') {
             if (filteredCruces.length === 0) return;
             const formatted = filteredCruces.map(c => ({
@@ -2140,6 +2354,51 @@ export default function ConciliacionBancaria() {
             setPreviewTitle(title);
             setPreviewSubtitle(sub);
             setPreviewFileName(`Conciliacion_ControlPagos_${cuentaNom}_${hasta}.pdf`);
+            setShowPdfPreview(true);
+            return;
+        }
+
+        if (activeTab === 'TRANSFERENCIAS') {
+            if (filteredTransferenciasVinculadas.length === 0) return;
+            const title = 'Conciliación Bancaria - Transferencias Internas';
+            doc.setFontSize(14);
+            doc.text(title, 14, 15);
+            doc.setFontSize(9);
+            const sub = `Cuenta: ${cuentaInfo?.banco_nombre || ''} - ${cuentaInfo?.numero || ''} | Corte: ${hasta}`;
+            doc.text(sub, 14, 22);
+
+            const totalTransf = filteredTransferenciasVinculadas.reduce((acc, t) => acc + Number(t.monto || 0), 0);
+            autoTable(doc, {
+                head: [['CORRELATIVO', 'FECHA', 'DIR', 'CONTRAPARTE', 'SIMETRÍA', 'MONTO ($)']],
+                body: filteredTransferenciasVinculadas.map(t => [
+                    t.transfer_group_id || '',
+                    t.fecha_display || '',
+                    t.direccion || '',
+                    t.transfer_contraparte ? `${t.transfer_contraparte.banco_nombre} #${t.transfer_contraparte.numero_cuenta} (${t.transfer_contraparte.empresa_nombre})` : '-',
+                    t.estado_simetria || '',
+                    `$${formatMoney(t.monto)}`
+                ]),
+                startY: 28,
+                theme: 'striped',
+                styles: { fontSize: 8, cellPadding: 2 },
+                headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255] },
+                foot: [[
+                    { content: `TOTAL (${filteredTransferenciasVinculadas.length} transferencias):`, colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
+                    { content: `$${formatMoney(totalTransf)}`, styles: { halign: 'right', fontStyle: 'bold' } }
+                ]],
+                didDrawPage: (data) => {
+                    const pageCount = doc.internal.getNumberOfPages();
+                    doc.setFontSize(8);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text(`Página ${data.pageNumber} de ${pageCount}`, doc.internal.pageSize.width - 14, doc.internal.pageSize.height - 8, { align: 'right' });
+                    doc.text('SIPE Admin - Reporte de Conciliación Bancaria', 14, doc.internal.pageSize.height - 8);
+                }
+            });
+            setPreviewPdfBlob(doc.output('blob'));
+            setPreviewTotalPages(doc.internal.getNumberOfPages());
+            setPreviewTitle(title);
+            setPreviewSubtitle(sub);
+            setPreviewFileName(`Conciliacion_Transferencias_${cuentaNom}_${hasta}.pdf`);
             setShowPdfPreview(true);
             return;
         }
@@ -2365,6 +2624,19 @@ export default function ConciliacionBancaria() {
                         style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', height: '36px', fontSize: '0.825rem' }}
                     >
                         <Plus size={15} /> Nuevo Movimiento
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => navigateToBancosTarget(navigate, 'transferencias', currentCuenta ? {
+                            empresaId: currentCuenta.empresa_codigo || currentCuenta.empresa_id,
+                            cuentaId: currentCuenta.id,
+                            numeroCuenta: currentCuenta.numero
+                        } : {})}
+                        className="btn-secondary"
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', height: '36px', fontSize: '0.825rem' }}
+                        title="Abrir pantalla de Transferencias Internas entre cuentas"
+                    >
+                        <ArrowRightLeft size={15} /> Transferencia Interna
                     </button>
                     <button
                         onClick={() => setShowImportModal(true)}
@@ -2904,6 +3176,26 @@ export default function ConciliacionBancaria() {
                     </button>
 
                     <button
+                        onClick={() => { setActiveTab('TRANSFERENCIAS'); setSelectedPendingKeys(new Set()); }}
+                        className={activeTab === 'TRANSFERENCIAS' ? 'btn-primary' : 'btn-secondary'}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.45rem',
+                            height: '36px',
+                            padding: '0 1rem',
+                            fontWeight: '600',
+                            fontSize: '0.82rem',
+                            borderColor: (transferenciasInternas.total_sugerencias_espejo > 0 || transferenciasInternas.total_asimetricas > 0) && activeTab !== 'TRANSFERENCIAS'
+                                ? 'rgba(139, 92, 246, 0.55)'
+                                : undefined
+                        }}
+                        title="Transferencias internas vinculadas y espejos detectados entre cuentas de las empresas"
+                    >
+                        <ArrowRightLeft size={15} /> TRANSFERENCIAS ({(transferenciasInternas.vinculadas?.length || 0) + (transferenciasInternas.sugerencias_espejo?.length || 0)})
+                    </button>
+
+                    <button
                         onClick={() => { setActiveTab('CONTROL_PAGOS'); setSelectedPendingKeys(new Set()); }}
                         className={activeTab === 'CONTROL_PAGOS' ? 'btn-primary' : 'btn-secondary'}
                         style={{
@@ -2923,6 +3215,25 @@ export default function ConciliacionBancaria() {
                 </div>
 
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', flex: '1 1 240px', minWidth: 0, justifyContent: 'flex-end' }}>
+                    {(activeTab === 'MOVIMIENTOS' || activeTab === 'PENDIENTES') && (
+                        <button
+                            type="button"
+                            onClick={() => setOnlyInternalTransfers(prev => !prev)}
+                            className={onlyInternalTransfers ? 'btn-primary' : 'btn-secondary'}
+                            style={{
+                                height: '36px',
+                                padding: '0 0.75rem',
+                                fontSize: '0.78rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                borderColor: onlyInternalTransfers ? undefined : 'rgba(139, 92, 246, 0.35)'
+                            }}
+                            title="Filtrar solo movimientos identificados como transferencias internas"
+                        >
+                            <ArrowRightLeft size={14} /> Solo Transf. Internas
+                        </button>
+                    )}
                     <div style={{ position: 'relative', flex: '1 1 200px', minWidth: '180px', maxWidth: '100%' }}>
                         <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                         <input
@@ -3130,6 +3441,210 @@ export default function ConciliacionBancaria() {
                         </tbody>
                     </table>
                 </div>
+            ) : activeTab === 'TRANSFERENCIAS' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                    {filteredSugerenciasEspejo.length > 0 && (
+                        <div className="card glass table-responsive" style={{ padding: 0, border: '1px solid rgba(139, 92, 246, 0.4)' }}>
+                            <div style={{ padding: '0.65rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', background: 'rgba(139, 92, 246, 0.08)' }}>
+                                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#c4b5fd', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    <Sparkles size={15} /> Posibles Transferencias Internas sin Vincular ({filteredSugerenciasEspejo.length})
+                                </div>
+                                <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                    Emparejadas automáticamente por monto exacto, dirección opuesta y ventana de fechas (±5 días)
+                                </span>
+                            </div>
+                            <table style={{ minWidth: '940px', width: '100%', fontSize: '0.8rem' }}>
+                                <thead>
+                                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Mov. Cuenta Actual</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Mov. Espejo Detectado (Otra Cuenta)</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Motivo / Confianza</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>Monto</th>
+                                        <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredSugerenciasEspejo.map((sug, idx) => (
+                                        <tr key={`${sug.movimiento_local_id}-${sug.movimiento_contraparte_id}-${idx}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                            <td style={{ padding: '0.45rem 0.5rem' }}>
+                                                <div style={{ fontWeight: 700 }}>
+                                                    {sug.movimiento_local_direccion} · {sug.movimiento_local_fecha_display} · #{sug.movimiento_local_documento || sug.movimiento_local_id}
+                                                </div>
+                                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{sug.movimiento_local_concepto}</div>
+                                            </td>
+                                            <td style={{ padding: '0.45rem 0.5rem' }}>
+                                                <div style={{ fontWeight: 700, color: '#93c5fd' }}>
+                                                    {sug.contraparte_direccion} · {sug.banco_nombre} #{sug.numero_cuenta}
+                                                </div>
+                                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                                    {sug.empresa_nombre} · {sug.contraparte_fecha_display} · #{sug.contraparte_documento || sug.movimiento_contraparte_id}
+                                                    {sug.intercompany && <span style={{ marginLeft: '6px', color: '#c4b5fd', fontWeight: 700 }}>(Inter-Empresa)</span>}
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '0.45rem 0.5rem', fontSize: '0.74rem' }}>
+                                                <span style={{
+                                                    padding: '0.12rem 0.4rem',
+                                                    borderRadius: '4px',
+                                                    fontSize: '0.68rem',
+                                                    fontWeight: 700,
+                                                    background: sug.confianza === 'ALTA' ? 'rgba(16, 185, 129, 0.16)' : 'rgba(245, 158, 11, 0.16)',
+                                                    color: sug.confianza === 'ALTA' ? '#34d399' : '#fbbf24',
+                                                    marginRight: '6px'
+                                                }}>
+                                                    {sug.confianza}
+                                                </span>
+                                                <span style={{ color: 'var(--text-muted)' }}>{sug.motivo}</span>
+                                            </td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 800 }}>
+                                                ${formatMoney(sug.monto)}
+                                            </td>
+                                            <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                                <button
+                                                    type="button"
+                                                    disabled={submitting}
+                                                    onClick={() => handleVincularEspejoExistente(sug)}
+                                                    className="btn-primary"
+                                                    style={{ height: '28px', padding: '0 0.7rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                                >
+                                                    <Link2 size={13} /> Vincular Transferencia
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    <div className="card glass table-responsive" style={{ padding: 0 }}>
+                        <div style={{ padding: '0.65rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <ArrowRightLeft size={15} color="var(--primary)" /> Transferencias Internas Vinculadas ({filteredTransferenciasVinculadas.length})
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => navigateToBancosTarget(navigate, 'transferencias', currentCuenta ? {
+                                    empresaId: currentCuenta.empresa_codigo || currentCuenta.empresa_id,
+                                    cuentaId: currentCuenta.id,
+                                    numeroCuenta: currentCuenta.numero
+                                } : {})}
+                                className="btn-secondary"
+                                style={{ height: '28px', padding: '0 0.7rem', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            >
+                                <Plus size={13} /> Nueva Transferencia
+                            </button>
+                        </div>
+                        <table style={{ minWidth: '960px', width: '100%', fontSize: '0.8rem' }}>
+                            <thead>
+                                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Correlativo / Ref</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Fecha</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>Dir.</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'left', fontSize: '0.74rem', textTransform: 'uppercase' }}>Cuenta Contraparte</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>Simetría</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontSize: '0.74rem', textTransform: 'uppercase' }}>Monto</th>
+                                    <th style={{ padding: '0.45rem 0.5rem', textAlign: 'center', fontSize: '0.74rem', textTransform: 'uppercase' }}>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredTransferenciasVinculadas.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                            No hay transferencias internas vinculadas en el rango seleccionado.
+                                        </td>
+                                    </tr>
+                                ) : filteredTransferenciasVinculadas.map(t => (
+                                    <tr key={`${t.transfer_group_id}-${t.id}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                        <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace', fontWeight: 700 }}>
+                                            <div>{t.transfer_group_id}</div>
+                                            {t.documento && t.documento !== t.transfer_group_id && (
+                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Ref: {t.documento}</div>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', whiteSpace: 'nowrap' }}>
+                                            <div>{t.fecha_display}</div>
+                                            {t.fecha_aplicado_display && (
+                                                <div style={{ fontSize: '0.7rem', color: '#34d399' }}>Apl: {t.fecha_aplicado_display}</div>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                            <span style={{
+                                                padding: '0.12rem 0.45rem',
+                                                borderRadius: '4px',
+                                                fontSize: '0.7rem',
+                                                fontWeight: 700,
+                                                background: t.direccion === 'CARGO' ? 'rgba(239, 68, 68, 0.16)' : 'rgba(16, 185, 129, 0.16)',
+                                                color: t.direccion === 'CARGO' ? '#fca5a5' : '#6ee7b7'
+                                            }}>
+                                                {t.direccion === 'CARGO' ? 'SALIDA (CARGO)' : 'ENTRADA (ABONO)'}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem' }}>
+                                            {t.transfer_contraparte ? (
+                                                <div>
+                                                    <div style={{ fontWeight: 600 }}>
+                                                        {t.transfer_contraparte.banco_nombre} #{t.transfer_contraparte.numero_cuenta}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                                        {t.transfer_contraparte.empresa_nombre}
+                                                        {t.transfer_contraparte.intercompany && <span style={{ marginLeft: '5px', color: '#c4b5fd', fontWeight: 700 }}>(Inter-Empresa)</span>}
+                                                    </div>
+                                                </div>
+                                            ) : <span style={{ color: 'var(--text-muted)' }}>Contraparte no disponible</span>}
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                            <span style={{
+                                                padding: '0.15rem 0.45rem',
+                                                borderRadius: '4px',
+                                                fontSize: '0.7rem',
+                                                fontWeight: 700,
+                                                background: t.simetrica ? 'rgba(16, 185, 129, 0.16)' : 'rgba(245, 158, 11, 0.16)',
+                                                color: t.simetrica ? '#34d399' : '#fbbf24'
+                                            }}>
+                                                {t.estado_simetria === 'AMBAS_CONCILIADAS' ? '✓ Ambas Conciliadas'
+                                                    : t.estado_simetria === 'FALTA_ACTUAL' ? '⏳ Falta Conciliar Aquí'
+                                                        : t.estado_simetria === 'FALTA_CONTRAPARTE' ? '◐ Falta Contraparte'
+                                                            : '⏳ Ambas Pendientes'}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'right', fontWeight: 800, color: t.direccion === 'CARGO' ? '#ef4444' : '#10b981' }}>
+                                            ${formatMoney(t.monto)}
+                                        </td>
+                                        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+                                            <div style={{ display: 'inline-flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                                                {!t.conciliado && (
+                                                    <button
+                                                        type="button"
+                                                        disabled={submitting}
+                                                        onClick={() => handleConciliarSingle({ id: t.id, origen_tipo: 'MOV', documento: t.documento })}
+                                                        className="btn-primary"
+                                                        style={{ height: '26px', padding: '0 0.55rem', fontSize: '0.7rem', background: '#10b981' }}
+                                                    >
+                                                        Conciliar Aquí
+                                                    </button>
+                                                )}
+                                                {t.transfer_contraparte && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => navigateToBancosTarget(navigate, 'conciliacion', {
+                                                            empresaId: t.transfer_contraparte.empresa_codigo || t.transfer_contraparte.empresa_id,
+                                                            cuentaId: t.transfer_contraparte.cuenta_bancaria_id,
+                                                            numeroCuenta: t.transfer_contraparte.numero_cuenta
+                                                        })}
+                                                        className="btn-secondary"
+                                                        style={{ height: '26px', padding: '0 0.55rem', fontSize: '0.7rem' }}
+                                                    >
+                                                        Ver Contraparte
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             ) : activeTab === 'CRUCES' ? (
                 <div className="card glass table-responsive" style={{ padding: 0 }}>
                     <table style={{ minWidth: '920px', width: '100%', fontSize: '0.8rem' }}>
@@ -3307,6 +3822,33 @@ export default function ConciliacionBancaria() {
                                             </td>
                                             <td style={{ padding: '0.45rem 0.5rem', fontFamily: 'monospace', fontWeight: '600' }}>
                                                 <div>{row.documento || '-'}</div>
+                                                {row.es_transferencia_interna && (
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '2px', fontFamily: 'inherit' }}>
+                                                        <span style={{
+                                                            fontSize: '0.67rem',
+                                                            fontWeight: 700,
+                                                            padding: '0.1rem 0.35rem',
+                                                            borderRadius: '4px',
+                                                            background: 'rgba(139, 92, 246, 0.18)',
+                                                            color: '#c4b5fd',
+                                                            border: '1px solid rgba(139, 92, 246, 0.35)'
+                                                        }}>
+                                                            ⇄ {row.transfer_contraparte?.intercompany ? 'Inter-Empresa' : 'Transf. Interna'}
+                                                        </span>
+                                                        {row.transfer_contraparte && (
+                                                            <span style={{
+                                                                fontSize: '0.66rem',
+                                                                fontWeight: 600,
+                                                                padding: '0.1rem 0.35rem',
+                                                                borderRadius: '4px',
+                                                                background: row.transfer_contraparte.conciliado ? 'rgba(16, 185, 129, 0.14)' : 'rgba(245, 158, 11, 0.14)',
+                                                                color: row.transfer_contraparte.conciliado ? '#34d399' : '#fbbf24'
+                                                            }}>
+                                                                {Number(row.cargo) > 0 ? '→' : '←'} {row.transfer_contraparte.banco_nombre} #{row.transfer_contraparte.numero_cuenta} ({row.transfer_contraparte.conciliado ? 'Conc.' : 'Pend.'})
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                )}
                                                 {agingMeta && (
                                                     <span style={{
                                                         display: 'inline-block',
@@ -3609,6 +4151,11 @@ export default function ConciliacionBancaria() {
                                 {Number(parsedExtract.reglas_aplicadas_count || 0) > 0 && (
                                     <span style={{ padding: '0.12rem 0.45rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.18)', color: '#34d399', fontWeight: 700 }}>
                                         Reglas IA aplicadas: {parsedExtract.reglas_aplicadas_count}
+                                    </span>
+                                )}
+                                {Number(parsedExtract.resumen_extracto?.transferencias_internas_detectadas || 0) > 0 && (
+                                    <span style={{ padding: '0.12rem 0.45rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.2)', color: '#c4b5fd', fontWeight: 700 }}>
+                                        ⇄ Transf. Internas: {parsedExtract.resumen_extracto.transferencias_internas_detectadas}
                                     </span>
                                 )}
                                 <span>Cargos Extracto: <strong style={{ color: '#ef4444' }}>${formatMoney(parsedExtract.resumen_extracto?.total_cargos)}</strong></span>
@@ -3927,6 +4474,18 @@ export default function ConciliacionBancaria() {
                                                         ) : (
                                                             <span style={{ color: 'var(--text-muted)' }}>Nuevo (sin coincidencia)</span>
                                                         )}
+                                                        {t.transferencia_interna_detectada && (
+                                                            <div style={{ marginTop: '3px', fontSize: '0.7rem', color: '#c4b5fd', fontWeight: 600 }}>
+                                                                ⇄ {t.transferencia_interna_detectada.tipo === 'VINCULADA'
+                                                                    ? 'Transf. Interna Vinculada'
+                                                                    : t.transferencia_interna_detectada.tipo === 'ESPEJO_OTRA_CUENTA'
+                                                                        ? 'Espejo en otra cuenta interna'
+                                                                        : 'Cuenta interna detectada'}:{' '}
+                                                                <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
+                                                                    {t.transferencia_interna_detectada.motivo}
+                                                                </span>
+                                                            </div>
+                                                        )}
                                                     </td>
                                                     <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
                                                         {t.procesado ? (
@@ -3956,14 +4515,40 @@ export default function ConciliacionBancaria() {
                                                                 </button>
                                                             </div>
                                                         ) : (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleOpenAssignModal(t, idx)}
-                                                                className="btn-primary"
-                                                                style={{ padding: '4px 10px', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                                                            >
-                                                                <Plus size={13} /> Asignar
-                                                            </button>
+                                                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                                                {t.transferencia_interna_detectada?.tipo === 'ESPEJO_OTRA_CUENTA' && (
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={submitting}
+                                                                        onClick={() => handleConciliarYCrearEspejoDesdeExtracto(t, idx)}
+                                                                        className="btn-primary"
+                                                                        style={{ padding: '4px 8px', fontSize: '0.71rem', background: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                                                        title="Crear en esta cuenta, conciliar y vincular con movimiento espejo de la otra cuenta"
+                                                                    >
+                                                                        <Link2 size={12} /> Vincular y Conciliar
+                                                                    </button>
+                                                                )}
+                                                                {t.transferencia_interna_detectada?.tipo === 'NUMERO_CUENTA_INTERNA' && (
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={submitting}
+                                                                        onClick={() => handleCrearParTransferenciaDesdeExtracto(t, idx)}
+                                                                        className="btn-secondary"
+                                                                        style={{ padding: '4px 8px', fontSize: '0.71rem', borderColor: 'rgba(139, 92, 246, 0.5)', color: '#c4b5fd', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                                                        title="Crear transferencia interna en ambas cuentas (aplicada aquí y pendiente en contraparte)"
+                                                                    >
+                                                                        <ArrowRightLeft size={12} /> Crear Transf.
+                                                                    </button>
+                                                                )}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleOpenAssignModal(t, idx)}
+                                                                    className="btn-primary"
+                                                                    style={{ padding: '4px 10px', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                                                >
+                                                                    <Plus size={13} /> Asignar
+                                                                </button>
+                                                            </div>
                                                         )}
                                                     </td>
                                                 </tr>
@@ -4039,6 +4624,61 @@ export default function ConciliacionBancaria() {
                         {selectedItem.cruce_id && (
                             <div style={{ padding: '0.5rem 0.75rem', borderRadius: 'var(--border-radius)', background: 'rgba(99, 102, 241, 0.14)', border: '1px solid rgba(99, 102, 241, 0.35)', fontSize: '0.8rem', color: '#a5b4fc' }}>
                                 Vinculado al <strong>Cruce Agrupado #{selectedItem.cruce_id}</strong> ({formatCruceTipoLabel(selectedItem.cruce_tipo)})
+                            </div>
+                        )}
+
+                        {selectedItem.es_transferencia_interna && (
+                            <div style={{
+                                padding: '0.65rem 0.85rem',
+                                borderRadius: 'var(--border-radius)',
+                                background: 'rgba(139, 92, 246, 0.12)',
+                                border: '1px solid rgba(139, 92, 246, 0.35)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.45rem',
+                                fontSize: '0.8rem'
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem', color: '#c4b5fd', fontWeight: 700 }}>
+                                    <span>⇄ Transferencia Interna · {selectedItem.transfer_group_id}</span>
+                                    {selectedItem.transfer_contraparte && (
+                                        <span style={{ color: selectedItem.transfer_contraparte.conciliado ? '#34d399' : '#fbbf24' }}>
+                                            {selectedItem.transfer_contraparte.conciliado
+                                                ? `Contraparte Conciliada (${selectedItem.transfer_contraparte.fecha_aplicado_display || ''})`
+                                                : 'Contraparte Pendiente en Tránsito'}
+                                        </span>
+                                    )}
+                                </div>
+                                {selectedItem.transfer_contraparte ? (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 600 }}>
+                                                {selectedItem.transfer_contraparte.banco_nombre} #{selectedItem.transfer_contraparte.numero_cuenta} ({selectedItem.transfer_contraparte.cuenta_nombre})
+                                            </div>
+                                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                                {selectedItem.transfer_contraparte.empresa_nombre} · {selectedItem.transfer_contraparte.direccion}
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setShowDetailModal(false);
+                                                navigateToBancosTarget(navigate, 'conciliacion', {
+                                                    empresaId: selectedItem.transfer_contraparte.empresa_codigo || selectedItem.transfer_contraparte.empresa_id,
+                                                    cuentaId: selectedItem.transfer_contraparte.cuenta_bancaria_id,
+                                                    numeroCuenta: selectedItem.transfer_contraparte.numero_cuenta
+                                                });
+                                            }}
+                                            className="btn-secondary"
+                                            style={{ height: '30px', padding: '0 0.7rem', fontSize: '0.75rem' }}
+                                        >
+                                            Ir a Conciliación Contraparte
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                                        No se encontró la contraparte activa para el grupo {selectedItem.transfer_group_id}.
+                                    </div>
+                                )}
                             </div>
                         )}
 

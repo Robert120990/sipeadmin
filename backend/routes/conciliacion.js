@@ -25,6 +25,7 @@ const {
     canEditMontoConciliacion,
     getReaperturaApproverIds,
     notifyReaperturaEvent,
+    generateNextTransferCode,
     emitBankUpdate
 } = require('../services/bancosIntegrityService');
 const {
@@ -77,6 +78,188 @@ const conciliacionReglasManagePerms = [
 ];
 
 const isNoSuchTableError = (err) => Boolean(err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146));
+
+const TRANSFER_KEYWORD_RE = /\b(TRANSFER|TRANSF|T365|TRANSFER365|TRASLADO|ENTRE CUENTAS|CTA PROPIA|CUENTA PROPIA|TFB\d+)\b/i;
+
+function getRowDirectionValue(row) {
+    if (!row) return 'ABONO';
+    if (Number(row.cargo || 0) > 0 && Number(row.abono || 0) === 0) return 'CARGO';
+    if (Number(row.abono || 0) > 0 && Number(row.cargo || 0) === 0) return 'ABONO';
+    const rawTipo = String(row.tipo || '').trim().toUpperCase();
+    return rawTipo === 'CARGO' ? 'CARGO' : 'ABONO';
+}
+
+function getYmdDayDiffLocal(ymdA, ymdB) {
+    if (!ymdA || !ymdB) return 999;
+    const tA = new Date(`${ymdA}T12:00:00Z`).getTime();
+    const tB = new Date(`${ymdB}T12:00:00Z`).getTime();
+    if (!Number.isFinite(tA) || !Number.isFinite(tB)) return 999;
+    return Math.round(Math.abs(tA - tB) / (24 * 3600 * 1000));
+}
+
+async function loadTransferCounterpartsByGroups(dbOrConn, groupIds = [], excludeCuentaId = null) {
+    const cleanGroups = [...new Set((groupIds || []).map(g => String(g || '').trim()).filter(Boolean))];
+    const map = new Map();
+    if (cleanGroups.length === 0) return map;
+    try {
+        const params = [...cleanGroups];
+        let excludeSql = '';
+        if (excludeCuentaId) {
+            excludeSql = ' AND mb.cuenta_bancaria_id != ?';
+            params.push(Number(excludeCuentaId));
+        }
+        const [rows] = await withRetry(() => dbOrConn.query(
+            `SELECT mb.id, mb.transfer_group_id, mb.cuenta_bancaria_id, mb.empresa_id,
+                    mb.fecha, mb.fecha_aplicado, mb.documento, mb.concepto,
+                    mb.monto, mb.cargo, mb.abono,
+                    cb.numero AS numero_cuenta, cb.nombre AS cuenta_nombre,
+                    b.descripcion AS banco_nombre,
+                    e.codigo AS empresa_codigo, e.nombre AS empresa_nombre
+             FROM movimientos_bancarios mb
+             LEFT JOIN cuentas_bancarias cb ON mb.cuenta_bancaria_id = cb.id
+             LEFT JOIN bancos b ON cb.banco_id = b.id
+             LEFT JOIN empresas e ON mb.empresa_id = e.id
+             WHERE mb.transfer_group_id IN (${cleanGroups.map(() => '?').join(',')})
+               AND mb.deleted_at IS NULL${excludeSql}`,
+            params
+        ));
+        for (const r of (rows || [])) {
+            const gid = String(r.transfer_group_id || '').trim();
+            if (!gid || map.has(gid)) continue;
+            map.set(gid, {
+                id: Number(r.id),
+                transfer_group_id: gid,
+                cuenta_bancaria_id: Number(r.cuenta_bancaria_id || 0),
+                empresa_id: Number(r.empresa_id || 0),
+                empresa_codigo: r.empresa_codigo || '',
+                empresa_nombre: r.empresa_nombre || '',
+                banco_nombre: r.banco_nombre || '',
+                numero_cuenta: r.numero_cuenta || '',
+                cuenta_nombre: r.cuenta_nombre || '',
+                documento: r.documento || '',
+                concepto: r.concepto || '',
+                monto: Number(r.monto || r.cargo || r.abono || 0),
+                cargo: Number(r.cargo || 0),
+                abono: Number(r.abono || 0),
+                direccion: getRowDirectionValue(r),
+                fecha: r.fecha,
+                fecha_ymd: parseStrictDBDate(r.fecha),
+                fecha_display: toDisplayDate(r.fecha),
+                fecha_aplicado: r.fecha_aplicado || null,
+                fecha_aplicado_ymd: r.fecha_aplicado ? parseStrictDBDate(r.fecha_aplicado) : null,
+                fecha_aplicado_display: r.fecha_aplicado ? toDisplayDate(r.fecha_aplicado) : null,
+                conciliado: Boolean(r.fecha_aplicado)
+            });
+        }
+    } catch (_) {
+        // Fallback seguro ante mocks parciales
+    }
+    return map;
+}
+
+function findMirrorTransferSuggestions({ cuentaId, cuentaEmpresaId, localMovs = [], otherMovs = [] }) {
+    const unlinkedLocal = (localMovs || []).filter(m => m && m.origen_tipo === 'MOV' && !m.transfer_group_id);
+    const unlinkedOther = (otherMovs || []).filter(m =>
+        m && !m.transfer_group_id && !m.deleted_at && Number(m.cuenta_bancaria_id) !== Number(cuentaId)
+    );
+    if (unlinkedLocal.length === 0 || unlinkedOther.length === 0) return [];
+
+    const normDoc = (v) => String(v || '').trim().replace(/^0+/, '').toUpperCase();
+    const digitsOnly = (v) => String(v || '').replace(/\D+/g, '');
+    const usedOtherIds = new Set();
+    const suggestions = [];
+
+    for (const local of unlinkedLocal) {
+        const lDir = getRowDirectionValue(local);
+        const oppDir = lDir === 'CARGO' ? 'ABONO' : 'CARGO';
+        const lMonto = Number(local.monto_display || local.monto || local.cargo || local.abono || 0);
+        if (lMonto <= 0) continue;
+        const lYmd = local.fecha_ymd || parseStrictDBDate(local.fecha);
+        const lDoc = normDoc(local.documento);
+        const lConcepto = String(local.concepto || '').toUpperCase();
+        const lDigits = digitsOnly(lConcepto);
+        const lHasKw = TRANSFER_KEYWORD_RE.test(lConcepto);
+
+        const candidates = [];
+        for (const other of unlinkedOther) {
+            if (usedOtherIds.has(Number(other.id))) continue;
+            const oDir = getRowDirectionValue(other);
+            if (oDir !== oppDir) continue;
+            const oMonto = Number(other.monto || other.cargo || other.abono || 0);
+            if (Math.abs(oMonto - lMonto) >= 0.01) continue;
+            const oYmd = parseStrictDBDate(other.fecha);
+            const diffDays = getYmdDayDiffLocal(lYmd, oYmd);
+            if (diffDays > 5) continue;
+
+            let score = 0;
+            const reasons = [];
+            const oDoc = normDoc(other.documento);
+            if (lDoc && oDoc && lDoc === oDoc) {
+                score += 50;
+                reasons.push(`misma ref #${other.documento}`);
+            }
+            const oDigits = digitsOnly(other.numero_cuenta);
+            if (oDigits.length >= 6 && lDigits.includes(oDigits)) {
+                score += 35;
+                reasons.push(`menciona cta #${other.numero_cuenta}`);
+            }
+            const oConcepto = String(other.concepto || '').toUpperCase();
+            if (lHasKw || TRANSFER_KEYWORD_RE.test(oConcepto)) {
+                score += 20;
+                reasons.push('concepto de transferencia');
+            }
+            if (diffDays === 0) {
+                score += 15;
+                reasons.push('misma fecha');
+            } else if (diffDays <= 2) {
+                score += 8;
+                reasons.push(`fecha ±${diffDays}d`);
+            }
+
+            if (score >= 15) {
+                candidates.push({ other, score, diffDays, reasons });
+            }
+        }
+
+        if (candidates.length > 0) {
+            candidates.sort((a, b) => b.score - a.score || a.diffDays - b.diffDays);
+            const best = candidates[0];
+            const cp = best.other;
+            usedOtherIds.add(Number(cp.id));
+            const cpYmd = parseStrictDBDate(cp.fecha);
+            suggestions.push({
+                movimiento_local_id: Number(local.id),
+                movimiento_local_fecha_ymd: lYmd,
+                movimiento_local_fecha_display: local.fecha_display || toDisplayDate(local.fecha),
+                movimiento_local_documento: local.documento || '',
+                movimiento_local_concepto: local.concepto || '',
+                movimiento_local_direccion: lDir,
+                movimiento_local_conciliado: Boolean(local.fecha_aplicado),
+                movimiento_contraparte_id: Number(cp.id),
+                cuenta_contraparte_id: Number(cp.cuenta_bancaria_id),
+                empresa_id: Number(cp.empresa_id || 0),
+                empresa_codigo: cp.empresa_codigo || '',
+                empresa_nombre: cp.empresa_nombre || '',
+                banco_nombre: cp.banco_nombre || '',
+                numero_cuenta: cp.numero_cuenta || '',
+                cuenta_nombre: cp.cuenta_nombre || '',
+                intercompany: Boolean(cuentaEmpresaId && cp.empresa_id && Number(cp.empresa_id) !== Number(cuentaEmpresaId)),
+                contraparte_fecha_ymd: cpYmd,
+                contraparte_fecha_display: toDisplayDate(cp.fecha),
+                contraparte_fecha_aplicado_display: cp.fecha_aplicado ? toDisplayDate(cp.fecha_aplicado) : null,
+                contraparte_documento: cp.documento || '',
+                contraparte_concepto: cp.concepto || '',
+                contraparte_direccion: getRowDirectionValue(cp),
+                contraparte_conciliado: Boolean(cp.fecha_aplicado),
+                monto: lMonto,
+                confianza: best.score >= 40 ? 'ALTA' : 'MEDIA',
+                motivo: best.reasons.join(' · ')
+            });
+        }
+    }
+
+    return suggestions;
+}
 
 const canManageConciliacionReglas = (user) => {
     if (!user) return false;
@@ -138,7 +321,7 @@ async function loadStatementMatchingContext(db, cuentaId) {
     if (!cuenta) return null;
 
     const [movPendientes] = await withRetry(() => db.query(
-        'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha ' +
+        'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha, transfer_group_id ' +
         'FROM movimientos_bancarios ' +
         'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NULL',
         [cuentaId]
@@ -153,7 +336,7 @@ async function loadStatementMatchingContext(db, cuentaId) {
     ));
 
     const [movConciliados] = await withRetry(() => db.query(
-        'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha, fecha_aplicado ' +
+        'SELECT id, "MOV" as origen_tipo, documento, concepto, monto, cargo, abono, fecha, fecha_aplicado, transfer_group_id ' +
         'FROM movimientos_bancarios ' +
         'WHERE cuenta_bancaria_id = ? AND deleted_at IS NULL AND fecha_aplicado IS NOT NULL ' +
         'AND fecha >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)',
@@ -190,13 +373,65 @@ async function loadStatementMatchingContext(db, cuentaId) {
     }
     const tiposRemesas = allTiposRemesas.filter((tr) => Number(tr.empresa_id) === Number(cuenta.empresa_id));
 
+    let otrasCuentasInternas = [];
+    let movimientosOtrasCuentas = [];
+    const localTransferGroups = new Set(
+        [...(movPendientes || []), ...(movConciliados || [])]
+            .map(m => String(m.transfer_group_id || '').trim())
+            .filter(Boolean)
+    );
+    const transferCounterpartsByGroup = await loadTransferCounterpartsByGroups(db, [...localTransferGroups], cuentaId);
+
+    try {
+        const [ctaRows] = await withRetry(() => db.query(
+            `SELECT cb.id, cb.empresa_id, cb.numero, cb.nombre,
+                    b.descripcion AS banco_nombre, e.codigo AS empresa_codigo, e.nombre AS empresa_nombre
+             FROM cuentas_bancarias cb
+             LEFT JOIN bancos b ON cb.banco_id = b.id
+             LEFT JOIN empresas e ON cb.empresa_id = e.id
+             WHERE cb.activa = TRUE AND cb.id != ?`,
+            [cuentaId]
+        ));
+        otrasCuentasInternas = ctaRows || [];
+    } catch (_) {
+        otrasCuentasInternas = [];
+    }
+
+    try {
+        const [otherMovRows] = await withRetry(() => db.query(
+            `SELECT mb.id, mb.empresa_id, mb.cuenta_bancaria_id, mb.fecha, mb.fecha_aplicado,
+                    mb.documento, mb.concepto, mb.monto, mb.cargo, mb.abono, mb.transfer_group_id,
+                    cb.numero AS numero_cuenta, cb.nombre AS cuenta_nombre,
+                    b.descripcion AS banco_nombre, e.codigo AS empresa_codigo, e.nombre AS empresa_nombre
+             FROM movimientos_bancarios mb
+             LEFT JOIN cuentas_bancarias cb ON mb.cuenta_bancaria_id = cb.id
+             LEFT JOIN bancos b ON cb.banco_id = b.id
+             LEFT JOIN empresas e ON mb.empresa_id = e.id
+             WHERE mb.cuenta_bancaria_id != ?
+               AND mb.deleted_at IS NULL
+               AND mb.fecha >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)
+             ORDER BY mb.fecha DESC, mb.id DESC
+             LIMIT 500`,
+            [cuentaId]
+        ));
+        movimientosOtrasCuentas = (otherMovRows || []).map(r => ({
+            ...r,
+            paired_with_current_account: Boolean(r.transfer_group_id && localTransferGroups.has(String(r.transfer_group_id).trim()))
+        }));
+    } catch (_) {
+        movimientosOtrasCuentas = [];
+    }
+
     return {
         cuenta,
         pendientes: [...(movPendientes || []), ...(chkPendientes || [])],
         conciliadosExistentes: [...(movConciliados || []), ...(chkConciliados || [])],
         rules,
         tiposRemesas: tiposRemesas.length > 0 ? tiposRemesas : allTiposRemesas,
-        allTiposRemesas
+        allTiposRemesas,
+        otrasCuentasInternas,
+        movimientosOtrasCuentas,
+        transferCounterpartsByGroup
     };
 }
 
@@ -292,7 +527,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
         const [movimientosAplicadosRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, m.tipo_remesa_id, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
-            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version, m.comprobante_url ' +
+            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version, m.comprobante_url, m.transfer_group_id ' +
             'FROM movimientos_bancarios m ' +
             'LEFT JOIN tipos_remesas tr ON m.tipo_remesa_id = tr.id ' +
             'WHERE m.cuenta_bancaria_id = ? ' +
@@ -330,7 +565,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
         const [movimientosPendientesRows] = await withRetry(() => db.query(
             'SELECT m.id, "MOV" as origen_tipo, tr.codigo as tipo_doc, ' +
             'm.fecha, m.fecha_aplicado, m.documento, m.concepto, "" as beneficiario, ' +
-            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version, m.comprobante_url ' +
+            'm.monto, m.cargo, m.abono, m.num_partida, m.cod_cta, m.es_contabilizado, m.version, m.comprobante_url, m.transfer_group_id ' +
             'FROM movimientos_bancarios m ' +
             'LEFT JOIN tipos_remesas tr ON m.tipo_remesa_id = tr.id ' +
             'WHERE m.cuenta_bancaria_id = ? ' +
@@ -475,6 +710,32 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             if (!isNoSuchTableError(errCruces)) throw errCruces;
         }
 
+        const allTransferGroupIds = [...new Set(
+            [...(movimientosAplicadosRows || []), ...(movimientosPendientesRows || [])]
+                .map(r => String(r.transfer_group_id || '').trim())
+                .filter(Boolean)
+        )];
+        const transferCounterpartsMap = await loadTransferCounterpartsByGroups(db, allTransferGroupIds, cuentaId);
+        const buildTransferRowMeta = (r) => {
+            if (r.origen_tipo !== 'MOV' || !r.transfer_group_id) {
+                return {
+                    transfer_group_id: null,
+                    es_transferencia_interna: false,
+                    transfer_contraparte: null
+                };
+            }
+            const gid = String(r.transfer_group_id).trim();
+            const cp = transferCounterpartsMap.get(gid) || null;
+            return {
+                transfer_group_id: gid,
+                es_transferencia_interna: true,
+                transfer_contraparte: cp ? {
+                    ...cp,
+                    intercompany: Boolean(cp.empresa_id && cuenta.empresa_id && Number(cp.empresa_id) !== Number(cuenta.empresa_id))
+                } : null
+            };
+        };
+
         const movimientosConciliados = [...movimientosAplicadosRows, ...chequesAplicadosRows]
             .sort((a, b) => new Date(b.fecha_aplicado) - new Date(a.fecha_aplicado) || b.id - a.id)
             .map(r => {
@@ -483,6 +744,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
                 return {
                     ...r,
                     ...attachMovementReceipts(r),
+                    ...buildTransferRowMeta(r),
                     key,
                     tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (Number(r.abono) > 0 ? 'RM' : 'NC')),
                     fecha_ymd: parseStrictDBDate(r.fecha),
@@ -508,6 +770,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             .map(r => ({
                 ...r,
                 ...attachMovementReceipts(r),
+                ...buildTransferRowMeta(r),
                 ...(r.origen_tipo === 'CK' ? classifyCheckAging(r.fecha, agingRefDate) : {}),
                 key: `${r.origen_tipo}_${r.id}`,
                 tipo: r.tipo_doc || (r.origen_tipo === 'CK' ? 'CH' : (Number(r.abono) > 0 ? 'RM' : 'NC')),
@@ -680,6 +943,80 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             sugerenciasControlPagos = [];
         }
 
+        // 9. Identificación de Transferencias Internas (Vinculadas + Sugerencias de Espejos)
+        let sugerenciasEspejo = [];
+        try {
+            const unlinkedLocalMovs = [...movimientosConciliados, ...pendientes]
+                .filter(r => r.origen_tipo === 'MOV' && !r.transfer_group_id);
+            if (unlinkedLocalMovs.length > 0) {
+                const dateWindowMin = unlinkedLocalMovs.reduce((minD, m) => (!minD || (m.fecha_ymd && m.fecha_ymd < minD) ? m.fecha_ymd : minD), null) || dbDesde;
+                const dateWindowMax = unlinkedLocalMovs.reduce((maxD, m) => (!maxD || (m.fecha_ymd && m.fecha_ymd > maxD) ? m.fecha_ymd : maxD), null) || dbHasta;
+                const [otherUnlinkedRows] = await withRetry(() => db.query(
+                    `SELECT mb.id, mb.empresa_id, mb.cuenta_bancaria_id, mb.fecha, mb.fecha_aplicado,
+                            mb.documento, mb.concepto, mb.monto, mb.cargo, mb.abono, mb.transfer_group_id,
+                            cb.numero AS numero_cuenta, cb.nombre AS cuenta_nombre,
+                            b.descripcion AS banco_nombre, e.codigo AS empresa_codigo, e.nombre AS empresa_nombre
+                     FROM movimientos_bancarios mb
+                     LEFT JOIN cuentas_bancarias cb ON mb.cuenta_bancaria_id = cb.id
+                     LEFT JOIN bancos b ON cb.banco_id = b.id
+                     LEFT JOIN empresas e ON mb.empresa_id = e.id
+                     WHERE mb.transfer_group_id IS NULL
+                       AND mb.deleted_at IS NULL
+                       AND mb.cuenta_bancaria_id != ?
+                       AND mb.fecha BETWEEN DATE_SUB(?, INTERVAL 5 DAY) AND DATE_ADD(?, INTERVAL 5 DAY)
+                     ORDER BY mb.fecha DESC, mb.id DESC
+                     LIMIT 300`,
+                    [cuentaId, dateWindowMin, dateWindowMax]
+                ));
+                sugerenciasEspejo = findMirrorTransferSuggestions({
+                    cuentaId,
+                    cuentaEmpresaId: cuenta.empresa_id,
+                    localMovs: unlinkedLocalMovs,
+                    otherMovs: otherUnlinkedRows || []
+                });
+            }
+        } catch (_) {
+            sugerenciasEspejo = [];
+        }
+
+        const vinculadasInternas = [...movimientosConciliados, ...pendientes]
+            .filter(r => r.es_transferencia_interna)
+            .map(r => {
+                const localConc = Boolean(r.fecha_aplicado);
+                const cpConc = Boolean(r.transfer_contraparte?.conciliado);
+                let estadoSimetria = 'AMBAS_PENDIENTES';
+                if (localConc && cpConc) estadoSimetria = 'AMBAS_CONCILIADAS';
+                else if (localConc && !cpConc) estadoSimetria = 'FALTA_CONTRAPARTE';
+                else if (!localConc && cpConc) estadoSimetria = 'FALTA_ACTUAL';
+                return {
+                    id: Number(r.id),
+                    origen_tipo: 'MOV',
+                    transfer_group_id: r.transfer_group_id,
+                    fecha_ymd: r.fecha_ymd,
+                    fecha_display: r.fecha_display,
+                    fecha_aplicado_ymd: r.fecha_aplicado_ymd,
+                    fecha_aplicado_display: r.fecha_aplicado_display,
+                    conciliado: localConc,
+                    documento: r.documento || '',
+                    concepto: r.concepto || '',
+                    direccion: Number(r.cargo || 0) > 0 ? 'CARGO' : 'ABONO',
+                    monto: Number(r.monto_display || r.monto || 0),
+                    transfer_contraparte: r.transfer_contraparte || null,
+                    simetrica: localConc && cpConc,
+                    estado_simetria: estadoSimetria,
+                    signed_url: r.signed_url || r.comprobante_url || null,
+                    comprobantes_count: r.comprobantes_count || 0
+                };
+            });
+
+        const transferenciasInternas = {
+            vinculadas: vinculadasInternas,
+            sugerencias_espejo: sugerenciasEspejo,
+            total_vinculadas: vinculadasInternas.length,
+            total_asimetricas: vinculadasInternas.filter(v => v.estado_simetria === 'FALTA_ACTUAL' || v.estado_simetria === 'FALTA_CONTRAPARTE').length,
+            total_sugerencias_espejo: sugerenciasEspejo.length
+        };
+
         res.json({
             cuenta,
             movimientos_conciliados: movimientosConciliados,
@@ -690,6 +1027,7 @@ router.get('/data', authenticateToken, requirePermission(conciliacionViewPerms),
             aging_resumen: agingSummary,
             aging_cheques: agingSummary,
             cruces_activos: crucesActivos,
+            transferencias_internas: transferenciasInternas,
             resumen: {
                 saldo_banco: saldoBanco,
                 saldo_chequera: summary.saldo_chequera,
@@ -1233,7 +1571,11 @@ router.post('/parse-extracto', express.json({ limit: '20mb' }), authenticateToke
             tiposRemesas: ctx.tiposRemesas,
             allTiposRemesas: ctx.allTiposRemesas,
             cuentaId,
-            bancoCodigo: ctx.cuenta.banco_codigo
+            empresaId: ctx.cuenta.empresa_id,
+            bancoCodigo: ctx.cuenta.banco_codigo,
+            otrasCuentasInternas: ctx.otrasCuentasInternas,
+            movimientosOtrasCuentas: ctx.movimientosOtrasCuentas,
+            transferCounterpartsByGroup: ctx.transferCounterpartsByGroup
         });
 
         let extractoYaImportado = null;
@@ -1304,7 +1646,11 @@ async function handleParseMultimodalStatement(req, res) {
             tiposRemesas: ctx.tiposRemesas,
             allTiposRemesas: ctx.allTiposRemesas,
             cuentaId,
-            bancoCodigo: ctx.cuenta.banco_codigo
+            empresaId: ctx.cuenta.empresa_id,
+            bancoCodigo: ctx.cuenta.banco_codigo,
+            otrasCuentasInternas: ctx.otrasCuentasInternas,
+            movimientosOtrasCuentas: ctx.movimientosOtrasCuentas,
+            transferCounterpartsByGroup: ctx.transferCounterpartsByGroup
         });
 
         let extractoYaImportado = null;
@@ -3992,5 +4338,421 @@ async function handleDesconciliarCruce(req, res) {
 
 router.post('/cruces/:id/desconciliar', authenticateToken, requirePermission(conciliacionManagePerms), handleDesconciliarCruce);
 router.delete('/cruces/:id', authenticateToken, requirePermission(conciliacionManagePerms), handleDesconciliarCruce);
+
+// ── 9. Identificar / Vincular Transferencias Internas desde Conciliación ────
+router.post('/vincular-transferencia-interna', authenticateToken, requirePermission(conciliacionManagePerms), async (req, res) => {
+    const {
+        modo = 'VINCULAR_EXISTENTES',
+        cuenta_bancaria_id,
+        movimiento_id,
+        movimiento_contraparte_id,
+        cuenta_contraparte_id,
+        direccion_actual,
+        fecha,
+        fecha_aplicado,
+        documento,
+        concepto,
+        monto,
+        cod_cta,
+        num_partida,
+        aplicar_inmediatamente = true,
+        aplicar_contraparte = false
+    } = req.body || {};
+
+    const cleanModo = String(modo || 'VINCULAR_EXISTENTES').trim().toUpperCase();
+    if (!['VINCULAR_EXISTENTES', 'CREAR_Y_VINCULAR_ESPEJO', 'CREAR_PAR_COMPLETO'].includes(cleanModo)) {
+        return res.status(400).json({ message: 'Modo de vinculación de transferencia interna no válido.' });
+    }
+
+    const cuentaId = parseInt(cuenta_bancaria_id, 10);
+    if (!Number.isInteger(cuentaId) || cuentaId <= 0) {
+        return res.status(400).json({ message: 'Debe especificar una cuenta bancaria válida.' });
+    }
+
+    const idempotencyKey = getIdempotencyKey(req);
+    const idempotencyScope = 'conciliacion_vincular_transferencia';
+
+    try {
+        const txResult = await withTransaction(async (conn) => {
+            if (idempotencyKey) {
+                const idem = await beginIdempotentRequest(conn, {
+                    key: idempotencyKey,
+                    scope: idempotencyScope,
+                    userId: req.user?.id,
+                    payload: {
+                        modo: cleanModo,
+                        cuentaId,
+                        movimiento_id,
+                        movimiento_contraparte_id,
+                        cuenta_contraparte_id,
+                        direccion_actual,
+                        fecha,
+                        fecha_aplicado,
+                        documento,
+                        monto
+                    }
+                });
+                if (idem.replayed) return { replayed: true, statusCode: idem.statusCode, body: idem.responseBody };
+                if (idem.conflict) return { conflict: true };
+            }
+
+            const abortTx = async (errorStatus, message) => {
+                await cleanupPendingIdempotency(conn, idempotencyKey, idempotencyScope);
+                return { errorStatus, errorBody: { message } };
+            };
+
+            const resolveTrId = async (empId, dir) => {
+                const codes = dir === 'CARGO' ? ['TR', 'NC'] : ['TR', 'NA'];
+                const [trRows] = await conn.query(
+                    `SELECT id FROM tipos_remesas WHERE empresa_id = ? AND codigo IN (?, ?) ORDER BY (codigo = 'TR') DESC LIMIT 1`,
+                    [empId, codes[0], codes[1]]
+                );
+                return trRows && trRows.length > 0 ? trRows[0].id : null;
+            };
+
+            if (cleanModo === 'VINCULAR_EXISTENTES') {
+                const movId = parseInt(movimiento_id, 10);
+                const cpId = parseInt(movimiento_contraparte_id, 10);
+                if (!Number.isInteger(movId) || movId <= 0 || !Number.isInteger(cpId) || cpId <= 0) {
+                    return abortTx(400, 'Debe especificar ambos IDs de movimiento para vincular la transferencia interna.');
+                }
+                if (movId === cpId) {
+                    return abortTx(400, 'No puede vincular un movimiento consigo mismo.');
+                }
+
+                const orderedIds = [movId, cpId].sort((a, b) => a - b);
+                const [lockedRows] = await conn.query(
+                    `SELECT * FROM movimientos_bancarios WHERE id IN (?, ?) FOR UPDATE`,
+                    orderedIds
+                );
+                const localMov = (lockedRows || []).find(r => Number(r.id) === movId);
+                const cpMov = (lockedRows || []).find(r => Number(r.id) === cpId);
+                if (!localMov || localMov.deleted_at || !cpMov || cpMov.deleted_at) {
+                    return abortTx(404, 'Uno o ambos movimientos no existen o fueron eliminados.');
+                }
+                if (Number(localMov.cuenta_bancaria_id) !== cuentaId) {
+                    return abortTx(403, 'El movimiento local no pertenece a la cuenta bancaria seleccionada.');
+                }
+                if (Number(localMov.cuenta_bancaria_id) === Number(cpMov.cuenta_bancaria_id)) {
+                    return abortTx(400, 'Los movimientos espejo deben pertenecer a cuentas bancarias distintas.');
+                }
+                if (localMov.transfer_group_id || cpMov.transfer_group_id) {
+                    return abortTx(409, 'Al menos uno de los movimientos ya está vinculado a otra transferencia interna.');
+                }
+
+                const dirLocal = getRowDirectionValue(localMov);
+                const dirCp = getRowDirectionValue(cpMov);
+                if (dirLocal === dirCp) {
+                    return abortTx(400, 'Los movimientos de una transferencia interna deben tener dirección opuesta (CARGO vs ABONO).');
+                }
+                const montoLocal = Number(localMov.monto || localMov.cargo || localMov.abono || 0);
+                const montoCp = Number(cpMov.monto || cpMov.cargo || cpMov.abono || 0);
+                if (Math.abs(montoLocal - montoCp) >= 0.01) {
+                    return abortTx(400, `Los montos no coinciden ($${montoLocal.toFixed(2)} vs $${montoCp.toFixed(2)}).`);
+                }
+
+                const lockLocal = await isDateInClosedPeriod(conn, localMov.cuenta_bancaria_id, [localMov.fecha, localMov.fecha_aplicado]);
+                if (lockLocal.closed) {
+                    return abortTx(423, `Período cerrado hasta ${toDisplayDate(lockLocal.lockedDate)} en la cuenta actual.`);
+                }
+                const lockCp = await isDateInClosedPeriod(conn, cpMov.cuenta_bancaria_id, [cpMov.fecha, cpMov.fecha_aplicado]);
+                if (lockCp.closed) {
+                    return abortTx(423, `Período cerrado hasta ${toDisplayDate(lockCp.lockedDate)} en la cuenta contraparte.`);
+                }
+
+                const transferGroupId = await generateNextTransferCode(conn);
+                await conn.query(
+                    'UPDATE movimientos_bancarios SET transfer_group_id = ?, updated_by = ?, version = version + 1 WHERE id IN (?, ?) AND deleted_at IS NULL',
+                    [transferGroupId, req.user?.id || null, movId, cpId]
+                );
+
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: localMov.cuenta_bancaria_id,
+                    entidad: 'movimientos_bancarios',
+                    entidadId: movId,
+                    accion: 'LINK_INTERNAL_TRANSFER',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    after: { id: movId, counterpart_id: cpId, transfer_group_id: transferGroupId }
+                });
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: cpMov.cuenta_bancaria_id,
+                    entidad: 'movimientos_bancarios',
+                    entidadId: cpId,
+                    accion: 'LINK_INTERNAL_TRANSFER',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    after: { id: cpId, counterpart_id: movId, transfer_group_id: transferGroupId }
+                });
+
+                const body = {
+                    message: `Transferencia interna vinculada (${transferGroupId}).`,
+                    modo: cleanModo,
+                    transfer_group_id: transferGroupId,
+                    movimiento_id: movId,
+                    movimiento_contraparte_id: cpId
+                };
+                if (idempotencyKey) {
+                    await saveIdempotentResponse(conn, { key: idempotencyKey, scope: idempotencyScope, statusCode: 200, responseBody: body });
+                }
+                return {
+                    statusCode: 200,
+                    body,
+                    cuentaIds: [Number(localMov.cuenta_bancaria_id), Number(cpMov.cuenta_bancaria_id)]
+                };
+            }
+
+            if (cleanModo === 'CREAR_Y_VINCULAR_ESPEJO') {
+                const cpId = parseInt(movimiento_contraparte_id, 10);
+                if (!Number.isInteger(cpId) || cpId <= 0) {
+                    return abortTx(400, 'Debe especificar el movimiento espejo existente en la otra cuenta.');
+                }
+
+                const [[ctaActual]] = await conn.query(
+                    'SELECT c.id, c.empresa_id, c.numero, c.nombre, c.activa, e.nombre AS empresa_nombre, b.descripcion AS banco_nombre FROM cuentas_bancarias c LEFT JOIN empresas e ON c.empresa_id = e.id LEFT JOIN bancos b ON c.banco_id = b.id WHERE c.id = ? LIMIT 1',
+                    [cuentaId]
+                );
+                if (!ctaActual || !ctaActual.activa) {
+                    return abortTx(404, 'Cuenta bancaria actual no encontrada o inactiva.');
+                }
+
+                const [[cpMov]] = await conn.query('SELECT * FROM movimientos_bancarios WHERE id = ? FOR UPDATE', [cpId]);
+                if (!cpMov || cpMov.deleted_at) {
+                    return abortTx(404, 'Movimiento espejo en contraparte no encontrado o eliminado.');
+                }
+                if (Number(cpMov.cuenta_bancaria_id) === cuentaId) {
+                    return abortTx(400, 'El movimiento espejo pertenece a la misma cuenta bancaria.');
+                }
+                if (cpMov.transfer_group_id) {
+                    return abortTx(409, `El movimiento espejo #${cpId} ya pertenece a la transferencia ${cpMov.transfer_group_id}.`);
+                }
+
+                const cpDir = getRowDirectionValue(cpMov);
+                const localDir = cpDir === 'CARGO' ? 'ABONO' : 'CARGO';
+                const montoExacto = round2(Number(cpMov.monto || cpMov.cargo || cpMov.abono || 0));
+                if (montoExacto <= 0) {
+                    return abortTx(400, 'El monto del movimiento espejo no es válido.');
+                }
+
+                const dbFecha = parseStrictDBDate(fecha || cpMov.fecha || getElSalvadorTodayYMD());
+                if (!dbFecha) {
+                    return abortTx(400, 'La fecha del movimiento no es válida.');
+                }
+                const aplicarNow = aplicar_inmediatamente !== false;
+                const dbFechaAplicado = aplicarNow ? parseStrictDBDate(fecha_aplicado || dbFecha) : null;
+                if (aplicarNow && !dbFechaAplicado) {
+                    return abortTx(400, 'La fecha de aplicación no es válida.');
+                }
+
+                const lockLocal = await isDateInClosedPeriod(conn, cuentaId, [dbFecha, dbFechaAplicado]);
+                if (lockLocal.closed) {
+                    return abortTx(423, `Período cerrado hasta ${toDisplayDate(lockLocal.lockedDate)} en la cuenta actual.`);
+                }
+                const lockCp = await isDateInClosedPeriod(conn, cpMov.cuenta_bancaria_id, [cpMov.fecha, cpMov.fecha_aplicado]);
+                if (lockCp.closed) {
+                    return abortTx(423, `Período cerrado hasta ${toDisplayDate(lockCp.lockedDate)} en la cuenta contraparte.`);
+                }
+
+                const transferGroupId = await generateNextTransferCode(conn);
+                const cleanDoc = (String(documento || cpMov.documento || '').trim() || transferGroupId).slice(0, 100);
+                const cleanConcepto = (String(concepto || '').trim().toUpperCase() || `TRANSFERENCIA ${localDir === 'CARGO' ? 'A' : 'DE'} CTA ESPEJO #${cpMov.id}`).slice(0, 255);
+                const cargo = localDir === 'CARGO' ? montoExacto : 0;
+                const abono = localDir === 'ABONO' ? montoExacto : 0;
+                const trId = await resolveTrId(ctaActual.empresa_id, localDir);
+                const fp = computeMovementFingerprint({ cuentaBancariaId: cuentaId, fecha: dbFecha, documento: cleanDoc, cargo, abono, concepto: cleanConcepto });
+
+                const debVal = localDir === 'CARGO' ? montoExacto : 0;
+                const credVal = localDir === 'ABONO' ? montoExacto : 0;
+                const [ins] = localDir === 'CARGO'
+                    ? await conn.query(
+                        `INSERT INTO movimientos_bancarios
+                            (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
+                             monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida,
+                             created_by, conciliado_by, conciliado_at, transfer_group_id, fingerprint, version)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                        [ctaActual.empresa_id, cuentaId, dbFecha, dbFechaAplicado, cleanDoc, cleanConcepto, montoExacto, debVal, trId, cod_cta || null, num_partida || null, req.user?.id || null, dbFechaAplicado ? (req.user?.id || null) : null, dbFechaAplicado ? new Date() : null, transferGroupId, fp]
+                    )
+                    : await conn.query(
+                        `INSERT INTO movimientos_bancarios
+                            (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
+                             monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida,
+                             created_by, conciliado_by, conciliado_at, transfer_group_id, fingerprint, version)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                        [ctaActual.empresa_id, cuentaId, dbFecha, dbFechaAplicado, cleanDoc, cleanConcepto, montoExacto, credVal, trId, cod_cta || null, num_partida || null, req.user?.id || null, dbFechaAplicado ? (req.user?.id || null) : null, dbFechaAplicado ? new Date() : null, transferGroupId, fp]
+                    );
+
+                await conn.query(
+                    'UPDATE movimientos_bancarios SET transfer_group_id = ?, updated_by = ?, version = version + 1 WHERE id = ? AND deleted_at IS NULL',
+                    [transferGroupId, req.user?.id || null, cpId]
+                );
+
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: cuentaId,
+                    entidad: 'movimientos_bancarios',
+                    entidadId: ins.insertId,
+                    accion: 'CREATE_AND_LINK_MIRROR_TRANSFER',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    after: { id: ins.insertId, counterpart_id: cpId, transfer_group_id: transferGroupId, monto: montoExacto }
+                });
+                await recordBankAudit(conn, {
+                    cuentaBancariaId: cpMov.cuenta_bancaria_id,
+                    entidad: 'movimientos_bancarios',
+                    entidadId: cpId,
+                    accion: 'LINK_INTERNAL_TRANSFER',
+                    user: req.user,
+                    ipAddress: req.ip,
+                    after: { id: cpId, counterpart_id: ins.insertId, transfer_group_id: transferGroupId }
+                });
+
+                const body = {
+                    message: `Movimiento creado, conciliado y vinculado como transferencia interna ${transferGroupId}.`,
+                    modo: cleanModo,
+                    transfer_group_id: transferGroupId,
+                    movimiento_id: ins.insertId,
+                    movimiento_contraparte_id: cpId
+                };
+                if (idempotencyKey) {
+                    await saveIdempotentResponse(conn, { key: idempotencyKey, scope: idempotencyScope, statusCode: 201, responseBody: body });
+                }
+                return {
+                    statusCode: 201,
+                    body,
+                    cuentaIds: [cuentaId, Number(cpMov.cuenta_bancaria_id)]
+                };
+            }
+
+            // CREAR_PAR_COMPLETO
+            const cpCuentaId = parseInt(cuenta_contraparte_id, 10);
+            if (!Number.isInteger(cpCuentaId) || cpCuentaId <= 0 || cpCuentaId === cuentaId) {
+                return abortTx(400, 'Debe especificar una cuenta bancaria contraparte distinta y válida.');
+            }
+            const parsedMonto = parseStrictPositiveAmount(monto);
+            if (parsedMonto === null) {
+                return abortTx(400, 'El monto de la transferencia debe ser mayor a $0.00.');
+            }
+            const dirActual = String(direccion_actual || 'CARGO').trim().toUpperCase() === 'ABONO' ? 'ABONO' : 'CARGO';
+            const dbFecha = parseStrictDBDate(fecha || getElSalvadorTodayYMD());
+            if (!dbFecha) {
+                return abortTx(400, 'La fecha de la transferencia no es válida.');
+            }
+            const aplicarNow = aplicar_inmediatamente !== false;
+            const dbFechaAplActual = aplicarNow ? parseStrictDBDate(fecha_aplicado || dbFecha) : null;
+            if (aplicarNow && !dbFechaAplActual) {
+                return abortTx(400, 'La fecha de aplicación no es válida.');
+            }
+            const dbFechaAplCp = aplicar_contraparte ? (dbFechaAplActual || dbFecha) : null;
+
+            const [[ctaActual]] = await conn.query(
+                'SELECT c.id, c.empresa_id, c.numero, c.nombre, c.activa, e.nombre AS empresa_nombre, b.descripcion AS banco_nombre FROM cuentas_bancarias c LEFT JOIN empresas e ON c.empresa_id = e.id LEFT JOIN bancos b ON c.banco_id = b.id WHERE c.id = ? LIMIT 1',
+                [cuentaId]
+            );
+            const [[ctaCp]] = await conn.query(
+                'SELECT c.id, c.empresa_id, c.numero, c.nombre, c.activa, e.nombre AS empresa_nombre, b.descripcion AS banco_nombre FROM cuentas_bancarias c LEFT JOIN empresas e ON c.empresa_id = e.id LEFT JOIN bancos b ON c.banco_id = b.id WHERE c.id = ? LIMIT 1',
+                [cpCuentaId]
+            );
+            if (!ctaActual || !ctaActual.activa || !ctaCp || !ctaCp.activa) {
+                return abortTx(404, 'Una o ambas cuentas bancarias no existen o están inactivas.');
+            }
+
+            const ctaDeb = dirActual === 'CARGO' ? ctaActual : ctaCp;
+            const ctaCred = dirActual === 'CARGO' ? ctaCp : ctaActual;
+            const fechaAplDeb = dirActual === 'CARGO' ? dbFechaAplActual : dbFechaAplCp;
+            const fechaAplCred = dirActual === 'ABONO' ? dbFechaAplActual : dbFechaAplCp;
+
+            const lockDeb = await isDateInClosedPeriod(conn, ctaDeb.id, [dbFecha, fechaAplDeb]);
+            if (lockDeb.closed) {
+                return abortTx(423, `Período cerrado hasta ${toDisplayDate(lockDeb.lockedDate)} en la cuenta origen.`);
+            }
+            const lockCred = await isDateInClosedPeriod(conn, ctaCred.id, [dbFecha, fechaAplCred]);
+            if (lockCred.closed) {
+                return abortTx(423, `Período cerrado hasta ${toDisplayDate(lockCred.lockedDate)} en la cuenta destino.`);
+            }
+
+            const transferGroupId = await generateNextTransferCode(conn);
+            const cleanDoc = (String(documento || '').trim() || transferGroupId).slice(0, 100);
+            const intercompany = Number(ctaDeb.empresa_id) !== Number(ctaCred.empresa_id);
+            const baseConcept = String(concepto || '').trim().toUpperCase();
+            const conceptoDeb = (baseConcept || `TRANSFERENCIA A ${ctaCred.banco_nombre || ''} #${ctaCred.numero}`).slice(0, 255);
+            const conceptoCred = (baseConcept || `TRANSFERENCIA DE ${ctaDeb.banco_nombre || ''} #${ctaDeb.numero}`).slice(0, 255);
+            const trDebId = await resolveTrId(ctaDeb.empresa_id, 'CARGO');
+            const trCredId = await resolveTrId(ctaCred.empresa_id, 'ABONO');
+            const fpDeb = computeMovementFingerprint({ cuentaBancariaId: ctaDeb.id, fecha: dbFecha, documento: cleanDoc, cargo: parsedMonto, abono: 0, concepto: conceptoDeb });
+            const fpCred = computeMovementFingerprint({ cuentaBancariaId: ctaCred.id, fecha: dbFecha, documento: cleanDoc, cargo: 0, abono: parsedMonto, concepto: conceptoCred });
+
+            const [resDeb] = await conn.query(
+                `INSERT INTO movimientos_bancarios
+                    (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
+                     monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida,
+                     created_by, conciliado_by, conciliado_at, transfer_group_id, fingerprint, version)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                [ctaDeb.empresa_id, ctaDeb.id, dbFecha, fechaAplDeb, cleanDoc, conceptoDeb, parsedMonto, parsedMonto, trDebId, cod_cta || null, num_partida || null, req.user?.id || null, fechaAplDeb ? (req.user?.id || null) : null, fechaAplDeb ? new Date() : null, transferGroupId, fpDeb]
+            );
+            const [resCred] = await conn.query(
+                `INSERT INTO movimientos_bancarios
+                    (empresa_id, cuenta_bancaria_id, fecha, fecha_aplicado, documento, concepto,
+                     monto, cargo, abono, tipo_remesa_id, cod_cta, num_partida,
+                     created_by, conciliado_by, conciliado_at, transfer_group_id, fingerprint, version)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                [ctaCred.empresa_id, ctaCred.id, dbFecha, fechaAplCred, cleanDoc, conceptoCred, parsedMonto, parsedMonto, trCredId, cod_cta || null, num_partida || null, req.user?.id || null, fechaAplCred ? (req.user?.id || null) : null, fechaAplCred ? new Date() : null, transferGroupId, fpCred]
+            );
+
+            await recordBankAudit(conn, {
+                cuentaBancariaId: ctaDeb.id,
+                entidad: 'movimientos_bancarios',
+                entidadId: resDeb.insertId,
+                accion: 'CREATE_TRANSFER_DEBIT',
+                user: req.user,
+                ipAddress: req.ip,
+                after: { id: resDeb.insertId, transfer_group_id: transferGroupId, intercompany, cargo: parsedMonto, fecha: dbFecha }
+            });
+            await recordBankAudit(conn, {
+                cuentaBancariaId: ctaCred.id,
+                entidad: 'movimientos_bancarios',
+                entidadId: resCred.insertId,
+                accion: 'CREATE_TRANSFER_CREDIT',
+                user: req.user,
+                ipAddress: req.ip,
+                after: { id: resCred.insertId, transfer_group_id: transferGroupId, intercompany, abono: parsedMonto, fecha: dbFecha }
+            });
+
+            const body = {
+                message: `Transferencia interna ${transferGroupId} creada y aplicada en cuenta actual.`,
+                modo: cleanModo,
+                transfer_group_id: transferGroupId,
+                debit_id: resDeb.insertId,
+                credit_id: resCred.insertId,
+                intercompany
+            };
+            if (idempotencyKey) {
+                await saveIdempotentResponse(conn, { key: idempotencyKey, scope: idempotencyScope, statusCode: 201, responseBody: body });
+            }
+            return {
+                statusCode: 201,
+                body,
+                cuentaIds: [Number(ctaDeb.id), Number(ctaCred.id)]
+            };
+        });
+
+        if (txResult.conflict) {
+            return res.status(409).json({ message: 'Solicitud duplicada en proceso. Espere unos segundos.' });
+        }
+        if (txResult.replayed) {
+            return res.status(txResult.statusCode).json(txResult.body);
+        }
+        if (txResult.errorStatus) {
+            return res.status(txResult.errorStatus).json(txResult.errorBody);
+        }
+
+        for (const ctaId of (txResult.cuentaIds || [])) {
+            emitBankUpdate(req.io, 'movimientos_updated', { cuenta_bancaria_id: ctaId, transfer_group_id: txResult.body?.transfer_group_id });
+            emitBankUpdate(req.io, 'conciliacion_updated', { cuenta_bancaria_id: ctaId, transfer_group_id: txResult.body?.transfer_group_id });
+        }
+
+        res.status(txResult.statusCode || 200).json(txResult.body);
+    } catch (error) {
+        sendSafeError(res, error, 'Error al vincular transferencia interna');
+    }
+});
 
 module.exports = router;

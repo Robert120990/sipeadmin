@@ -2386,6 +2386,203 @@ function detectGroupedMatches(transacciones = [], pendientes = []) {
     return suggestions;
 }
 
+const INTERNAL_TRANSFER_KEYWORD_RE = /\b(TRANSFER|TRANSF|T365|TRANSFER365|TRASLADO|ENTRE CUENTAS|CTA PROPIA|CUENTA PROPIA|TFB\d+)\b/i;
+
+function extractAccountDigits(val) {
+    return String(val || '').replace(/\D+/g, '');
+}
+
+/**
+ * Identifica si una fila de extracto bancario corresponde a una transferencia interna:
+ * 1) Ya vinculada en libros (`VINCULADA`)
+ * 2) Espejo sin vincular en otra cuenta bancaria de las empresas (`ESPEJO_OTRA_CUENTA`)
+ * 3) Mención de un número de cuenta bancaria interna en la descripción (`NUMERO_CUENTA_INTERNA`)
+ */
+function detectInternalTransferForStatementRow(tx, context = {}) {
+    if (!tx) return null;
+    const {
+        cuentaId = null,
+        empresaId = null,
+        otrasCuentasInternas = [],
+        movimientosOtrasCuentas = [],
+        transferCounterpartsByGroup = new Map(),
+        usedMirrorIds = new Set(),
+        uniqueLast6Map = null
+    } = context;
+
+    const getCounterpartByGroup = (groupId) => {
+        if (!groupId) return null;
+        if (transferCounterpartsByGroup instanceof Map) {
+            return transferCounterpartsByGroup.get(groupId) || null;
+        }
+        return transferCounterpartsByGroup?.[groupId] || null;
+    };
+
+    const normDoc = (v) => String(v || '').trim().replace(/^0+/, '').toUpperCase();
+    const txDescUpper = String(tx.descripcion || tx.concepto || '').toUpperCase();
+    const txDoc = normDoc(tx.documento);
+    const txDir = String(tx.tipo || (Number(tx.cargo || 0) > 0 ? 'CARGO' : 'ABONO')).toUpperCase();
+    const txMonto = Number(tx.monto || 0);
+    const txYmd = tx.fecha_ymd || parseBankDate(tx.fecha)?.ymd || null;
+    const descDigits = extractAccountDigits(txDescUpper);
+    const hasTransferKw = INTERNAL_TRANSFER_KEYWORD_RE.test(txDescUpper) || /\bACH\b/i.test(txDescUpper);
+
+    // 1. Fila cuyo cruce en libros ya tiene transfer_group_id
+    if (tx.match && tx.match.origen_tipo === 'MOV' && tx.match.transfer_group_id) {
+        const gid = tx.match.transfer_group_id;
+        const cp = getCounterpartByGroup(gid);
+        return {
+            tipo: 'VINCULADA',
+            confianza: 'ALTA',
+            transfer_group_id: gid,
+            cuenta_contraparte_id: cp ? Number(cp.cuenta_bancaria_id) : null,
+            empresa_id: cp ? Number(cp.empresa_id || 0) : null,
+            empresa_codigo: cp?.empresa_codigo || '',
+            empresa_nombre: cp?.empresa_nombre || '',
+            banco_nombre: cp?.banco_nombre || '',
+            numero_cuenta: cp?.numero_cuenta || '',
+            cuenta_nombre: cp?.cuenta_nombre || '',
+            intercompany: Boolean(cp && empresaId && cp.empresa_id && Number(cp.empresa_id) !== Number(empresaId)),
+            movimiento_espejo_id: cp ? Number(cp.id) : null,
+            movimiento_espejo_documento: cp?.documento || null,
+            movimiento_espejo_fecha: cp ? (parseBankDate(cp.fecha)?.display || cp.fecha_display || null) : null,
+            movimiento_espejo_conciliado: Boolean(cp?.fecha_aplicado),
+            motivo: cp
+                ? `Transferencia vinculada (${gid}) con ${cp.banco_nombre || 'Cuenta'} #${cp.numero_cuenta || ''}`
+                : `Movimiento vinculado al grupo de transferencia ${gid}`
+        };
+    }
+
+    // 2. Fila sin cruce: buscar movimiento espejo en otra cuenta interna (dirección opuesta + mismo monto + ±5 días)
+    if (!tx.match && Array.isArray(movimientosOtrasCuentas) && movimientosOtrasCuentas.length > 0 && txMonto > 0) {
+        const oppositeDir = txDir === 'CARGO' ? 'ABONO' : 'CARGO';
+        const candidates = [];
+
+        for (const m of movimientosOtrasCuentas) {
+            if (!m || usedMirrorIds.has(Number(m.id))) continue;
+            if (cuentaId && Number(m.cuenta_bancaria_id) === Number(cuentaId)) continue;
+            if (m.paired_with_current_account) continue;
+
+            const mDir = getNormalizedPendingDir(m);
+            if (mDir !== oppositeDir) continue;
+
+            const mMonto = Number(m.monto || m.cargo || m.abono || 0);
+            if (Math.abs(mMonto - txMonto) >= 0.01) continue;
+
+            const mYmd = getNormalizedPendingDateYMD(m);
+            const diffDays = txYmd && mYmd ? getYmdDaysDiff(txYmd, mYmd) : 999;
+            if (diffDays > 5) continue;
+
+            let score = 0;
+            const reasons = [];
+            const mDoc = normDoc(m.documento);
+            if (txDoc && mDoc && txDoc === mDoc) {
+                score += 50;
+                reasons.push(`misma referencia #${m.documento}`);
+            }
+            if (m.transfer_group_id && txDescUpper.includes(String(m.transfer_group_id).toUpperCase())) {
+                score += 50;
+                reasons.push(`correlativo ${m.transfer_group_id}`);
+            }
+
+            const cpAccDigits = extractAccountDigits(m.numero_cuenta);
+            if (cpAccDigits.length >= 6 && descDigits.includes(cpAccDigits)) {
+                score += 35;
+                reasons.push(`mención de cuenta #${m.numero_cuenta}`);
+            }
+
+            const mConceptoUpper = String(m.concepto || '').toUpperCase();
+            if (hasTransferKw || INTERNAL_TRANSFER_KEYWORD_RE.test(mConceptoUpper)) {
+                score += 20;
+                reasons.push('descripción de transferencia');
+            }
+
+            if (diffDays === 0) {
+                score += 15;
+                reasons.push('misma fecha');
+            } else if (diffDays <= 2) {
+                score += 8;
+                reasons.push(`fecha ±${diffDays}d`);
+            }
+
+            if (score >= 15) {
+                candidates.push({ m, score, diffDays, reasons });
+            }
+        }
+
+        if (candidates.length > 0) {
+            candidates.sort((a, b) => b.score - a.score || a.diffDays - b.diffDays);
+            const best = candidates[0];
+            const m = best.m;
+            usedMirrorIds.add(Number(m.id));
+            return {
+                tipo: 'ESPEJO_OTRA_CUENTA',
+                confianza: best.score >= 40 ? 'ALTA' : 'MEDIA',
+                transfer_group_id: m.transfer_group_id || null,
+                cuenta_contraparte_id: Number(m.cuenta_bancaria_id),
+                empresa_id: Number(m.empresa_id || 0),
+                empresa_codigo: m.empresa_codigo || '',
+                empresa_nombre: m.empresa_nombre || '',
+                banco_nombre: m.banco_nombre || '',
+                numero_cuenta: m.numero_cuenta || '',
+                cuenta_nombre: m.cuenta_nombre || '',
+                intercompany: Boolean(empresaId && m.empresa_id && Number(m.empresa_id) !== Number(empresaId)),
+                movimiento_espejo_id: Number(m.id),
+                movimiento_espejo_documento: m.documento || '',
+                movimiento_espejo_fecha: parseBankDate(m.fecha)?.display || null,
+                movimiento_espejo_fecha_ymd: getNormalizedPendingDateYMD(m),
+                movimiento_espejo_concepto: m.concepto || '',
+                movimiento_espejo_conciliado: Boolean(m.fecha_aplicado),
+                motivo: `Posible espejo en ${m.banco_nombre || 'Cuenta'} #${m.numero_cuenta || ''} (${best.reasons.join(', ')})`
+            };
+        }
+    }
+
+    // 3. Sin cruce ni espejo: detectar si la descripción menciona otra cuenta bancaria interna
+    if (!tx.match && Array.isArray(otrasCuentasInternas) && otrasCuentasInternas.length > 0 && descDigits.length >= 6) {
+        const last6Map = uniqueLast6Map || (() => {
+            const counts = new Map();
+            for (const c of otrasCuentasInternas) {
+                const d = extractAccountDigits(c.numero);
+                if (d.length >= 6) {
+                    const l6 = d.slice(-6);
+                    counts.set(l6, (counts.get(l6) || 0) + 1);
+                }
+            }
+            return counts;
+        })();
+
+        for (const c of otrasCuentasInternas) {
+            if (cuentaId && Number(c.id) === Number(cuentaId)) continue;
+            const cDigits = extractAccountDigits(c.numero);
+            if (cDigits.length < 6) continue;
+            const fullMatch = descDigits.includes(cDigits);
+            const last6 = cDigits.slice(-6);
+            const uniqueLast6Match = !fullMatch && hasTransferKw && last6Map.get(last6) === 1 && descDigits.includes(last6);
+
+            if (fullMatch || uniqueLast6Match) {
+                return {
+                    tipo: 'NUMERO_CUENTA_INTERNA',
+                    confianza: fullMatch ? 'ALTA' : 'MEDIA',
+                    transfer_group_id: null,
+                    cuenta_contraparte_id: Number(c.id),
+                    empresa_id: Number(c.empresa_id || 0),
+                    empresa_codigo: c.empresa_codigo || '',
+                    empresa_nombre: c.empresa_nombre || '',
+                    banco_nombre: c.banco_nombre || '',
+                    numero_cuenta: c.numero || '',
+                    cuenta_nombre: c.nombre || '',
+                    intercompany: Boolean(empresaId && c.empresa_id && Number(c.empresa_id) !== Number(empresaId)),
+                    movimiento_espejo_id: null,
+                    motivo: `Menciona cuenta interna ${c.banco_nombre || ''} #${c.numero} (${c.empresa_nombre || c.nombre || ''})`.trim()
+                };
+            }
+        }
+    }
+
+    return null;
+}
+
 function runDeterministicMatchingAndEnrichment({
     parsedTransactions,
     filasDescartadas,
@@ -2400,7 +2597,11 @@ function runDeterministicMatchingAndEnrichment({
     tiposRemesas = [],
     allTiposRemesas = [],
     cuentaId = null,
-    bancoCodigo = null
+    empresaId = null,
+    bancoCodigo = null,
+    otrasCuentasInternas = [],
+    movimientosOtrasCuentas = [],
+    transferCounterpartsByGroup = new Map()
 }) {
     const usedPendingKeys = new Set();
     const normDoc = (v) => String(v || '').trim().replace(/^0+/, '').toUpperCase();
@@ -2511,7 +2712,8 @@ function runDeterministicMatchingAndEnrichment({
                 beneficiario: match.beneficiario || '',
                 monto: Number(match.monto || 0),
                 fecha: parseBankDate(match.fecha)?.display || '',
-                ya_conciliado: matchType === 'YA_CONCILIADO'
+                ya_conciliado: matchType === 'YA_CONCILIADO',
+                ...(match.transfer_group_id ? { transfer_group_id: match.transfer_group_id } : {})
             } : null,
             matchType,
             auto_conciliable: autoConciliable,
@@ -2525,7 +2727,54 @@ function runDeterministicMatchingAndEnrichment({
         bancoCodigo,
         allTiposRemesas
     });
-    const enriched = rulesResult.transacciones;
+
+    const usedMirrorIds = new Set();
+    const uniqueLast6Map = new Map();
+    for (const c of (otrasCuentasInternas || [])) {
+        const d = extractAccountDigits(c.numero);
+        if (d.length >= 6) {
+            const l6 = d.slice(-6);
+            uniqueLast6Map.set(l6, (uniqueLast6Map.get(l6) || 0) + 1);
+        }
+    }
+
+    const enriched = rulesResult.transacciones.map((tx) => {
+        const transferDetection = detectInternalTransferForStatementRow(tx, {
+            cuentaId,
+            empresaId,
+            otrasCuentasInternas,
+            movimientosOtrasCuentas,
+            transferCounterpartsByGroup,
+            usedMirrorIds,
+            uniqueLast6Map
+        });
+        if (!transferDetection) {
+            return { ...tx, transferencia_interna_detectada: null };
+        }
+        const shouldSuggestTr = !tx.regla_aplicada && !tx.match;
+        const enrichedMatch = tx.match ? {
+            ...tx.match,
+            es_transferencia_interna: true,
+            transfer_contraparte: transferDetection.cuenta_contraparte_id ? {
+                cuenta_bancaria_id: transferDetection.cuenta_contraparte_id,
+                empresa_id: transferDetection.empresa_id,
+                empresa_codigo: transferDetection.empresa_codigo,
+                empresa_nombre: transferDetection.empresa_nombre,
+                banco_nombre: transferDetection.banco_nombre,
+                numero_cuenta: transferDetection.numero_cuenta,
+                cuenta_nombre: transferDetection.cuenta_nombre,
+                intercompany: transferDetection.intercompany,
+                conciliado: transferDetection.movimiento_espejo_conciliado
+            } : null
+        } : null;
+        return {
+            ...tx,
+            match: enrichedMatch,
+            ...(shouldSuggestTr ? { tipo_remesa_codigo: 'TR' } : {}),
+            transferencia_interna_detectada: transferDetection
+        };
+    });
+
     const groupedSuggestions = detectGroupedMatches(enriched, pendientes);
 
     const totalCargos = round2(enriched.reduce((s, t) => s + (t.cargo || 0), 0));
@@ -2551,6 +2800,7 @@ function runDeterministicMatchingAndEnrichment({
             alertas_diferencia: enriched.filter(t => t.matchType === 'ALERTA_DIFERENCIA_MONTO').length,
             duplicados_probables: enriched.filter(t => t.es_duplicado_probable).length,
             nuevos_sin_cruce: enriched.filter(t => !t.match).length,
+            transferencias_internas_detectadas: enriched.filter(t => Boolean(t.transferencia_interna_detectada)).length,
             descartadas_count: filasDescartadas.length,
             reglas_aplicadas: rulesResult.reglas_aplicadas_count,
             cruces_agrupados_sugeridos: groupedSuggestions.length,
@@ -2608,7 +2858,11 @@ async function extractBankStatementWithGemini({
     tiposRemesas = [],
     allTiposRemesas = [],
     cuentaId = null,
+    empresaId = null,
     bancoCodigo = null,
+    otrasCuentasInternas = [],
+    movimientosOtrasCuentas = [],
+    transferCounterpartsByGroup = new Map(),
     generateWithGeminiFn = null
 } = {}) {
     const { files: normalizedFiles, fileHash } = normalizeStatementFiles({
@@ -2814,7 +3068,11 @@ async function extractBankStatementWithGemini({
         tiposRemesas,
         allTiposRemesas,
         cuentaId,
-        bancoCodigo
+        empresaId,
+        bancoCodigo,
+        otrasCuentasInternas,
+        movimientosOtrasCuentas,
+        transferCounterpartsByGroup
     });
 
     return {
@@ -2840,7 +3098,11 @@ function parseAndMatchBankStatement({
     tiposRemesas = [],
     allTiposRemesas = [],
     cuentaId = null,
-    bancoCodigo = null
+    empresaId = null,
+    bancoCodigo = null,
+    otrasCuentasInternas = [],
+    movimientosOtrasCuentas = [],
+    transferCounterpartsByGroup = new Map()
 }) {
     let rows = [];
     let rawForHash = '';
@@ -3106,7 +3368,11 @@ function parseAndMatchBankStatement({
         tiposRemesas,
         allTiposRemesas,
         cuentaId,
-        bancoCodigo
+        empresaId,
+        bancoCodigo,
+        otrasCuentasInternas,
+        movimientosOtrasCuentas,
+        transferCounterpartsByGroup
     });
 }
 
@@ -3126,6 +3392,7 @@ module.exports = {
     validateClassificationRulePattern,
     applyClassificationRules,
     detectGroupedMatches,
+    detectInternalTransferForStatementRow,
     extractBankStatementWithGemini,
     parseAndMatchBankStatement
 };
